@@ -1,0 +1,5 @@
+*.txt
+old_trials/**
+webgl/shaders/**
+.idea/
+Thumbs.db
