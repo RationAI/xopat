@@ -67,5 +67,5 @@ $execution = <<<EOF
 EOF;
 
 //print output: shader first and second part, the name of the image (required because OSD will program this variable for you)
-send($definition, $execution, "data_{$data['index']}");
+send($definition, "data_{$data['index']}", $execution);
 ?>						

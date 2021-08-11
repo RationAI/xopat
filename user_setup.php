@@ -62,7 +62,19 @@ The requested data has no visualisation goal: set it up by yourself!
             color: $("#data2color").val()
         }
     }
+
+      
+    var data3 = {
+        data: "Faulty Shader for testing",
+        source: "http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/prdel.php",
+        visible: "1",
+        params: {
+            color: $("#data2color").val()
+        }
+    }
     
+    user_settings.shaders.push(data3);
+
     if ($("#first").val() === 1) {
         user_settings.shaders.push(data2);
         user_settings.shaders.push(data1);
@@ -70,9 +82,17 @@ The requested data has no visualisation goal: set it up by yourself!
         user_settings.shaders.push(data1);
         user_settings.shaders.push(data2);
     }
+
     
     //only one visualisation possible for now
-      document.getElementById("visualisation").value = JSON.stringify([user_settings]);
+      document.getElementById("visualisation").value = JSON.stringify([user_settings, {
+        name: "Test faulty visualisation",
+        params: {},
+        shaders: [
+          data3
+        ]
+
+      }]);
     //evt.preventDefault(); we want to do this
   });
   

@@ -5,30 +5,39 @@
  * $_GET expected parameters:
  *  index - unique number in the compiled shader
  * $_GET supported parameters:
- *  color - color to use on edges, default yellow
+ *  color - color to fill-in areas with values, url encoded '#ffffff' format or digits only 'ffffff', default "#d2eb00"
+ *  ctrlColor - whether to allow color modification, true or false, default true
+ *  ctrlThreshold - whether to allow threshold modification, true or false, default true
+ *  ctrlOpacity - whether to allow opacity modification, true or false, default true
  * 
  */
 require_once("init.php");
 
-$r=$g=$b=$r_dark=$g_dark=$b_dark=0;
+$r=$g=$b=0;
 
-if (!isset($data["color"])) {
-    $data["color"] = "#d2eb00"; //default yellow
+$color = "";
+if (isset($data["color"])) {
+
+    $color = ltrim(urldecode($data["color"]), "#");
+    list($r, $g, $b) = sscanf($color, "%02x%02x%02x");
+    $color = "#$color"; //make sure hash present for default input value later
 } else {
-    $data["color"] = urldecode($data["color"]);
-}
-
-list($r, $g, $b) = adjustBrightness($data["color"], 0); //parse original color
-$r = toShaderFloatString($r); 
-$g = toShaderFloatString($g); 
-$b = toShaderFloatString($b); 
-
-list($r_dark, $g_dark, $b_dark) = adjustBrightness($data["color"], 0); //parse original color
-$r_dark = toShaderFloatString($r_dark); 
-$g_dark = toShaderFloatString($g_dark); 
-$b_dark = toShaderFloatString($b_dark); 
+    //default yellow
+    $color = "#d2eb00";
+    $r = 210;
+    $g = 235;
+    $b = 0;
+} 
 
 $samplerName = "tile_data_{$uniqueId}";
+
+$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] != 'false');
+$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] != 'false');
+$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] != 'false');
+
+$r = $r / 255;
+$g = $g / 255;
+$b = $b / 255;
 
 /**
  * https://stackoverflow.com/questions/3512311/how-to-generate-lighter-darker-color-with-php
@@ -67,6 +76,7 @@ uniform sampler2D $samplerName;
 uniform float threshold_{$uniqueId};
 uniform float threshold_opacity_{$uniqueId};
 uniform float zoom_{$uniqueId};
+uniform vec3 color_{$uniqueId};
 
 //todo try replace with step function
 float clipToThresholdf_{$uniqueId}(float value) {
@@ -94,9 +104,9 @@ vec4 getBorder_{$uniqueId}(float mid, float u, float b, float l, float r, float 
                 clipToThresholdi_{$uniqueId}(r);
     
     if(counter == 2 || counter == 3) {  //two or three points hit the region
-       return vec4($r, $g, $b, 1.0); //border
+       return vec4(color_{$uniqueId}, 1.0); //border
     } else if ((dx < -0.5 || dy < -0.5)) {
-       return vec4($r_dark, $g_dark, $b_dark, .7); //inner border
+       return vec4(color_{$uniqueId} * 0.7, .7); //inner border
     } 
     return vec4(.0, .0, .0, .0);
 }
@@ -145,27 +155,41 @@ $glload = <<<EOF
 threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
 opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_opacity_{$uniqueId}');
 zoom_gl_{$uniqueId} = gl.getUniformLocation(program, 'zoom_{$uniqueId}');
+color_gl_{$uniqueId} = gl.getUniformLocation(program, 'color_{$uniqueId}');
 EOF;
 
 $gldraw = <<<EOF
 gl.uniform1f(threshold_gl_{$uniqueId}, threshold_{$uniqueId} / 100.0);
 gl.uniform1f(opacity_gl_{$uniqueId}, thresholdopacity_{$uniqueId});
 gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); //todo dirty touching of global variable
+gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); 
+gl.uniform3fv(color_gl_{$uniqueId}, color_{$uniqueId});
 EOF;
 
 //html part: controls rendered under shader settings, allows user to change shader uniform values
-$html = <<<EOF
-<span> Edges Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1">
-<br>
+$html = "";
+if ($allowColorChange) {
+  $html .= <<<EOF
+  <span> Color:</span><input type="color" id="color-{$uniqueId}" onchange="colorChange_{$uniqueId}(this)" value="$color"><br>
+  EOF;
+}
 
-<span> Edges Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="0" step="1">
-<input type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="0">
-<br>
-EOF;
+if ($allowOpacityChange) {
+  $html .= <<<EOF
+  <span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
+  EOF;
+}
+
+if ($allowThresholdChange) {
+  $html .= <<<EOF
+  <span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="0" step="1">
+  <input type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="0"><br>
+  EOF;
+}
 
 //js part: controls action: update controls if necessary and invoke `redraw();`
 $js = <<<EOF
-var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, zoom_gl_{$uniqueId};
+var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, zoom_gl_{$uniqueId}, color_gl_{$uniqueId};
 
 var threshold_{$uniqueId} = 1;
 
@@ -193,8 +217,20 @@ function opacityChange_{$uniqueId}(self) {
    thresholdopacity_{$uniqueId} = $(self).val();
    redraw();
 }
+
+var color_{$uniqueId} = [$r, $g, $b];
+
+function colorChange_{$uniqueId}(self) {
+    let col = $(self).val();
+    color_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
+    color_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
+    color_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
+
+    redraw();
+}
+
 EOF;
 
-send($definition, $execution, $html, $js, $glload, $gldraw, $samplerName);
+send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
 
 ?>						

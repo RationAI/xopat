@@ -1,38 +1,35 @@
 /* source: https://stackoverflow.com/questions/14387690/how-can-i-show-only-corner-borders */
-.configurable-border {
-    --b:5px;   /* thickness of the border */
-    --c:red;   /* color of the border */
-    --w:20px;  /* width of border */
+ /* .configurable-border {
+    --b:5px;   
+    --c:#3d6a6c;;   
+    --w:25px;  
+    --r:10px;
     
-  
-    border:var(--b) solid transparent; /* space for the border */
-    background:
-      linear-gradient(var(--c),var(--c)) top left,
-      linear-gradient(var(--c),var(--c)) top left,
-      linear-gradient(var(--c),var(--c)) bottom left,
-      linear-gradient(var(--c),var(--c)) bottom left,
-      linear-gradient(var(--c),var(--c)) top right,
-      linear-gradient(var(--c),var(--c)) top right,
-      linear-gradient(var(--c),var(--c)) bottom right,
-      linear-gradient(var(--c),var(--c)) bottom right;
-    background-size:var(--b) var(--w),var(--w) var(--b);
+    border: var(--b) solid transparent;
+    background: linear-gradient(var(--c),var(--c)) top left, linear-gradient(var(--c),var(--c)) bottom left, linear-gradient(var(--c),var(--c)) bottom left;
+    background-size: var(--b) 100%,var(--w) var(--b);
     background-origin:border-box;
-    background-repeat:no-repeat;
-    
-    /*Irrelevant code*/  
-    /* width:200px;
-    height:100px;
-    box-sizing:border-box;
-    margin:5px;
-    display:inline-flex;
-    font-size:30px;
-    justify-content:center;
-    align-items:center;
-    line-height:90px; */
-  }
+    background-repeat: no-repeat;
+    padding-left: 10px;
+    border-radius: 10px;
+    background-color: #2c4e4f;
+    margin: 4px 2px;
+    cursor: ns-resize;
+  }  */
+
+.configurable-border {
+    padding-left: 14px;
+    border-radius: 10px;
+    margin: 4px 2px;
+    cursor: ns-resize;
+    background-image: linear-gradient(to right, #595959 , #303134);
+    padding-top: 2px;
+    padding-bottom: 4px;
+}
+
 .shader-part-name {
     font-weight: 600;
-    margin: 4px 0 2px 12px;
+    margin: 0 0 2px 12px;
 }
 
 
@@ -45,6 +42,9 @@
     padding: 7px 12px;
 }
 
+.shader-part-error {
+    filter: brightness(0.5);
+}
 
 select {
     padding: 2px 20px 2px 5px;

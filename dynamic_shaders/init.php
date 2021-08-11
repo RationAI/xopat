@@ -1,4 +1,10 @@
 <?php
+
+set_exception_handler(function($exception) {
+  $msg = $exception->getMessage();
+  echo json_encode((object)array("error" => "Unknown error. This shader will be unusable.", "desc" => "<code>$msg</code>"));
+});
+
 $data = null;
 if (isset($_GET["index"])) {
   $data = $_GET;
@@ -8,7 +14,7 @@ if (isset($_GET["index"])) {
   die("No data was specified. The shader part could not be generated.");
 }
 
-$uniqueId = isset($data["unique_id"]) ? $data["unique_id"] : "";
+$uniqueId = isset($data["uniqueId"]) ? $data["uniqueId"] : "";
 $uniqueId .= $data["index"];
 
 function toShaderFloatString($value, $precisionLen=5) {
@@ -19,22 +25,27 @@ function toShaderFloatString($value, $precisionLen=5) {
     return $value;
 }
 
-function prepare_send($definition, $execution, $html_part, $js_part, $gl_loaded, $gl_drawing, $data_name) {
+function prepare_send($definition, $dataName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing) {
      return (object)array(
             "definition" => $definition,
             "execution" => $execution,
-            "html" => $html_part,
-            "js" => $js_part,
-            "gl_loaded" => $gl_loaded,
-            "gl_drawing" => $gl_drawing,
-            "sampler2D" => $data_name
+            "html" => $htmlPart,
+            "js" => $jsPart,
+            "glLoaded" => $glLoaded,
+            "glDrawing" => $glDrawing,
+            "sampler2D" => $dataName
         );
 }
 
-function send($definition, $execution, $html_part, $js_part, $gl_loaded, $gl_drawing, $data_name) {
+function send($definition, $dataName, $execution, $htmlPart = "", $jsPart = "", $glLoaded = "", $glDrawing = "") {
+  if (!$definition || !$dataName || !$execution) {
+    echo json_encode((object)array("error" => "Invalid shader.", 
+    "desc" => "Missing compulsory parameters.<br>Definition: <code>$definition</code><br>Execution: <code>$execution</code><br>Sampler name: $dataName."));
+  } else {
     echo json_encode(
-        prepare_send($definition, $execution, $html_part, $js_part, $gl_loaded, $gl_drawing, $data_name)
+      prepare_send($definition, $dataName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)
     );
+  }    
 }
 
 ?>

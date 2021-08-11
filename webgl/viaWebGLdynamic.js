@@ -13,10 +13,13 @@ ViaWebGL = function(incoming) {
     ~*~*~*~*~*~*~*~*~*~*~*~*/
     
     //default calls
-    this.onFatalError = function(e) {
-        console.error(e["error"], e["desc"]);
+    this.onFatalError = function(vis) {
+        console.error(vis["error"], vis["desc"]);
     }
-    this.ready = function(e) { return e; };
+    // this.onException = function(e) {
+    //     console.error(e);
+    // }
+    this.ready = function() { };
 
     //default values that might come from options and be overwritten later
     this.jsGlLoadedCall = "viaGlLoadedCall";
@@ -52,7 +55,6 @@ ViaWebGL = function(incoming) {
   
     this.gl_drawing = function (tile, e) {
         this._callString(this.jsGlDrawingCall, gl, e);
-        
         //use shaders only for certain tile source
         //todo make this more elegant (move decision into osdGL script)
         return e.tiledImage.source.tilesUrl.indexOf(urlImage) === -1; //use webGL if not urlImage source
@@ -75,9 +77,23 @@ ViaWebGL.prototype = {
         visualisation.url = this.shaderGenerator;
         this._visualisations.push(visualisation);
     }, 
-    
-    //TODO add update shader that will modify shader (download shader, )    
 
+    /**
+     * Rebuild visualisation and update scene
+     * @param {array} order order in reverse, ID's of data as defined in setup JSON
+     */
+    rebuildVisualisation: function(order) {
+        var vis = this._visualisations[this._program],
+            program = this._programs[this._program];
+
+        vis.order = order;
+        //must remove before attaching new
+        this._detachShader(program, "VERTEX_SHADER");
+        this._detachShader(program, "FRAGMENT_SHADER");
+        this._visualisationToProgram(vis, program, this._program);
+        this.forceSwitchShader(null, true);
+    },
+    
     /**
      * Switch to program at index: this is the index (order) in which
      * setShaders(...) was called. If you want to switch to shader that
@@ -86,7 +102,7 @@ ViaWebGL.prototype = {
      */
     switchVisualisation: function(i) {
         if (this._program == i) return;
-        this.forceSwitchShader(i);
+        this.forceSwitchShader(i, true);
     },
     
     /**
@@ -95,20 +111,24 @@ ViaWebGL.prototype = {
      * invoked (e.g. some uniform variables changed)
      * @param {integer} i program index
      */
-    forceSwitchShader: function(i) {
+    forceSwitchShader: function(i, preserveJS = false) {
+        if (!i) i = this._program;
+
         if (i >= this._programs.length) {
             console.error("Invalid shader index.");
-        } else if (this._visualisations[i].responseData.hasOwnProperty("error")) {
-            this._loadScript(i);
+        } else if (this._visualisations[i].hasOwnProperty("error") || !this._programs[i]) {
+            this._loadHtml(i, this._program, preserveJS);
+            this._loadScript(i, this._program, preserveJS);
+            this._program = i;
             this.onFatalError(this._visualisations[i]);
             this.running = false;
         } else {
             this.running = true;
+            this._loadHtml(i, this._program, preserveJS);
+            this._loadScript(i, this._program, preserveJS);
             this._program = i;
-            this._loadHtml(i);
-            this._loadScript(i);
             this.toBuffers(this._programs[i]);
-        }   
+        }
     },
     
     /**
@@ -140,8 +160,8 @@ ViaWebGL.prototype = {
 
         // Allow for custom loading
         this.gl.useProgram(program);
-        this['gl_loaded'].call(this, program, this.gl);
         this.visualisationInUse(this._visualisations[this._program]);
+        this['gl_loaded'].call(this, program, this.gl);
 
         // Unchangeable square array buffer fills viewport with texture
         var boxes = [[-1, 1,-1,-1, 1, 1, 1,-1], [0, 1, 0, 0, 1, 1, 1, 0]];
@@ -245,7 +265,7 @@ ViaWebGL.prototype = {
         var step = [this._visualisations.map(this.getter)];
         
         step.push(this.toProgram.bind(this));
-        step.push(this.forceSwitchShader.bind(this, 0)); //default program is index 0
+        step.push(this.forceSwitchShader.bind(this, null, false)); //default program left on _program variable value
         return Promise.all(step[0]).then(step[1]).then(step[2]).then(this.ready);
     },
     // Make a canvas
@@ -279,40 +299,73 @@ ViaWebGL.prototype = {
         });
     },
 
-    _loadHtml: function(i) {
-        document.getElementById(this.htmlControlsId).innerHTML = this._visualisations[i]["html"];
+    _loadHtml: function(visId, prevVisId, preserveJS) {
+        var htmlControls = document.getElementById(this.htmlControlsId);
+        if (preserveJS) {
+            if (visId == prevVisId) return;
+            let oldHtmlText = htmlControls ? htmlControls.innerHTML : false;
+            if (oldHtmlText) {
+                this._visualisations[prevVisId]["html"] = oldHtmlText;
+            }
+        } 
+        htmlControls.innerHTML = this._visualisations[visId]["html"];
     },
 
-    _loadScript: function(i) {
+    _loadScript: function(visId, prevVisId, preserveJS) {
         var forScript = document.getElementById(this.scriptId);
+        if (preserveJS) {
+            if (visId == prevVisId) return;
+            let oldScriptText = forScript.firstChild ? forScript.firstChild.text : false;
+            if (oldScriptText) {
+                this._visualisations[prevVisId]["js"] = oldScriptText;
+            }
+        } 
         forScript.innerHTML = "";
-
         var script = document.createElement("script");
         script.type = "text/javascript";
-        script.text = this._visualisations[i]["js"];
-        forScript.appendChild(script);
+        script.text = this._visualisations[visId]["js"];
+        forScript.appendChild(script);            
     },
 
     // https://stackoverflow.com/questions/359788/how-to-execute-a-javascript-function-when-i-have-its-name-as-a-string
     _callString: function(fn, ...args) {
-        let func = (typeof fn =="string")?window[fn]:fn;
-        if (typeof func == "function") func(...args);
-        else throw new Error(`${fn} is Not a function!`);
+        try {
+            let func = (typeof fn =="string")?window[fn]:fn;
+            if (typeof func == "function") func(...args);
+            else this.onException(new Error(`${fn} is Not a function!`));
+        } catch (e) {
+            console.error(e);
+            this.onException(e);
+        }
+     
     },
 
-    _buildVisualisation: function(visSetup, visualisation, glLoadCall, glDrawingCall) {
+    _buildVisualisation: function(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
             var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "";
 
-            visualisation.order.forEach(dataId => {
-                definition += visSetup[dataId]["definition"];
-                execution += visSetup[dataId]["execution"];
-                //reverse order append to show first the last drawn element (top)
-                html = `<div class="configurable-border"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["html"]}</div>${html}`;
-                js += visSetup[dataId]["js"];
-                glload += visSetup[dataId]["gl_loaded"];
-                gldraw += visSetup[dataId]["gl_drawing"];
+            order.forEach(dataId => {
+                if (visSetup[dataId].error) {
+                    html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["error"]}</div>${html}`;
+                    console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
+
+                } else if (visSetup[dataId].definition && visSetup[dataId].execution && visSetup[dataId].sampler2D) {
+                    definition += visSetup[dataId]["definition"];
+                    execution += visSetup[dataId]["execution"];
+                    //reverse order append to show first the last drawn element (top)
+                    html = `<div class="configurable-border" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["html"]}</div>${html}`;
+                    js += visSetup[dataId]["js"];
+                    glload += visSetup[dataId]["glLoaded"];
+                    gldraw += visSetup[dataId]["glDrawing"];  
+                } else {
+                    html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>This data cannot be displayed: invalid visualisation type.</div>${html}`;
+                    console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
+                }
             });
+
+            if (execution === "" || definition === "") {
+                throw "Empty visualisation or there is no part of the valid.";
+            } 
 
         var fragment_shader = `
 precision mediump float;
@@ -342,53 +395,52 @@ void main() {
 }`;
 
 var jsscript = `
-${js}
+//user input might do wild things, use try-catch
+try {
+    ${js}
 
-function ${glLoadCall}(program, gl) {
-    ${glload}
-}
-
-function ${glDrawingCall}(gl, e) {
-    ${gldraw}
+    function ${glLoadCall}(program, gl) {
+        ${glload}
+    }
+    
+    function ${glDrawingCall}(gl, e) {
+        ${gldraw}
+    }
+} catch (error) {
+    console.error(error.message);
+    //todo try if error outside functions
 }
 `;
-
-var vertex_shader = `
-attribute vec4 a_pos;
-attribute vec2 a_tile_pos;
-varying vec2 v_tile_pos;
-
-void main() {
-  v_tile_pos = a_tile_pos;
-  gl_Position = a_pos;
-}
-`
+    
+    var vertex_shader = `
+    attribute vec4 a_pos;
+    attribute vec2 a_tile_pos;
+    varying vec2 v_tile_pos;
+    
+    void main() {
+      v_tile_pos = a_tile_pos;
+      gl_Position = a_pos;
+    }
+`;
             visualisation.vertex_shader = vertex_shader;
             visualisation.fragment_shader = fragment_shader;
             visualisation.js = jsscript;
             visualisation.html = html;
-            visualisation.icon = '';
-            delete visualisation.responseData.error;
+            delete visualisation.error;            
+            delete visualisation.desc;
         } catch (error) { 
             visualisation.vertex_shader = "";
             visualisation.fragment_shader = "";
-            visualisation.js = "function glLoaded(){} function glDrawing(){}";
+            visualisation.js = `function ${glLoadCall}(){} function ${glDrawingCall}(){}`;
             visualisation.html = "";
-            visualisation.icon = '<span class="material-icons">warning</span>&nbsp;';
-            visualisation.responseData.error = "Failed to compose visualisation.";
+            visualisation.error = "Failed to compose visualisation.";
         }
     },
 
     // Link shaders from strings
     toProgram: function(responses) {
 
-        //todo better messaging system
-        var gl = this.gl;
-        var ok = function(kind,status,value,sh) {
-            if (!gl['get'+kind+'Parameter'](value, gl[status+'_STATUS'])){
-                console.log((sh||'LINK')+':\n'+gl['get'+kind+'InfoLog'](value));
-            }
-        }
+        this._program = 0; //default program
 
         // Load multiple shaders - visalisations
         for (let i = 0; i < responses.length; i++) { 
@@ -402,44 +454,77 @@ void main() {
                 responseData = {error: error.message}; 
             }
 
-            this._visualisations[i].responseData = responseData;
+            let vis = this._visualisations[i];
+            vis.responseData = responseData;
             
-            console.log(responseData);
-
             if (responseData.hasOwnProperty("error")) {
                 //load default JS to not to cause errors
-                responseData["js"] = "function glLoaded(){} function glDrawing(){}";
-                this._visualisations[i].icon = '<span class="material-icons">warning</span>&nbsp;';
+                vis.js = `function ${this.jsGlLoadedCall}(){} function ${this.jsGlDrawingCall}(){}`;
+                vis.error = responseData.error;
+                vis.desc = responseData.desc;
                 this._programs.push(null); //no program
+                if (i == this._program) this._program++;
                 continue;
             }
 
-            let program = gl.createProgram();
+            let program = this.gl.createProgram();
+            this._programs.push(program); //preventive, will possibly
+            vis.order = Object.keys(vis.responseData);
+            this._visualisationToProgram(vis, program, i);
+            this.visualisationReady(i, vis);            
+        }
+        //if all invalid go back  
+        if (this._program >= this._programs.length) this._program = 0;
 
-            this._visualisations[i].order = Object.keys(responseData);
-            this._buildVisualisation(responseData, this._visualisations[i], this.jsGlLoadedCall, this.jsGlDrawingCall);
-
-            function useShader(gl, program, data, type) {
-                var shader = gl.createShader(gl[type]);
-                gl.shaderSource(shader, data);
-                gl.compileShader(shader);
-                gl.attachShader(program, shader);
-                program[type] = shader;
-                ok('Shader','COMPILE', shader, type);
-            }
-
-            console.log("VERTEX", this._visualisations[i]["vertex_shader"]);
-            console.log("FRAGMENT", this._visualisations[i]["fragment_shader"]);
-
-            useShader(gl, program, this._visualisations[i]["vertex_shader"], 'VERTEX_SHADER')
-            useShader(gl, program, this._visualisations[i]["fragment_shader"], 'FRAGMENT_SHADER')
-            gl.linkProgram(program);
-            gl.iddd = this.jsGlLoadedCall;
-            ok('Program','LINK',program);
-            this._programs.push(program);
-            this.visualisationReady(i, this._visualisations[i]);
-        }  
         return this._programs[0];
+    },
+
+    _detachShader: function(program, type) {
+        var shader = program[type];
+        this.gl.detachShader(program, shader);
+        this.gl.deleteShader(shader);
+    },
+
+    _visualisationToProgram: function(vis, program, idx) {
+        var gl = this.gl,
+            ok = function(kind,status,value,sh) {
+                if (!gl['get'+kind+'Parameter'](value, gl[status+'_STATUS'])){
+                    console.log((sh||'LINK')+':\n'+gl['get'+kind+'InfoLog'](value));
+                    return false;
+                }
+                return true;
+            },
+            err = function(message, description, glLoad, glDraw) {
+                vis.js = `function ${glLoad}(){} function ${glDraw}(){}`;
+                vis.error = message;
+                vis.desc = description;
+                vis.html = "Invalid visualisation.";
+        };
+
+        this._buildVisualisation(vis.order, vis.responseData, vis, this.jsGlLoadedCall, this.jsGlDrawingCall);
+
+        function useShader(gl, program, data, type) {
+            var shader = gl.createShader(gl[type]);
+            gl.shaderSource(shader, data);
+            gl.compileShader(shader);
+            gl.attachShader(program, shader);
+            program[type] = shader;
+            return ok('Shader','COMPILE', shader, type);
+        }
+
+        // console.log("FRAGMENT", vis["fragment_shader"]);
+
+        if (!useShader(gl, program, vis["vertex_shader"], 'VERTEX_SHADER') ||
+            !useShader(gl, program, vis["fragment_shader"], 'FRAGMENT_SHADER')) {
+            err("Unable to use this visualisation.", "Compilation of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
+            if (idx == this._program) this._program++;
+        } else {
+            gl.linkProgram(program);
+            //todo error here as well...
+            if (!ok('Program','LINK',program)) {
+                err("Unable to use this visualisation.", "Linking of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
+            }
+        }
     },
 
     texture: {

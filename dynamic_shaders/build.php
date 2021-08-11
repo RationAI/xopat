@@ -51,7 +51,7 @@ set_exception_handler(function($exception) {
  $uniqueId = "";
  try {
    $params = json_decode($_POST["params"]); //the params
-   $uniqueId = "&unique_id=$params->unique_id";
+   $uniqueId = "&uniqueId=$params->unique_id";
  } catch (\Exception $e) {
    //do nothing, use default values as set above
  }
@@ -61,31 +61,49 @@ set_exception_handler(function($exception) {
 
  $i = 0;
  foreach ($input as $key=>$object) {
-    if (isset($shaders[$object->type])) { 
 
+    //try to get the url of shader part
+    $url = "";
+    if (!isset($object->type) && isset($object->source)) {
+        $i++;
+        $args = to_params($object->params);
+        $url = "$object->source?index=$i$uniqueId$args";
+    } else if (isset($object->type) && isset($shaders[$object->type])) { 
         if (file_exists("{$shaders[$object->type]}.php")) {
             $i++;
-            try {
-                $args = to_params($object->params);
-                $dir = dirname($_SERVER['SCRIPT_NAME']);
-                $fullurl="http://".$_SERVER['HTTP_HOST'].$dir;
-                $data = json_decode(file_get_contents("$fullurl/{$shaders[$object->type]}.php?index=$i$uniqueId$args"));
-                $data->order = $i;
-                                
-                $visualisation[$object->data] = $data; 
-            } catch (\Exception $e) {
-                $msg = $e->getMessage();
-                $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg"); 
-            } 
+            $args = to_params($object->params);
+            $dir = dirname($_SERVER['SCRIPT_NAME']);
+            $fullurl="http://".$_SERVER['HTTP_HOST'].$dir;
+            $url = "$fullurl/{$shaders[$object->type]}.php?index=$i$uniqueId$args";
         } else {
             $visualisation[$object->data] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist."); 
+            continue;
         }    
     } else {
         $visualisation[$object->data] = (object)array("error" => "Requested visualisation '$object->type' does not exist.", "desc" => "Undefined shader: $object->type."); 
-    }       
+        continue;
+    } 
+    
+    //try to load the shader URL
+    try {
+        $data = json_decode(file_get_contents($url));
+        $data->order = $i;
+        if (isset($data->error) && $data->error) {
+            $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
+        } else {
+            $visualisation[$object->data] = $data; 
+        }
+    } catch (\Exception $e) {
+        $msg = $e->getMessage();
+        $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg"); 
+    } 
  }
 
  function to_params($array) {
+    if (!is_array($array) || !is_object($array)) {
+        return "";
+    }
+
     $out = "";
     foreach ($array as $name=>$value) {
         $encoded = urlencode($value);

@@ -36,12 +36,37 @@ openSeadragonGL = function(openSD, viaGLParams) {
 };
 
 openSeadragonGL.prototype = {
+    
+    foreachVisualisation: function(call) {
+        this.viaGL._visualisations.forEach(vis => {
+            call(vis);
+        });
+    },
+    
     /**
      * Set program shaders. Just forwards the call to viaGL, for easier access.
      * @param {string} visualisation program fragment shaders components
      */
     setVisualisation: function(visualisation) {
         this.viaGL.setVisualisation(visualisation);
+    },
+
+    /**
+     * Change visualisation in use
+     * @param {integer} visIdx index of the visualisation 
+     */
+    switchVisualisation: function(visIdx) {
+        this.viaGL.switchVisualisation(visIdx);
+    },
+
+    /**
+     * Reorder shader: will re-generate current visualisation from dynamic data obtained from viaGL.shaderGenerator
+     * @param {array} order array of strings that refer to ID's in the visualisation data
+     */
+    reorder: function(order) {
+        if (!Array.isArray(order)) return;
+        //viaGL rendering is first in order: first drawn, last in order: last drawn (atop)
+        this.viaGL.rebuildVisualisation(order.reverse());
     },
 
     /**

@@ -36,20 +36,27 @@ tells in which order was certain object processed (the order in which `shaders` 
 Required parameter (`GET` or `POST`) is `index`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
 that can be passed from outer `params` field.
 
+_Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/colors.php?index=1&color=#9900fa
+
 Each shader type has a shader part script that generates following JSON-encoded object output with following fields:
 - `definition` - define global variables or custom functions in the resulting shader, should define at least `sampler2D` variable where
  the visualisation sends the data for certain tile
 - `execution` - write shader code that is executed, placed inside `main{}` and can use pre-defined functions or `definition` part
 - `html` - html elements that are to be shown in the visualiser, serve for user input
 - `js` - `js` script, that helps to send user values from `html` to shader
-- `gl_loaded` - `js` code executed when WebGL program is loaded, used to register uniform variables
-- `gl_drawing` - `js` code executed when WebGL program is used, used to set values to uniforms
+- `glLoaded` - `js` code executed when WebGL program is loaded, used to register uniform variables
+- `glDrawing` - `js` code executed when WebGL program is used, used to set values to uniforms
 - `sampler2D` - name of the `sampler2D` variable, so that visualiser knows where to bind the data
+
+**OR**
+
+- `error` - error title - user-friendly message
+- `desc` - detailed error description
 
 Each file, after `init.php` inclusion can use global parameters:
 - `$uniqueID` - a variable to avoid namespace collision
 - `$data` - an array that contains sent parameters
-- function `send($definition, $execution, $html_part, $js_part, $gl_loaded, $gl_drawing, $data_name)` for unified output style
+- function `send($definition, $sampler2DUniformName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)` for unified output style
 
 Example of really simple _identity_ shader part:
 

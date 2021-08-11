@@ -128,7 +128,6 @@ $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev
   <script src="./external/point-in-polygon.js"></script>
   <script src="./external/greiner-hormann.min.js"></script>
 
-  
 </head>
 
 <body>
@@ -189,6 +188,8 @@ $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev
 
   <script type="text/javascript">
 
+    
+
     var DisplayError = {
       msgTitle: $("#system-message-title"),
       msgDetails: $("#system-message-details"),
@@ -211,12 +212,15 @@ $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev
       }
     }
 
+
 <?php
 
 if($errorSource) {
   //todo failure, no data source
   echo "$('#main-panel').css('display', 'none');";
-  echo "DisplayError.show('Something went wrong. Please, re-open the visualizer.', 'ERROR: Visualiser expects a JSON structure that parametrizes the visualisation. No valid structure was given.<br><code>$visualisation</code>');";
+  $debugSource = print_r($dataSource, true);
+  if (!$debugSource) $debugSource = "null";
+  echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', 'ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$debugSource</code>');";
   echo "</script></body></html>";
   exit;
 }
@@ -264,16 +268,36 @@ if($errorSource) {
       jsGlLoadedCall: "glLoaded",
       jsGlDrawingCall: "glDrawing",
       shaderGenerator: "/iipmooviewer-jiri/OSD/dynamic_shaders/build.php",
-      visualisationReady: function(i, visualisation) {
-        shaderNames.append(`<option value="${i}">${visualisation['name']}</option>`);
-        DisplayError.hide(); //preventive
+
+      //called once fully initialized
+      ready: function() {
+        var i = 0;
+        seaGL.foreachVisualisation(function (vis) {
+          if (vis.error) {
+            shaderNames.append(`<option value="${i}" title="${vis.error}">&#9888; ${vis['name']}</option>`);
+          } else {
+            shaderNames.append(`<option value="${i}">${vis['name']}</option>`);
+          }
+          i++;
+        });
       },
-      visualisationInUse: function(visualisation) {
+
+      //called once a visualisation is (for the first time only) compiled and linked (might not happen)
+      visualisationReady: function(i, visualisation) {
 
       },
+
+      visualisationInUse: function(visualisation) {
+        enableDragSort("shader-options");
+        //called only if everything is fine
+        DisplayError.hide(); //preventive
+      },
       onFatalError: function(vis) {
-        DisplayError.show(vis.responseData.error, vis.responseData.desc);
-      }
+        DisplayError.show(vis.error, vis.desc);
+      },
+      onException: function(error) {
+        DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
+      },
     });
 
 
@@ -291,9 +315,8 @@ if($errorSource) {
     // load desired shader upon selection
     $("#shaders").on("change", function () {
       activeShader = $(this).val();
-      seaGL.viaGL.switchShader(activeShader);
+      seaGL.switchVisualisation(activeShader);
       redraw();
-      updateShaderControls();
     });
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
@@ -344,6 +367,55 @@ if($errorSource) {
     });
 
 
+
+
+
+    /* Made with love by @fitri
+    This is a component of my ReactJS project
+    https://codepen.io/fitri/full/oWovYj/ 
+    
+    Modified by Jiří
+    */
+
+    function enableDragSort(listId) {
+      const sortableList = document.getElementById(listId);
+      Array.prototype.map.call(sortableList.children, (item) => {enableDragItem(item)});
+    }
+
+    function enableDragItem(item) {
+      item.setAttribute('draggable', true)
+      item.ondrag = handleDrag;
+      item.ondragend = handleDrop;
+    }
+
+    function handleDrag(item) {
+      const selectedItem = item.target,
+            list = selectedItem.parentNode,
+            x = event.clientX,
+            y = event.clientY;
+      
+      selectedItem.classList.add('drag-sort-active');
+      let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
+      
+      if (list === swapItem.parentNode) {
+        swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
+        list.insertBefore(selectedItem, swapItem);
+      }
+    }
+
+    function handleDrop(item) {
+      item.target.classList.remove('drag-sort-active');
+      const listItems = item.target.parentNode.children;
+
+      var order = [];
+      Array.prototype.forEach.call(listItems, function(child) {
+        order.push(child.dataset.id);
+      });
+
+      seaGL.reorder(order);
+      redraw();
+    }
+
     
 /*------------ Initialization of OSD Annotations ------------*/
 var openseadragon_image_annotations = new OSDAnnotations({
@@ -389,6 +461,7 @@ var openseadragon_image_annotations = new OSDAnnotations({
       var json_annotation = '';
   
       openseadragon_image_annotations.initialize(json_annotation, viewer, viewer.world.getItemAt(layerIDX), "imageAnnotationToolbarContent", options);
+
 
     };
 
