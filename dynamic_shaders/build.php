@@ -88,6 +88,7 @@ set_exception_handler(function($exception) {
     try {
         $data = json_decode(file_get_contents($url));
         $data->order = $i;
+        $data->visible = $object->visible;
         if (isset($data->error) && $data->error) {
             $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
         } else {

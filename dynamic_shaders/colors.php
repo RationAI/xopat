@@ -82,7 +82,7 @@ EOF;
 $html = "";
 if ($allowColorChange) {
   $html .= <<<EOF
-  <span> Color:</span><input type="color" id="color-{$uniqueId}" onchange="colorChange_{$uniqueId}(this)" value="$color"><br>
+  <span> Color:</span><input type="color" id="color-{$uniqueId}" onchange="colorChange_{$uniqueId}(this)"><br>
   EOF;
 }
 
@@ -99,10 +99,13 @@ if ($allowThresholdChange) {
   EOF;
 }
 
+
+
+
 $js = <<<EOF
 var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, color_gl_{$uniqueId};
 
-var threshold_{$uniqueId} = 1;
+var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", 1);
 
 //initial values
 $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
@@ -115,27 +118,31 @@ function thresholdChange_{$uniqueId}(self) {
    else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
    $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
    $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
+   saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
 
    //global function, part of API
    redraw();
 }
 
-var thresholdopacity_{$uniqueId} = 1;
+var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
 
 $("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
 
 function opacityChange_{$uniqueId}(self) {
    thresholdopacity_{$uniqueId} = $(self).val();
+   saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
    redraw();
 }
 
-var color_{$uniqueId} = [$r, $g, $b];
+var color_{$uniqueId} = loadCache("color_{$uniqueId}", [$r, $g, $b]);
+$("#color-{$uniqueId}").val("#" + Math.round(color_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
 
 function colorChange_{$uniqueId}(self) {
     let col = $(self).val();
     color_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
     color_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
     color_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
+    saveCache("color_{$uniqueId}", color_{$uniqueId});
 
     redraw();
 }

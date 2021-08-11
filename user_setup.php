@@ -57,13 +57,12 @@ The requested data has no visualisation goal: set it up by yourself!
     var data2 = {
         data: "Annotation layer",
         type: "edge",
-        visible: "1",
+        visible: "0",
         params: {
             color: $("#data2color").val()
         }
     }
 
-      
     var data3 = {
         data: "Faulty Shader for testing",
         source: "http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/prdel.php",

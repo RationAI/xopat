@@ -42,6 +42,10 @@ openSeadragonGL.prototype = {
             call(vis);
         });
     },
+
+    currentVisualisation: function() {
+        return this.viaGL._visualisations[this.viaGL._program];
+    },
     
     /**
      * Set program shaders. Just forwards the call to viaGL, for easier access.
@@ -63,10 +67,13 @@ openSeadragonGL.prototype = {
      * Reorder shader: will re-generate current visualisation from dynamic data obtained from viaGL.shaderGenerator
      * @param {array} order array of strings that refer to ID's in the visualisation data
      */
-    reorder: function(order) {
-        if (!Array.isArray(order)) return;
-        //viaGL rendering is first in order: first drawn, last in order: last drawn (atop)
-        this.viaGL.rebuildVisualisation(order.reverse());
+    reorder: function(order = null) {
+        if (!Array.isArray(order)) {
+            this.viaGL.rebuildVisualisation(null);
+        } else {
+            //viaGL rendering is first in order: first drawn, last in order: last drawn (atop)
+            this.viaGL.rebuildVisualisation(order.reverse());
+        }
     },
 
     /**

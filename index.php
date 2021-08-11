@@ -298,7 +298,15 @@ if($errorSource) {
       onException: function(error) {
         DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
       },
+      htmlShaderPartHeader: function(key, data, isVisible) {
+        if (isVisible) {
+          return `<div class="configurable-border" data-id="${key}"><div class="shader-part-name"><input type="checkbox" checked data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
+        }
+        return `<div class="configurable-border shader-part-error" data-id="${key}"><div class="shader-part-name"><input type="checkbox" data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
+      }
     });
+
+   
 
 
     setup.forEach(visualisationDef => {
@@ -413,6 +421,18 @@ if($errorSource) {
       });
 
       seaGL.reorder(order);
+      redraw();
+    }
+
+    function shaderPartToogleOnOff(self) {
+      if (self.checked == true) {
+        seaGL.currentVisualisation().responseData[self.dataset.id].visible = 1;
+        self.parentNode.parentNode.classList.remove("shader-part-error");
+      } else {
+        seaGL.currentVisualisation().responseData[self.dataset.id].visible = 0;
+        self.parentNode.parentNode.classList.add("shader-part-error");
+      }
+      seaGL.reorder();
       redraw();
     }
 

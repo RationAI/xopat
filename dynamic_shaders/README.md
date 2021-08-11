@@ -53,12 +53,13 @@ Each shader type has a shader part script that generates following JSON-encoded 
 - `error` - error title - user-friendly message
 - `desc` - detailed error description
 
-Each file, after `init.php` inclusion can use global parameters:
+#### Global functions available
+There are some necessary things required to allow advanced functionality. Each file, after `init.php` inclusion can use global parameters:
 - `$uniqueID` - a variable to avoid namespace collision
 - `$data` - an array that contains sent parameters
 - function `send($definition, $sampler2DUniformName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)` for unified output style
 
-Example of really simple _identity_ shader part:
+In fragment shader (`$execution` and `$definition`), there are several global functions and variables available. Example of really simple _identity_ shader part:
 
 `````php
 /**
@@ -91,11 +92,11 @@ $js = ""; //nothing
 //print output
 send($definition, $execution, $html, $js, $glload, $gldraw, $samplerName);
 `````
-Shader is then composed in this manner: 
+Shader is then composed in this manner: (you can see the **global** stuff here)
 ````glsl
 precision mediump float;
-uniform vec2 u_tile_size;
-varying vec2 v_tile_pos;
+uniform vec2 u_tile_size;  //tile dimension
+varying vec2 v_tile_pos;   //in-texture position
 
 //linear blending of colors based on float 'ratio'
 vec4 blend(vec4 a, vec4 b, float ratio) {

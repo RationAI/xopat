@@ -16,9 +16,9 @@ ViaWebGL = function(incoming) {
     this.onFatalError = function(vis) {
         console.error(vis["error"], vis["desc"]);
     }
-    // this.onException = function(e) {
-    //     console.error(e);
-    // }
+    this.htmlShaderPartHeader = function(key, data, isVisible) {
+        return `<div class="configurable-border"><div class="shader-part-name">${key}</div>${data[key]["html"]}</div>`;
+    }
     this.ready = function() { };
 
     //default values that might come from options and be overwritten later
@@ -66,6 +66,13 @@ ViaWebGL = function(incoming) {
     }
 
     this.texture.init(gl, this.max_textures);
+
+    var s = document.createElement("script");
+    s.type = "text/javascript";
+    s.text = `
+    var VISUALISAITION_SHADER_CACHE = {};
+    `;
+    document.body.appendChild(s);
 };
 
 ViaWebGL.prototype = {
@@ -86,7 +93,9 @@ ViaWebGL.prototype = {
         var vis = this._visualisations[this._program],
             program = this._programs[this._program];
 
-        vis.order = order;
+        if (order) {
+            vis.order = order;
+        }
         //must remove before attaching new
         this._detachShader(program, "VERTEX_SHADER");
         this._detachShader(program, "FRAGMENT_SHADER");
@@ -301,25 +310,25 @@ ViaWebGL.prototype = {
 
     _loadHtml: function(visId, prevVisId, preserveJS) {
         var htmlControls = document.getElementById(this.htmlControlsId);
-        if (preserveJS) {
-            if (visId == prevVisId) return;
-            let oldHtmlText = htmlControls ? htmlControls.innerHTML : false;
-            if (oldHtmlText) {
-                this._visualisations[prevVisId]["html"] = oldHtmlText;
-            }
-        } 
+        // if (preserveJS) {
+        //     if (visId == prevVisId) return;
+        //     let oldHtmlText = htmlControls ? htmlControls.innerHTML : false;
+        //     if (oldHtmlText) {
+        //         this._visualisations[prevVisId]["html"] = oldHtmlText;
+        //     }
+        // } 
         htmlControls.innerHTML = this._visualisations[visId]["html"];
     },
 
     _loadScript: function(visId, prevVisId, preserveJS) {
         var forScript = document.getElementById(this.scriptId);
-        if (preserveJS) {
-            if (visId == prevVisId) return;
-            let oldScriptText = forScript.firstChild ? forScript.firstChild.text : false;
-            if (oldScriptText) {
-                this._visualisations[prevVisId]["js"] = oldScriptText;
-            }
-        } 
+        // if (preserveJS) {
+        //     if (visId == prevVisId) return;
+        //     let oldScriptText = forScript.firstChild ? forScript.firstChild.text : false;
+        //     if (oldScriptText) {
+        //         this._visualisations[prevVisId]["js"] = oldScriptText;
+        //     }
+        // } 
         forScript.innerHTML = "";
         var script = document.createElement("script");
         script.type = "text/javascript";
@@ -342,30 +351,36 @@ ViaWebGL.prototype = {
 
     _buildVisualisation: function(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
-            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "";
+            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", _this = this;
 
             order.forEach(dataId => {
+                
+
                 if (visSetup[dataId].error) {
                     html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["error"]}</div>${html}`;
                     console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
 
                 } else if (visSetup[dataId].definition && visSetup[dataId].execution && visSetup[dataId].sampler2D) {
-                    definition += visSetup[dataId]["definition"];
-                    execution += visSetup[dataId]["execution"];
+                    let visible = false;
+                    if (visSetup[dataId].visible == 1) {
+                        definition += visSetup[dataId]["definition"];
+                        execution += visSetup[dataId]["execution"];
+                        glload += visSetup[dataId]["glLoaded"];
+                        gldraw += visSetup[dataId]["glDrawing"]; 
+                        visible = true;
+                    }
                     //reverse order append to show first the last drawn element (top)
-                    html = `<div class="configurable-border" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["html"]}</div>${html}`;
+                    html = _this.htmlShaderPartHeader(dataId, visSetup, visible) + html;
                     js += visSetup[dataId]["js"];
-                    glload += visSetup[dataId]["glLoaded"];
-                    gldraw += visSetup[dataId]["glDrawing"];  
                 } else {
                     html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>This data cannot be displayed: invalid visualisation type.</div>${html}`;
                     console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
                 }
             });
 
-            if (execution === "" || definition === "") {
-                throw "Empty visualisation or there is no part of the valid.";
-            } 
+            // if (execution === "" || definition === "") {
+            //     throw "Empty visualisation or there is no part of the valid.";
+            // } 
 
         var fragment_shader = `
 precision mediump float;
@@ -395,6 +410,20 @@ void main() {
 }`;
 
 var jsscript = `
+function saveCache(key, value) {
+    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
+        VISUALISAITION_SHADER_CACHE["${visualisation.name}"] = {};
+    }
+    VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key] = value;
+}
+function loadCache(key, defaultValue) {
+    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
+        !VISUALISAITION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
+        return defaultValue;
+    }
+    return VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key];
+}
+
 //user input might do wild things, use try-catch
 try {
     ${js}
