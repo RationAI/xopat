@@ -53,12 +53,13 @@ Each shader type has a shader part script that generates following JSON-encoded 
 - `error` - error title - user-friendly message
 - `desc` - detailed error description
 
-#### Global functions available
+#### Global functions and variables - PHP
 There are some necessary things required to allow advanced functionality. Each file, after `init.php` inclusion can use global parameters:
 - `$uniqueID` - a variable to avoid namespace collision
 - `$data` - an array that contains sent parameters
 - function `send($definition, $sampler2DUniformName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)` for unified output style
 
+#### Global functions and variables - GLSL
 In fragment shader (`$execution` and `$definition`), there are several global functions and variables available. Example of really simple _identity_ shader part:
 
 `````php
@@ -127,6 +128,16 @@ void main() {
 You can see which global variables and functions are available. The resulting color from `execution` must be set using
 `show(...)`. TODO possible boost: The performance can be enhanced in reverse-order rendering if the first `show(...)` call uses alpha
 of `1`, the rest of the shader execution can be aborted. This is visualisator-independent and now considered pointless.
+
+#### Global functions and variables - JavaScript
+For javascript, you can use
+- `redraw();` - will trigger update to the whole canvas, WebGL will be used to update it
+- `loadCache( key, defaultValue )` - will load data
+- `saveCache( key, value )` - will save data
+Saving cache is important for between-visualisation switching. When your visualisation is loaded (not necessarily for the first time), all your `js` code is
+executed. That means the user would lose all presents from the use history. Here you can nicely cache and load your variable values so that all changes will be preserved.
+Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
+
 
 For more complex examples, see other scripts. **Non-unique names of variables and functions will cause the shader compilation failure or other
 namespace collision.** 

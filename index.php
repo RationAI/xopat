@@ -52,7 +52,13 @@ if (!$dataSource) { //if missing data, error
 
 //whether to use the visualisation for development of network or for visualisation / browsing of data
 $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev") ? $_POST["dev"] : false);
-//echo "DEV" . $networkDevelopment;
+
+//possible cache
+$cached = hasKey($_POST, "cache") ? $_POST["cache"] : "{}";
+
+//possible annotations export
+$anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
+
 ?>
 
 <!DOCTYPE html>
@@ -153,7 +159,12 @@ $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev
       <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
     </div>
 
-    <div class="inner-panel" style="margin-top: 320px;"><span> Overlay opacity: </span><input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1"></div> <!--Height of navigator = margn top of this div + padding-->
+    <div class="inner-panel" style="margin-top: 320px; display: flex;">
+      <span> Overlay opacity: &emsp;</span>
+      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" style="display: flex; width: 165px;">&emsp;
+      <span onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Export <span class="material-icons">download</span></span>
+      <a style="display:none;" id="export-visualisation"></a>
+    </div> <!--Height of navigator = margn top of this div + padding-->
     <div id="panel-shaders" class="inner-panel" > 
 
       <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
@@ -220,7 +231,8 @@ if($errorSource) {
   echo "$('#main-panel').css('display', 'none');";
   $debugSource = print_r($dataSource, true);
   if (!$debugSource) $debugSource = "null";
-  echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', 'ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$debugSource</code>');";
+  $postdata = print_r($_POST, true);
+  echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', `ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$postdata</code>`);";
   echo "</script></body></html>";
   exit;
 }
@@ -256,8 +268,8 @@ if($errorSource) {
       navigatorId: "panel-navigator",
       // debugMode:  true,  
     });
-
     viewer.gestureSettingsMouse.clickToZoom = false;
+
 
     let shaderNames = $("#shaders");
     //note: a shader, once defined, must be used
@@ -306,19 +318,19 @@ if($errorSource) {
       }
     });
 
-   
+    //must be defined
+    function redraw() {
+      seaGL.redraw(viewer.world, layerIDX);
+    }
 
-
+    //Set visualisations
     setup.forEach(visualisationDef => {
       //setup all visualisations defined     
       seaGL.setVisualisation(visualisationDef);  
     });
 
-
-    function redraw() {
-      seaGL.redraw(viewer.world, layerIDX);
-    }
-
+    //Set cache
+    seaGL.viaGL.setCache(<?php echo $cached; ?>);
 
     // load desired shader upon selection
     $("#shaders").on("change", function () {
@@ -469,8 +481,7 @@ var openseadragon_image_annotations = new OSDAnnotations({
     Create annotation overlay and enables annotation control(add, edit, dowload...)
     
     - scale: width of source image (annotationcanvas is created with same width)
-    - json_annotation: json file with annotation description, viewer will visualize
-                       provided annotaions
+    - json_annotation: json string from annotations export
     */
 
     function initialize_annotations() {
@@ -478,15 +489,12 @@ var openseadragon_image_annotations = new OSDAnnotations({
         scale: viewer.world.getItemAt(0).source.Image.Size.Width,
         fireRightClick: true
       };
-      var json_annotation = '';
-  
+      var json_annotation = <?php echo "'$anotationsJSON'";?>;
       openseadragon_image_annotations.initialize(json_annotation, viewer, viewer.world.getItemAt(layerIDX), "imageAnnotationToolbarContent", options);
-
-
     };
 
     
-    function nameAnnotFile() {
+    function nameAnnotFile(self) {
       var probabs_url_array = urlProbabilities.split("/");
       var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
       var experiment = probabs_url_array.pop();
@@ -495,6 +503,45 @@ var openseadragon_image_annotations = new OSDAnnotations({
       document.getElementById('download_link1').download = file_name + ".json";
       document.getElementById('download_link2').download = file_name + ".xml";
     };
+
+    function exportVisualisation() {
+      var annotations = openseadragon_image_annotations.getJSONContent();
+      var visCache = JSON.stringify(seaGL.viaGL.getCache());
+      var doc = `<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+</head>
+<body>
+  <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
+    <input type="hidden" id="visualisation" name="visualisation">
+    <input type="hidden" id="image" name="image">
+    <input type="hidden" id="layer" name="layer">
+    <input type="hidden" id="cache" name="cache">
+    <input type="hidden" id="dev" name="dev">
+    <input type="hidden" id="annotations" name="annotations">
+    <input type="submit" value="">
+    </form>
+  <script type="text/javascript">
+    //safely set values (JSON)
+    document.getElementById("visualisation").value = '<?php echo $visualisation ?>';
+    document.getElementById("image").value = '<?php echo $dataSource["image"]; ?>';
+    document.getElementById("layer").value = '<?php echo $dataSource["layer"]; ?>';
+    document.getElementById("cache").value = '${visCache}';
+    document.getElementById("dev").value = '<?php echo $networkDevelopment; ?>';
+    document.getElementById("annotations").value = '${annotations}';
+
+    document.getElementById("redirect").submit();
+    <\/script>
+</body>
+</html>`;
+			var output = new Blob([doc], { type: 'text/html' });
+			var downloadURL = window.URL.createObjectURL(output);
+      var downloader = document.getElementById("export-visualisation");
+			downloader.href = downloadURL;
+      downloader.download = "export.html";
+      downloader.click();
+    }
 
 
     <?php
@@ -510,11 +557,8 @@ var openseadragon_image_annotations = new OSDAnnotations({
       networkPlugin.init(viewer.viewport, viewer.world.getItemAt(layerIDX), openseadragon_image_annotations);
     });
 
-EOF;
-    
-    
+EOF; 
   } 
-  
   ?>
 
   </script>

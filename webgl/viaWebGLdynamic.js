@@ -36,6 +36,8 @@ ViaWebGL = function(incoming) {
     this._programs = [];
     this._program = -1;
     this._texture_names = [];
+    this._initialized = false;
+    this._cache = [];
 
     this.wrap = gl.CLAMP_TO_EDGE;
     this.tile_pos = 'a_tile_pos';
@@ -66,13 +68,6 @@ ViaWebGL = function(incoming) {
     }
 
     this.texture.init(gl, this.max_textures);
-
-    var s = document.createElement("script");
-    s.type = "text/javascript";
-    s.text = `
-    var VISUALISAITION_SHADER_CACHE = {};
-    `;
-    document.body.appendChild(s);
 };
 
 ViaWebGL.prototype = {
@@ -242,8 +237,22 @@ ViaWebGL.prototype = {
 
     // Run handler only to decide whether particular tile uses openGL
     willUseCanvas: function(tile, e) {
-        //todo dirty
+        //todo dirty do it differently
         return this['gl_drawing'].call(this, tile, e);
+    },
+
+    // Must be called before init()
+    setCache: function(cache) {
+        if (typeof cache !== "object" || this._initialized) {
+            console.error("Invalid call of loadCache!");
+            return;
+        }
+        this._cache = cache;
+    },
+
+    getCache: function() {
+        //global maintained by this script
+        return VISUALISAITION_SHADER_CACHE;
     },
 
     //////////////////////////////////////////////////////////////////////////////
@@ -252,6 +261,11 @@ ViaWebGL.prototype = {
 
     // Initialize viaGL
     init: function() {
+        if (this._initialized) {
+            console.error("Already initialized!");
+            return;
+        }
+    
         if (this._visualisations.length < 1) {
             //todo show GUI error instead
             console.error("No visualisation specified!");
@@ -263,12 +277,21 @@ ViaWebGL.prototype = {
             return;
         }
 
+        this._initialized = true;
         // Allow for mouse actions on click
         if (this.hasOwnProperty('container') && this.hasOwnProperty('onclick')) {
             this.container.onclick = this[this.onclick].bind(this);
         }
-
         this.setDimensions(this.width, this.height);
+
+        //cache setup
+        var s = document.createElement("script");
+        s.type = "text/javascript";
+        s.text = `
+        var VISUALISAITION_SHADER_CACHE = ${JSON.stringify(this._cache)};
+        `;
+        document.body.appendChild(s);
+        delete this._cache;
 
         // Load the shaders when ready and return the promise
         var step = [this._visualisations.map(this.getter)];

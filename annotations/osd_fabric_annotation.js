@@ -758,7 +758,7 @@ OSDAnnotations.prototype = {
 			//json
 
 			//TODO add oteher attributes for export to preserve funkcionality (border width, etc)
-			var text = JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold']));
+			var text = this.getJSONContent();
 			var json_data = new Blob([text], { type: 'text/plain' });
 			var url1 = window.URL.createObjectURL(json_data);
 			document.getElementById('download_link1').href = url1;
@@ -770,8 +770,6 @@ OSDAnnotations.prototype = {
 			var url2 = window.URL.createObjectURL(xml_data);
 			document.getElementById('download_link2').href = url2;
 			document.getElementById('download_link2').click();
-
-
 		});
 
 		// create ASAP xml form with neccessary tags
@@ -928,6 +926,9 @@ OSDAnnotations.prototype = {
 		});
 	}, // end of initialize
 
+	getJSONContent: function() {
+		return JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold']));
+	},
 
 	/****************************************************************************************************************
 	
