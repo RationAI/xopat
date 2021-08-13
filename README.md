@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Histoviso - OpenSeadragon-based histology data visualizer
 
 This visualiser uses OpenSeadragon together with _fabric.js overlay_ and modified _webGL_ OSD plugins to render 
