@@ -90,7 +90,7 @@ OSDAnnotations.prototype = {
   
 				<span class="material-icons inline-pin"
 				onclick="$(this).parents().eq(3).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
-				<h3 style="display: inline-block;">Annotations&emsp;</h3>
+				<h3 class="d-inline-block h3">Annotations&emsp;</h3>
 				<span id="expand" class="material-icons" style="cursor: pointer;float: right;">expand_more</span>
   
 				<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
@@ -140,15 +140,15 @@ OSDAnnotations.prototype = {
 	
 	  </div>
   
-	  <div id="annotation-logger" class="inner-panel" style="flex-grow: 3;">
+	  <div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 		<div class="noselect" style="height: 100%;position: relative"  id="inner-panel-content-3">
-		  <h4 style="padding-left: 9px; display: inline-block;">Board&nbsp;</h4>&nbsp;
+		  <h3 class="pl-2 d-inline-block h3">Board</h4>
 		  <span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
 		  <span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
 		  
-		  <button type="button" aria-pressed="false" autocomplete="off" style="position: absolute; right: 15px; top: 0;" id="deleteAll">Delete All</button>
+		  <button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>
 		 <br>
-		  <div id="annotation-logs" style="cursor:pointer"></div>
+		  <div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
 		   </div>
 	  </div>
 	</div>
@@ -940,26 +940,25 @@ OSDAnnotations.prototype = {
 
 		return `Brush:<br>
 			<div id="imageToolbarRow2">
-				<div class="btn-group" data-toggle="buttons">
-					<label class="btn btn-secondary active" onclick="openseadragon_image_annotations.annotationType='rect';">
-						<input type="radio" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked><span class="material-icons"> crop_5_4 </span>
-					</label>
-					<label class="btn btn-secondary" onclick="openseadragon_image_annotations.annotationType='ellipse';">
-						<input type="radio" name="annotationType" id="ellipse" autocomplete="off" value="ellipse"><span class="material-icons"> panorama_fish_eye </span>
-					</label>
-					<label class="btn btn-secondary" onclick="openseadragon_image_annotations.annotationType='polygon';">
-						<input type="radio" name="annotationType" id="polygon" autocomplete="off" value="polygon"><span class="material-icons"> share </span>
-					</label>
+				<div class="radio-group">
+
+					  <button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
+	
+						<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
+						<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>
+			
 							  
 				</div>
 			</div>
 	  
-			<label><input type="text" style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
-			  <input type="color" id="leftClickColor" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
-			</label>
-			<label><input type="text" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
-			  <input type="color" id="rightClickColor" name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
-			</label>
+			<div class="input-group">
+			  <input type="text" class="form-control"  style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
+			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
+			</div>
+			<div class="input-group">
+			<input type="text" class="form-control" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
+			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
+			  </div>
 			<br>
 			<p1>Automatic tool threshold:</p1>
 			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
@@ -2833,10 +2832,10 @@ OSDAnnotations.prototype = {
 
 		highlight: function(object) {
 			if (this._boardSelected) {
-				this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('highlighted');
+				this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('color-bg-tertiary');
 			}
 			if (object) {
-				this.board.find(`#log-object-${object.incrementId}`).addClass('highlighted');
+				this.board.find(`#log-object-${object.incrementId}`).addClass('color-bg-tertiary');
 			}
 			this._boardSelected = object;
 		},
@@ -2885,7 +2884,7 @@ OSDAnnotations.prototype = {
 			let center = object.getCenterPoint();
 			this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="openseadragon_image_annotations.history._focus(${center.x}, ${center.y}, ${object.incrementId});">
 			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
-				<input type="text" disabled="true" class="desc" value="${desc}">
+				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 				<span class="material-icons" onclick="
 				 if ($(this).html() === 'edit') {
 					$(this).prev().prop('disabled', false); 
@@ -2959,25 +2958,33 @@ OSDAnnotations.prototype = {
 	}, // end of namespace history
 
 	messenger: {
-		MSG_INFO: {color: "#a8cf6d"},
-		MSG_WARN: {color: "#cfab6d"},
-		MSG_ERR: {color: "#cf846d"},
+		MSG_INFO: {class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>'},
+		MSG_WARN: {class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />'},
+		MSG_ERR: {class: "Toast--error", icon:'<path fill-rule="evenodd" d="M10 1H4L0 5v6l4 4h6l4-4V5l-4-4zm3 9.5L9.5 14h-5L1 10.5v-5L4.5 2h5L13 5.5v5zM6 4h2v5H6V4zm0 6h2v2H6v-2z" />'},
 		_timer: null,
 
 		init: function() {
-			$("body").append('<div class="popUpHide" id="system-messages-container"><span id="system-messages"></span>&emsp;<span onclick="openseadragon_image_annotations.messenger.hide(false);" style="cursor:pointer;" class="material-icons">close</span></div>');
-			this._body = $("#system-messages-container");
-			this._board = $("#system-messages");
+			//$("body").append('<div class="popUpHide" id="annotation-messages-container"><span id="annotation-messages"></span>&emsp;<span onclick="openseadragon_image_annotations.messenger.hide(false);" style="cursor:pointer;" class="material-icons">close</span></div>');
+			$("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
+			  <span class="Toast-icon"><svg width="12" height="16"v id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
+			  <span id="annotation-messages" class="Toast-content v-align-middle"></span>
+			  <button class="Toast-dismissButton" onclick="openseadragon_image_annotations.messenger.hide(false);">
+			    <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
+			  </button>
+			  </div>`);
+			this._body = $("#annotation-messages-container");
+			this._board = $("#annotation-messages");
+			this._icon = $("#annotation-icon");
 		},
 
 		show: function(text, delayMS, importance) {
 
-			this._board.html(text)
-			this._body.css("background", importance.color);
+			this._board.html(text);
+			this._icon.html(importance.icon);
+			this._body.removeClass(); //all
+			this._body.addClass(`Toast position-fixed ${importance.class}`)
 			this._body.removeClass("popUpHide");
 			this._body.addClass("popUpEnter");
-
-			console.log("add", this._body)
 
 			if (delayMS > 1000) {
 				this._timer = setTimeout(this.hide.bind(this), delayMS);

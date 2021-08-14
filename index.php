@@ -146,14 +146,14 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
   <!-- System messaging -->
   <div id="system-message" class="hidden">
-    <div id="system-message-warn"><span class="material-icons">error_outline</span>&nbsp;Error</div>
-    <div id="system-message-title"></div>
-    <div id="system-message-details-btn" onclick="$('#system-message-details').css('visibility', 'visible'); $(this).css('display', 'none');">details</div>
-    <div id="system-message-details"></div>
+    <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
+    <div id="system-message-title" class="f2-light text-center clearfix"></div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('visibility', 'visible'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
+    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="visibility: hidden;"></div>
   </div>
 
-  <!-- Left panel -->
-  <div id="main-panel" class="left-panel">
+  <!-- Panel -->
+  <div id="main-panel" class="position-fixed d-flex flex-column right-0 height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
     <div id="navigator-container" class="inner-panel">
       <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
@@ -176,7 +176,7 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
           <span class="material-icons inline-pin"
           onclick="$(this).parents().eq(1).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
           
-          <select name="shaders" id="shaders" style="font-size: 14pt; height: 39px; margin-top: 4px; display: inline-block; vertical-align: super;">
+          <select name="shaders" id="shaders" class="form-select v-align-baseline h3" aria-label="Visualisation">
             <!--populated with shaders from the list -->
           </select>          
         </div>
@@ -228,7 +228,7 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
 if($errorSource) {
   //todo failure, no data source
-  echo "$('#main-panel').css('display', 'none');";
+  echo "$('#main-panel').addClass('d-none');";
   $debugSource = print_r($dataSource, true);
   if (!$debugSource) $debugSource = "null";
   $postdata = print_r($_POST, true);
@@ -312,9 +312,9 @@ if($errorSource) {
       },
       htmlShaderPartHeader: function(key, data, isVisible) {
         if (isVisible) {
-          return `<div class="configurable-border" data-id="${key}"><div class="shader-part-name"><input type="checkbox" checked data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
+          return `<div class="shader-part rounded-3 mx-1 my-2 pl-3 pt-1 pb-2" data-id="${key}"><div class="h5"><input type="checkbox" class="form-control" checked data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
         }
-        return `<div class="configurable-border shader-part-error" data-id="${key}"><div class="shader-part-name"><input type="checkbox" data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
+        return `<div class="shader-part rounded-3 mx-1 my-2 pl-3 pt-1 pb-2" data-id="${key}" style="filter: brightness(0.5);"><div class="h5"><input type="checkbox" class="form-control" data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
       }
     });
 

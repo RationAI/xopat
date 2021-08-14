@@ -1,52 +1,61 @@
-/* source: https://stackoverflow.com/questions/14387690/how-can-i-show-only-corner-borders */
- /* .configurable-border {
-    --b:5px;   
-    --c:#3d6a6c;;   
-    --w:25px;  
-    --r:10px;
-    
-    border: var(--b) solid transparent;
-    background: linear-gradient(var(--c),var(--c)) top left, linear-gradient(var(--c),var(--c)) bottom left, linear-gradient(var(--c),var(--c)) bottom left;
-    background-size: var(--b) 100%,var(--w) var(--b);
-    background-origin:border-box;
-    background-repeat: no-repeat;
-    padding-left: 10px;
-    border-radius: 10px;
-    background-color: #2c4e4f;
-    margin: 4px 2px;
+#system-message { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%));}
+
+
+#main-panel {
+    z-index: 9999;
+}
+
+.inner-panel {
+    padding: 3px 5px 5px 9px;
+    position: relative;
+    margin-bottom: 12px;
+}
+
+.inner-panel .inner-panel-content {
+    overflow-y: scroll;
+    overflow-x: hidden;
+    min-height: 50px;
+}
+
+.inner-panel::after {
+    content: '';
+}
+
+.inner-panel #expand {
+    transform: rotate(90deg);
+    transition: transform 0.2s ease-in-out;
+}
+
+.inner-panel:hover #expand {
+    transform: rotate(0);
+    transition: transform 0.2s ease-in-out;
+}
+
+
+.inner-panel .inner-panel-hidden {
+    max-height: 0;
+    transition: max-height 0.15s ease-in-out;
+    overflow: hidden;
+}
+
+.inner-panel:hover .inner-panel-hidden {
+    max-height: 100vw;
+    transition: max-height 0.15s ease-in-out;
+}
+
+.inline-pin {
+    cursor: pointer;
+    vertical-align: baseline !important;
+}
+
+.shader-part {
     cursor: ns-resize;
-  }  */
-
-.configurable-border {
-    padding-left: 14px;
-    border-radius: 10px;
-    margin: 4px 2px;
-    cursor: ns-resize;
-    background-image: linear-gradient(to right, #595959 , #303134);
-    padding-top: 2px;
-    padding-bottom: 4px;
-}
-
-.shader-part-name {
-    font-weight: 600;
-    margin-top: 2px;
+    background-image: linear-gradient(to right, #3a414b , #22272e);
 }
 
 
-#ctxmenu {
-    display: none;
-    position: absolute;
-    background-color: white;
-    border: 1px solid;
-    margin: 0;
-    padding: 7px 12px;
-}
 
-.shader-part-error {
-    filter: brightness(0.5);
-}
-
-select {
+/* select {
     padding: 2px 20px 2px 5px;
     margin: 2px;
     font-size: 16px;
@@ -76,6 +85,21 @@ input[type=number] {
     color: #e8eaed;
     margin: 0;
 }
+
+
+
+
+input[type=radio] {
+    position: fixed;
+    opacity: 0;
+    pointer-events: none;
+}
+
+option {
+    background: #3f3f3f;
+}
+ */
+
 
 input[type=range] {
     height: 25px;
@@ -179,24 +203,6 @@ input[type=range]:focus::-ms-fill-upper {
     background: #b9b9b9;
 }
 
-
-input[type=radio] {
-    position: fixed;
-    opacity: 0;
-    pointer-events: none;
-}
-
-option {
-    background: #3f3f3f;
-}
-
-button {
-    border: 2px solid #6a6a6a;
-    background: transparent;
-    border-radius: 7px;
-    color: white;
-}
-
 /*IE*/
 select::-ms-expand {
     display: none; /* Remove default arrow in Internet Explorer 10 and 11 */
@@ -275,28 +281,6 @@ select::-ms-expand {
 
 
 
-.inner-panel #expand {
-    transform: rotate(90deg);
-    transition: transform 0.2s ease-in-out;
-}
-
-.inner-panel:hover #expand {
-    transform: rotate(0);
-    transition: transform 0.2s ease-in-out;
-
-}
-
-
-.inner-panel .inner-panel-hidden {
-    max-height: 0;
-    transition: max-height 0.15s ease-in-out;
-    overflow: hidden;
-}
-
-.inner-panel:hover .inner-panel-hidden {
-    max-height: 100vw;
-    transition: max-height 0.15s ease-in-out;
-}
 
 
 .outline {
@@ -317,59 +301,7 @@ select::-ms-expand {
 display:none;
 }
 
-#system-message {
-    position: fixed;
-    width: 60%;
-    /* height: 30%; */
-    left: 18%;
-    transform: translate(0, calc(50vh - 50%));
-}
 
-#system-message-warn {
-    font-size: xxx-large;
-    text-align: center;
-    color: white;
-}
-
-#system-message-warn .material-icons {
-font-size: xxx-large;
-    transform: translate(0px, -5px);
-}
-
-
-
-#system-message-title {
-    font-size: x-large;
-    text-align: center;
-    color: white;
-}
-
-#system-message-details-btn {
-  font-size: medium;
-  color: white;
-  cursor: pointer;
- margin-top: 15px;
-    border: 1px solid;
-    border-radius: 4px;
-    font-weight: bold;
-    display: inline-block;
-    padding: 3px 12px;
-    margin-right: 35px;
-    float: right;       
-}
-
-
-#system-message-details {
-    font-size: medium;
-    color: white;
-    visibility: hidden;
-    max-height: 350px;
-    overflow-y: scroll;
-    padding: 20px 30px;
-    border: 1px solid white;
-    border-radius: 8px;
-    margin-top: 20px; 
-}
 
 
 .noselect {
@@ -382,9 +314,7 @@ font-size: xxx-large;
                                     supported by Chrome, Edge, Opera and Firefox */
   }
   
-  #main-panel {
-    z-index: 9999;
-  }
+ 
 
   #navigator-container {
     position: fixed;
@@ -407,37 +337,6 @@ font-size: xxx-large;
     
   }
 
-.left-panel {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    right:0;
-    height: 100vh;
-    overflow-y: overlay;
-    background: #303134;
-    box-shadow: 0 8px 10px -5px rgb(0 0 0 / 20%), 0 16px 24px 2px rgb(0 0 0 / 14%), 0 6px 30px 5px rgb(0 0 0 / 12%);
-    width: 400px;
-}
-
-.inner-panel {
-    color: white;
-    padding: 3px 5px 5px 9px;
-    position: relative;
-    margin-bottom: 12px;
-}
-
-.inner-panel .inner-panel-content {
-    overflow-y: scroll;
-    overflow-x: hidden;
-    min-height: 50px;
-}
-
-
-.inner-panel::after {
-    content: '';
-  
-}
-
 .window-scaler {
     height: 5px;
     width: 100%;
@@ -446,57 +345,7 @@ font-size: xxx-large;
 
 }
 
-/* .annotations {
-    position:fixed;
-    right: 0;
-    bottom: 0;
-    width: max-content;
-    height: max-content;
-    background: #202124;
-    color: #e8eaed;
-    width: 550px;
-  } */
-  
-  #annotation-pin {
-      position: absolute; 
-      right:0; 
-      top:4;
-      cursor: pointer;
-  }
 
-  .inline-pin {
-    cursor: pointer;
-    vertical-align: baseline !important;
-  }
-
-/* .annotations #imageAnnotationToolbar {
-    display:none;
-    padding: 10px;
-    position: relative;
-}
-
-
-.annotations:hover #imageAnnotationToolbar {
-    display: block;
-}
-
-.imageAnnotationToolbarAndButtons {
-  padding: 10px;
-} */
-
-/* .sliders-wrapper {
-    left: 0;
-    bottom: 0;
-    position: fixed;
-    z-index: 999999;
-    height: auto;
-    width: max-content;
-    background: #202124;
-    border: 1px solid #000;
-    padding: 15px;
-    color: #e8eaed;
-
-} */
 
 .options {
   left: 5px;
@@ -522,6 +371,40 @@ font-size: xxx-large;
   border: 1px solid #000;
   border-radius: 5px;
   padding: 10px;
+}
+
+
+
+
+
+
+
+
+.material-icons {
+  font-family: 'Material Icons';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;  /* Preferred icon size */
+  display: inline-block;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  word-wrap: normal;
+  white-space: nowrap;
+  direction: ltr;
+  vertical-align: middle;
+  padding: 0 5px;
+
+  /* Support for all WebKit browsers. */
+  -webkit-font-smoothing: antialiased;
+  /* Support for Safari and Chrome. */
+  text-rendering: optimizeLegibility;
+
+  /* Support for Firefox. */
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Support for IE. */
+  font-feature-settings: 'liga';
 }
 
 /* width */
@@ -555,32 +438,4 @@ font-size: xxx-large;
 }
 ::-webkit-scrollbar-corner {
     background-color: transparent;
-}
-
-
-.material-icons {
-  font-family: 'Material Icons';
-  font-weight: normal;
-  font-style: normal;
-  font-size: 24px;  /* Preferred icon size */
-  display: inline-block;
-  line-height: 1;
-  text-transform: none;
-  letter-spacing: normal;
-  word-wrap: normal;
-  white-space: nowrap;
-  direction: ltr;
-  vertical-align: middle;
-  padding: 0 5px;
-
-  /* Support for all WebKit browsers. */
-  -webkit-font-smoothing: antialiased;
-  /* Support for Safari and Chrome. */
-  text-rendering: optimizeLegibility;
-
-  /* Support for Firefox. */
-  -moz-osx-font-smoothing: grayscale;
-
-  /* Support for IE. */
-  font-feature-settings: 'liga';
 }

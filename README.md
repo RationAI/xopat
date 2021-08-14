@@ -13,7 +13,7 @@ multiple sources need to be defined) and rendered onto canvas using WebGL.
 In each folder you will find a `README` document that describes the given component in more detail.
 
 ### `./`
-Root folder contains two basic styles `github.css` (bootstrap style) and `style.css` (custom style) and `index.php` - files 
+Root folder contains two basic styles `github.css` (bootstrap _Primer CSS_, [documentation available here](https://primer.style/css)) and `style.css` (custom style) and `index.php` - files 
 that are the skeleton of the visualizer. 
 
 Supported arguments for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests:
