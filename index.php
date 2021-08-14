@@ -136,7 +136,7 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
 </head>
 
-<body>
+<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
   <!-- OSD viewer -->
   <div id="viewer-container">
     <div id="viewer">

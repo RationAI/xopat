@@ -31,43 +31,13 @@ if (isset($data["color"])) {
 
 $samplerName = "tile_data_{$uniqueId}";
 
-$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] != 'false');
-$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] != 'false');
-$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] != 'false');
+$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"]);
+$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"]);
+$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"]);
 
 $r = $r / 255;
 $g = $g / 255;
 $b = $b / 255;
-
-/**
- * https://stackoverflow.com/questions/3512311/how-to-generate-lighter-darker-color-with-php
- * Increases or decreases the brightness of a color by a percentage of the current brightness.
- *
- * @param   string  $hexCode        Supported formats: `#FFF`, `#FFFFFF`, `FFF`, `FFFFFF`
- * @param   float   $adjustPercent  A number between -1 and 1. E.g. 0.3 = 30% lighter; -0.4 = 40% darker.
- *
- * @return  array   [r g b] r g b conponents in decimal values, ready to be used by shader (between 0 and 1)
- *
- * @author  maliayas (modified)
- */
-function adjustBrightness($hexCode, $adjustPercent) {
-    $hexCode = ltrim($hexCode, '#');
-
-    if (strlen($hexCode) == 3) {
-        $hexCode = $hexCode[0] . $hexCode[0] . $hexCode[1] . $hexCode[1] . $hexCode[2] . $hexCode[2];
-    }
-
-    $hexCode = array_map('hexdec', str_split($hexCode, 2));
-
-    foreach ($hexCode as & $color) {
-        $adjustableLimit = $adjustPercent < 0 ? $color : 255 - $color;
-        $adjustAmount = ceil($adjustableLimit * $adjustPercent);
-
-        $color = ($color + $adjustAmount) / 255;
-    }
-
-    return $hexCode;
-}
 
 
 $definition = <<<EOF
@@ -117,25 +87,25 @@ EOF;
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
 
-    float data_{$uniqueId} = texture2D($samplerName, v_tile_pos).g;
+    float data_{$uniqueId} = texture2D($samplerName, v_tile_pos).r;
     float dist_{$uniqueId} = 0.01;
 
-    float up_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).g;
-    float bottom_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).g;
-    float left_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).g;
-    float right_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})).g;
+    float up_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
+    float bottom_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
+    float left_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;
+    float right_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})).r;
 
-    float up2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)).g;
-    float bottom2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)).g;
-    float left2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})).g;
-    float right2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})).g;
+    float up2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
+    float bottom2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
+    float left2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})).r;
+    float right2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})).r;
 
     vec4 border_{$uniqueId} = getBorder_{$uniqueId}(data_{$uniqueId}, up_{$uniqueId}, bottom_{$uniqueId}, left_{$uniqueId},
                                 right_{$uniqueId}, up2_{$uniqueId}, bottom2_{$uniqueId}, left2_{$uniqueId}, right2_{$uniqueId});
                                                                
     //we don't know the ZOOM max level, opacity created empirically
     float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
-    show(vec4(border_{$uniqueId}.r, border_{$uniqueId}.g, border_{$uniqueId}.b, border_{$uniqueId}.a * borderOpacity_{$uniqueId} * threshold_opacity_{$uniqueId}));
+    show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * borderOpacity_{$uniqueId} * threshold_opacity_{$uniqueId}));
     
     // if (clipToThresholdi_(data.r) == 1){
     //     if (data.g > 0.1) {

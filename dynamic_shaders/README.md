@@ -2,7 +2,7 @@
 
 All the API is accessible through simple `GET` or `POST` requests. 
 
-### `builder.php`
+### `build.php`
 
 Is an interface to avoid running separate requests for each shader part. Only `POST` request is supported, because
 the parametrization might be lengthy. Required parameters are attributes of the `visualisation` field required by
@@ -57,7 +57,7 @@ Each shader type has a shader part script that generates following JSON-encoded 
 There are some necessary things required to allow advanced functionality. Each file, after `init.php` inclusion can use global parameters:
 - `$uniqueID` - a variable to avoid namespace collision
 - `$data` - an array that contains sent parameters
-- function `send($definition, $sampler2DUniformName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)` for unified output style
+- function `send($definition, $sampler2DUniformName, $execution, $htmlPart="", $jsPart="", $glLoaded="", $glDrawing="")` for unified output style
 
 #### Global functions and variables - GLSL
 In fragment shader (`$execution` and `$definition`), there are several global functions and variables available. Example of really simple _identity_ shader part:
@@ -90,8 +90,8 @@ $gldraw = ""; //nothing
 $html = ""; //nothing
 //js part: controls action: update controls if necessary and invoke `redraw();`
 $js = ""; //nothing
-//print output
-send($definition, $execution, $html, $js, $glload, $gldraw, $samplerName);
+//print output, it is also possible to call send($definition, $samplerName, $execution); only
+send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
 `````
 Shader is then composed in this manner: (you can see the **global** stuff here)
 ````glsl
@@ -139,6 +139,6 @@ executed. That means the user would lose all presents from the use history. Here
 Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
 
 
-For more complex examples, see other scripts. **Non-unique names of variables and functions will cause the shader compilation failure or other
+For more complex examples, see scripts themselves. **Non-unique names of variables and functions will cause the shader compilation failure or other
 namespace collision.** 
 We recommend to extend each custom variable and function name with `$uniqueId`, both for `GLSL` and `JavaScript`.

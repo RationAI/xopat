@@ -25,19 +25,7 @@ set_exception_handler(function($exception) {
     echo json_encode((object)array("error" => "Unknown error. Please, re-open the application.", "desc" => "<code>$msg</code>"));
 });
  
- //EXISTING SHADERS
- $COLORS_NAME = "color";
- $COLORS_FILENAME = "colors";
- $EDGES_NAME = "edge";
- $EDGES_FILENAME = "edges";
- $IDENTITY_NAME = "identity";
- $IDENTITY_FILENAME = "identity";
-
- $shaders = array(
-     $COLORS_NAME=>$COLORS_FILENAME,
-     $EDGES_NAME=>$EDGES_FILENAME,
-     $IDENTITY_NAME=>$IDENTITY_FILENAME
- );
+ include_once("defined.php");
 
  $input = json_decode($_POST["shaders"]); //the data
  if (!$input) {
@@ -89,6 +77,7 @@ set_exception_handler(function($exception) {
         $data = json_decode(file_get_contents($url));
         $data->order = $i;
         $data->visible = $object->visible;
+        $data->url = $url;
         if (isset($data->error) && $data->error) {
             $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
         } else {
@@ -101,9 +90,9 @@ set_exception_handler(function($exception) {
  }
 
  function to_params($array) {
-    if (!is_array($array) || !is_object($array)) {
-        return "";
-    }
+    // if (!is_array($array) || !is_object($array)) {
+    //     return "";
+    // }
 
     $out = "";
     foreach ($array as $name=>$value) {

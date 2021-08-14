@@ -40,7 +40,7 @@ Then, based on the presence of `visualisation` the user is
 [{    
       "name": "A visualisation setup 1",
       "params": {
-             "unique_id": "network" 
+             "uniqueId": "network" 
       }, 
       "shaders": [
              {
@@ -66,7 +66,7 @@ Then, based on the presence of `visualisation` the user is
 All items are required except for items inside `params` field and the exception of `type`/`source`.
 - `name` - visualisation name
 - `params` - visualisation parameters, supported:
-    - `unique_id` - necessary to set up in case mutiple instances of webGL framework are running
+    - `uniqueId` - necessary to set up in case mutiple instances of webGL framework are running
 - `shaders` - a list of data instances tied to a certain visualisation style
     - `data` - both name and id (in future, id will be a lone parameter), defines the data (id will in the pyramidal 
         tiff directory define the data to use)
