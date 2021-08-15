@@ -138,14 +138,12 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
   <!-- OSD viewer -->
-  <div id="viewer-container">
-    <div id="viewer">
-      <div id="osd"></div>
-    </div>
+  <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
+     <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
   </div>
 
   <!-- System messaging -->
-  <div id="system-message" class="hidden">
+  <div id="system-message" class="d-none">
     <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('visibility', 'visible'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
@@ -155,13 +153,13 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
   <!-- Panel -->
   <div id="main-panel" class="position-fixed d-flex flex-column right-0 height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
-    <div id="navigator-container" class="inner-panel">
+    <div id="navigator-container" class="inner-panel position-fixed right-0 top-0" style="width: 400px;">
       <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
     </div>
 
-    <div class="inner-panel" style="margin-top: 320px; display: flex;">
+    <div class="inner-panel d-flex" style="margin-top: 320px;">
       <span> Overlay opacity: &emsp;</span>
-      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" style="display: flex; width: 165px;">&emsp;
+      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 165px;">&emsp;
       <span onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Export <span class="material-icons">download</span></span>
       <a style="display:none;" id="export-visualisation"></a>
     </div> <!--Height of navigator = margn top of this div + padding-->
@@ -171,12 +169,11 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
       <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
-          <span id="expand" class="material-icons btn-right" style="margin-right: 14px;">expand_more</span>
 
           <span class="material-icons inline-pin"
           onclick="$(this).parents().eq(1).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
           
-          <select name="shaders" id="shaders" class="form-select v-align-baseline h3" aria-label="Visualisation">
+          <select name="shaders" id="shaders" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
             <!--populated with shaders from the list -->
           </select>          
         </div>
@@ -213,12 +210,12 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
       show: function(title, description) {
         this.msgTitle.html(title);
         this.msgDetails.html(description);
-        this.msgContainer.removeClass("hidden");
+        this.msgContainer.removeClass("d-none");
         this.screenContainer.addClass("disabled");
       },
 
       hide: function() {
-        this.msgContainer.addClass("hidden");
+        this.msgContainer.addClass("d-none");
         this.screenContainer.removeClass("disabled");
       }
     }
@@ -311,10 +308,15 @@ if($errorSource) {
         DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
       },
       htmlShaderPartHeader: function(key, data, isVisible) {
-        if (isVisible) {
-          return `<div class="shader-part rounded-3 mx-1 my-2 pl-3 pt-1 pb-2" data-id="${key}"><div class="h5"><input type="checkbox" class="form-control" checked data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
-        }
-        return `<div class="shader-part rounded-3 mx-1 my-2 pl-3 pt-1 pb-2" data-id="${key}" style="filter: brightness(0.5);"><div class="h5"><input type="checkbox" class="form-control" data-id="${key}" onchange="shaderPartToogleOnOff(this);">&emsp;${key}</div>${data[key]["html"]}</div>`;
+        let style = isVisible ? '' : 'style="filter: brightness(0.5);">';
+        let checked = isVisible ? 'checked' : '';
+        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${key}" ${style}>
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" class="form-control" ${checked} data-id="${key}" onchange="shaderPartToogleOnOff(this);">
+              &emsp;${key}<span class="material-icons position-absolute right-1" style="width: 10%;">swap_vert</span>
+            </div>
+            <div class="non-draggable">${data[key]["html"]}</div>
+            </div>`;
       }
     });
 
@@ -402,10 +404,37 @@ if($errorSource) {
       Array.prototype.map.call(sortableList.children, (item) => {enableDragItem(item)});
     }
 
+ 
     function enableDragItem(item) {
-      item.setAttribute('draggable', true)
+      item.setAttribute('draggable', true);
+      item.ondragstart = startDrag;
       item.ondrag = handleDrag;
       item.ondragend = handleDrop;
+    }
+
+    function startDrag(event) {
+      const currentTarget = event.target;
+        let clicked = document.elementFromPoint(event.x, event.y);
+        if (isPrevented(clicked, 'non-draggable')) {
+          event.preventDefault();
+        }
+    }
+    
+    //modified from https://codepen.io/akorzun/pen/aYwXoR
+    const isPrevented = (element, cls) => {
+      let currentElem = element;
+      let isParent = false;
+      
+      while (currentElem) {
+        const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
+        if (hasClass) {
+          isParent = true;
+          currentElem = undefined;
+        } else {
+          currentElem = currentElem.parentElement;
+        }
+      }
+      return isParent;
     }
 
     function handleDrag(item) {
@@ -447,6 +476,7 @@ if($errorSource) {
       seaGL.reorder();
       redraw();
     }
+
 
     
 /*------------ Initialization of OSD Annotations ------------*/

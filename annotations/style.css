@@ -37,3 +37,17 @@
 #annotation-logger input:disabled {
   cursor: pointer;
 }
+
+/* TODO unused? */
+#input_form {
+  display: none;
+  left: 5px;
+  position: fixed;
+  z-index: 999999;
+  height: max-content;
+  width: max-content;
+  background: #fff;
+  border: 1px solid #000;
+  border-radius: 5px;
+  padding: 10px;
+}

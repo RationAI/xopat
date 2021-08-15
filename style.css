@@ -1,8 +1,12 @@
 #system-message { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%));}
 
-
 #main-panel {
     z-index: 9999;
+}
+
+#shader-options span {
+    width: 30%;
+    display: inline-block;
 }
 
 .inner-panel {
@@ -20,17 +24,6 @@
 .inner-panel::after {
     content: '';
 }
-
-.inner-panel #expand {
-    transform: rotate(90deg);
-    transition: transform 0.2s ease-in-out;
-}
-
-.inner-panel:hover #expand {
-    transform: rotate(0);
-    transition: transform 0.2s ease-in-out;
-}
-
 
 .inner-panel .inner-panel-hidden {
     max-height: 0;
@@ -53,209 +46,14 @@
     background-image: linear-gradient(to right, #3a414b , #22272e);
 }
 
-
-
-/* select {
-    padding: 2px 20px 2px 5px;
-    margin: 2px;
-    font-size: 16px;
-    border: 2px solid #6a6a6a;
-    height: 34px;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-    background: transparent;
-    border-radius: 11px;
-    color: #c8c8c8;
-    display: block;
-    cursor: pointer;
-    padding-left: 7px;
-    margin: 8px 5px 5px 0;
-    max-width: 85%;
-    outline: 0;
-    box-shadow: none;
+.non-draggable {
+    cursor: auto;
 }
-
-input[type=number] {
-    margin: 5px;
-    width: 50px;
-    background: inherit;
-    border: 1px solid #e8eaed;
-    border-radius: 8px;
-    color: #e8eaed;
-    margin: 0;
-}
-
-
-
-
-input[type=radio] {
-    position: fixed;
-    opacity: 0;
-    pointer-events: none;
-}
-
-option {
-    background: #3f3f3f;
-}
- */
-
-
-input[type=range] {
-    height: 25px;
-    -webkit-appearance: none;
-    margin: 3px 0;
-    width: 65%;
-    background: transparent;
-    vertical-align: middle;
-    margin: 0;
-}
-
-#shader-options span {
-    width: 30%;
-    display: inline-block;
-}
-
-input[type=range].with-direct-input {
-    width: calc(70% - 80px);
-}
-
-input[type=range]:focus {
-    outline: none;
-}
-input[type=range]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 8px;
-    cursor: pointer;
-    box-shadow: 0px 0px 0px #000000;
-    background: #b9b9b9;
-    border-radius: 7px;
-    border: 0px 
-}
-input[type=range]::-webkit-slider-thumb {
-    box-shadow: 0px 0px 3px #000000;
-    border: 0px solid #FFFFFF;
-    height: 18px;
-    width: 18px;
-    border-radius: 25px;
-    background: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-    -webkit-appearance: none;
-    margin-top: -5px;
-}
-input[type=range]:focus::-webkit-slider-runnable-track {
-    background: #b9b9b9;
-}
-input[type=range]::-moz-range-track {
-    width: 100%;
-    height: 8px;
-    cursor: pointer;
-    animate: 0.2s;
-    box-shadow: 0px 0px 0px #000000;
-    background: #b9b9b9;
-    border-radius: 7px;
-    border: 0px;
-}
-input[type=range]::-moz-range-thumb {
-    box-shadow: 0px 0px 3px #000000;
-    border: 0px solid #b9b9b9;
-    height: 18px;
-    width: 18px;
-    border-radius: 25px;
-    background: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-}
-input[type=range]::-ms-track {
-    width: 100%;
-    height: 8px;
-    cursor: pointer;
-    animate: 0.2s;
-    background: transparent;
-    border-color: transparent;
-    color: transparent;
-}
-input[type=range]::-ms-fill-lower {
-    background: #b9b9b9;
-    border: 0px solid #000000;
-    border-radius: 14px;
-    box-shadow: 0px 0px 0px #000000;
-}
-input[type=range]::-ms-fill-upper {
-    background: #b9b9b9;
-    border: 0px solid #e8eaed;
-    border-radius: 14px;
-    box-shadow: 0px 0px 0px #000000;
-}
-input[type=range]::-ms-thumb {
-    margin-top: 1px;
-    box-shadow: 0px 0px 3px #000000;
-    border: 0px solid #b9b9b9;
-    height: 18px;
-    width: 18px;
-    border-radius: 25px;
-    background: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-}
-input[type=range]:focus::-ms-fill-lower {
-    background: #b9b9b9;
-}
-input[type=range]:focus::-ms-fill-upper {
-    background: #b9b9b9;
-}
-
-/*IE*/
-select::-ms-expand {
-    display: none; /* Remove default arrow in Internet Explorer 10 and 11 */
-}
-
-#viewer-container {
-  position: absolute;
-  width: 100%;
-  height: 100vh;
-  left: 0;
-  top: 0;
-}
-#viewer-container #viewer {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 100vh;
-  pointer-events: none;
-}
-#viewer-container #osd {
-  position: relative;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 100vh;
-}
-#viewer-container #osd {
-  pointer-events: auto;
-}
-
-#help {
-    background: #000000bd;
-    min-height: 100px;
-    border-radius: 27px;
-    position: absolute;
-    left: 50%;
-    width: 50vw;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    padding: 12px;
-    color: white;
-    max-height: 80vh;
-    overflow: overlay;
-}
-
-.btn-right {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    cursor: pointer;
-}
-
+/**
+=====================
+UTILITIES
+=====================
+*/
 
 .pressed  {
     transform: translate(0, 6px);
@@ -265,13 +63,11 @@ select::-ms-expand {
     content: '';
     width: 20px;
     height: 7px;
-    background: #303134;
+    background: var(--color-bg-canvas);
     position: absolute;
     right: 7px;
-    top: 17px;
-    
+    top: 17px; 
 }
-
 
 .force-visible {
     display: block !important;
@@ -279,30 +75,48 @@ select::-ms-expand {
     max-height: initial !important;
 }
 
-
-
-
-
-.outline {
-  border-radius: 5px;
-  background: #fff;
-  border: 1px solid #000;
-  width: max-content;
-  padding: 10px;
-  margin-left: auto;
-  margin-bottom: 5px;
-}
-.controls-container button {
-  width: 100%;
-  padding: 5px 0;
-  margin-bottom: 5px;
-}
-.hidden {
-display:none;
+/* Disabled overlay on div */
+.disabled::after {
+    content: '';
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    filter: brightness(0.3);
+    background: #808080e6;
+    
 }
 
 
 
+/* For somre reason Github css does not style input range */
+input[type=range] { height: 25px;  -webkit-appearance: none; margin: 3px 0; width: 65%; background: transparent; vertical-align: middle; margin: 0;}
+input[type=range].with-direct-input { width: calc(70% - 80px);}
+input[type=range]:focus { outline: none;}
+input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer; box-shadow: 0px 0px 0px #000000; background: #b9b9b9; border-radius: 7px; border: 0px }
+input[type=range]::-webkit-slider-thumb { box-shadow: 0px 0px 3px #000000; border: 0px solid #FFFFFF; height: 18px; width: 18px; border-radius: 25px; background: rgba(255, 255, 255, 0.6); 
+    cursor: pointer; -webkit-appearance: none; margin-top: -5px;}
+input[type=range]:focus::-webkit-slider-runnable-track {  background: #b9b9b9;}
+input[type=range]::-moz-range-track { width: 100%; height: 8px; cursor: pointer; box-shadow: 0px 0px 0px #000000; background: #b9b9b9; border-radius: 7px; border: 0px;}
+input[type=range]::-moz-range-thumb { box-shadow: 0px 0px 3px #000000; border: 0px solid #b9b9b9; height: 18px; width: 18px; border-radius: 25px; background: rgba(255, 255, 255, 0.6); cursor: pointer;}
+input[type=range]::-ms-track { width: 100%; height: 8px; cursor: pointer; background: transparent; border-color: transparent; color: transparent;}
+input[type=range]::-ms-fill-lower { background: #b9b9b9; border: 0px solid #000000; border-radius: 14px; box-shadow: 0px 0px 0px #000000;}
+input[type=range]::-ms-fill-upper { background: #b9b9b9;border: 0px solid #e8eaed;border-radius: 14px;box-shadow: 0px 0px 0px #000000;}
+input[type=range]::-ms-thumb { margin-top: 1px; box-shadow: 0px 0px 3px #000000; border: 0px solid #b9b9b9; height: 18px; width: 18px; border-radius: 25px; background: rgba(255, 255, 255, 0.6); cursor: pointer;}
+input[type=range]:focus::-ms-fill-lower { background: #b9b9b9;}
+input[type=range]:focus::-ms-fill-upper { background: #b9b9b9;}
+
+/**
+=====================
+SYSTEM STYLING
+=====================
+*/
+
+/*IE*/
+select::-ms-expand {
+    display: none; /* Remove default arrow in Internet Explorer 10 and 11 */
+}
 
 .noselect {
     -webkit-touch-callout: none; /* iOS Safari */
@@ -313,71 +127,6 @@ display:none;
               user-select: none; /* Non-prefixed version, currently
                                     supported by Chrome, Edge, Opera and Firefox */
   }
-  
- 
-
-  #navigator-container {
-    position: fixed;
-    right: 0;
-    top: 0;
-    background-color: #303134;
-    z-index: 99999;
-    width: 400px;
-  }
-  
-  .disabled::after {
-    content: '';
-    width: 100%;
-    height: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    filter: brightness(0.3);
-    background: #808080e6;
-    
-  }
-
-.window-scaler {
-    height: 5px;
-    width: 100%;
-    cursor: pointer;
-    background-color: red;
-
-}
-
-
-
-.options {
-  left: 5px;
-  bottom: 280px;
-  position: fixed;
-  z-index: 999999;
-  height: 40px;
-  width: max-content;
-  background: #fff;
-  border: 1px solid #000;
-  border-radius: 5px;
-  padding: 10px;
-
-}
-
-#input_form {
-  left: 5px;
-  position: fixed;
-  z-index: 999999;
-  height: max-content;
-  width: max-content;
-  background: #fff;
-  border: 1px solid #000;
-  border-radius: 5px;
-  padding: 10px;
-}
-
-
-
-
-
-
 
 
 .material-icons {
@@ -394,20 +143,23 @@ display:none;
   direction: ltr;
   vertical-align: middle;
   padding: 0 5px;
-
   /* Support for all WebKit browsers. */
   -webkit-font-smoothing: antialiased;
   /* Support for Safari and Chrome. */
   text-rendering: optimizeLegibility;
-
   /* Support for Firefox. */
   -moz-osx-font-smoothing: grayscale;
-
   /* Support for IE. */
   font-feature-settings: 'liga';
 }
 
-/* width */
+
+/**
+=====================
+STYLING OF SCROLL BAR
+=====================
+*/
+
 ::-webkit-scrollbar {
     background: transparent;
     margin: 25px 0 25px 0;
@@ -415,12 +167,10 @@ display:none;
     height: 14px;
 }
 
-/* Track */
 ::-webkit-scrollbar-track {
     background: transparent;
 }
 
-/* Handle */
 ::-webkit-scrollbar-thumb {
     height: 6px;
     border: 4px solid rgba(0, 0, 0, 0);
@@ -430,12 +180,12 @@ display:none;
     -webkit-box-shadow: inset -1px -1px 0px rgba(0, 0, 0, 0.05), inset 1px 1px 0px rgba(0, 0, 0, 0.05);
 }
 
-
 ::-webkit-scrollbar-button {
     width: 0;
     height: 0;
     display: none;
 }
+
 ::-webkit-scrollbar-corner {
     background-color: transparent;
 }

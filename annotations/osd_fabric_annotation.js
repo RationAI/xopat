@@ -91,7 +91,6 @@ OSDAnnotations.prototype = {
 				<span class="material-icons inline-pin"
 				onclick="$(this).parents().eq(3).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
 				<h3 class="d-inline-block h3">Annotations&emsp;</h3>
-				<span id="expand" class="material-icons" style="cursor: pointer;float: right;">expand_more</span>
   
 				<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
   
@@ -154,10 +153,65 @@ OSDAnnotations.prototype = {
 	</div>
   `);
 
+$("body").append(`
+<div id="help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+<details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:700px; max-height: 600px;">
+    <div class="Box-header">
+      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$('#help').css('display', 'none');">
+        <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
+      </button>
+      <h3 class="Box-title">Annotations help</h3>
+    </div>
+    <div class="overflow-auto">
+      <div class="Box-body overflow-auto">
+	  
+	  <div class="flash mt-3 flash-error">
+	  <span class="octicon octicon-flame material-icons" viewBox="0 0 16 16" width="16" height="16"> error</span>
+	  Annotations work only for the original visualisations, edge-based visualisations do not support automatic selection (yet).
+	</div>
+	<br>
+	
+      <h4 class="mt-2"><span class="material-icons">brush</span>Brushes</h3>
+      <p>You can choose from  <span class="material-icons">crop_5_4</span>rectangle, <span class="material-icons">panorama_fish_eye</span>ellipse or <span class="material-icons">share</span>polygon. </p>
+      
+      <h4><span class="material-icons"> settings_overscan</span>Click to annotate</h3>
+      <p>You can create annotations with both left and right mouse button. Each button has default color and comment you can customize.
+      When you click on the canvas, a default object depending on a brush is created: if it is inside a visualised region, it will try to fit the underlying shape. Polygon will fail 
+      outside vis regions, other tools create default-sized object.</p>
+      <p><b>Automatic tool treshold</b> is the sensitivity of automatic selection: when minimized, the shape will take all surrounding areas. When set high, only the most prominent areas
+      will be included.</p>
 
+	  <div class="flash mt-3 flash-error">
+	  <span class="octicon octicon-flame material-icons" viewBox="0 0 16 16" width="16" height="16"> error</span>
+	  Avoid auto-appending of large areas (mainly large probability tile chunks), the algorithm is still not optimized and the vizualiation would freeze. In that case, close the tab and reopen a new one.
+	</div>
+      
+
+      <br>
+	  
+	  <h4 class="mt-2"><span class="material-icons">highlight_alt</span>Alt+Drag, Alt+Click</h4>
+        <p>With left alt on a keyboard, you can create custom shapes. Simply hold the left alt key and drag for rectangle/ellipse, or click-place points of a polygon. Once you release alt,
+        the polygon will be created. With other shapes, to finish the drag is enough.</p>
+      <h4 class="mt-2"><span class="material-icons">flip_to_front </span>Shift + Click</h4>
+        <p>You can use left mouse button to append regions to a selected object. With right button, you can <b>remove</b> areas from any annotaion object.</p>
+      <h4 class="mt-2"><span class="material-icons">assignment</span>Annotation board</h4>
+        <p>You can browse exiting annotation objects there. You can edit a comment by <span class="material-icons">edit</span> modifying the label (do not forget to save <span class="material-icons">save</span>).
+            Also, selecting an object will send you to its location and highlight it so that you can orient easily in existing annotaions. </p>
+      <h4 class="mt-2"><span class="material-icons"> delete</span>Del to delete</h4>
+        <p>Highlighted object will be deleted, when you hit 'delete' key. This works handily with annotation board - click and delete to remove any object.</p>
+      <h4 class="mt-2"><span class="material-icons"> history</span>History</h4>
+        <p>You can use Ctrl+Z to revert any changes made on object that affect its shape. This does not include manual resizing or movement of rectangles or ellipses. 
+		You can use Ctrl+Shift+Z to redo the history (note: if you hit the bottom, you can redo history except the last item. In other words, if you undo 'n' operations, you can redo 'n-1').</p>
+      <h4 class="mt-2"><span class="material-icons"> tune</span>Advanced modifications</h4>
+        <p>By holding the right alt key, you can manually adjust shapes - move them around, resize them or modify polygon vertices. <b style="color: chocolate;">This mode might be very buggy.</b></p>
+      </div>
+    </div>
+  </details-dialog>
+  </div>
+`);
 		
 
-
+	//form for object property modification
 		$("body").append(
 			`<div id="input_form" style="display:none">
 			<table>
@@ -180,58 +234,7 @@ OSDAnnotations.prototype = {
 				<td colspan="2"><textarea id="annotation_comment" placeholder="Add a comment..." name="text" rows="2" tabindex="3"></textarea></td>
 			</tr>
 			</table>
-		</div><div id="custom-cursor" style="position: fixed;border: 4px solid gray;border-radius:50%;display:none;"></div>
-		<div id="help" style="display: none;">
-    <div style="position: relative;">
-      <span class="material-icons btn-right" onclick="$('#help').css('display', 'none');"  title="Close" style="font-size: 25pt;">close</span>
-      <br>
-      <b style="color: chocolate;">NOTE: annotations work only for the original visualisations, edge-based visualisations do not support automatic selection (yet).</b>
-      <br><br>
-      <br><h4><span class="material-icons">brush</span>Brushes</h3>
-      You can choose from  <span class="material-icons">crop_5_4</span>rectangle, <span class="material-icons">panorama_fish_eye</span>ellipse or <span class="material-icons">share</span>polygon. 
-      
-      <br><br><h4><span class="material-icons"> settings_overscan</span>Click to annotate</h3>
-      You can create annotations with both left and right mouse button. Each button has default color and comment you can customize.
-      When you click on the canvas, a default object depending on a brush is created: if it is inside a visualised region, it will try to fit the underlying shape. Polygon will fail 
-      outside vis regions, other tools create default-sized object.
-      <b>Automatic tool treshold</b> is the sensitivity of automatic selection: when minimized, the shape will take all surrounding areas. When set high, only the most prominent areas
-      will be included.
-      <br><br>
-      <b style="color: chocolate;">CAVEAT: avoid auto-appending of large areas (mainly large probability tile chunks), the algorithm is still not optimized and the vizualiation would freeze. In that case, close the tab and reopen a new one.</b>
-
-
-      <br><br><h4><span class="material-icons">
-        highlight_alt
-        </span>Alt+Drag, Alt+Click</h4>
-      With left alt on a keyboard, you can create custom shapes. Simply hold the left alt key and drag for rectangle/ellipse, or click-place points of a polygon. Once you release alt,
-        the polygon will be created. With other shapes, to finish the drag is enough.
-
-      <br><br><h4><span class="material-icons">
-        flip_to_front
-        </span>Shift + Click</h4>
-        When holding a left shift key, you can auto-customize any shape. An algorithm will select a region that is to be appended to the currently selected object. Ellipse/rect will
-        simply grow in size, polygon will <b style="color: chocolate;">degenerate: this still needs a fix</b>. Only similar pixels in the surrounding area are appended, unlike
-        with the automatic object creation.
-        <b style="color:darkcyan;">TODO (needs to be implemented): Right click to _remove_ surrounding areas.</b>
-        <br><br>
-        <b style="color: chocolate;">CAVEAT: avoid auto-appending of large areas (mainly large probability tile chunks), the algorithm is still not optimized and the vizualiation would freeze. In that case, close the tab and reopen a new one.</b>
-
-      <br><br><h4><span class="material-icons">
-            assignment
-            </span>Annotation board</h4>
-            You can browse exiting annotation objects there. You can edit a comment by <span class="material-icons">edit</span> modifying the label (do not forget to save <span class="material-icons">save</span>).
-            Also, selecting an object will send you to its location and highlight it so that you can orient easily in existing annotaions. 
-
-            <br><br><h4><span class="material-icons"> delete</span>Del to delete</h4>
-            Highlighted object will be deleted, when you hit 'delete' key. This works handily with annotation board - click and delete to remove any object.
-
-            <br><br><h4><span class="material-icons"> history</span>History</h4>
-            You can use Ctrl+Z to revert any changes made on object that affect its shape. This does not include manual resizing or movement of rectangles or ellipses. You can use Ctrl+Shift+Z to redo the history (note: if you hit the bottom, you can redo history except the last item. In other words, if you undo 'n' operations, you can redo 'n-1').
-
-            <br><br><h4><span class="material-icons"> tune</span>Advanced modifications</h4>
-            By holding the right alt key, you can manually adjust shapes - move them around, resize them or modify polygon vertices. <b style="color: chocolate;">This mode might be very buggy.</b>
-    </div>
-	`);
+		</div><div id="custom-cursor" style="position: fixed;border: 4px solid gray;border-radius:50%;display:none;"></div>`);
 
 
 	this.history.init();
