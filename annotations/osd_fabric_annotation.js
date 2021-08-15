@@ -234,9 +234,10 @@ $("body").append(`
 				<td colspan="2"><textarea id="annotation_comment" placeholder="Add a comment..." name="text" rows="2" tabindex="3"></textarea></td>
 			</tr>
 			</table>
-		</div><div id="custom-cursor" style="position: fixed;border: 4px solid gray;border-radius:50%;display:none;"></div>`);
+		</div><div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
+		`);
 
-
+			this.cursor.init();
 	this.history.init();
 	this.messenger.init();
 		this.annotationForm = $("#input_form");
@@ -327,8 +328,7 @@ $("body").append(`
 				}
 
 				openseadragon_image_annotations.modifyTool.init(currentObject, openseadragon_image_annotations.toScreenCoords(pointer.x, pointer.y), 100, isLeftClick);
-				openseadragon_image_annotations.modifyTool.update(pointer);
-				
+				openseadragon_image_annotations.modifyTool.update(pointer);				
 			} else {
 				//problem when click on cavas and the browser is not in focus, prevent current selection from removal
 				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
@@ -464,7 +464,6 @@ $("body").append(`
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
 			var pointer = openseadragon_image_annotations.overlay.fabricCanvas().getPointer(o.e);
-			openseadragon_image_annotations.cursor.update({x: o.e.pageX, y: o.e.pageY});
 
 			if (!openseadragon_image_annotations.isDown) return;
 
@@ -660,12 +659,8 @@ $("body").append(`
 				openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "crosshair";
 				//todo value of radius from user
 				// openseadragon_image_annotations.modifyTool.setRadius(100); //so that cursor radius that is being taken from here will be correct before midify tool init
-				// let screenRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius();
-				// openseadragon_image_annotations.cursor.setCursorStyle({
-				// 	width: screenRadius*2,
-				// 	height: screenRadius*2
-				// });
-				//openseadragon_image_annotations.cursor.show();
+
+				openseadragon_image_annotations.cursor.show();
 			} else if (e.code === "AltRight") {
 				openseadragon_image_annotations.setMouseOSDInteractive(false);
 			}
@@ -713,7 +708,7 @@ $("body").append(`
 						openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
 						openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "pointer";
 						openseadragon_image_annotations.viewer.setMouseNavEnabled(true);
-						//openseadragon_image_annotations.cursor.hide();
+						openseadragon_image_annotations.cursor.hide();
 					}
 				}
 			}
@@ -2266,30 +2261,47 @@ $("body").append(`
 		_node: null,
 		_toolRadius: 0,
 
-		setCursorStyle: function(styleObject) {
-			this._node = $("#custom-cursor");
-			this._node.css(styleObject);
+		init: function() {
+			this._node = document.getElementById("annotation-cursor");
+		},
+
+		updateRadius: function() {
 			this._toolRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius();
 		},
 
-		show: function() {
-			this._node.css("display", "block");
-			this._visible = true;
+		getHTMLNode: function() {
+			return this._node;
 		},
 
-		update: function(mousePosition) {
-			if (this._visible) {
-				this._node.css({
-					left: mousePosition.x - this._toolRadius,
-					top: mousePosition.y - this._toolRadius,
-				});
-			}
+		show: function() {
+			if (this._listener) return;
+			//this._node.css({display: "block", width: this._toolRadius+"px", height: this._toolRadius+"px"});
+			this._node.style.display = "block";			
+			this.updateRadius();
+			this._node.style.width = (this._toolRadius * 2)+"px";
+			this._node.style.height = (this._toolRadius * 2)+"px";
+			// this._node.style.top = e.pageY + "px";
+			// this._node.style.left = e.pageX + "px";
+
+			const c = this._node;
+
+			this._visible = true;
+			this._listener = e => {
+				c.style.top = e.pageY + "px";
+				c.style.left = e.pageX + "px";
+	
+
+			};
+			window.addEventListener("mousemove", this._listener);
 		},
 
 		hide: function() {
-			this._node.css("display", "none");
+			if (!this._listener) return;
+			this._node.style.display = "none";
 			this._visible = false;
-		}
+			window.removeEventListener("mousemove", this._listener);
+			this._listener = null;
+		},
 	},
 
 
@@ -2512,7 +2524,8 @@ $("body").append(`
 					this._setupPolygon(object);
 					break;
 				default:
-					//TODO finish will fail this way...
+					this.polygon = null;
+					openseadragon_image_annotations.messenger.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, openseadragon_image_annotations.messenger.MSG_WARN);
 					return;
 			}
 

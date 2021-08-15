@@ -191,35 +191,31 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
   <div id="auto-scripts"></div>
   
 
+<!-- DEFAULT SETUP SCRIPTING -->
+<script type="text/javascript">
 
-  <!-- DEFAULT SETUP SCRIPTING -->
+   /*---------------------------------------------------------*/
+   /*------------ System error messenger ---------------------*/
+   /*---------------------------------------------------------*/
 
-  <script type="text/javascript">
+  var DisplayError = {
+    msgTitle: $("#system-message-title"),
+        msgDetails: $("#system-message-details"),
+        msgContainer: $("#system-message"), 
+        screenContainer: $("#viewer-container"),
+      
+        show: function(title, description) {
+          this.msgTitle.html(title);
+          this.msgDetails.html(description);
+          this.msgContainer.removeClass("d-none");
+          this.screenContainer.addClass("disabled");
+        },
 
-    
-
-    var DisplayError = {
-      msgTitle: $("#system-message-title"),
-      msgDetails: $("#system-message-details"),
-      msgContainer: $("#system-message"), 
-      screenContainer: $("#viewer-container"),
-      // Status: Object.freeze({
-      //   ERROR
-      // });
-
-      show: function(title, description) {
-        this.msgTitle.html(title);
-        this.msgDetails.html(description);
-        this.msgContainer.removeClass("d-none");
-        this.screenContainer.addClass("disabled");
-      },
-
-      hide: function() {
-        this.msgContainer.addClass("d-none");
-        this.screenContainer.removeClass("disabled");
-      }
-    }
-
+        hide: function() {
+          this.msgContainer.addClass("d-none");
+          this.screenContainer.removeClass("disabled");
+        }    
+  }   
 
 <?php
 
@@ -235,14 +231,13 @@ if($errorSource) {
 }
 
 ?>
-    
+   /*---------------------------------------------------------*/
    /*------------ Initialization of OpenSeadragon ------------*/
-
+   /*---------------------------------------------------------*/
     var urlImage = "<?php echo $dataSource["image"]; ?>";
     var urlLayer = "<?php echo $dataSource["layer"]; ?>";
     var setup = <?php echo $visualisation ?>;  
     
-    // set tile sources for individual images.
     //IIPIMAGE with deepzoom protocol will provide dzi tiles from tif (urlImage and layer data)
     var baseTileSource = "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi";
     var layerTileSource = "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi";
@@ -253,7 +248,7 @@ if($errorSource) {
 
     var activeShader = 0;
 
-    // initialize viewer
+    // Initialize viewer - OpenSeadragon
     var viewer = OpenSeadragon({
       id: "osd",
       prefixUrl: "images/",
@@ -267,11 +262,10 @@ if($errorSource) {
     });
     viewer.gestureSettingsMouse.clickToZoom = false;
 
-
+    // Initialize viewer webGL extension - ViaGL
     let shaderNames = $("#shaders");
-    //note: a shader, once defined, must be used
     seaGL = new openSeadragonGL(viewer, {
-      //todo HCEK if parameters not missing and throw error if required param missing
+      //todo CHECK if parameters not missing and throw error if required param missing
       htmlControlsId: "shader-options",
       scriptId: "auto-scripts",
       jsGlLoadedCall: "glLoaded",
@@ -291,22 +285,29 @@ if($errorSource) {
         });
       },
 
-      //called once a visualisation is (for the first time only) compiled and linked (might not happen)
+      //called once a visualisation is compiled and linked (might not happen)
       visualisationReady: function(i, visualisation) {
 
       },
 
+      //called once a visualisation is switched to (including first run)
       visualisationInUse: function(visualisation) {
         enableDragSort("shader-options");
         //called only if everything is fine
         DisplayError.hide(); //preventive
       },
+
+      //called when visualisation is unable to run
       onFatalError: function(vis) {
         DisplayError.show(vis.error, vis.desc);
       },
+
+      //called when exception (usually some missing function) occurs
       onException: function(error) {
         DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
       },
+
+      //called to get custom HTML header for each shader part
       htmlShaderPartHeader: function(key, data, isVisible) {
         let style = isVisible ? '' : 'style="filter: brightness(0.5);">';
         let checked = isVisible ? 'checked' : '';
@@ -346,43 +347,38 @@ if($errorSource) {
       viewer.world.getItemAt(layerIDX).setOpacity(val);
     });
 
-    
-
-    //init
-    // setupShaders();
-    //updateShaderControls();
+  
     seaGL.init();
 
 
+   /*---------------------------------------------------------*/
+   /*------------ JS utilities and enhancements --------------*/
+   /*---------------------------------------------------------*/
+
+    /**
+     * From https://github.com/openseadragon/openseadragon/issues/1690
+     * brings better zooming behaviour
+     */
     viewer.addHandler("canvas-scroll", function (event) {
-      //Create var to count number of consecutive scrolls that have taken place within the specified time limit of each other
       if (typeof this.scrollNum == 'undefined') {
         this.scrollNum = 0;
       }
 
-      //Create var to store the time of the previous scroll that occurred
       if (typeof this.lastScroll == 'undefined') {
         this.lastScroll = new Date();
       }
 
       this.currentScroll = new Date(); //Time that this scroll occurred at
 
-      //If the last scroll was less than 400 ms ago, increase the scroll count
       if (this.currentScroll - this.lastScroll < 400) {
         this.scrollNum++;
-      }
-      //Otherwise, reset the count and zoom speed
-      else {
+      } else {
         this.scrollNum = 0;
         viewer.zoomPerScroll = 1.2;
       }
 
-      //If user has scrolled more than twice consecutively within 400 ms, increase the scroll speed with each consecutive scroll afterwards
-      if (this.scrollNum > 2) {
-        //Limit maximum scroll speed to 2.5
-        if (viewer.zoomPerScroll <= 2.5) {
-          viewer.zoomPerScroll += 0.2;
-        }
+      if (this.scrollNum > 2 && viewer.zoomPerScroll <= 2.5) { 
+        viewer.zoomPerScroll += 0.2;
       }
 
       this.lastScroll = this.currentScroll; //Set last scroll to now
@@ -390,14 +386,13 @@ if($errorSource) {
 
 
 
-
-
-    /* Made with love by @fitri
-    This is a component of my ReactJS project
-    https://codepen.io/fitri/full/oWovYj/ 
-    
-    Modified by Jiří
-    */
+    /**
+     * Made with love by @fitri
+     * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/ 
+     * 
+     * Shader re-compilation and re-ordering logics
+     * Modified by Jiří
+     */
 
     function enableDragSort(listId) {
       const sortableList = document.getElementById(listId);
@@ -477,12 +472,57 @@ if($errorSource) {
       redraw();
     }
 
+    /**
+     * Exporting of visualisation
+     *  
+     */
+    function exportVisualisation() {
+      var annotations = openseadragon_image_annotations.getJSONContent();
+      var visCache = JSON.stringify(seaGL.viaGL.getCache());
+      var doc = `<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+</head>
+<body>
+  <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
+    <input type="hidden" id="visualisation" name="visualisation">
+    <input type="hidden" id="image" name="image">
+    <input type="hidden" id="layer" name="layer">
+    <input type="hidden" id="cache" name="cache">
+    <input type="hidden" id="dev" name="dev">
+    <input type="hidden" id="annotations" name="annotations">
+    <input type="submit" value="">
+    </form>
+  <script type="text/javascript">
+    //safely set values (JSON)
+    document.getElementById("visualisation").value = '<?php echo $visualisation ?>';
+    document.getElementById("image").value = '<?php echo $dataSource["image"]; ?>';
+    document.getElementById("layer").value = '<?php echo $dataSource["layer"]; ?>';
+    document.getElementById("cache").value = '${visCache}';
+    document.getElementById("dev").value = '<?php echo $networkDevelopment; ?>';
+    document.getElementById("annotations").value = '${annotations}';
 
+    document.getElementById("redirect").submit();
+    <\/script>
+</body>
+</html>`;
+			var output = new Blob([doc], { type: 'text/html' });
+			var downloadURL = window.URL.createObjectURL(output);
+      var downloader = document.getElementById("export-visualisation");
+			downloader.href = downloadURL;
+      downloader.download = "export.html";
+      downloader.click();
+    }
+
+
+   /*---------------------------------------------------------*/
+   /*------------ Plugins ------------------------------------*/
+   /*---------------------------------------------------------*/
     
 /*------------ Initialization of OSD Annotations ------------*/
 var openseadragon_image_annotations = new OSDAnnotations({
   controlPanelId: "main-panel",
-   
 });
 
 
@@ -534,44 +574,7 @@ var openseadragon_image_annotations = new OSDAnnotations({
       document.getElementById('download_link2').download = file_name + ".xml";
     };
 
-    function exportVisualisation() {
-      var annotations = openseadragon_image_annotations.getJSONContent();
-      var visCache = JSON.stringify(seaGL.viaGL.getCache());
-      var doc = `<!DOCTYPE html>
-<html lang="en" dir="ltr">
-<head>
-  <meta charset="utf-8">
-</head>
-<body>
-  <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
-    <input type="hidden" id="visualisation" name="visualisation">
-    <input type="hidden" id="image" name="image">
-    <input type="hidden" id="layer" name="layer">
-    <input type="hidden" id="cache" name="cache">
-    <input type="hidden" id="dev" name="dev">
-    <input type="hidden" id="annotations" name="annotations">
-    <input type="submit" value="">
-    </form>
-  <script type="text/javascript">
-    //safely set values (JSON)
-    document.getElementById("visualisation").value = '<?php echo $visualisation ?>';
-    document.getElementById("image").value = '<?php echo $dataSource["image"]; ?>';
-    document.getElementById("layer").value = '<?php echo $dataSource["layer"]; ?>';
-    document.getElementById("cache").value = '${visCache}';
-    document.getElementById("dev").value = '<?php echo $networkDevelopment; ?>';
-    document.getElementById("annotations").value = '${annotations}';
 
-    document.getElementById("redirect").submit();
-    <\/script>
-</body>
-</html>`;
-			var output = new Blob([doc], { type: 'text/html' });
-			var downloadURL = window.URL.createObjectURL(output);
-      var downloader = document.getElementById("export-visualisation");
-			downloader.href = downloadURL;
-      downloader.download = "export.html";
-      downloader.click();
-    }
 
 
     <?php

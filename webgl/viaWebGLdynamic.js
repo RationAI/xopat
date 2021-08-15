@@ -522,8 +522,7 @@ try {
             let program = this.gl.createProgram();
             this._programs.push(program); //preventive, will possibly
             vis.order = Object.keys(vis.responseData);
-            this._visualisationToProgram(vis, program, i);
-            this.visualisationReady(i, vis);            
+            this._visualisationToProgram(vis, program, i);            
         }
         //if all invalid go back  
         if (this._program >= this._programs.length) this._program = 0;
@@ -577,6 +576,7 @@ try {
                 err("Unable to use this visualisation.", "Linking of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
             }
         }
+        this.visualisationReady(i, vis);
     },
 
     texture: {
