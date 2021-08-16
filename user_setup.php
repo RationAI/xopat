@@ -41,7 +41,7 @@ foreach ($shaders as $name=>$filename) {
 
   $params = array();
   foreach($options[$name] as $option=>$type) {
-    $params[$option] = "<div class='d-flex'><span style='width: 20%;direction:rtl;' class='position-relative'><input class='mr-2' type='{$htmlInputTypes[$type]}' {$htmlInputValues[$type]} onchange=\"setValue(this, '$option', '$type');\"></span><span class='flex-1'>Option <code>$option</code> - {$paramDescriptions[$option]}</span></div>";
+    $params[$option] = "<div class='d-flex'><span style='width: 20%;direction:rtl;' class='position-relative'><input style='direction:ltr; max-width:70px;' class='form-control input-sm mr-2' type='{$htmlInputTypes[$type]}' {$htmlInputValues[$type]} onchange=\"setValue(this, '$option', '$type');\"></span><span class='flex-1'>Option <code>$option</code> - {$paramDescriptions[$option]}</span></div>";
   }
   $inputs[$name] = (object)$params;
 }
@@ -139,7 +139,7 @@ $inputs_json = json_encode((object)$inputs);
   
   function setValue(self, option, type) {
     console.log(type);
-    if (type === "bool") {
+    if (type === "bool" || type === "neg_bool") {
       shaderObject.params[option] = (self.checked == true); //type coercion
     } else {
       shaderObject.params[option] = self.value;
@@ -190,7 +190,6 @@ $inputs_json = json_encode((object)$inputs);
     //     user_settings.shaders.push(data1);
     //     user_settings.shaders.push(data2);
     // }
-
 
     //only one visualisation possible for now
       document.getElementById("visualisation").value = JSON.stringify([user_settings]);

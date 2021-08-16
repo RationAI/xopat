@@ -1,0 +1,225 @@
+<?php
+/**
+ * Bi-colors shader
+ * 
+ * $_GET expected parameters:
+ *  index - unique number in the compiled shader
+ * $_GET supported parameters:
+ *  colorHigh - color to fill-in areas with high values (-->255), url encoded '#ffffff' format or digits only 'ffffff', default "#ff0000"
+ *  colorLow - color to fill-in areas with low values (-->0), url encoded '#ffffff' format or digits only 'ffffff', default "#7cfc00"
+ *  ctrlColor - whether to allow color modification, true or false, default true
+ *  ctrlThreshold - whether to allow threshold modification, true or false, default true
+ *  ctrlOpacity - whether to allow opacity modification, true or false, default true
+ * 
+ * colors shader will read underlying data (red component) and output
+ * to canvas defined color with opacity based on the data
+ * (0.0 => transparent, 1.0 => opaque)
+ * supports thresholding - outputs color on areas above certain value
+ * mapping html input slider 0-100 to .0-1.0
+ */
+require_once("init.php");
+
+$colorHigh = [255, 0, 0, "#ff0000"];
+if (isset($data["colorHigh"])) {
+  $colorHigh = toRGBColorFromString($data["colorHigh"], $colorHigh);
+} 
+
+$colorLow = [124, 252, 0, "#7cfc00"];
+if (isset($data["colorLow"])) {
+  $colorLow = toRGBColorFromString($data["colorLow"], $colorLow);
+} 
+
+$rH = $colorHigh[0] / 255;
+$gH = $colorHigh[1] / 255;
+$bH = $colorHigh[2] / 255;
+$rL = $colorLow[0] / 255;
+$gL = $colorLow[1] / 255; 
+$bL = $colorLow[2] / 255;
+
+//flags
+$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] == "1");
+$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] == "1");
+$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] == "1");
+$logScale = (isset($data["logScale"]) && $data["logScale"] == "1");
+
+//other values
+$logScaleMax = isset($data["logScaleMax"]) ? toShaderFloatString($data["logScaleMax"], 100, 2) : "100.0";
+$samplerName = "tile_data_{$uniqueId}";
+
+//definition part
+$definition = <<<EOF
+
+uniform sampler2D $samplerName;
+uniform float threshold_{$uniqueId};
+uniform float threshold_opacity_{$uniqueId};
+uniform vec3 colorHigh_{$uniqueId};
+uniform vec3 colorLow_{$uniqueId};
+
+EOF;
+
+//execution part
+if ($logScale) {
+  $compareAgainst = "float normalized_{$uniqueId} = (log2($logScaleMax + value_{$uniqueId}) - log2($logScaleMax))/(log2($logScaleMax+1.0)-log2($logScaleMax));";
+  $comparison = "normalized_{$uniqueId} > threshold_{$uniqueId}";
+  $alpha = "normalized_{$uniqueId} * threshold_opacity_{$uniqueId}";
+} else {
+  $compareAgainst = "";
+  $comparison = "value_{$uniqueId} > threshold_{$uniqueId}";
+  $alpha = "value_{$uniqueId} * threshold_opacity_{$uniqueId}";
+}
+$compConst = $invertOpacity ? "< 0.98" : " > 0.02";
+$defaultThresholdValue = $invertOpacity ? "100" : "1";
+
+$execution = <<<EOF
+
+  vec4 data_{$uniqueId} = texture2D($samplerName, v_tile_pos);
+  if (!close(data_{$uniqueId}.b, .5)) {
+    if (data_{$uniqueId}.b < .5) { //g2 color for small values
+      float value_{$uniqueId} = 1.0 - data_{$uniqueId}.b * 2.0;
+      $compareAgainst
+      if ($comparison) {
+         show(vec4( colorLow_{$uniqueId} , $alpha));
+      }
+    } else {  //r2 color for large values
+      float value_{$uniqueId} = (data_{$uniqueId}.b - 0.5) * 2.0;
+      $compareAgainst
+      if ($comparison) {
+         show(vec4( colorHigh_{$uniqueId} , $alpha));
+      } 
+    }  
+  }
+
+//   vec4 data = texture2D($samplerName, v_tile_pos);
+//   float log_threshold = 100.0;
+//   if (close(data.b, .5)) {
+//     return;
+//  }
+ 
+ 
+//  if (data.b < .5) { //green areas apped from 0 (highest) to .5 (smallest)
+//     float value = 1.0 - data.b * 2.0;
+//     float normalized_val = (log2(log_threshold + value) - log2(log_threshold))/(log2(log_threshold+1.0)-log2(log_threshold));
+//     if (normalized_val > threshold_{$uniqueId}) {
+//        gl_FragColor = vec4(.0, 1.0, .0, normalized_val);
+//     } else {
+//        gl_FragColor = vec4(.0);
+//     }
+    
+//  } else {  //red areas apped from 1 (highest) to .5 (smallest)
+//     float value = (data.b - 0.5) * 2.0;
+//     float normalized_val = (log2(log_threshold + value) - log2(log_threshold))/(log2(log_threshold+1.0)-log2(log_threshold));
+//     if (normalized_val > threshold_{$uniqueId}) {
+//        gl_FragColor = vec4(1.0, .0, .0, normalized_val);
+//     } else {
+//        gl_FragColor = vec4(.0);
+//     }
+//  }
+
+EOF;
+
+//glLoad, glDraw
+$glload = <<<EOF
+
+threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
+opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_opacity_{$uniqueId}');
+colorHigh_gl_{$uniqueId} = gl.getUniformLocation(program, 'colorHigh_{$uniqueId}');
+colorLow_gl_{$uniqueId} = gl.getUniformLocation(program, 'colorLow_{$uniqueId}');
+
+EOF;
+
+
+$gldraw = <<<EOF
+
+gl.uniform1f(threshold_gl_{$uniqueId}, threshold_{$uniqueId} / 100.0);
+gl.uniform1f(opacity_gl_{$uniqueId}, thresholdopacity_{$uniqueId});
+gl.uniform3fv(colorHigh_gl_{$uniqueId}, colorHigh_{$uniqueId});
+gl.uniform3fv(colorLow_gl_{$uniqueId}, colorLow_{$uniqueId});
+
+EOF;
+
+$html = "";
+if ($allowColorChange) {
+  $html .= <<<EOF
+  <span> High values:</span><input type="color" id="color-high-{$uniqueId}" class="form-control input-sm"  onchange="colorHighChange_{$uniqueId}(this)"><br>
+  <span> Low values:</span><input type="color" id="color-low-{$uniqueId}" class="form-control input-sm"  onchange="colorLowChange_{$uniqueId}(this)"><br>
+  EOF;
+}
+
+if ($allowOpacityChange) {
+  $html .= <<<EOF
+  <span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
+  EOF;
+}
+
+if ($allowThresholdChange) {
+  $directionRange = $invertOpacity ? 'style="direction: rtl"' : "";
+  $logname = $logScale ? " (log scale)" : "";
+  $html .= <<<EOF
+  <span> Threshold$logname:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" $directionRange value="1" step="1">
+  <input class="form-control input-sm" style="max-width:60px;" type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
+  EOF;
+}
+
+
+$js = <<<EOF
+var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, colorHigh_gl_{$uniqueId}, colorLow_gl_{$uniqueId};
+
+var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", 1);
+
+//initial values
+$("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
+$("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
+
+//updater
+function thresholdChange_{$uniqueId}(self) {
+   threshold_{$uniqueId} = $(self).val();
+   if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
+   else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
+   $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
+   $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
+   saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+
+   //global function, part of API
+   redraw();
+}
+
+var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
+
+$("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
+
+function opacityChange_{$uniqueId}(self) {
+   thresholdopacity_{$uniqueId} = $(self).val();
+   saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
+   redraw();
+}
+
+var colorHigh_{$uniqueId} = loadCache("colorHigh_{$uniqueId}", [$rH, $gH, $bH]);
+$("#color-high-{$uniqueId}").val("#" + Math.round(colorHigh_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") +  Math.round(colorHigh_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(colorHigh_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
+
+function colorHighChange_{$uniqueId}(self) {
+    let col = $(self).val();
+    colorHigh_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
+    colorHigh_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
+    colorHigh_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
+    saveCache("colorHigh_{$uniqueId}", colorHigh_{$uniqueId});
+
+    redraw();
+}
+
+var colorLow_{$uniqueId} = loadCache("colorLow_{$uniqueId}", [$rL, $gL, $bL]);
+$("#color-low-{$uniqueId}").val("#" + Math.round(colorLow_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") +  Math.round(colorLow_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(colorLow_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
+
+function colorLowChange_{$uniqueId}(self) {
+    let col = $(self).val();
+    colorLow_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
+    colorLow_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
+    colorLow_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
+    saveCache("colorLow_{$uniqueId}", colorLow_{$uniqueId});
+
+    redraw();
+}
+EOF;
+
+send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
+
+?>						

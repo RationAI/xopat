@@ -17,13 +17,10 @@ $dataSource = hasKey($_GET, "image") ? $_GET : (hasKey($_POST, "image") ? $_POST
 //can come from POST
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
 
-//if no request for new visualisation
-if (!$visualisation 
-      && !hasKey($_GET, "new") 
-      && !hasKey($_POST, "new") 
-      && !hasKey($_COOKIE, "new") 
-      && hasKey($_COOKIE, "visualisation")) {
-  
+$requireNewSetup = hasKey($_GET, "new") || hasKey($_POST, "new") || hasKey($_COOKIE, "new");
+
+//if no request for new visualisationm try to use cookies
+if (!$visualisation && !$requireNewSetup && hasKey($_COOKIE, "visualisation")) {
   $visualisation = $_COOKIE["visualisation"];
   //if data not given in POST/GET, try cookies
   if (!$dataSource) {
@@ -54,7 +51,7 @@ if (!$dataSource) { //if missing data, error
 $networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev") ? $_POST["dev"] : false);
 
 //possible cache
-$cached = hasKey($_POST, "cache") ? $_POST["cache"] : "{}";
+$cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
 
 //possible annotations export
 $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";

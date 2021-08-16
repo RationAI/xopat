@@ -80,6 +80,10 @@ set_exception_handler(function($exception) {
         $data->url = $url;
         if (isset($data->error) && $data->error) {
             $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
+        } else if (strlen($data->execution) < 5 || strlen($data->definition) < 5 || strlen($data->sampler2D) < 1) {
+            $data->error = "The requested visualisation type '$object->type' does not work properly.";
+            $data->desc = "One of the compulsory parts is empty or missing: definition/execution/sampler2D member variables. Status from $url request: " . $http_response_header[0];
+            $visualisation[$object->data] = $data;
         } else {
             $visualisation[$object->data] = $data; 
         }

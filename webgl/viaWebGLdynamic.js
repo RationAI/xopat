@@ -380,6 +380,7 @@ ViaWebGL.prototype = {
                 
 
                 if (visSetup[dataId].error) {
+                    //todo attach warn icon
                     html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["error"]}</div>${html}`;
                     console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
 
@@ -396,6 +397,8 @@ ViaWebGL.prototype = {
                     html = _this.htmlShaderPartHeader(dataId, visSetup, visible) + html;
                     js += visSetup[dataId]["js"];
                 } else {
+                     //todo attach warn icon
+
                     html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>This data cannot be displayed: invalid visualisation type.</div>${html}`;
                     console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
                 }
@@ -416,8 +419,15 @@ vec4 blend(vec4 a, vec4 b, float ratio) {
 //mixing the show color
 //shader parts should not touch gl_FragColor but rather send the
 //output using show(...)
+float _blend_channel(float fg, float bg) {
+    if (bg < 0.5) {
+        return 2.0 * bg * fg;
+    }
+    return 1.0 - 2.0 * (1.0 - bg) * (1.0 - fg);
+}
 void show(vec4 color) {
-    gl_FragColor = color.a * color + (1.0-color.a) * gl_FragColor;
+    // gl_FragColor = vec4(color.a * color.rgb + (1.0-color.a) * gl_FragColor.rgb, max(color.a, gl_FragColor.a));
+    gl_FragColor = vec4(_blend_channel(color.r, gl_FragColor.r), _blend_channel(color.g, gl_FragColor.g), _blend_channel(color.b, gl_FragColor.b), max(color.a, gl_FragColor.a));
 }
 
 bool close(float value, float target) {
@@ -427,7 +437,7 @@ bool close(float value, float target) {
 ${definition}
 
 void main() {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    gl_FragColor = vec4(0.5, 0.5, 0.5, 0.0);
 
     ${execution}
 }`;
@@ -568,15 +578,18 @@ try {
         if (!useShader(gl, program, vis["vertex_shader"], 'VERTEX_SHADER') ||
             !useShader(gl, program, vis["fragment_shader"], 'FRAGMENT_SHADER')) {
             err("Unable to use this visualisation.", "Compilation of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
+            console.warn("VERTEX SHADER", vis["vertex_shader"]);
+            console.warn("FRAGMENT SHADER", vis["fragment_shader"]);
             if (idx == this._program) this._program++;
         } else {
             gl.linkProgram(program);
+            console.log("FRAGMENT SHADER", vis["fragment_shader"]);
             //todo error here as well...
             if (!ok('Program','LINK',program)) {
                 err("Unable to use this visualisation.", "Linking of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
             }
         }
-        this.visualisationReady(i, vis);
+        this.visualisationReady(idx, vis);
     },
 
     texture: {

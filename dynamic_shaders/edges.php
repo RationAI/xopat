@@ -152,8 +152,8 @@ if ($allowOpacityChange) {
 
 if ($allowThresholdChange) {
   $html .= <<<EOF
-  <span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="0" step="1">
-  <input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="0"><br>
+  <span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="1" step="1">
+  <input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
   EOF;
 }
 

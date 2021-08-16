@@ -18,12 +18,27 @@ $uniqueId = isset($data["uniqueId"]) ? $data["uniqueId"] : "";
 $uniqueId .= $data["index"];
 
 
-function toShaderFloatString($value, $precisionLen=5) {
-    if (!is_numeric($precisionLen) || $precisionLen < 0 || $precisionLen > 9) {
-      $precisionLen = 5;
-    }
-    $value = sprintf("%01.{$precisionLen}f", $value);
-    return $value;
+function toShaderFloatString($value, $default, $precisionLen=5) {
+  if (!is_numeric($precisionLen) || $precisionLen < 0 || $precisionLen > 9) {
+    $precisionLen = 5;
+  }
+  try {     
+    return sprintf("%01.{$precisionLen}f", $value);
+  } catch (\Exception $e) {
+    //ignore and use default
+    return sprintf("%01.{$precisionLen}f", $default);
+  }   
+}
+
+function toRGBColorFromString($toParse, $default) {
+  try {     
+    $color = ltrim(urldecode($toParse), "#");
+    $arr = sscanf($color, "%02x%02x%02x");
+    return $arr;
+  } catch (\Exception $e) {
+    //ignore and use default
+    return $default;
+  }   
 }
 
 function prepare_send($definition, $dataName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing) {

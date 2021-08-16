@@ -9,6 +9,7 @@
  *  ctrlColor - whether to allow color modification, true or false, default true
  *  ctrlThreshold - whether to allow threshold modification, true or false, default true
  *  ctrlOpacity - whether to allow opacity modification, true or false, default true
+ *  inverse - low values are high opacities instead of high values
  * 
  * colors shader will read underlying data (red component) and output
  * to canvas defined color with opacity based on the data
@@ -34,16 +35,22 @@ if (isset($data["color"])) {
     $b = 0;
 } 
 
-$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] != 'false');
-$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] != 'false');
-$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] != 'false');
-
-$samplerName = "tile_data_{$uniqueId}";
-
 $r = $r / 255;
 $g = $g / 255;
 $b = $b / 255;
 
+//flags
+$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] == "1");
+$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] == "1");
+$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] == "1");
+$invertOpacity = (isset($data["inverse"]) && $data["inverse"] == "1");
+$logScale = (isset($data["logScale"]) && $data["logScale"] == "1");
+
+//other values
+$logScaleMax = isset($data["logScaleMax"]) ? toShaderFloatString($data["logScaleMax"], 100, 2) : "100.0";
+$samplerName = "tile_data_{$uniqueId}";
+
+//definition part
 $definition = <<<EOF
 
 uniform sampler2D $samplerName;
@@ -53,15 +60,31 @@ uniform vec3 color_{$uniqueId};
 
 EOF;
 
+//execution part
+$comparison = $invertOpacity ? "<" : ">";
+if ($logScale) {
+  $compareAgainst = "float normalized_{$uniqueId} = (log2($logScaleMax + data{$uniqueId}.r) - log2($logScaleMax))/(log2($logScaleMax+1.0)-log2($logScaleMax));";
+  $comparison = "normalized_{$uniqueId} $comparison threshold_{$uniqueId}";
+  $alpha = ($invertOpacity ? "(1.0 - normalized_{$uniqueId})" : "normalized_{$uniqueId}") . " * threshold_opacity_{$uniqueId}";
+} else {
+  $compareAgainst = "";
+  $comparison = "data{$uniqueId}.r $comparison threshold_{$uniqueId}";
+  $alpha = ($invertOpacity ? "(1.0 - data{$uniqueId}.r)" : "data{$uniqueId}.r") . " * threshold_opacity_{$uniqueId}";
+}
+$compConst = $invertOpacity ? "< 0.98" : " > 0.02";
+$defaultThresholdValue = $invertOpacity ? "100" : "1";
+
 $execution = <<<EOF
 
   vec4 data{$uniqueId} = texture2D($samplerName, v_tile_pos);
-  if(data{$uniqueId}.r > 0.02 && data{$uniqueId}.r > threshold_{$uniqueId}){
-    show(vec4(color_{$uniqueId}, data{$uniqueId}.r * threshold_opacity_{$uniqueId}));
+  $compareAgainst
+  if(data{$uniqueId}.r $compConst && $comparison){
+    show(vec4(color_{$uniqueId}, $alpha));
   }
 
 EOF;
 
+//glLoad, glDraw
 $glload = <<<EOF
 
 threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
@@ -93,19 +116,19 @@ if ($allowOpacityChange) {
 }
 
 if ($allowThresholdChange) {
+  $directionRange = $invertOpacity ? 'style="direction: rtl"' : "";
+  $logname = $logScale ? " (log scale)" : "";
   $html .= <<<EOF
-  <span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="0" step="1">
-  <input class="form-control input-sm" style="max-width:60px;" type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="0"><br>
+  <span> Threshold$logname:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" $directionRange value="$defaultThresholdValue" step="1">
+  <input class="form-control input-sm" style="max-width:60px;" type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="$defaultThresholdValue"><br>
   EOF;
 }
-
-
 
 
 $js = <<<EOF
 var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, color_gl_{$uniqueId};
 
-var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", 1);
+var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", $defaultThresholdValue);
 
 //initial values
 $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
