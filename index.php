@@ -498,15 +498,28 @@ if($errorSource) {
     }
 
 
-
-
    /*---------------------------------------------------------*/
    /*------------ PLUGINS ------------------------------------*/
    /*---------------------------------------------------------*/
+  var mainPanel = $("#main-panel");
    var PLUGINS = {
       osd: viewer,
       seaGL: seaGL,
-      controlPanelId: "main-panel",
+      appendToMainMenu: function(title, titleHtml, html, id) {
+        $("#main-panel").append(`<div id="${id}" class="inner-panel"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
+      },
+      appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id) {
+        $("#main-panel").append(`<div id="${id}" class="inner-panel"><div>
+        <span class="material-icons inline-pin" onclick="$(this).parent().parent().children().eq(2).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
+        <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
+        </div>
+        <div>	
+        ${html}
+        </div><div class='inner-panel-hidden'>${hiddenHtml}</div></div>`);
+      },
+      appendToMainMenuRaw: function(html, id) {
+        $("#main-panel").append(`<div id="${id}" class="inner-panel">${html}</div>`);
+      },
       postData: <?php echo json_encode($_POST)?>,
       each: <?php echo json_encode((object)$PLUGINS)?>
     };

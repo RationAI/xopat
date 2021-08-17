@@ -65,53 +65,33 @@ OSDAnnotations.prototype = {
 		}
 
 
-		$(`#${PLUGINS.controlPanelId}`).append(`
-<div id="panel-annotations" class="inner-panel">
-	<div class="inner-panel-content noselect"  id="inner-panel-content-2">
-		<div class="imageAnnotationToolbarAndButtons">
-			<div id="annotationButtonWrapper">
-			    <div style="display: inline-block; width: 100%;">
-				<span class="material-icons inline-pin"
-				onclick="$(this).parents().eq(3).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
-				<h3 class="d-inline-block h3">Annotations&emsp;</h3>
-				<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
-				<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
-				<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
+		PLUGINS.appendToMainMenuExtended("Annotations", `
+<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
+<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
+<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
 
-				<span class="material-icons" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
-				if ($(this).attr('data-ref') === 'on'){
-				  openseadragon_image_annotations.turnAnnotationsOnOff(false);
-				  $(this).html('visibility_off');
-				  $(this).attr('data-ref', 'off');
-				} else {
-				  openseadragon_image_annotations.turnAnnotationsOnOff(true);
-				  $(this).html('visibility');
-				  $(this).attr('data-ref', 'on');
-				}"> visibility</span>
-  
-				<br>Opacity:<br>
-				<input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
-				</div>
-				<a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
-				<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>	
-			</div>
-		</div>
-		<div id="imageAnnotationToolbar"  class="inner-panel-hidden">
-			<div id="imageAnnotationToolbarContent">
-	  
-			Brush:<br>
-			<div id="imageToolbarRow2">
-				<div class="radio-group">
+<span class="material-icons" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
+if ($(this).attr('data-ref') === 'on'){
+	openseadragon_image_annotations.turnAnnotationsOnOff(false);
+	$(this).html('visibility_off');
+	$(this).attr('data-ref', 'off');
+} else {
+	openseadragon_image_annotations.turnAnnotationsOnOff(true);
+	$(this).html('visibility');
+	$(this).attr('data-ref', 'on');
+}"> visibility</span>`,
+`<br>Opacity:<br>
+<input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
 
-					  <button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
-	
-						<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
-						<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>
-			
-							  
-				</div>
+<a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
+<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
+`<div id="imageAnnotationToolbarContent">
+			Brush:
+			<div class="radio-group">
+				<button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
+				<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
+				<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>		  
 			</div>
-	  
 			<div class="input-group">
 			  <input type="text" class="form-control"  style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
 			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
@@ -123,14 +103,9 @@ OSDAnnotations.prototype = {
 			<br>
 			<p1>Automatic tool threshold:</p1>
 			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
-			
-	  
-			</div>
-		</div>
-	</div>
-</div>`);
+			</div>`);
 
-		this.history.init(50, `#${PLUGINS.controlPanelId}`);
+		this.history.init(50);
 
 		$("body").append(`
 <div id="help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
@@ -2776,18 +2751,14 @@ History.prototype = {
 
 	//TODO history: populate BOARD when annotation file is loaded (some for object loop)
 	init: function (historySize = 30, jquerySelector = "body") {
-		$(jquerySelector).append(`<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-			<div class="noselect" style="height: 100%;position: relative"  id="inner-panel-content-3">
-			<h3 class="pl-2 d-inline-block h3">Board</h4>
-			<!--TODO dirty relying on a global-->
-			<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
-			<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
-			
-			<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>
-			<br>
+		PLUGINS.appendToMainMenu("Board", `<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
+		<!--TODO dirty relying on a global-->
+		<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
+		<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>`,
+		 `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
 			</div>
-		</div>`);
+		</div>`, 'annotation-board');
 
 		this.board = $("#annotation-logs");
 		this.undoBtn = $("#history-undo");

@@ -46,12 +46,27 @@ This global variable contains a lot of useful references:
 - `seaGL` Instance of underlying OpenSeadragon GL library
 - `imageLayer` Instance of `TiledImage` - OSD Class, a root for the tissue visualisation layer (0)
 - `dataLayer` Instance of `TiledImage` - OSD Class, a root for the data visualisation layer (1)
-- `controlPanelId` - `HTML` id for the Main Panel
+- `appendToMainMenu(title, titleHtml, html, id)` - both this and functions below allow for insertion of `HTML` into the Main Panel
+- `appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id)`
+    - `title`: plugin title to display
+    - `titleHtml`: html to append after title
+    - `html`: body of the plugin control panel, always visible
+    - `hiddenHtml`: body of the plugin control panel, visible on hover onlyor when pinned
+    - `id`: id that is given to the outer container, you can for example delete the panel later 
+- `appendToMainMenuRaw(html, id)` - if you need more freedom, we recommend to use functions above if possible
 - `postData` - JSON variant of `PHP`'s `$_POST` variable
 - `each` - object of **plugin id** to other **plugin `includes` data** mapping
 
 #### `redraw()`
 This function will trigger re-drawing of the whole data layer.
+
+### Available functionality
+You can use
+ - [jQuery](https://jquery.com/), 
+ - [OpenSeadragon](https://openseadragon.github.io/docs/) utilities (working with points etc.), 
+ - [Material design icons](https://fonts.google.com/icons?selected=Material+Icons)
+ for icons (use `<span>`) and 
+ - [Primer CSS bootstrap](https://primer.style/css).
 
 ### CSS
 If you want to use CSS, please, first rely on _Primer CSS_ bootstrap (https://primer.style/css) using class styling. 

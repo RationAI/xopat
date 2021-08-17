@@ -1,11 +1,6 @@
 Network = function () {
     //controlPanelId is incomming parameter, defines where to add HTML
-    $(`#${PLUGINS.controlPanelId}`).append(`<div id="panel-annotations" class="inner-panel">
-     <!--NOSELECT important due to interaction with slider, default height due to height adjustment later-->
-     <div class="inner-panel-content noselect">
-     <h3>Network control panel</h3>
-           HERE I CAN ADD CUSTOM CONTROLS, HTML CONTENT etc...
-     </div>`);
+    PLUGINS.appendToMainMenu("Network control panel", "<!--nothing in title html-->", `HERE I CAN ADD CUSTOM CONTROLS, HTML CONTENT etc...`, "idOfTheOuterDivContainer");
 
     //it is also possible to add elements to body:
     //$("body").append("<!--some html-->");
