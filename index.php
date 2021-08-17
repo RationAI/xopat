@@ -1,7 +1,13 @@
 <?php
 
+require_once("plugins.php");
+
 function hasKey($array, $key) {
   return isset($array[$key]) && $array[$key];
+}
+
+function isFlag($flag) {
+  return (hasKey($_GET, $flag) ? $_GET[$flag] : (hasKey($_POST, $flag) ? $_POST[$flag] : false));
 }
 
 function letUserSetUp($image, $layer) {
@@ -47,14 +53,9 @@ if (!$dataSource) { //if missing data, error
   }
 }
 
-//whether to use the visualisation for development of network or for visualisation / browsing of data
-$networkDevelopment = hasKey($_GET, "dev") ? $_GET["dev"] : (hasKey($_POST, "dev") ? $_POST["dev"] : false);
-
 //possible cache
 $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
 
-//possible annotations export
-$anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
 ?>
 
@@ -113,23 +114,6 @@ $anotationsJSON = hasKey($_POST, "annotations") ? $_POST["annotations"] : "";
 
   <script src="./webgl/openSeadragonGLdynamic.js"></script>
   <script src="./webgl/viaWebGLdynamic.js"></script>
-
-  <?php
-  if ($networkDevelopment) {
-    echo '<!-- New plugin -->
-    <link rel="stylesheet" href="./network/style.css">
-    <script src="./network/network.js"></script>';
-  }
-  ?>
-
-  <!-- Fabric -->
-  <link rel="stylesheet" href="./annotations/style.css">
-  <script src="./external/fabric.min.js"></script>
-  <script src="./external/openseadragon-fabricjs-overlay.js"></script>
-  <script src="./annotations/osd_fabric_annotation.js"></script>
-  <script src="./external/hull.js"></script>
-  <script src="./external/point-in-polygon.js"></script>
-  <script src="./external/greiner-hormann.min.js"></script>
 
 </head>
 
@@ -225,9 +209,10 @@ if($errorSource) {
   echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', `ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$postdata</code>`);";
   echo "</script></body></html>";
   exit;
-}
+} 
 
 ?>
+
    /*---------------------------------------------------------*/
    /*------------ Initialization of OpenSeadragon ------------*/
    /*---------------------------------------------------------*/
@@ -248,7 +233,7 @@ if($errorSource) {
     // Initialize viewer - OpenSeadragon
     var viewer = OpenSeadragon({
       id: "osd",
-      prefixUrl: "images/",
+      prefixUrl: "osd/images/",
       tileSources: sources,
       showNavigator: true,
       maxZoomPixelRatio: 1,
@@ -305,15 +290,16 @@ if($errorSource) {
       },
 
       //called to get custom HTML header for each shader part
-      htmlShaderPartHeader: function(key, data, isVisible) {
-        let style = isVisible ? '' : 'style="filter: brightness(0.5);">';
+      htmlShaderPartHeader: function(title, html, isVisible, isControllable=true) {
+        let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
         let checked = isVisible ? 'checked' : '';
-        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${key}" ${style}>
+        let disabled = isControllable ? '' : 'disabled';
+        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${title}" ${style}>
             <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${checked} data-id="${key}" onchange="shaderPartToogleOnOff(this);">
-              &emsp;${key}<span class="material-icons position-absolute right-1" style="width: 10%;">swap_vert</span>
+              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${title}" onchange="shaderPartToogleOnOff(this);">
+              &emsp;${title}<span class="material-icons position-absolute right-1" style="width: 10%;">swap_vert</span>
             </div>
-            <div class="non-draggable">${data[key]["html"]}</div>
+            <div class="non-draggable">${html}</div>
             </div>`;
       }
     });
@@ -346,7 +332,6 @@ if($errorSource) {
 
   
     seaGL.init();
-
 
    /*---------------------------------------------------------*/
    /*------------ JS utilities and enhancements --------------*/
@@ -513,85 +498,41 @@ if($errorSource) {
     }
 
 
+
+
    /*---------------------------------------------------------*/
-   /*------------ Plugins ------------------------------------*/
+   /*------------ PLUGINS ------------------------------------*/
    /*---------------------------------------------------------*/
-    
-/*------------ Initialization of OSD Annotations ------------*/
-var openseadragon_image_annotations = new OSDAnnotations({
-  controlPanelId: "main-panel",
-});
-
-
-    viewer.addHandler('open', initialize_annotations);
-
-
-    // /*---------- Handlers for opening of viewer and tile loading--------------- */
-
-
-    // // load optional images for decision layer
-    //viewer.addHandler('open', loadOptions);
-    // // initialize fabricjs overlay with annotation control
-    // viewer.addHandler('open', initialize_annotations);
-    // // set name of downloadable annotation file based on experiment and slide name
-    // viewer.addHandler('open', nameAnnotFile);
-    // // add handler to recalculate pixels to navigator (so image in nav and viewer stayed the same)
-    // viewer.navigator.addHandler('tile-loaded', changePixels);
-
-    /*-------------- End of handlers---------------- */
-
-
-    /* ------------------Custom functions for handlers-------------*/
-
-
-    /* initialize_annotations()
-    Create annotation overlay and enables annotation control(add, edit, dowload...)
-    
-    - scale: width of source image (annotationcanvas is created with same width)
-    - json_annotation: json string from annotations export
-    */
-
-    function initialize_annotations() {
-      var options = {
-        scale: viewer.world.getItemAt(0).source.Image.Size.Width,
-        fireRightClick: true
-      };
-      var json_annotation = <?php echo "'$anotationsJSON'";?>;
-      openseadragon_image_annotations.initialize(json_annotation, viewer, viewer.world.getItemAt(layerIDX), "imageAnnotationToolbarContent", options);
+   var PLUGINS = {
+      osd: viewer,
+      seaGL: seaGL,
+      controlPanelId: "main-panel",
+      postData: <?php echo json_encode($_POST)?>,
+      each: <?php echo json_encode((object)$PLUGINS)?>
     };
-
-    
-    function nameAnnotFile(self) {
-      var probabs_url_array = urlProbabilities.split("/");
-      var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
-      var experiment = probabs_url_array.pop();
-      var file_name = [experiment, slide].join(":");
-
-      document.getElementById('download_link1').download = file_name + ".json";
-      document.getElementById('download_link2').download = file_name + ".xml";
-    };
-
-
-
-
-    <?php
-  if ($networkDevelopment) {
-    echo <<<EOF
-    var networkPlugin = new Network({
-       //send any properties to the plugin
-       controlPanelId: "main-panel"
-    });
 
     viewer.addHandler('open', function() {
-      //tiledImage now ready
-      networkPlugin.init(viewer.viewport, viewer.world.getItemAt(layerIDX), openseadragon_image_annotations);
+      PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
+      PLUGINS.dataLayer = viewer.world.getItemAt(layerIDX);
     });
-
-EOF; 
-  } 
-  ?>
-
   </script>
-</body>
 
+    <!-- PLUGINS -->
+<?php
+foreach ($PLUGINS as $_ => $plugin) {
+    if (isset($plugin->flag) && $plugin->flag && !isFlag($plugin->flag)) {
+      continue;
+    }
+
+    //add plugin includes
+    if (file_exists(PLUGIN_FOLDER . $plugin->directory . "/style.css")) {
+      echo "<link rel=\"stylesheet\" href=\"" . PLUGIN_FOLDER . $plugin->directory . "/style.css\">";
+    }
+
+    foreach ($plugin->includes as $_ => $file) {
+      echo "<script src=\"" . PLUGIN_FOLDER . $plugin->directory . "/$file\"></script>";
+    }
+}
+?>
+</body>
 </html>

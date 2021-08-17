@@ -1,0 +1,10 @@
+{
+    "id": "network_dev",
+    "name": "Neural network interactive development",
+    "includes" : [
+        "network.js"
+    ],
+    "flag": "dev",
+    "priority": 10,
+    "requires": "openseadragon_image_annotations"
+}

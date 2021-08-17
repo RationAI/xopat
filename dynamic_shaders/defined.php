@@ -17,11 +17,29 @@
      $IDENTITY_NAME=>$IDENTITY_FILENAME
  );
 
- //options offered by each shader
+ //options offered by each shader, each option contains [type, default input HTML value]
  $options = array(
-    $COLORS_NAME=>array("color"=>"color", "logScale"=>"neg_bool", "logScaleMax"=>"float", "ctrlThreshold"=>"bool", "ctrlOpacity"=>"bool", "ctrlColor"=>"bool", "inverse"=>"neg_bool"),
-    $EDGES_NAME=>array("color"=>"color", "ctrlThreshold"=>"bool", "ctrlOpacity"=>"bool", "ctrlColor"=>"bool"),
-    $BICOLORS_NAME=>array("colorHigh"=>"color", "colorLow"=>"color", "logScale"=>"neg_bool", "logScaleMax"=>"float", "ctrlThreshold"=>"bool", "ctrlOpacity"=>"bool", "ctrlColor"=>"bool"),
+    $COLORS_NAME=>array(
+       "color"=>["color", 'value="#d2eb00"'], 
+       "logScale"=>["bool", ""], 
+       "logScaleMax"=>["float", 'value="1.0" step="0.01" min="0"'], 
+       "ctrlThreshold"=>["bool", "checked"], 
+       "ctrlOpacity"=>["bool", "checked"], 
+       "ctrlColor"=>["bool", "checked"],
+       "inverse"=>["neg_bool", ""]),
+    $EDGES_NAME=>array(
+       "color"=>["color", 'value="#d2eb00"'], 
+       "ctrlThreshold"=>["bool", "checked"], 
+       "ctrlOpacity"=>["bool", "checked"], 
+       "ctrlColor"=>["bool", "checked"]),
+    $BICOLORS_NAME=>array(
+       "colorHigh"=>["color", 'value="#ff0000"'], 
+       "colorLow"=>["color", 'value="#7cfc00"'], 
+       "logScale"=>["neg_bool", ""], 
+       "logScaleMax"=>["float", 'value="1.0" step="0.01" min="0"'], 
+       "ctrlThreshold"=>["bool", "checked"], 
+       "ctrlOpacity"=>["bool", "checked"], 
+       "ctrlColor"=>["bool", "checked"]),
     $IDENTITY_NAME=>array()
  );
 
@@ -54,15 +72,5 @@
     "float"=>"number",
     "neg_bool" => "checkbox"
  );
-
- //what to append to HTML input tag - default value by type
-$htmlInputValues = array(
-    "color"=>'value="#d2eb00"', 
-    "bool"=> "checked",
-    "number"=>'value="1" min="0"',
-    "float"=>'value="1.0" step="0.01" min="0"',
-    "neg_bool"=>""
-);
-
 
  ?>

@@ -5,7 +5,6 @@
   <meta charset="utf-8">
   <title>Visualisation</title>
 
-  <link rel="stylesheet" href="./web-template.css"> 
   <link rel="stylesheet" href="./github.css">
   
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
@@ -40,8 +39,8 @@ foreach ($shaders as $name=>$filename) {
   ];
 
   $params = array();
-  foreach($options[$name] as $option=>$type) {
-    $params[$option] = "<div class='d-flex'><span style='width: 20%;direction:rtl;' class='position-relative'><input style='direction:ltr; max-width:70px;' class='form-control input-sm mr-2' type='{$htmlInputTypes[$type]}' {$htmlInputValues[$type]} onchange=\"setValue(this, '$option', '$type');\"></span><span class='flex-1'>Option <code>$option</code> - {$paramDescriptions[$option]}</span></div>";
+  foreach($options[$name] as $option=>$settings) {
+    $params[$option] = "<div class='d-flex'><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' class='position-relative'><input style='direction:ltr; max-width:70px;' class='form-control input-sm mr-2' type='{$htmlInputTypes[$settings[0]]}' $settings[1] onchange=\"setValue(this, '$option', '$settings[0]');\"></span><span class='flex-1'>Option <code>$option</code> - {$paramDescriptions[$option]}</span></div>";
   }
   $inputs[$name] = (object)$params;
 }
@@ -49,35 +48,30 @@ foreach ($shaders as $name=>$filename) {
 
 //javascript will handle the parameter selection
 $inputs_json = json_encode((object)$inputs);
-
+$shaders_json = json_encode((object)$shader_selections);
 
   $i = 0;
  // foreach(?? as $_ => $source) {
    $source = $_GET['layer'];
 
     $progress = $i == 0 ? "in-progress" : "";
-    echo "<section class='border m-2 px-2 pb-3 active $progress'> <header class='position-sticky top-0 color-bg-secondary f2-light p-responsive px-1 mt-2'>Data <code class='h3'>$source</code></header><div>";
+    echo "<section class='border m-2 px-2 pb-3 active $progress'> <header class='position-sticky top-0 color-bg-secondary f2-light p-responsive px-1 mt-2 d-inline-block'>Data <code class='h3'>$source</code></header>";
 
-    foreach($shader_selections as $name=>$html) {
-      echo $html[0] . $source . $html[1];
-    }
-    echo "</div><div class='shader-part-advanced mt-3'></div></section>";
+    echo "<button class='btn float-right mt-2' onclick=\"addShader(this.parentNode, '$source');\">Add visualisation</button>";
+    echo "</section>";
  // }
 
-
+$path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['PHP_SELF']);
 ?>
 
 <br>
-<form method="POST" action="index.php?image=<?php echo $_GET['image']?>&layer=<?php echo $_GET['layer']?>"  id="request">
-   <!-- <input type="hidden" name="layer" value="<?php echo $_GET['layer']?>">
-   <input type="hidden" name="image" value="<?php echo $_GET['image']?>"> -->
-   <input type="hidden" name="dev" value="<?php echo $_GET['dev']?>">
-
-   <!-- todo hardcoded, for testing purposes as of now-->
+<form method="POST" action="<?php echo $path; ?>/index.php?image=<?php echo $_GET['image']?>&layer=<?php echo $_GET['layer']?>"  id="request">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
-   <input type="submit" value="Ready!">
+   <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp; 
+   
 </form>
-
+<button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</span>
+<a style="display:none;" id="export-visualisation"></a>
 
   </div>
 </div>
@@ -95,9 +89,22 @@ $inputs_json = json_encode((object)$inputs);
 
         ]
       };
+  var SHADERS = <?php echo $shaders_json; ?>;
   var PARAMS = <?php echo $inputs_json; ?>;
   var shaderObject = null;
   var setShader = null;
+
+  var shadersNo = 1;
+
+  function addShader(self, dataId) {
+    var html = `<div><p class='f3-light text-center mt-4'>visualisation no. ${shadersNo}<div>`;
+    Object.entries(SHADERS).forEach(element => {
+      const [k, v] = element;
+      html += `${v[0]}${dataId} (${shadersNo}.)${v[1]}`;
+    });
+    shadersNo++;
+    $(self).append(html + "</div><div class='shader-part-advanced mt-3'></div></div>");
+  }
 
   function selectShaderPart(self, name, filename, dataID) {
     let node = self.parentNode.parentNode.lastChild;
@@ -119,6 +126,8 @@ $inputs_json = json_encode((object)$inputs);
       shaderObject.type = name;
       shaderObject.params = {};
     }
+
+    console.log(user_settings.shaders);
   
 
     setShader = name;
@@ -146,11 +155,39 @@ $inputs_json = json_encode((object)$inputs);
     }
     console.log(shaderObject);
   }
+
+  function exportVisualisation(self) {
+      var action = $("#request").attr('action');
+      var visSetup = JSON.stringify([user_settings]);
+      var doc = `<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+</head>
+<body>
+  <form method="POST" id="redirect" action="${action}">
+    <input type="hidden" id="visualisation" name="visualisation">
+    <input type="submit" value="">
+    </form>
+  <script type="text/javascript">
+    //safely set values (JSON)
+    document.getElementById("visualisation").value = '${visSetup}';
+    document.getElementById("redirect").submit();
+    <\/script>
+</body>
+</html>`;
+			var output = new Blob([doc], { type: 'text/html' });
+			var downloadURL = window.URL.createObjectURL(output);
+      var downloader = document.getElementById("export-visualisation");
+			downloader.href = downloadURL;
+      downloader.download = "visualisation.html";
+      downloader.click();
+    }
   
   $(document).off('submit');
 
   // new form handling
-  $('form').submit(function(evt) {
+  $('#request').submit(function(evt) {
     
     
     

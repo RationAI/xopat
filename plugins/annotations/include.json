@@ -1,0 +1,15 @@
+{
+    "id": "openseadragon_image_annotations",
+    "name": "Annotations",
+    "includes" : [
+        "ext/fabric.min.js",
+        "ext/openseadragon-fabricjs-overlay.js",
+        "ext/greiner-hormann.min.js",
+        "ext/point-in-polygon.js",
+        "ext/hull.js",
+        "osd_fabric_annotation.js"
+    ],
+    "flag": null,
+    "priority": 0,
+    "requires": null
+}

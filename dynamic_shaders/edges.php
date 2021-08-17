@@ -107,18 +107,6 @@ $execution = <<<EOF
     float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
     show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * borderOpacity_{$uniqueId} * threshold_opacity_{$uniqueId}));
     
-    // if (clipToThresholdi_(data.r) == 1){
-    //     if (data.g > 0.1) {
-    //         gl_FragColor = blend(vec4(0.823529, 0.9215686, 0.0, data.r * threshold_opacity), vec4(0.0, 1.0, 1.0, 1.0), data.r * threshold_opacity);
-    //         border = maxblend(border, annotationBorder);
-    //     } else {
-    //         gl_FragColor = vec4(0.823529, 0.9215686, 0.0, data.r * threshold_opacity);
-    //     }   
-    //     gl_FragColor = blend(border, gl_FragColor, borderOpacity * threshold_opacity);
-    // } else if (data.g > 0.1) {
-    //     gl_FragColor = blend(annotationBorder, vec4(0.0, 1.0, 1.0, 1.0), borderOpacity * threshold_opacity);
-    // } 
-
 EOF;
 
 $glload = <<<EOF

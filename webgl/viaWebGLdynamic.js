@@ -7,19 +7,19 @@
 /* CHANGES MADE BY
 /* Jiří Horák, 2021
 */
-ViaWebGL = function(incoming) {
+ViaWebGL = function (incoming) {
 
     /* Custom WebGL API calls
     ~*~*~*~*~*~*~*~*~*~*~*~*/
-    
+
     //default calls
-    this.onFatalError = function(vis) {
+    this.onFatalError = function (vis) {
         console.error(vis["error"], vis["desc"]);
     }
-    this.htmlShaderPartHeader = function(key, data, isVisible) {
-        return `<div class="configurable-border"><div class="shader-part-name">${key}</div>${data[key]["html"]}</div>`;
+    this.htmlShaderPartHeader = function (title, html, isVisible, isControllable = true) {
+        return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
     }
-    this.ready = function() { };
+    this.ready = function () { };
 
     //default values that might come from options and be overwritten later
     this.jsGlLoadedCall = "viaGlLoadedCall";
@@ -31,7 +31,7 @@ ViaWebGL = function(incoming) {
 
     // Private shader management
     this._visualisations = [];
-    
+
     this._textures = [];
     this._programs = [];
     this._program = -1;
@@ -49,12 +49,12 @@ ViaWebGL = function(incoming) {
     this.gl = gl;
     // maximum textures applied at once: how many different layers are supported
     this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
-    
+
     this.gl_loaded = function (program, gl) {
         //call pre-defined name of
         this._callString(this.jsGlLoadedCall, program, gl);
     };
-  
+
     this.gl_drawing = function (tile, e) {
         this._callString(this.jsGlDrawingCall, gl, e);
         //use shaders only for certain tile source
@@ -75,16 +75,16 @@ ViaWebGL.prototype = {
      * Set program shaders. Vertex shader is set by default a square.
      * @param {object} visualisation visualisation setup
      */
-    setVisualisation: function(visualisation) {
+    setVisualisation: function (visualisation) {
         visualisation.url = this.shaderGenerator;
         this._visualisations.push(visualisation);
-    }, 
+    },
 
     /**
      * Rebuild visualisation and update scene
      * @param {array} order order in reverse, ID's of data as defined in setup JSON
      */
-    rebuildVisualisation: function(order) {
+    rebuildVisualisation: function (order) {
         var vis = this._visualisations[this._program],
             program = this._programs[this._program];
 
@@ -97,25 +97,25 @@ ViaWebGL.prototype = {
         this._visualisationToProgram(vis, program, this._program);
         this.forceSwitchShader(null, true);
     },
-    
+
     /**
      * Switch to program at index: this is the index (order) in which
      * setShaders(...) was called. If you want to switch to shader that
      * has been set with second setShaders(...) call, pass i=1.
      * @param {integer} i program index
      */
-    switchVisualisation: function(i) {
+    switchVisualisation: function (i) {
         if (this._program == i) return;
         this.forceSwitchShader(i, true);
     },
-    
+
     /**
      * Force switch shader (program), will reset even if the specified
      * program is currently active, good if you need 'gl-loaded' to be
      * invoked (e.g. some uniform variables changed)
      * @param {integer} i program index
      */
-    forceSwitchShader: function(i, preserveJS = false) {
+    forceSwitchShader: function (i, preserveJS = false) {
         if (!i) i = this._program;
 
         if (i >= this._programs.length) {
@@ -134,13 +134,13 @@ ViaWebGL.prototype = {
             this.toBuffers(this._programs[i]);
         }
     },
-    
+
     /**
      * Change the dimensions, useful for borders, used by openSeadragonGL
      * @param {integer} width 
      * @param {integer} height 
      */
-    setDimensions: function(width, height) {
+    setDimensions: function (width, height) {
         this.gl.canvas.width = width;
         this.gl.canvas.height = height;
         this.gl.viewport(0, 0, width, height);
@@ -159,7 +159,7 @@ ViaWebGL.prototype = {
     //      uniform vec2 u_tile_size;
     //      varying vec2 v_tile_pos;
     // VERTEX SHADER (ommited, you probably don't want to touch that shader anyway)
-    toBuffers: function(program) {
+    toBuffers: function (program) {
         if (!this.running) return;
 
         // Allow for custom loading
@@ -168,7 +168,7 @@ ViaWebGL.prototype = {
         this['gl_loaded'].call(this, program, this.gl);
 
         // Unchangeable square array buffer fills viewport with texture
-        var boxes = [[-1, 1,-1,-1, 1, 1, 1,-1], [0, 1, 0, 0, 1, 1, 1, 0]];
+        var boxes = [[-1, 1, -1, -1, 1, 1, 1, -1], [0, 1, 0, 0, 1, 1, 1, 0]];
         var buffer = new Float32Array([].concat.apply([], boxes));
         var bytes = buffer.BYTES_PER_ELEMENT;
         var gl = this.gl;
@@ -179,44 +179,44 @@ ViaWebGL.prototype = {
         gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
 
         // Get attribute terms
-        this._att = [this.pos, this.tile_pos].map(function(name, number) {
+        this._att = [this.pos, this.tile_pos].map(function (name, number) {
 
-            var index = Math.min(number, boxes.length-1);
-            var vec = Math.floor(boxes[index].length/count);
+            var index = Math.min(number, boxes.length - 1);
+            var vec = Math.floor(boxes[index].length / count);
             var vertex = gl.getAttribLocation(program, name);
 
-            return [vertex, vec, gl.FLOAT, 0, vec*bytes, count*index*vec*bytes];
+            return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
         this.texture.toBuffers(gl, this.wrap, this.filter);
-        
+
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 
         // Build the position and texture buffer
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
     },
-    
+
     // Renders canvas using webGL
     // accepts image data to draw (tile) and source (string, origin of the tile)
     //
     // returns canvas if webGL was used, null otherwise
-    toCanvas: function(tile, e) {
+    toCanvas: function (tile, e) {
         if (!this.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
         // TODO move this decision to tile-loaded to decide once!
-        if (! this['gl_drawing'].call(this, tile, e)) {
+        if (!this['gl_drawing'].call(this, tile, e)) {
             return null;
         }
 
         var gl = this.gl;
         gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);  
+        gl.clear(gl.COLOR_BUFFER_BIT);
 
         // Set Attributes for GLSL
-        this._att.map(function(x){
-            gl.enableVertexAttribArray(x.slice(0,1));
+        this._att.map(function (x) {
+            gl.enableVertexAttribArray(x.slice(0, 1));
             gl.vertexAttribPointer.apply(gl, x);
         });
 
@@ -236,13 +236,13 @@ ViaWebGL.prototype = {
     },
 
     // Run handler only to decide whether particular tile uses openGL
-    willUseCanvas: function(tile, e) {
+    willUseCanvas: function (tile, e) {
         //todo dirty do it differently
         return this['gl_drawing'].call(this, tile, e);
     },
 
     // Must be called before init()
-    setCache: function(cache) {
+    setCache: function (cache) {
         if (typeof cache !== "object" || this._initialized) {
             console.error("Invalid call of loadCache!");
             return;
@@ -250,7 +250,7 @@ ViaWebGL.prototype = {
         this._cache = cache;
     },
 
-    getCache: function() {
+    getCache: function () {
         //global maintained by this script
         return VISUALISAITION_SHADER_CACHE;
     },
@@ -260,12 +260,12 @@ ViaWebGL.prototype = {
     //////////////////////////////////////////////////////////////////////////////
 
     // Initialize viaGL
-    init: function() {
+    init: function () {
         if (this._initialized) {
             console.error("Already initialized!");
             return;
         }
-    
+
         if (this._visualisations.length < 1) {
             //todo show GUI error instead
             console.error("No visualisation specified!");
@@ -287,6 +287,7 @@ ViaWebGL.prototype = {
         //cache setup
         var s = document.createElement("script");
         s.type = "text/javascript";
+        // todo just define cache global variable instead...
         s.text = `
         var VISUALISAITION_SHADER_CACHE = ${JSON.stringify(this._cache)};
         `;
@@ -295,23 +296,23 @@ ViaWebGL.prototype = {
 
         // Load the shaders when ready and return the promise
         var step = [this._visualisations.map(this.getter)];
-        
+
         step.push(this.toProgram.bind(this));
         step.push(this.forceSwitchShader.bind(this, null, false)); //default program left on _program variable value
         return Promise.all(step[0]).then(step[1]).then(step[2]).then(this.ready);
     },
     // Make a canvas
-    maker: function(options){
+    maker: function (options) {
         return this.context(document.createElement('canvas'));
     },
-    context: function(a){
-        return a.getContext('experimental-webgl', { premultipliedAlpha: false,  alpha: true }) 
-                || a.getContext('webgl', { premultipliedAlpha: false, alpha: true });
+    context: function (a) {
+        return a.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
+            || a.getContext('webgl', { premultipliedAlpha: false, alpha: true });
     },
     // Get built visualisation
-    getter: function(visualisation) {        
-        
-        return new Promise(function(done){
+    getter: function (visualisation) {
+
+        return new Promise(function (done) {
 
             var bid = new XMLHttpRequest();
             bid.open('POST', visualisation.url, true);
@@ -319,19 +320,19 @@ ViaWebGL.prototype = {
             postData.append("shaders", JSON.stringify(visualisation["shaders"]));
             postData.append("params", JSON.stringify(visualisation["params"]));
             bid.send(postData);
-            bid.onerror = function() {
+            bid.onerror = function () {
                 if (bid.status == 200) {
                     return done(bid.response);
                 }
                 return done(requestURL);
             };
-            bid.onload = function() {
+            bid.onload = function () {
                 return done(bid.response);
             };
         });
     },
 
-    _loadHtml: function(visId, prevVisId, preserveJS) {
+    _loadHtml: function (visId, prevVisId, preserveJS) {
         var htmlControls = document.getElementById(this.htmlControlsId);
         // if (preserveJS) {
         //     if (visId == prevVisId) return;
@@ -343,7 +344,7 @@ ViaWebGL.prototype = {
         htmlControls.innerHTML = this._visualisations[visId]["html"];
     },
 
-    _loadScript: function(visId, prevVisId, preserveJS) {
+    _loadScript: function (visId, prevVisId, preserveJS) {
         var forScript = document.getElementById(this.scriptId);
         // if (preserveJS) {
         //     if (visId == prevVisId) return;
@@ -356,69 +357,66 @@ ViaWebGL.prototype = {
         var script = document.createElement("script");
         script.type = "text/javascript";
         script.text = this._visualisations[visId]["js"];
-        forScript.appendChild(script);            
+        forScript.appendChild(script);
     },
 
     // https://stackoverflow.com/questions/359788/how-to-execute-a-javascript-function-when-i-have-its-name-as-a-string
-    _callString: function(fn, ...args) {
+    _callString: function (fn, ...args) {
         try {
-            let func = (typeof fn =="string")?window[fn]:fn;
+            let func = (typeof fn == "string") ? window[fn] : fn;
             if (typeof func == "function") func(...args);
             else this.onException(new Error(`${fn} is Not a function!`));
         } catch (e) {
             console.error(e);
             this.onException(e);
         }
-     
+
     },
 
-    _buildVisualisation: function(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
+    _buildVisualisation: function (order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
-            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", _this = this;
+            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", _this = this, usableShaders = 0;
 
             order.forEach(dataId => {
-                
 
                 if (visSetup[dataId].error) {
                     //todo attach warn icon
-                    html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>${visSetup[dataId]["error"]}</div>${html}`;
+                    html = _this.htmlShaderPartHeader(dataId, visSetup[dataId]["error"], false, false) + html;
                     console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
 
                 } else if (visSetup[dataId].definition && visSetup[dataId].execution && visSetup[dataId].sampler2D) {
                     let visible = false;
+                    usableShaders++;
                     if (visSetup[dataId].visible == 1) {
                         definition += visSetup[dataId]["definition"];
                         execution += visSetup[dataId]["execution"];
                         glload += visSetup[dataId]["glLoaded"];
-                        gldraw += visSetup[dataId]["glDrawing"]; 
+                        gldraw += visSetup[dataId]["glDrawing"];
                         visible = true;
                     }
                     //reverse order append to show first the last drawn element (top)
-                    html = _this.htmlShaderPartHeader(dataId, visSetup, visible) + html;
+                    html = _this.htmlShaderPartHeader(dataId, visSetup[dataId]["html"], visible, true) + html;
                     js += visSetup[dataId]["js"];
                 } else {
-                     //todo attach warn icon
-
-                    html = `<div class="configurable-border shader-part-error" data-id="${dataId}"><div class="shader-part-name">${dataId}</div>This data cannot be displayed: invalid visualisation type.</div>${html}`;
+                    //todo attach warn icon
+                    html = _this.htmlShaderPartHeader(dataId, `The requested visualisation type does not work properly.`, false, false) + html;
                     console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
                 }
             });
 
-            // if (execution === "" || definition === "") {
-            //     throw "Empty visualisation or there is no part of the valid.";
-            // } 
-
-        var fragment_shader = `
+            var fragment_shader = `
 precision mediump float;
 uniform vec2 u_tile_size;
 varying vec2 v_tile_pos;
-//linear blending of colors based on float 'ratio'
+
 vec4 blend(vec4 a, vec4 b, float ratio) {
     return ratio * a + (1.0-ratio) * b;
 }
-//mixing the show color
-//shader parts should not touch gl_FragColor but rather send the
-//output using show(...)
+
+bool close(float value, float target) {
+    return abs(target - value) < 0.001;
+}
+
 float _blend_channel(float fg, float bg) {
     if (bg < 0.5) {
         return 2.0 * bg * fg;
@@ -426,23 +424,23 @@ float _blend_channel(float fg, float bg) {
     return 1.0 - 2.0 * (1.0 - bg) * (1.0 - fg);
 }
 void show(vec4 color) {
-    // gl_FragColor = vec4(color.a * color.rgb + (1.0-color.a) * gl_FragColor.rgb, max(color.a, gl_FragColor.a));
-    gl_FragColor = vec4(_blend_channel(color.r, gl_FragColor.r), _blend_channel(color.g, gl_FragColor.g), _blend_channel(color.b, gl_FragColor.b), max(color.a, gl_FragColor.a));
-}
-
-bool close(float value, float target) {
-    return abs(target - value) < 0.001;
+    if (close(gl_FragColor.a, 0.0)) {
+        gl_FragColor = color;
+    } else {
+        gl_FragColor = vec4(color.a * color.rgb + (1.0-color.a) * gl_FragColor.rgb, max(color.a, gl_FragColor.a));
+    }
+    //gl_FragColor = vec4(_blend_channel(color.r, gl_FragColor.r), _blend_channel(color.g, gl_FragColor.g), _blend_channel(color.b, gl_FragColor.b), max(color.a, gl_FragColor.a));
 }
 
 ${definition}
 
 void main() {
-    gl_FragColor = vec4(0.5, 0.5, 0.5, 0.0);
+    gl_FragColor = vec4(1., 1., 1., 0.);
 
     ${execution}
 }`;
 
-var jsscript = `
+            var jsscript = `
 function saveCache(key, value) {
     if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
         VISUALISAITION_SHADER_CACHE["${visualisation.name}"] = {};
@@ -473,8 +471,8 @@ try {
     //todo try if error outside functions
 }
 `;
-    
-    var vertex_shader = `
+
+            var vertex_shader = `
     attribute vec4 a_pos;
     attribute vec2 a_tile_pos;
     varying vec2 v_tile_pos;
@@ -488,40 +486,46 @@ try {
             visualisation.fragment_shader = fragment_shader;
             visualisation.js = jsscript;
             visualisation.html = html;
-            delete visualisation.error;            
+
+            if (usableShaders < 1) {
+                throw "Empty visualisation or there is no part of the valid.";
+            }
+
+            delete visualisation.error;
             delete visualisation.desc;
-        } catch (error) { 
+        } catch (error) {
             visualisation.vertex_shader = "";
             visualisation.fragment_shader = "";
             visualisation.js = `function ${glLoadCall}(){} function ${glDrawingCall}(){}`;
-            visualisation.html = "";
             visualisation.error = "Failed to compose visualisation.";
+            visualisation.desc = error.message;
         }
     },
 
     // Link shaders from strings
-    toProgram: function(responses) {
+    toProgram: function (responses) {
 
         this._program = 0; //default program
 
         // Load multiple shaders - visalisations
-        for (let i = 0; i < responses.length; i++) { 
+        for (let i = 0; i < responses.length; i++) {
             var responseData;
             try {
                 responseData = JSON.parse(responses[i]);
                 if (!responseData || typeof responseData !== "object") {
-                    responseData = {error: ""}; 
-                } 
-            } catch (error) { 
-                responseData = {error: error.message}; 
+                    responseData = { error: "" };
+                }
+            } catch (error) {
+                responseData = { error: error.message };
             }
 
             let vis = this._visualisations[i];
             vis.responseData = responseData;
-            
+
             if (responseData.hasOwnProperty("error")) {
                 //load default JS to not to cause errors
                 vis.js = `function ${this.jsGlLoadedCall}(){} function ${this.jsGlDrawingCall}(){}`;
+                vis.html = "Invalid visualisation.";
                 vis.error = responseData.error;
                 vis.desc = responseData.desc;
                 this._programs.push(null); //no program
@@ -532,7 +536,7 @@ try {
             let program = this.gl.createProgram();
             this._programs.push(program); //preventive, will possibly
             vis.order = Object.keys(vis.responseData);
-            this._visualisationToProgram(vis, program, i);            
+            this._visualisationToProgram(vis, program, i);
         }
         //if all invalid go back  
         if (this._program >= this._programs.length) this._program = 0;
@@ -540,29 +544,30 @@ try {
         return this._programs[0];
     },
 
-    _detachShader: function(program, type) {
+    _detachShader: function (program, type) {
         var shader = program[type];
         this.gl.detachShader(program, shader);
         this.gl.deleteShader(shader);
     },
 
-    _visualisationToProgram: function(vis, program, idx) {
+    _visualisationToProgram: function (vis, program, idx) {
         var gl = this.gl,
-            ok = function(kind,status,value,sh) {
-                if (!gl['get'+kind+'Parameter'](value, gl[status+'_STATUS'])){
-                    console.log((sh||'LINK')+':\n'+gl['get'+kind+'InfoLog'](value));
+            ok = function (kind, status, value, sh) {
+                if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
+                    console.log((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
                     return false;
                 }
                 return true;
             },
-            err = function(message, description, glLoad, glDraw) {
+            err = function (message, description, glLoad, glDraw) {
                 vis.js = `function ${glLoad}(){} function ${glDraw}(){}`;
                 vis.error = message;
                 vis.desc = description;
-                vis.html = "Invalid visualisation.";
-        };
+            };
 
         this._buildVisualisation(vis.order, vis.responseData, vis, this.jsGlLoadedCall, this.jsGlDrawingCall);
+
+        if (vis.hasOwnProperty("error")) return;
 
         function useShader(gl, program, data, type) {
             var shader = gl.createShader(gl[type]);
@@ -570,7 +575,7 @@ try {
             gl.compileShader(shader);
             gl.attachShader(program, shader);
             program[type] = shader;
-            return ok('Shader','COMPILE', shader, type);
+            return ok('Shader', 'COMPILE', shader, type);
         }
 
         // console.log("FRAGMENT", vis["fragment_shader"]);
@@ -585,7 +590,7 @@ try {
             gl.linkProgram(program);
             console.log("FRAGMENT SHADER", vis["fragment_shader"]);
             //todo error here as well...
-            if (!ok('Program','LINK',program)) {
+            if (!ok('Program', 'LINK', program)) {
                 err("Unable to use this visualisation.", "Linking of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
             }
         }
@@ -595,8 +600,8 @@ try {
     texture: {
         // Get texture
 
-        init: function(gl, maxTextureUnits) {
-             this._units = [];
+        init: function (gl, maxTextureUnits) {
+            this._units = [];
             // for (let i = 0; i < maxTextureUnits; i++) {
             //     this._units.push({
             //         bindConstant: `TEXTURE${i}`,
@@ -604,8 +609,8 @@ try {
             //     });
             // }
         },
-        
-        toBuffers: function(gl, wrap, filter, visualisation) {
+
+        toBuffers: function (gl, wrap, filter, visualisation) {
             this.texParameteri = [
                 [gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap],
                 [gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap],
@@ -616,12 +621,12 @@ try {
             this.pixelStorei = [gl.UNPACK_FLIP_Y_WEBGL, 1];
             //todo dirty...
             //this.init(this.gl, this._units.length);
-           
+
         },
 
-        toCanvas: function(visualisation, tile, program, gl) {
+        toCanvas: function (visualisation, tile, program, gl) {
 
-        
+
             //todo bind textures by data name
             let samplerNames = [];
 
@@ -639,11 +644,11 @@ try {
                 //gl.bindTexture(gl.TEXTURE_2D, this._units[i].bindPointer);
                 let bindPtr = gl.createTexture();
                 //this._units.push(bindPtr);
-                let bindConst =  `TEXTURE${i}`;
+                let bindConst = `TEXTURE${i}`;
                 gl.bindTexture(gl.TEXTURE_2D, bindPtr);
 
                 // Apply texture parameters
-                this.texParameteri.map(function(x){
+                this.texParameteri.map(function (x) {
                     gl.texParameteri.apply(gl, x);
                 });
                 gl.pixelStorei.apply(gl, this.pixelStorei);
@@ -664,9 +669,9 @@ try {
             }
         },
 
-        freeTextures: function() {
-             this._units.forEach(tex => this.gl.deleteTexture(tex));
-             //this._units = [];
+        freeTextures: function () {
+            this._units.forEach(tex => this.gl.deleteTexture(tex));
+            //this._units = [];
         }
     }
 }

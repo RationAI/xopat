@@ -19,12 +19,12 @@
  */
 require_once("init.php");
 
-$colorHigh = [255, 0, 0, "#ff0000"];
+$colorHigh = [255, 0, 0];
 if (isset($data["colorHigh"])) {
   $colorHigh = toRGBColorFromString($data["colorHigh"], $colorHigh);
 } 
 
-$colorLow = [124, 252, 0, "#7cfc00"];
+$colorLow = [124, 252, 0];
 if (isset($data["colorLow"])) {
   $colorLow = toRGBColorFromString($data["colorLow"], $colorLow);
 } 

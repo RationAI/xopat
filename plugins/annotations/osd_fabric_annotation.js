@@ -1,18 +1,17 @@
-
-//TODO default size of regions: let the user to choose default size in pixels (e.g. probabilities layer!!!)
 sleep = function (ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 };
 
+OSDAnnotations = function (incoming) {
+	this.id = "openseadragon_image_annotations";
+	PLUGINS.each[this.id].instance = this;
 
-OSDAnnotations = function(incoming) {
-    this.DEFAULT_LEFT_LABEL = "Left Click";
+	this.DEFAULT_LEFT_LABEL = "Left Click";
 	this.DEFAULT_RIGHT_LABEL = "Right Click";
 
 	this.origX = "";
 	this.origY = "";
 	this.overlay = "";
-	this.imageJson = ""; //json annotation file
 
 	/*
 	Global setting to show/hide annotations on default
@@ -35,10 +34,13 @@ OSDAnnotations = function(incoming) {
 	this.isDown = false;   //FABRIC handler click down recognition
 	this.isOverObject = false;
 
-	 // Assign from incoming terms
-	 for (var key in incoming) {
-        this[key] = incoming[key];
-    }
+	// Assign from incoming terms
+	for (var key in incoming) {
+		this[key] = incoming[key];
+	}
+
+	this.messenger = new Messenger();
+	this.history = new History(this);
 };
 
 OSDAnnotations.prototype = {
@@ -46,20 +48,12 @@ OSDAnnotations.prototype = {
 	/*
 	Initialize member variables
 	*/
-	initialize: function (imageJson, osdViewer, osdLayer, htmlForControlsID, options) {
+	initialize: function (imageJson, options) {
 
-
-		/* Initialize member variables */
-		this.imageJson = imageJson;
 
 		/* OSD values used by annotations */
-		this.viewer = osdViewer;
-		this.tiledImage = osdLayer;
 		this.currentTile = "";
-
-		
-
-		this.overlay = this.viewer.fabricjsOverlay(options);
+		this.overlay = PLUGINS.osd.fabricjsOverlay(options);
 
 		this.setMouseOSDInteractive(true);
 
@@ -70,35 +64,20 @@ OSDAnnotations.prototype = {
 			this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
 		}
 
-	
 
-
-		//if (!openseadragon_image_annotations.showAnnotations) {
-		//	$("#off").click();
-			//openseadragon_image_annotations.turnAnnotationsOnOff(false); //already called
-		//};
-
-		$(`#${this.controlPanelId}`).append(`<div id="panel-annotations" class="inner-panel">
-		<!--NOSELECT important due to interaction with slider, default height due to height adjustment later, TODO: set from cookies-->
-		<div class="inner-panel-content noselect"  id="inner-panel-content-2">
-  
-		  
-	  
-		  <div class="imageAnnotationToolbarAndButtons">
+		$(`#${PLUGINS.controlPanelId}`).append(`
+<div id="panel-annotations" class="inner-panel">
+	<div class="inner-panel-content noselect"  id="inner-panel-content-2">
+		<div class="imageAnnotationToolbarAndButtons">
 			<div id="annotationButtonWrapper">
-			  <div style="display: inline-block; width: 100%;">
-  
+			    <div style="display: inline-block; width: 100%;">
 				<span class="material-icons inline-pin"
 				onclick="$(this).parents().eq(3).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
 				<h3 class="d-inline-block h3">Annotations&emsp;</h3>
-  
 				<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
-  
 				<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
-				<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="downloadAnnotation">Download annotations</button> -->
 				<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
-  
-  
+
 				<span class="material-icons" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
 				if ($(this).attr('data-ref') === 'on'){
 				  openseadragon_image_annotations.turnAnnotationsOnOff(false);
@@ -110,50 +89,50 @@ OSDAnnotations.prototype = {
 				  $(this).attr('data-ref', 'on');
 				}"> visibility</span>
   
-  
-			 
-				<br>Opacity:
-				<br>
-				<input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">
-						  
-			  </div>
-			  <a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
-			  <a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>
-	  
-			
+				<br>Opacity:<br>
+				<input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
+				</div>
+				<a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
+				<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>	
 			</div>
-		  </div>
-  
-  
-		  <div id="imageAnnotationToolbar"  class="inner-panel-hidden">
+		</div>
+		<div id="imageAnnotationToolbar"  class="inner-panel-hidden">
 			<div id="imageAnnotationToolbarContent">
 	  
-			  <!--populated with options for a given shader -->
+			Brush:<br>
+			<div id="imageToolbarRow2">
+				<div class="radio-group">
+
+					  <button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
+	
+						<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
+						<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>
+			
+							  
+				</div>
+			</div>
+	  
+			<div class="input-group">
+			  <input type="text" class="form-control"  style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
+			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
+			</div>
+			<div class="input-group">
+			<input type="text" class="form-control" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
+			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
+			  </div>
+			<br>
+			<p1>Automatic tool threshold:</p1>
+			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
+			
 	  
 			</div>
-		  </div>
-  
 		</div>
-		<br><br>
-	 
-	
-	  </div>
-  
-	  <div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-		<div class="noselect" style="height: 100%;position: relative"  id="inner-panel-content-3">
-		  <h3 class="pl-2 d-inline-block h3">Board</h4>
-		  <span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
-		  <span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
-		  
-		  <button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>
-		 <br>
-		  <div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
-		   </div>
-	  </div>
 	</div>
-  `);
+</div>`);
 
-$("body").append(`
+		this.history.init(50, `#${PLUGINS.controlPanelId}`);
+
+		$("body").append(`
 <div id="help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
 <details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:700px; max-height: 600px;">
     <div class="Box-header">
@@ -209,9 +188,9 @@ $("body").append(`
   </details-dialog>
   </div>
 `);
-		
 
-	//form for object property modification
+
+		//form for object property modification
 		$("body").append(
 			`<div id="input_form" style="display:none">
 			<table>
@@ -237,14 +216,10 @@ $("body").append(`
 		</div><div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
 		`);
 
-			this.cursor.init();
-	this.history.init();
-	this.messenger.init();
+		this.cursor.init();
 		this.annotationForm = $("#input_form");
 
-		$(`#${htmlForControlsID}`).append(this.complexAnnotationControl()); 
 
-	  
 		/****************************************************************************************************************
 	
 												 E V E N T  L I S T E N E R S: FABRIC
@@ -264,15 +239,15 @@ $("body").append(`
 		// 	//todo prevent clicking both buttons simultaneously, some mode which tells which key is active adn allow that one only
 		// 	if (!openseadragon_image_annotations.showAnnotations) return;
 		// 	openseadragon_image_annotations.mouseTime = Date.now();
-			
+
 		// 	if (o.button === 1) fabricHandleLeftClickDown(o);
 		// 	else if (o.button === 3) fabricHandleRightClickDown(o);
 		// });
 
-		$('.upper-canvas').mousedown(function(event) {
-			if (!openseadragon_image_annotations.showAnnotations || openseadragon_image_annotations.viewer.isMouseNavEnabled()) return;
+		$('.upper-canvas').mousedown(function (event) {
+			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
 			openseadragon_image_annotations.mouseTime = Date.now();
-			
+
 			if (event.which === 1) fabricHandleLeftClickDown(event);
 			else if (event.which === 3) fabricHandleRightClickDown(event);
 		});
@@ -286,8 +261,8 @@ $("body").append(`
 
 		function fabricHandleLeftClickDown(o) {
 			console.log("fabric mouse down");
-			
-			if (openseadragon_image_annotations.isMouseOSDInteractive())  {
+
+			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
 				handleFabricKeyDownInOSDMode(o, true);
 			} else {
 				handleFabricKeyDownInEditMode(o);
@@ -297,13 +272,14 @@ $("body").append(`
 		function handleFabricKeyDownInOSDMode(o, isLeftClick) {
 			var pointer = openseadragon_image_annotations.overlay.fabricCanvas().getPointer(o);
 
-			if (o.altKey) { 
-
+			if (o.altKey) {
+ 
+				//todo dirty, just send isLeftClick flag
 				openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: isLeftClick };
 				openseadragon_image_annotations.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
 				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 
-				this.currentAnnotationObjectUpdater = null; 
+				this.currentAnnotationObjectUpdater = null;
 				switch (openseadragon_image_annotations.annotationType) {
 					case 'polygon':
 						openseadragon_image_annotations.polygonClickAction(o, pointer.x, pointer.y);
@@ -316,19 +292,23 @@ $("body").append(`
 						break;
 					default:
 						return; //other types not support, no mouse motion tracking
-				}	
-					
-			} else if (o.shiftKey) { //shift key, let fabric.js mouse track do the job (need disabled OSD navigation)
-			
-				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
-				let currentObject = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
-				if (!currentObject) {
-					openseadragon_image_annotations.messenger.show("No selected target to append to.", 2000, openseadragon_image_annotations.messenger.MSG_WARN);
-					return;
 				}
 
+			} else if (o.shiftKey) { //shift key, let fabric.js mouse track do the job (need disabled OSD navigation)
+
+				let currentObject = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
+				if (!currentObject) {
+
+					//create tool-shaped object
+					currentObject = openseadragon_image_annotations.createPolygon(openseadragon_image_annotations.modifyTool.getCircleShape(pointer), isLeftClick);
+					openseadragon_image_annotations.overlay.fabricCanvas().add(currentObject);
+					openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(currentObject);
+					openseadragon_image_annotations.history.push(currentObject);
+				}
+				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
+
 				openseadragon_image_annotations.modifyTool.init(currentObject, openseadragon_image_annotations.toScreenCoords(pointer.x, pointer.y), 100, isLeftClick);
-				openseadragon_image_annotations.modifyTool.update(pointer);				
+				openseadragon_image_annotations.modifyTool.update(pointer);
 			} else {
 				//problem when click on cavas and the browser is not in focus, prevent current selection from removal
 				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
@@ -336,7 +316,7 @@ $("body").append(`
 
 			openseadragon_image_annotations.isDown = true;
 			openseadragon_image_annotations.origX = pointer.x;
-			openseadragon_image_annotations.origY = pointer.y;	
+			openseadragon_image_annotations.origY = pointer.y;
 		}
 
 		function handleFabricKeyDownInEditMode(o) {
@@ -382,16 +362,16 @@ $("body").append(`
 		// });
 
 		$('.upper-canvas').mouseup(function (event) {
-			if (!openseadragon_image_annotations.showAnnotations || openseadragon_image_annotations.viewer.isMouseNavEnabled()) return;
+			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
 			//if (openseadragon_image_annotations.isMouseOSDInteractive() && (!event.ctrlKey || !event.altKey || !event.shiftKey)) return;
-			openseadragon_image_annotations.isDown = false;	
-			
+			openseadragon_image_annotations.isDown = false;
+
 			console.log("UP");
 
 			if (event.which === 1) fabricHandleLeftClickUp(event);
 			else if (event.which === 3) fabricHandleRightClickUp(event);
 		});
-		
+
 		function fabricHandleRightClickUp(o) {
 			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
 				handleFabricKeyUpInOSDMode(o);
@@ -399,7 +379,7 @@ $("body").append(`
 		}
 
 		function fabricHandleLeftClickUp(o) {
-			if (openseadragon_image_annotations.isMouseOSDInteractive())  {
+			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
 				handleFabricKeyUpInOSDMode(o);
 			} else {
 				handleFabricKeyUpInEditMode(o);
@@ -408,10 +388,10 @@ $("body").append(`
 
 		function handleFabricKeyUpInOSDMode(o) {
 			openseadragon_image_annotations.isDown = false;
-			openseadragon_image_annotations.viewer.setMouseNavEnabled(true);
+			PLUGINS.osd.setMouseNavEnabled(true);
 			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
 
-			if (o.altKey) { 
+			if (o.altKey) {
 
 				if (!openseadragon_image_annotations.currentAnnotationObject) return;
 
@@ -423,12 +403,12 @@ $("body").append(`
 							console.log("REMOVED OBJECT WITHOUT HISTORY");
 							openseadragon_image_annotations.overlay.fabricCanvas().remove(openseadragon_image_annotations.currentAnnotationObject);
 							return;
-						case 'polygon': 
+						case 'polygon':
 						default:
 							return;
-					}					
+					}
 				}
-				
+
 				switch (openseadragon_image_annotations.currentAnnotationObject.type) {
 					case 'rect':
 					case 'ellipse':
@@ -445,8 +425,8 @@ $("body").append(`
 					default:
 						break;
 				}
-					
-			} else if (o.shiftKey) { 
+
+			} else if (o.shiftKey) {
 				let result = openseadragon_image_annotations.modifyTool.finish();
 				if (result) openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(result);
 			}
@@ -479,7 +459,7 @@ $("body").append(`
 					openseadragon_image_annotations.currentAnnotationObjectUpdater(pointer.x, pointer.y);
 					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 				}
-			}		
+			}
 		});
 
 
@@ -553,15 +533,15 @@ $("body").append(`
 		// 	} 
 		// });
 
-		this.overlay.fabricCanvas().on('object:selected',function(e){
-			if(e && e.target){
+		this.overlay.fabricCanvas().on('object:selected', function (e) {
+			if (e && e.target) {
 				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
 				openseadragon_image_annotations.history.highlight(e.target);
 				e.target.hasControls = !openseadragon_image_annotations.isMouseOSDInteractive();
-			}  
+			}
 		});
-		
-		
+
+
 		/****************************************************************************************************************
 
 											 E V E N T  L I S T E N E R S: OSD (clicks without alt or shift)
@@ -571,7 +551,7 @@ $("body").append(`
 
 		*****************************************************************************************************************/
 
-		this.viewer.addHandler("canvas-press", function (e) {
+		PLUGINS.osd.addHandler("canvas-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 			openseadragon_image_annotations.mouseTime = Date.now();
 
@@ -587,7 +567,7 @@ $("body").append(`
 			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: true };
 		});
 
-		this.viewer.addHandler("canvas-release", function (e) {
+		PLUGINS.osd.addHandler("canvas-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
 			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
@@ -600,7 +580,7 @@ $("body").append(`
 				case 'ellipse':
 					openseadragon_image_annotations.createApproxEllipse(e.position);
 					break;
-				case 'polygon': 
+				case 'polygon':
 					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
 					break;
 				default:
@@ -608,15 +588,15 @@ $("body").append(`
 			}
 		});
 
-		this.viewer.addHandler("canvas-nonprimary-press", function (e) {
+		PLUGINS.osd.addHandler("canvas-nonprimary-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
 			if (e.button != 2 || e.originalEvent.shiftKey || e.originalEvent.altKey) return; //plain right click only
 			openseadragon_image_annotations.mouseTime = Date.now();
-			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: false};
+			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: false };
 		});
 
-		this.viewer.addHandler("canvas-nonprimary-release", function (e) {
+		PLUGINS.osd.addHandler("canvas-nonprimary-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
 			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
@@ -629,9 +609,9 @@ $("body").append(`
 				case 'ellipse':
 					openseadragon_image_annotations.createApproxEllipse(e.position);
 					break;
-				case 'polygon': 
+				case 'polygon':
 					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
-				break;
+					break;
 				default:
 					break;
 			}
@@ -645,16 +625,16 @@ $("body").append(`
 
 
 
-		$(this.viewer.element).on('contextmenu', function(event) {
+		$(PLUGINS.osd.element).on('contextmenu', function (event) {
 			event.preventDefault();
-		}); 
+		});
 
 		document.addEventListener('keydown', (e) => {
 			if (!openseadragon_image_annotations.showAnnotations || !openseadragon_image_annotations.isMouseOSDInteractive()) return;
 			if (e.code === "AltLeft") {
-				openseadragon_image_annotations.viewer.setMouseNavEnabled(false);
+				PLUGINS.osd.setMouseNavEnabled(false);
 			} else if (e.code === "ShiftLeft") {
-				openseadragon_image_annotations.viewer.setMouseNavEnabled(false);
+				PLUGINS.osd.setMouseNavEnabled(false);
 				openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
 				openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "crosshair";
 				//todo value of radius from user
@@ -665,14 +645,14 @@ $("body").append(`
 				openseadragon_image_annotations.setMouseOSDInteractive(false);
 			}
 			openseadragon_image_annotations.key_code = e.code;
-				
+
 		});
 
 		document.addEventListener('keyup', (e) => {
-			
+
 			openseadragon_image_annotations.key_code = null;
-			if (!openseadragon_image_annotations.showAnnotations) return;	
-			
+			if (!openseadragon_image_annotations.showAnnotations) return;
+
 			if (!openseadragon_image_annotations.isMouseOSDInteractive()) {
 				if (e.code === "AltRight") {
 					openseadragon_image_annotations.setMouseOSDInteractive(true);
@@ -684,36 +664,36 @@ $("body").append(`
 					openseadragon_image_annotations.removeActiveObject();
 					openseadragon_image_annotations.currentAnnotationObject = null;
 				}
-	
+
 				//todo delete valid in both modes?
 				//if (!openseadragon_image_annotations.isMouseOSDInteractive()) return;
-	
+
 				if (e.ctrlKey && e.code === "KeyY") {
 					if (e.shiftKey) openseadragon_image_annotations.history.redo();
 					else openseadragon_image_annotations.history.back();
 				} else if (e.code === "AltLeft") {
 					if (!openseadragon_image_annotations.isDown) {
 						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
-						openseadragon_image_annotations.viewer.setMouseNavEnabled(true);
+						PLUGINS.osd.setMouseNavEnabled(true);
 					}
-	
+
 					if (this.polygon.polygonBeingCreated) {
 						this.polygon.generatePolygon(this.polygon.pointArray);
-						openseadragon_image_annotations.viewer.setMouseNavEnabled(true);
+						PLUGINS.osd.setMouseNavEnabled(true);
 					}
 				} else if (e.code === "ShiftLeft") {
 					if (!openseadragon_image_annotations.isDown) {
 						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
-						
+
 						openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
 						openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "pointer";
-						openseadragon_image_annotations.viewer.setMouseNavEnabled(true);
+						PLUGINS.osd.setMouseNavEnabled(true);
 						openseadragon_image_annotations.cursor.hide();
 					}
 				}
 			}
 
-			
+
 		});
 
 
@@ -726,7 +706,7 @@ $("body").append(`
 			var xml_text = new XMLSerializer().serializeToString(doc);
 
 			// get file name from probabilities layer (axperiment:slide)
-			var probabs_url_array = openseadragon_image_annotations.viewer.tileSources[2].split("=")[1].split("/");
+			var probabs_url_array = PLUGINS.osd.tileSources[2].split("=")[1].split("/");
 			var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
 			var experiment = probabs_url_array.pop();
 			var file_name = [experiment, slide].join(":");
@@ -915,7 +895,7 @@ $("body").append(`
 			};
 			openseadragon_image_annotations.history._updateBoardText(annotation, annotation.comment);
 		});
-	
+
 		// delete all annotation
 		$('#deleteAll').click(function () {
 			// if polygon was mid-drawing resets all parameters
@@ -924,7 +904,7 @@ $("body").append(`
 		});
 	}, // end of initialize
 
-	getJSONContent: function() {
+	getJSONContent: function () {
 		return JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold']));
 	},
 
@@ -933,36 +913,6 @@ $("body").append(`
 											 HTML ANNOTATIONS: AWAILABLE CONTROLS
 	
 	*****************************************************************************************************************/
-	complexAnnotationControl: function () {
-		openseadragon_image_annotations.annotationType = "rect";
-
-		return `Brush:<br>
-			<div id="imageToolbarRow2">
-				<div class="radio-group">
-
-					  <button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
-	
-						<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
-						<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>
-			
-							  
-				</div>
-			</div>
-	  
-			<div class="input-group">
-			  <input type="text" class="form-control"  style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
-			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
-			</div>
-			<div class="input-group">
-			<input type="text" class="form-control" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
-			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
-			  </div>
-			<br>
-			<p1>Automatic tool threshold:</p1>
-			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
-			`;
-	},
-
 
 	// simpleAnnotationControl: function () {
 	// 	openseadragon_image_annotations.annotationType = "polygon";
@@ -1011,7 +961,7 @@ $("body").append(`
 		if (isOSDInteractive) {
 			//this.setFabricCanvasInteractivity(true);
 			//this.deselectFabricObjects();
-			this.viewer.setMouseNavEnabled(true);
+			PLUGINS.osd.setMouseNavEnabled(true);
 			$("#input_form").hide();
 			this.overlay.fabricCanvas().defaultCursor = "crosshair";
 			this.overlay.fabricCanvas().hoverCursor = "pointer";
@@ -1028,7 +978,7 @@ $("body").append(`
 
 		} else {
 			//this.setFabricCanvasInteractivity(true);
-			this.viewer.setMouseNavEnabled(false);
+			PLUGINS.osd.setMouseNavEnabled(false);
 			this.overlay.fabricCanvas().defaultCursor = "auto";
 			this.overlay.fabricCanvas().hoverCursor = "move";
 
@@ -1048,17 +998,17 @@ $("body").append(`
 		return this.mouseOSDInteractive;
 	},
 
-	removeActiveObject: function() {
+	removeActiveObject: function () {
 		let toRemove = this.overlay.fabricCanvas().getActiveObject();
 		if (toRemove) {
 			if (toRemove.type === "rect" || toRemove.type === "polygon" || toRemove.type === "ellipse") {
-				this.overlay.fabricCanvas().remove(toRemove); 
+				this.overlay.fabricCanvas().remove(toRemove);
 				this.history.push(null, toRemove);
 				this.overlay.fabricCanvas().renderAll();
 			} else if (toRemove) {
-				this.overlay.fabricCanvas().remove(toRemove); 
-			
-			} 
+				this.overlay.fabricCanvas().remove(toRemove);
+
+			}
 		}
 	},
 
@@ -1092,9 +1042,9 @@ $("body").append(`
 	createOutline: async function (eventPosition) {
 		console.log("called outline");
 
-		var viewportPos = this.viewer.viewport.pointFromPixel(eventPosition);
-		//var imagePoint = tiledImage.viewportToImageCoordinates(viewportPos);
-		var originPoint = this.viewer.viewport.pixelFromPoint(viewportPos);
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		//var imagePoint = PLUGINS.dataLayer.viewportToImageCoordinates(viewportPos);
+		var originPoint = PLUGINS.osd.viewport.pixelFromPoint(viewportPos);
 		this.changeTile(viewportPos);
 
 		//todo unused, maybe round origin point...?
@@ -1243,26 +1193,26 @@ $("body").append(`
 			function () { console.error("Fell out of region."); }
 		];
 
-		surroundingInspector = function(x, y, maxDist) {
+		surroundingInspector = function (x, y, maxDist) {
 			for (var i = 1; i <= maxDist; i++) {
-				$("#osd").append(`<span style="position:absolute; top:${y+i}px; left:${x+i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if ( openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x+i, y+i];
-				$("#osd").append(`<span style="position:absolute; top:${y-i}px; left:${x+i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
+				$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if ( openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x+i, y-i];
-				$("#osd").append(`<span style="position:absolute; top:${y+i}px; left:${x-i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
+				$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if ( openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x-i, y+i];
-				$("#osd").append(`<span style="position:absolute; top:${y-i}px; left:${x-i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
+				$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if ( openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x-i, y-i];
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
 
 			}
 			return null;
 		};
 
-		let maxLevel = this.tiledImage.source.maxLevel;
+		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
 		let level = this.currentTile.level;
 		let maxSpeed = 24;
 		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
@@ -1271,7 +1221,7 @@ $("body").append(`
 		while ((Math.abs(first_point.x - x) > 2 || Math.abs(first_point.y - y) > 2) || counter < 20) {
 			let mark = this.getAreaStamp(x, y);
 			if (mark == 0 || mark == 15) {
-				let findClosest = surroundingInspector(x, y, 2*speed);
+				let findClosest = surroundingInspector(x, y, 2 * speed);
 				console.log("CLOSEST", findClosest);
 				if (findClosest) {
 					x = findClosest[0];
@@ -1320,8 +1270,8 @@ $("body").append(`
 
 	createRegionGrowingOutline: function (eventPosition) {
 
-		var viewportPos = this.viewer.viewport.pointFromPixel(eventPosition);
-		var originPoint = this.viewer.viewport.pixelFromPoint(viewportPos);
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		var originPoint = PLUGINS.osd.viewport.pixelFromPoint(viewportPos);
 		this.changeTile(viewportPos);
 
 		let points = [];
@@ -1348,7 +1298,7 @@ $("body").append(`
 			}
 		}
 		//speed based on ZOOM level (detailed tiles can go with rougher step)
-		let maxLevel = this.tiledImage.source.maxLevel;
+		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
 		let level = this.currentTile.level;
 		let maxSpeed = 24;
 		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
@@ -1357,19 +1307,19 @@ $("body").append(`
 
 		//todo same points evaluated multiple times seems to be more stable, BUT ON LARGE CANVAS!!!...
 
-		var maxX=0, maxY=0;
+		var maxX = 0, maxY = 0;
 		this._growRegionInDirections(x - 1, y, [-1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length-1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length-1].y));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
 		this._growRegionInDirections(x + 1, y, [1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length-1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length-1].y));
-		this._growRegionInDirections(x, y + 1, [0, -1], [ [-1, 0],  [1, 0]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length-1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length-1].y));
-		this._growRegionInDirections(x, y - 1, [0, 1], [ [-1, 0],  [1, 0]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length-1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length-1].y));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+		this._growRegionInDirections(x, y + 1, [0, -1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+		this._growRegionInDirections(x, y - 1, [0, 1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
 
 		if (maxX < 10 || maxY < 10) {
 			this.messenger.show("Failed to create region.", 3000, this.messenger.MSG_WARN);
@@ -1381,17 +1331,17 @@ $("body").append(`
 		// this._growRegion(x, y, startIdx, startIdx, this._bitArray, points, speed, this.isValidPixel.bind(this));
 		//// this._bitArray.drawXY(500, 500, 900, 700);
 
-		points = hull(points, 2*speed);
-		let p1=points[0]; p2=points[1];
+		points = hull(points, 2 * speed);
+		let p1 = points[0]; p2 = points[1];
 		let result = [this.toGlobalPointXY(p1[0], p1[1])];
 
 		for (var i = 2; i < points.length; i++) {
 			//three consecutive points on a line, discard
 			if ((Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-			 || (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
+				|| (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
 				p2 = points[i];
 				continue;
-			} 
+			}
 
 			p1 = p2;
 			p2 = points[i];
@@ -1400,22 +1350,22 @@ $("body").append(`
 
 		this.currentAnnotationObject = this.createPolygon(result);
 		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-	
+
 		this.history.push(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().renderAll();
 
-//$(".to-delete").remove();
+		//$(".to-delete").remove();
 	},
 
 
 	//used to detect auto size of a primitive object (rect/ellipse)
-	_getSimpleApproxObjectBounds: function(eventPosition) {
+	_getSimpleApproxObjectBounds: function (eventPosition) {
 		//TODO move this beginning logic to handler
 
-		var viewportPos = this.viewer.viewport.pointFromPixel(eventPosition);
-		//var imagePoint = tiledImage.viewportToImageCoordinates(viewportPos);
-		var originPoint = this.viewer.viewport.pixelFromPoint(viewportPos);
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		//var imagePoint = PLUGINS.dataLayer.viewportToImageCoordinates(viewportPos);
+		var originPoint = PLUGINS.osd.viewport.pixelFromPoint(viewportPos);
 		this.changeTile(viewportPos);
 
 		//todo unused, maybe round origin point...?
@@ -1433,7 +1383,7 @@ $("body").append(`
 
 		if (!this.comparator(origPixel)) {
 			//default object of width 40
-			return {top: this.toGlobalPointXY(x, y-20), left: this.toGlobalPointXY(x-20, y), bottom: this.toGlobalPointXY(x, y+20), right: this.toGlobalPointXY(x+20, y)}
+			return { top: this.toGlobalPointXY(x, y - 20), left: this.toGlobalPointXY(x - 20, y), bottom: this.toGlobalPointXY(x, y + 20), right: this.toGlobalPointXY(x + 20, y) }
 		};
 
 		while (this.getAreaStamp(x, y) == 15) {
@@ -1459,7 +1409,7 @@ $("body").append(`
 		}
 		var top = this.toGlobalPointXY(x, y);
 
-		return {top: top, left: left, bottom: bottom, right: right}
+		return { top: top, left: left, bottom: bottom, right: right }
 	},
 
 
@@ -1469,35 +1419,35 @@ $("body").append(`
 	_bitArray: {
 		dimension: 2000,
 		arr: [],
-		
+
 		cells: [1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 8, 1 << 9,
-			1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16, 1 << 17, 1 << 18, 1 << 19,
-			1 << 20, 1 << 21, 1 << 22, 1 << 23, 1 << 24, 1 << 25, 1 << 26, 1 << 27, 1 << 28, 1 << 29],
-		
-		isFlag: function(i, j) {
-			let idx = i*this.dimension + j;
+		1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16, 1 << 17, 1 << 18, 1 << 19,
+		1 << 20, 1 << 21, 1 << 22, 1 << 23, 1 << 24, 1 << 25, 1 << 26, 1 << 27, 1 << 28, 1 << 29],
+
+		isFlag: function (i, j) {
+			let idx = i * this.dimension + j;
 			let flag = this.arr[Math.floor(idx / this.cells.length)];
 
 			return (flag & this.cells[idx % this.cells.length]) > 0;
 		},
 
-		setFlag: function(i, j, flag=true) {
-			let idx = i*this.dimension + j;
+		setFlag: function (i, j, flag = true) {
+			let idx = i * this.dimension + j;
 			if (flag) {
 				// |    to add selection (1 on the only place we want to add)
 				this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] | this.cells[idx % this.cells.length];
 			} else {
 				// & ~   to negate the selection (0 on the only place we want to clear) and bit-wise and this mask to arr
-				this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx /  this.cells.length)] & ~this.cells[idx % this.cells.length];
+				this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] & ~this.cells[idx % this.cells.length];
 			}
 		},
 
 		//for growing region
-		startXY: function() {
+		startXY: function () {
 			return Math.floor(this.dimension / 2);
 		},
 
-		clear: function() {
+		clear: function () {
 			this.arr = [];
 		},
 
@@ -1510,7 +1460,7 @@ $("body").append(`
 		// 		}
 		// 		console.log(line);
 		// 	}
-			
+
 		// }
 	},
 
@@ -1518,38 +1468,38 @@ $("body").append(`
 	// primaryDirection - where pixel is tested, directions - where the recursion is branching, resultingPoints - to push border points(result),
 	// speed - how many pixels skip, evaluator - function that takes a position and returns bool - True if valid pixel
 	_growRegion: function (x, y, bitsX, bitsY, bitsmap, resultingPoints, speed, evaluator) {
-		
+
 		if (bitsX < 0 || bitsX >= bitsmap.dimension || bitsY < 0 || bitsY >= bitsmap.dimension) {
 			//todo stop here, add the point or believe it was being taken care of before??
 			resultingPoints.push([x, y]);
 			return;
 		}
 
-		let newP = new OpenSeadragon.Point(x, y);	
+		let newP = new OpenSeadragon.Point(x, y);
 		//console.log(`${bitsX}, ${bitsY}:: ${x}, ${y}`)
 		if (evaluator(newP)) {
 			resultingPoints.push([newP.x, newP.y]);
 
-			if (!bitsmap.isFlag(bitsX+1, bitsY)) {
-				bitsmap.setFlag(bitsX+1, bitsY);
-				this._growRegion(x + speed, y, bitsX+1, bitsY, bitsmap, resultingPoints, speed, evaluator);
+			if (!bitsmap.isFlag(bitsX + 1, bitsY)) {
+				bitsmap.setFlag(bitsX + 1, bitsY);
+				this._growRegion(x + speed, y, bitsX + 1, bitsY, bitsmap, resultingPoints, speed, evaluator);
 			}
-			if (!bitsmap.isFlag(bitsX-1, bitsY)) {
-				bitsmap.setFlag(bitsX-1, bitsY);
-				this._growRegion(x - speed, y, bitsX-1, bitsY, bitsmap, resultingPoints, speed, evaluator);
+			if (!bitsmap.isFlag(bitsX - 1, bitsY)) {
+				bitsmap.setFlag(bitsX - 1, bitsY);
+				this._growRegion(x - speed, y, bitsX - 1, bitsY, bitsmap, resultingPoints, speed, evaluator);
 			}
-			if (!bitsmap.isFlag(bitsX, bitsY+1)) {
-				bitsmap.setFlag(bitsX, bitsY+1);
-				this._growRegion(x, y + speed, bitsX, bitsY+1, bitsmap, resultingPoints, speed, evaluator);
+			if (!bitsmap.isFlag(bitsX, bitsY + 1)) {
+				bitsmap.setFlag(bitsX, bitsY + 1);
+				this._growRegion(x, y + speed, bitsX, bitsY + 1, bitsmap, resultingPoints, speed, evaluator);
 			}
-			if (!bitsmap.isFlag(bitsX, bitsY-1)) {
-				bitsmap.setFlag(bitsX, bitsY-1);
-				this._growRegion(x, y - speed, bitsX, bitsY-1, bitsmap, resultingPoints, speed, evaluator);
+			if (!bitsmap.isFlag(bitsX, bitsY - 1)) {
+				bitsmap.setFlag(bitsX, bitsY - 1);
+				this._growRegion(x, y - speed, bitsX, bitsY - 1, bitsmap, resultingPoints, speed, evaluator);
 			}
 		}
 		//else: try to go pixel by pixel back to find the boundary
 	},
-	
+
 	//if first direction cannot be persued, other take over for some time
 	// primaryDirection - where pixel is tested, directions - where the recursion is branching, resultingPoints - to push border points(result),
 	// speed - how many pixels skip, evaluator - function that takes a position and returns bool - True if valid pixel
@@ -1567,10 +1517,10 @@ $("body").append(`
 			//TODO PUT SOME INSIDE POINTS AS WELL, OTHERWISE CONVEX HULL FAILS TO COMPUTE COREECT OUTLINE
 
 			//if (Math.random() > 0.8) {
-				resultingPoints.push([newP.x, newP.y]);
-				//if (maxDist > 0) $("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-			
-				//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+			resultingPoints.push([newP.x, newP.y]);
+			//if (maxDist > 0) $("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+
+			//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 			//}
 
 			if (_primarySubstitued && directions[0]) {
@@ -1587,7 +1537,7 @@ $("body").append(`
 
 			return valid;
 		} else {
-		
+
 			if (!_primarySubstitued) {
 				//TODO due to speed probably imprecise, try to find exact border by going forward by 1?
 
@@ -1602,7 +1552,7 @@ $("body").append(`
 						newP.y -= primaryDirection[1];
 					} while (!evaluator(newP));
 				}
-				
+
 				resultingPoints.push([newP.x, newP.y]);
 
 				//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
@@ -1621,26 +1571,23 @@ $("body").append(`
 
 	*****************************************************************************************************************/
 
-	toScreenCoords: function(x, y) {
-		return this.tiledImage.imageToWindowCoordinates(new OpenSeadragon.Point(x, y));	
+	toScreenCoords: function (x, y) {
+		return PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(x, y));
 	},
 
 	toGlobalPointXY: function (x, y) {
-		return this.tiledImage.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
-		//return this.tiledImage.viewportToImageCoordinates(this.viewer.viewport.pointFromPixel(new OpenSeadragon.Point(x, y)));
+		return PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	},
 
 	toGlobalPoint: function (point) {
-		return this.tiledImage.windowToImageCoordinates(point);
-
-		//return this.tiledImage.viewportToImageCoordinates(this.viewer.viewport.pointFromPixel(point));
+		return PLUGINS.dataLayer.windowToImageCoordinates(point);
 	},
 
-	getCursorXY: function(e) {
+	getCursorXY: function (e) {
 		return new OpenSeadragon.Point(e.pageX, e.pageY);
 	},
 
-	getGlobalCursorXY: function(e) {
+	getGlobalCursorXY: function (e) {
 		return this.getGlobalCursorXY(this.getCursorXY(e));
 	},
 
@@ -1655,7 +1602,7 @@ $("body").append(`
 	// set currentTile to tile where is the event
 	changeTile: function (viewportPos) {
 		var i = 0;
-		this.tiledImage.lastDrawn.forEach(function (tile) {
+		PLUGINS.dataLayer.lastDrawn.forEach(function (tile) {
 			if (tile.bounds.containsPoint(viewportPos)) {
 				openseadragon_image_annotations.currentTile = tile;
 				return;
@@ -1679,7 +1626,7 @@ $("body").append(`
 	getPixelData: function (eventPosition) {
 		//change only if outside
 		if (!this.currentTile.bounds.containsPoint(eventPosition)) {
-			this.changeTile(viewer.viewport.pointFromPixel(eventPosition));
+			this.changeTile(PLUGINS.osd.viewport.pointFromPixel(eventPosition));
 		}
 
 		// get position on a current tile
@@ -1690,7 +1637,7 @@ $("body").append(`
 		var relative_x = Math.round((x / this.currentTile.size.x) * this.currentTile.context2D.canvas.width);
 		var relative_y = Math.round((y / this.currentTile.size.y) * this.currentTile.context2D.canvas.height);
 
-		
+
 		return this.currentTile.context2D.getImageData(relative_x, relative_y, 1, 1).data;
 	},
 
@@ -1721,12 +1668,14 @@ $("body").append(`
  
 	 *****************************************************************************************************************/
 
-	createRectangle: function(left, top, width, height) {
+	createRectangle: function (left, top, width, height, isLeftClick = null) {
+		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
+
 		return new fabric.Rect({
 			left: left,
 			top: top,
-			fill: this.currentAnnotationObject.isLeftClick ? this.leftClickColor : this.rightClickColor,
-			isLeftClick: this.currentAnnotationObject.isLeftClick,
+			fill: leftClick ? this.leftClickColor : this.rightClickColor,
+			isLeftClick: leftClick,
 			opacity: $("#opacity_control").val(),
 			strokeWidth: 2,
 			stroke: 'black',
@@ -1736,17 +1685,17 @@ $("body").append(`
 			scaleY: 1,
 			type: 'rect',
 			hasRotatingPoint: false,
-			borderColor:'#fbb802',
-			cornerColor:'#fbb802',
+			borderColor: '#fbb802',
+			cornerColor: '#fbb802',
 			borderScaleFactor: 3,
 			hasControls: false,
-			comment: this.currentAnnotationObject.isLeftClick ? 
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) : 
+			comment: leftClick ?
+				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
 				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
 		});
-	},	
-	
-	createCopyRectangle: function(ofObject, left, top, width, height) {
+	},
+
+	createCopyRectangle: function (ofObject, left, top, width, height) {
 		return new fabric.Rect({
 			left: left,
 			top: top,
@@ -1769,7 +1718,9 @@ $("body").append(`
 		});
 	},
 
-	createEllipse: function(left, top, rx, ry) {
+	createEllipse: function (left, top, rx, ry, isLeftClick = null) {
+		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
+
 		return new fabric.Ellipse({
 			left: left,
 			top: top,
@@ -1778,25 +1729,25 @@ $("body").append(`
 			rx: rx,
 			ry: ry,
 			angle: 0,
-			fill: this.currentAnnotationObject.isLeftClick ? this.leftClickColor : this.rightClickColor,
+			fill: leftClick ? this.leftClickColor : this.rightClickColor,
 			stroke: 'black',
 			strokeWidth: 2,
 			opacity: $("#opacity_control").val(),
 			type: 'ellipse',
-			isLeftClick: this.currentAnnotationObject.isLeftClick,
+			isLeftClick: leftClick,
 			selectable: true,
-			hasRotatingPoint: false,			
-			borderColor:'#fbb802',
-			cornerColor:'#fbb802',
+			hasRotatingPoint: false,
+			borderColor: '#fbb802',
+			cornerColor: '#fbb802',
 			borderScaleFactor: 3,
 			hasControls: false,
-			comment: this.currentAnnotationObject.isLeftClick ? 
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) : 
+			comment: leftClick ?
+				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
 				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
 		});
-	},		
-	
-	createCopyEllipse: function(ofObject, left, top, rx, ry) {
+	},
+
+	createCopyEllipse: function (ofObject, left, top, rx, ry) {
 		return new fabric.Ellipse({
 			left: left,
 			top: top,
@@ -1812,36 +1763,38 @@ $("body").append(`
 			type: ofObject.type,
 			isLeftClick: ofObject.isLeftClick,
 			selectable: ofObject.selectable,
-			hasRotatingPoint: ofObject.hasRotatingPoint,	
+			hasRotatingPoint: ofObject.hasRotatingPoint,
 			borderColor: ofObject.borderColor,
 			cornerColor: ofObject.cornerColor,
 			borderScaleFactor: ofObject.borderScaleFactor,
 			hasControls: ofObject.hasControls,
 			comment: ofObject.comment,
 		});
-	},		
-	
-	createPolygon: function(points) {
+	},
+
+	createPolygon: function (points, isLeftClick = null) {
+		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
+
 		return new fabric.Polygon(points, {
 			hasRotatingPoint: false,
-			fill: this.currentAnnotationObject.isLeftClick ? this.leftClickColor : this.rightClickColor,
+			fill: leftClick ? this.leftClickColor : this.rightClickColor,
 			stroke: 'black',
 			strokeWidth: 2,
-			isLeftClick: this.currentAnnotationObject.isLeftClick,
+			isLeftClick: leftClick,
 			opacity: $("#opacity_control").val(),
 			type: 'polygon',
 			selectable: true,
-			borderColor:'#fbb802',
-			cornerColor:'#fbb802',
+			borderColor: '#fbb802',
+			cornerColor: '#fbb802',
 			borderScaleFactor: 3,
 			hasControls: false,
-			comment: this.currentAnnotationObject.isLeftClick ? 
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) : 
+			comment: leftClick ?
+				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
 				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
 		});
-	},	
+	},
 
-	createCopyPolygon: function(ofObject, newPoints, evented=true) {
+	createCopyPolygon: function (ofObject, newPoints, evented = true) {
 		return new fabric.Polygon(newPoints, {
 			hasRotatingPoint: ofObject.hasRotatingPoint,
 			fill: ofObject.fill,
@@ -1859,7 +1812,7 @@ $("body").append(`
 			hasControls: ofObject.hasControls,
 			evented: evented,
 		});
-	},	
+	},
 
 
 	/****************************************************************************************************************
@@ -1906,13 +1859,13 @@ $("body").append(`
 		this.currentAnnotationObject.set({ rx: width, ry: height });
 	},
 
-	enlargeRectToContain: function(rect, points) {
+	enlargeRectToContain: function (rect, points) {
 		let w = rect.width,
 			h = rect.height;
-		points.push({x: rect.left, y: rect.top});
-		points.push({x: rect.left+w, y: rect.top});
-		points.push({x: rect.left, y: rect.top+h});
-		points.push({x: rect.left+w, y: rect.top+h});
+		points.push({ x: rect.left, y: rect.top });
+		points.push({ x: rect.left + w, y: rect.top });
+		points.push({ x: rect.left, y: rect.top + h });
+		points.push({ x: rect.left + w, y: rect.top + h });
 		var minX = points[0].x,
 			minY = points[0].y,
 			maxX = minX,
@@ -1929,18 +1882,18 @@ $("body").append(`
 		this.overlay.fabricCanvas().remove(rect);
 		this.overlay.fabricCanvas().add(newObject);
 		this.history.push(newObject, rect);
-		
-    	this.overlay.fabricCanvas().renderAll();
+
+		this.overlay.fabricCanvas().renderAll();
 		this.overlay.fabricCanvas().setActiveObject(newObject);
 	},
 
-	enlargeEllipseToContain: function(ellipse, points) {
-		let w = ellipse.rx*2,
-			h = ellipse.ry*2;
-		points.push({x: ellipse.left, y: ellipse.top});
-		points.push({x: ellipse.left+w, y: ellipse.top});
-		points.push({x: ellipse.left, y: ellipse.top+h});
-		points.push({x: ellipse.left+w, y: ellipse.top+h});
+	enlargeEllipseToContain: function (ellipse, points) {
+		let w = ellipse.rx * 2,
+			h = ellipse.ry * 2;
+		points.push({ x: ellipse.left, y: ellipse.top });
+		points.push({ x: ellipse.left + w, y: ellipse.top });
+		points.push({ x: ellipse.left, y: ellipse.top + h });
+		points.push({ x: ellipse.left + w, y: ellipse.top + h });
 
 		var minX = points[0].x,
 			minY = points[0].y,
@@ -1958,9 +1911,9 @@ $("body").append(`
 		this.overlay.fabricCanvas().add(newObject);
 		this.overlay.fabricCanvas().remove(ellipse);
 		this.history.push(newObject, ellipse);
-		
-    	this.overlay.fabricCanvas().renderAll();
-		this.overlay.fabricCanvas().setActiveObject(newObject);		
+
+		this.overlay.fabricCanvas().renderAll();
+		this.overlay.fabricCanvas().setActiveObject(newObject);
 	},
 
 	polygonClickAction: function (o, x, y) {
@@ -1988,10 +1941,10 @@ $("body").append(`
 		}
 	},
 
-	enlargePolygonToContain: async function(polygon, points) {
-		
+	enlargePolygonToContain: async function (polygon, points) {
+
 		console.log("enlarge poly")
-		
+
 		var polypoints = polygon.get("points")
 
 		//TODO WHEN PROCESSING I KNOW WHICH INDICES ARE OUT/IN SO THERE IT SHOULD CROSS THE BORDER AND THUS MERGE...
@@ -2006,14 +1959,14 @@ $("body").append(`
 					//todo
 				}
 			} else {
-				if (! inside) {
+				if (!inside) {
 					inside = true;
 					//todo
 				}
 			}
 		});
 
-		
+
 
 		//suppose polygon is bigger than appended region, keep region edge points too (0)		
 		points.forEach(p => {
@@ -2114,7 +2067,7 @@ $("body").append(`
 		});
 		openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 
-		
+
 		this.polygon.originallyEddited = p;
 		this.polygon.currentlyEddited = this.createCopyPolygon(p, points, false);
 		this.overlay.fabricCanvas().remove(p);
@@ -2243,8 +2196,8 @@ $("body").append(`
 		document.getElementById("annotation_threshold").innerHTML = annotation.threshold;
 
 		// set position of the input form
-		var viewport_coordinates = this.viewer.world.getItemAt(0).imageToViewportCoordinates(annotation.left + annotation.width, annotation.top);
-		var pixel_coordinates = this.viewer.viewport.pixelFromPoint(viewport_coordinates);
+		var viewport_coordinates = PLUGINS.osd.world.getItemAt(0).imageToViewportCoordinates(annotation.left + annotation.width, annotation.top);
+		var pixel_coordinates = PLUGINS.osd.viewport.pixelFromPoint(viewport_coordinates);
 		document.getElementById("input_form").style.position = "absolute";
 		document.getElementById("input_form").style.top = String(pixel_coordinates.y - 10) + "px";
 		document.getElementById("input_form").style.left = String(pixel_coordinates.x + 10) + "px";
@@ -2261,25 +2214,25 @@ $("body").append(`
 		_node: null,
 		_toolRadius: 0,
 
-		init: function() {
+		init: function () {
 			this._node = document.getElementById("annotation-cursor");
 		},
 
-		updateRadius: function() {
+		updateRadius: function () {
 			this._toolRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius();
 		},
 
-		getHTMLNode: function() {
+		getHTMLNode: function () {
 			return this._node;
 		},
 
-		show: function() {
+		show: function () {
 			if (this._listener) return;
 			//this._node.css({display: "block", width: this._toolRadius+"px", height: this._toolRadius+"px"});
-			this._node.style.display = "block";			
+			this._node.style.display = "block";
 			this.updateRadius();
-			this._node.style.width = (this._toolRadius * 2)+"px";
-			this._node.style.height = (this._toolRadius * 2)+"px";
+			this._node.style.width = (this._toolRadius * 2) + "px";
+			this._node.style.height = (this._toolRadius * 2) + "px";
 			// this._node.style.top = e.pageY + "px";
 			// this._node.style.left = e.pageX + "px";
 
@@ -2289,13 +2242,13 @@ $("body").append(`
 			this._listener = e => {
 				c.style.top = e.pageY + "px";
 				c.style.left = e.pageX + "px";
-	
+
 
 			};
 			window.addEventListener("mousemove", this._listener);
 		},
 
-		hide: function() {
+		hide: function () {
 			if (!this._listener) return;
 			this._node.style.display = "none";
 			this._visible = false;
@@ -2319,7 +2272,7 @@ $("body").append(`
 		input_attributes: {},
 
 		// initialize attributes, prepare for new drawing
-		init: function (isNew=true) {
+		init: function (isNew = true) {
 			this.polygonBeingCreated = isNew;
 			this.pointArray = new Array();
 			this.lineArray = new Array();
@@ -2439,7 +2392,7 @@ $("body").append(`
 				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.currentlyEddited);
 			};
 
-		
+
 			if (pointArray.length < 3) {
 				this.init(false); //clear
 				return;
@@ -2487,40 +2440,39 @@ $("body").append(`
 		polygon: null,
 		radius: 50,
 		mousePos: null,
-				
-		SQRT2DIV2: 0.707106781187,
-	
-		//initialize any object for cursor-drawing modification
-		init: function(object, atPosition, radius, add=true) {
 
-			switch(object.type) {
+		SQRT2DIV2: 0.707106781187,
+
+		//initialize any object for cursor-drawing modification
+		init: function (object, atPosition, radius, add = true) {
+			switch (object.type) {
 				case 'rect':
 					let w = object.width, h = object.height;
-					this._createPolygonAndSetupFrom([{x: object.left, y: object.top},
-						{x: object.left+w, y: object.top},
-						{x: object.left+w, y: object.top+h},
-						{x: object.left, y: object.top+h}
+					this._createPolygonAndSetupFrom([{ x: object.left, y: object.top },
+					{ x: object.left + w, y: object.top },
+					{ x: object.left + w, y: object.top + h },
+					{ x: object.left, y: object.top + h }
 					], object);
 					break;
 				case 'ellipse':
 					//see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
 					//formula author https://math.stackexchange.com/users/299599/ng-chung-tak
-					let pow2e = 1 - (object.ry*object.ry) / (object.rx*object.rx),
-						pow3e = pow2e*Math.sqrt(pow2e),
-						pow4e = pow2e*pow2e,
-						pow6e = pow3e*pow3e;
+					let pow2e = 1 - (object.ry * object.ry) / (object.rx * object.rx),
+						pow3e = pow2e * Math.sqrt(pow2e),
+						pow4e = pow2e * pow2e,
+						pow6e = pow3e * pow3e;
 
 					let step = Math.PI / 16, points = [];
 
-					for (let t = 0; t < 2*Math.PI; t += step) {
-						let param = t - (pow2e/8 + pow4e/16 + 71*pow6e/2048)*Math.sin(2*t)
-						 			+ ( (5*pow4e + 5*pow6e)/256 ) * Math.sin(4*t)
-									+ (29*pow6e/6144) * Math.sin(6*t);
-						points.push({x: object.rx * Math.cos(param) + object.left + object.rx, y: object.ry * Math.sin(param) + object.top + object.ry});
+					for (let t = 0; t < 2 * Math.PI; t += step) {
+						let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
+							+ ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
+							+ (29 * pow6e / 6144) * Math.sin(6 * t);
+						points.push({ x: object.rx * Math.cos(param) + object.left + object.rx, y: object.ry * Math.sin(param) + object.top + object.ry });
 					}
 					this._createPolygonAndSetupFrom(points, object);
 					break;
-				case 'polygon': 
+				case 'polygon':
 					this._setupPolygon(object);
 					break;
 				default:
@@ -2534,23 +2486,23 @@ $("body").append(`
 
 			this.setRadius(radius);
 
-			this.mousePos = atPosition;		
+			this.mousePos = atPosition;
 		},
 
-		setRadius: function(radius) {
+		setRadius: function (radius) {
 			var zoom = openseadragon_image_annotations.overlay.fabricCanvas().getZoom();
-			if (zoom < 0.01) { this.radius = 50*radius; }
-			else if (zoom < 0.03) { this.radius = 25*radius; }
-			else if (zoom < 0.1) { this.radius = 5*radius; }
-			else if (zoom < 0.3) { this.radius = 2*radius; }
+			if (zoom < 0.01) { this.radius = 50 * radius; }
+			else if (zoom < 0.03) { this.radius = 25 * radius; }
+			else if (zoom < 0.1) { this.radius = 5 * radius; }
+			else if (zoom < 0.3) { this.radius = 2 * radius; }
 			else { this.radius = radius; };
 		},
 
 		//update step meant to be executed on mouse move event
-		update: this.union,
+		update: null,
 
 		//final step
-		finish: function() {
+		finish: function () {
 			if (this.polygon) {
 				this.polygon.lockMovementX = false;
 				this.polygon.lockMovementY = false;
@@ -2569,29 +2521,29 @@ $("body").append(`
 		},
 
 		//TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
-		union: function(nextMousePos) {
+		union: function (nextMousePos) {
 			if (!this.polygon || openseadragon_image_annotations.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
 
-			let radPoints = this._get8Directions(nextMousePos);
+			let radPoints = this.getCircleShape(nextMousePos);
 			var polypoints = this.polygon.get("points");
 			//avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-			if (openseadragon_image_annotations.toDistanceObj(polypoints[0], polypoints[polypoints.length-1]) < this.radius) polypoints.pop();
+			if (openseadragon_image_annotations.toDistanceObj(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
 			this.mousePos = nextMousePos;
 
 			//compute union
-			var union  = greinerHormann.union(polypoints, radPoints);
+			var union = greinerHormann.union(polypoints, radPoints);
 
-			if(union) {
+			if (union) {
 				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.polygon);
-					
-				if(typeof union[0][0] === 'number'){ // single linear ring
+
+				if (typeof union[0][0] === 'number') { // single linear ring
 					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(union, this.radius / 5));
 					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-					this.polygon = polygon;					
+					this.polygon = polygon;
 				} else {
-					if (union.length > 1) union  = this._unify(union);
-					
-					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon,this._simplifyPolygon(union[0], this.radius / 5));
+					if (union.length > 1) union = this._unify(union);
+
+					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(union[0], this.radius / 5));
 					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
 					this.polygon = polygon;
 				}
@@ -2605,62 +2557,62 @@ $("body").append(`
 			}
 		},
 
-		subtract: function(nextMousePos) {
+		subtract: function (nextMousePos) {
 			if (!this.polygon || openseadragon_image_annotations.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
 
-			let radPoints = this._get8Directions(nextMousePos);
+			let radPoints = this.getCircleShape(nextMousePos);
 			var polypoints = this.polygon.get("points");
 			this.mousePos = nextMousePos;
 
 			var difference = greinerHormann.diff(polypoints, radPoints);
 			if (difference) {
 				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.polygon);
-					if(typeof difference[0][0] === 'number'){ // single linear ring
-						var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference, this.radius / 5));
-						openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-						this.polygon = polygon;					
-					} else {
-						if (difference.length > 1) difference  = this._unify(difference);
+				if (typeof difference[0][0] === 'number') { // single linear ring
+					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference, this.radius / 5));
+					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
+					this.polygon = polygon;
+				} else {
+					if (difference.length > 1) difference = this._unify(difference);
 
-						let maxIdx = 0, maxArea = 0;
-						for (let j = 0; j < difference.length; j++) {
-							let measure = this._findApproxBoundBoxSize(difference[j]);
-							if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
-							let area = measure.diffX*measure.diffY;
-							if (area > maxArea) {
-								maxArea = area;
-								maxIdx = j;
-							}
+					let maxIdx = 0, maxArea = 0;
+					for (let j = 0; j < difference.length; j++) {
+						let measure = this._findApproxBoundBoxSize(difference[j]);
+						if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
+						let area = measure.diffX * measure.diffY;
+						if (area > maxArea) {
+							maxArea = area;
+							maxIdx = j;
 						}
-
-						if (maxArea < this.radius*this.radius / 2) {  //largest area ceased to exist: finish
-							//this.polygon.comment = this.initial.comment; //for some reason not preserved
-							openseadragon_image_annotations.history.push(null, this.initial);
-							this.polygon = null;
-							this.initial = null;
-							this.mousePos = null;
-							return;
-						}
-
-						var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
-						openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-						this.polygon = polygon;
 					}
-	
-					this.polygon.lockMovementX = false;
-					this.polygon.lockMovementY = false;
-					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
+
+					if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
+						//this.polygon.comment = this.initial.comment; //for some reason not preserved
+						openseadragon_image_annotations.history.push(null, this.initial);
+						this.polygon = null;
+						this.initial = null;
+						this.mousePos = null;
+						return;
+					}
+
+					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
+					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
+					this.polygon = polygon;
+				}
+
+				this.polygon.lockMovementX = false;
+				this.polygon.lockMovementY = false;
+				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 			} else {
 				console.log("NO DIFFERENCE FOUND");
 			}
 		},
 
-		getScreenToolRadius: function() {
+		getScreenToolRadius: function () {
 			return openseadragon_image_annotations.toScreenCoords(0, 0).distanceTo(openseadragon_image_annotations.toScreenCoords(0, this.radius));
 		},
 
 		//initialize object so that it is ready to be modified
-		_setupPolygon: function(polyObject) {
+		_setupPolygon: function (polyObject) {
 			openseadragon_image_annotations.currentAnnotationObject = polyObject;
 
 			polyObject.lockMovementX = true;
@@ -2671,7 +2623,7 @@ $("body").append(`
 		},
 
 		//create polygon from points and initialize so that it is ready to be modified
-		_createPolygonAndSetupFrom: function(points, object) {
+		_createPolygonAndSetupFrom: function (points, object) {
 			let polygon = openseadragon_image_annotations.createCopyPolygon(object, points);
 			polygon.type = "polygon";
 
@@ -2685,45 +2637,45 @@ $("body").append(`
 		},
 
 		//try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
-		_unify: function(unions) {
+		_unify: function (unions) {
 			let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
 
 			unions.forEach(u => {
-				primary.push(this._simplifyPolygon(u, this.radius/5));
+				primary.push(this._simplifyPolygon(u, this.radius / 5));
 			});
 			while (i < len) {
 				i++;
 				let j = 0;
-				for (; j < primary.length-1; j+=2) {
-					let ress = greinerHormann.union(primary[j], primary[j+1]);
+				for (; j < primary.length - 1; j += 2) {
+					let ress = greinerHormann.union(primary[j], primary[j + 1]);
 
-					if(typeof ress[0][0] === 'number'){
+					if (typeof ress[0][0] === 'number') {
 						secondary = [ress].concat(secondary); //reverse order for different union call in the next loop
 					} else {
 						secondary = ress.concat(secondary); //reverse order for different union call
-					}				
+					}
 				}
-				if (j == primary.length-1) secondary.push(primary[j]);
+				if (j == primary.length - 1) secondary.push(primary[j]);
 				primary = secondary;
 				secondary = [];
 			}
 			return primary;
 		},
-		
+
 		//remove on-line (horizontal/vertical only) points or points that are too close
-		_simplifyPolygon: function(points, threshold) {
+		_simplifyPolygon: function (points, threshold) {
 			if (points.length < 20) return points;
-			let p1=points[0], p2=points[1];
+			let p1 = points[0], p2 = points[1];
 			let result = [p1];
-	
+
 			for (var i = 2; i < points.length; i++) {
 				if (openseadragon_image_annotations.toDistanceObj(p1, p2) < threshold
-				 ||	(Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-				 || (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
+					|| (Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
+					|| (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
 					p2 = points[i];
 					continue;
-				} 
-	
+				}
+
 				p1 = p2;
 				p2 = points[i];
 				result.push(p1);
@@ -2733,8 +2685,8 @@ $("body").append(`
 		},
 
 		//when removing parts of polygon, decide which one has smaller area and will be removed
-		_findApproxBoundBoxSize: function(points) {
-			if (points.length < 3) return {diffX:0, diffY: 0};
+		_findApproxBoundBoxSize: function (points) {
+			if (points.length < 3) return { diffX: 0, diffY: 0 };
 			let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
 			for (let i = 1; i < points.length; i++) {
 				maxX = Math.max(maxX, points[i].x);
@@ -2742,163 +2694,228 @@ $("body").append(`
 				minX = Math.min(minX, points[i].x);
 				minY = Math.min(minY, points[i].y);
 			}
-			return {diffX:maxX-minX, diffY: maxY-minY};
+			return { diffX: maxX - minX, diffY: maxY - minY };
 		},
 
 		//create approximated polygon of drawing tool
-		_get8Directions: function(fromPoint) {
-			let diagonal = this.radius*this.SQRT2DIV2;
+		getCircleShape: function (fromPoint) {
+			let diagonal = this.radius * this.SQRT2DIV2;
 			return [
-				{x: fromPoint.x - this.radius, y: fromPoint.y},
-				{x: fromPoint.x - diagonal, y: fromPoint.y + diagonal},
-				{x: fromPoint.x, y: fromPoint.y + this.radius},
-				{x: fromPoint.x + diagonal, y: fromPoint.y + diagonal},
-				{x: fromPoint.x + this.radius, y: fromPoint.y},
-				{x: fromPoint.x + diagonal, y: fromPoint.y - diagonal},
-				{x: fromPoint.x, y: fromPoint.y - this.radius},
-				{x: fromPoint.x - diagonal, y: fromPoint.y - diagonal}
+				{ x: fromPoint.x - this.radius, y: fromPoint.y },
+				{ x: fromPoint.x - diagonal, y: fromPoint.y + diagonal },
+				{ x: fromPoint.x, y: fromPoint.y + this.radius },
+				{ x: fromPoint.x + diagonal, y: fromPoint.y + diagonal },
+				{ x: fromPoint.x + this.radius, y: fromPoint.y },
+				{ x: fromPoint.x + diagonal, y: fromPoint.y - diagonal },
+				{ x: fromPoint.x, y: fromPoint.y - this.radius },
+				{ x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
 			]
+		},
+	}
+}; // end of namespace
+
+
+
+
+
+Messenger = function () {
+	this.MSG_INFO = { class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' };
+	this.MSG_WARN = { class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />' };
+	this.MSG_ERR = { class: "Toast--error", icon: '<path fill-rule="evenodd" d="M10 1H4L0 5v6l4 4h6l4-4V5l-4-4zm3 9.5L9.5 14h-5L1 10.5v-5L4.5 2h5L13 5.5v5zM6 4h2v5H6V4zm0 6h2v2H6v-2z" />' };
+	this._timer = null;
+
+	$("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
+		  <span class="Toast-icon"><svg width="12" height="16"v id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
+		  <span id="annotation-messages" class="Toast-content v-align-middle"></span>
+		  <button class="Toast-dismissButton" onclick="openseadragon_image_annotations.messenger.hide(false);">
+			<svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
+		  </button>
+		  </div>`);
+
+	this._body = $("#annotation-messages-container");
+	this._board = $("#annotation-messages");
+	this._icon = $("#annotation-icon");
+}
+Messenger.prototype = {
+	show: function (text, delayMS, importance) {
+		this._board.html(text);
+		this._icon.html(importance.icon);
+		this._body.removeClass(); //all
+		this._body.addClass(`Toast position-fixed ${importance.class}`)
+		this._body.removeClass("popUpHide");
+		this._body.addClass("popUpEnter");
+
+		if (delayMS > 1000) {
+			this._timer = setTimeout(this.hide.bind(this), delayMS);
 		}
 	},
 
-	history: {
+	hide: function (_autoCalled = true) {
+		console.log("remove", this._body)
+		this._body.removeClass("popUpEnter");
+		this._body.addClass("popUpHide");
 
-		//TODO history: populate BOARD when annotation file is loaded (some for object loop)
+		if (!_autoCalled) {
+			clearTimeout(this._timer);
+		}
+		this._timer = null;
+	}
+}  // end of namespace messenger
 
-		buffer: [],
-		_buffidx: 0,
-		BUFFER_LENGTH: null,
-		_lastValidIndex: -1,
-		_autoIncrement: 0,
-		_boardSelected: null,
 
-		init: function(historySize=30) {			
-		  this.board = $("#annotation-logs");
-		  this.undoBtn = $("#history-undo");
-		  this.redoBtn = $("#history-redo");
+History = function (context) {
+	this.buffer = [];
+	this._buffidx = 0;
+	this.BUFFER_LENGTH = null;
+	this._lastValidIndex = -1;
+	this._autoIncrement = 0;
+	this._boardSelected = null;
+	this._context = context;
+}
+History.prototype = {
 
-		  this.BUFFER_LENGTH = historySize;
-		},
-	
-		back: function () {	
-			if (this.buffer[this._buffidx]) {
-				this._performSwap(openseadragon_image_annotations.overlay.fabricCanvas(), 
-								  this.buffer[this._buffidx].back, this.buffer[this._buffidx].forward)				
-		
-				//this.bufferLastRemoved = this.buffer[this._buffidx];
-				//this.buffer[this._buffidx] = null;
+	//TODO history: populate BOARD when annotation file is loaded (some for object loop)
+	init: function (historySize = 30, jquerySelector = "body") {
+		$(jquerySelector).append(`<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
+			<div class="noselect" style="height: 100%;position: relative"  id="inner-panel-content-3">
+			<h3 class="pl-2 d-inline-block h3">Board</h4>
+			<!--TODO dirty relying on a global-->
+			<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
+			<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
+			
+			<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>
+			<br>
+			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
+			</div>
+		</div>`);
 
-					
-				this._buffidx--;
-				if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
-				//if we went around and finished where we once were, stop
-				if (this._lastValidIndex === this._buffidx) {
-					//lose one object to prevent from cycling
-					this.buffer[this._lastValidIndex] = null;
+		this.board = $("#annotation-logs");
+		this.undoBtn = $("#history-undo");
+		this.redoBtn = $("#history-redo");
 
-					this._lastValidIndex--;
-					if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
-				}
+		this.BUFFER_LENGTH = historySize;
+	},
 
-				if (this.redoBtn) this.redoBtn.css("color", "white");
+	back: function () {
+		if (this.buffer[this._buffidx]) {
+			this._performSwap(this._context.overlay.fabricCanvas(),
+				this.buffer[this._buffidx].back, this.buffer[this._buffidx].forward)
+
+			//this.bufferLastRemoved = this.buffer[this._buffidx];
+			//this.buffer[this._buffidx] = null;
+
+
+			this._buffidx--;
+			if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
+			//if we went around and finished where we once were, stop
+			if (this._lastValidIndex === this._buffidx) {
+				//lose one object to prevent from cycling
+				this.buffer[this._lastValidIndex] = null;
+
+				this._lastValidIndex--;
+				if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
 			}
 
-			if (this.undoBtn) {
-				let color = this.buffer[this._buffidx] ? "white" : "gray";
-				this.undoBtn.css("color", color);
-			}
-		},
+			if (this.redoBtn) this.redoBtn.css("color", "white");
+		}
 
-		redo: function() {
-			if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
-				this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-				
-				this._performSwap(openseadragon_image_annotations.overlay.fabricCanvas(), 
-								  this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back)
-			}
+		if (this.undoBtn) {
+			let color = this.buffer[this._buffidx] ? "white" : "gray";
+			this.undoBtn.css("color", color);
+		}
+	},
 
-			if (this.redoBtn) {
-				let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "white" : "gray";
-				this.redoBtn.css("color", color);
-			}
-			if (this.undoBtn) this.undoBtn.css("color", "white");
-		},
-	
-		push: function (newObject, previous=null) {
-			if (newObject) {
-				this._addToBoard(newObject);
-			} 
-
-			if (previous) {
-				//todo not necessarily ID present
-				this._removeFromBoard(previous);
-			}
-
-			console.log("PREV", previous, "NEXT", newObject);
-
+	redo: function () {
+		if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
 			this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-			this.buffer[this._buffidx] = {forward: newObject, back: previous};
-			this._lastValidIndex = this._buffidx; //new object creation overiddes history
 
-			if (this.undoBtn && this.redoBtn) {
-				this.undoBtn.css("color", "white");
-				this.redoBtn.css("color", "gray");
+			this._performSwap(this._context.overlay.fabricCanvas(),
+				this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back)
+		}
+
+		if (this.redoBtn) {
+			let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "white" : "gray";
+			this.redoBtn.css("color", color);
+		}
+		if (this.undoBtn) this.undoBtn.css("color", "white");
+	},
+
+	push: function (newObject, previous = null) {
+		if (newObject) {
+			this._addToBoard(newObject);
+		}
+
+		if (previous) {
+			//todo not necessarily ID present
+			this._removeFromBoard(previous);
+		}
+
+		console.log("PREV", previous, "NEXT", newObject);
+
+		this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
+		this.buffer[this._buffidx] = { forward: newObject, back: previous };
+		this._lastValidIndex = this._buffidx; //new object creation overiddes history
+
+		if (this.undoBtn && this.redoBtn) {
+			this.undoBtn.css("color", "white");
+			this.redoBtn.css("color", "gray");
+		}
+	},
+
+	highlight: function (object) {
+		if (this._boardSelected) {
+			this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('color-bg-tertiary');
+		}
+		if (object) {
+			this.board.find(`#log-object-${object.incrementId}`).addClass('color-bg-tertiary');
+		}
+		this._boardSelected = object;
+	},
+
+	_focus: function (cx, cy, objectId = null) {
+		var target = PLUGINS.dataLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+		if (objectId !== null) {
+			var targetObj = this._findObjectOnCanvasById(objectId);
+			if (targetObj) {
+				this._context.overlay.fabricCanvas().setActiveObject(targetObj);
 			}
-		},
+		}
+		PLUGINS.osd.viewport.panTo(target);
+		PLUGINS.osd.viewport.applyConstraints();
+	},
 
-		highlight: function(object) {
-			if (this._boardSelected) {
-				this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('color-bg-tertiary');
+	_updateBoardText: function (object, text) {
+		console.log(text);
+		if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
+		this.board.find(`#log-object-${object.incrementId} span.desc`).html(text);
+	},
+
+	_removeFromBoard: function (object) {
+		this.board.children(`#log-object-${object.incrementId}`).remove();
+	},
+
+	_addToBoard: function (object) {
+		let desc = "", icon = "";
+		if (!object.comment) {
+			desc = this._getObjectDefaultDescription(object);
+			icon = this._getObjectDefaultIcon(object);
+		} else {
+			desc = object.comment;
+			if (desc === this._context.leftClickLabel || desc === this._context.rightClickLabel) {
+				//auto labelling - append coords to distinguish
+				desc += ` [${Math.round(object.left)}, ${Math.round(object.top)}]`;
 			}
-			if (object) {
-				this.board.find(`#log-object-${object.incrementId}`).addClass('color-bg-tertiary');
-			}
-			this._boardSelected = object;
-		},
-	
-		_focus: function(cx, cy, objectId=null) {
-			var target = openseadragon_image_annotations.tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
-			if (objectId !== null) {
-				var targetObj = this._findObjectOnCanvasById(objectId);
-				if (targetObj) {
-					openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(targetObj);
-				}
-			}
-			openseadragon_image_annotations.viewer.viewport.panTo(target);
-			openseadragon_image_annotations.viewer.viewport.applyConstraints();
-		},
+			icon = this._getObjectDefaultIcon(object);
+		}
 
-		_updateBoardText: function(object, text) {
-			console.log(text);
-			if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
-			this.board.find(`#log-object-${object.incrementId} span.desc`).html(text);
-		},
+		if (!object.incrementId) {
+			object.incrementId = this._autoIncrement;
+			this._autoIncrement++;
+		}
 
-		_removeFromBoard: function(object) {
-			this.board.children(`#log-object-${object.incrementId}`).remove();
-		},
-
-		_addToBoard: function(object) {
-			let desc = "", icon = "";
-			if (!object.comment) {
-				desc = this._getObjectDefaultDescription(object);
-				icon = this._getObjectDefaultIcon(object);
-			} else {
-				desc = object.comment;
-				if (desc === openseadragon_image_annotations.leftClickLabel || desc === openseadragon_image_annotations.rightClickLabel) {
-					//auto labelling - append coords to distinguish
-					desc += ` [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-				}
-				icon = this._getObjectDefaultIcon(object);
-			}
-
-			if (!object.incrementId) {
-				object.incrementId = this._autoIncrement;
-				this._autoIncrement++;
-			}
-
-			let center = object.getCenterPoint();
-			this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="openseadragon_image_annotations.history._focus(${center.x}, ${center.y}, ${object.incrementId});">
+		let center = object.getCenterPoint();
+		//todo relying on a dirty global
+		this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="openseadragon_image_annotations.history._focus(${center.x}, ${center.y}, ${object.incrementId});">
 			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
 				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 				<span class="material-icons" onclick="
@@ -2911,112 +2928,116 @@ $("body").append(`
 					 openseadragon_image_annotations.history._findObjectOnCanvasById(${object.incrementId}).set({comment: $(this).prev().val()});
 				 }">edit</span> 
 			</div>`);
-		},
-		
-		_getObjectDefaultDescription: function(object) {
-			switch (object.type) {
-				case "rect": return `Rect [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-				case "polygon": return `Polygon [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-				case "ellipse": return`Ellipse [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-				default:
-					return;
-			}
-		},
+	},
 
-		_getObjectDefaultIcon: function(object) {
-			return {"rect": "crop_5_4", "polygon":"share", "ellipse":"circle"}[object.type];
-		},
+	_getObjectDefaultDescription: function (object) {
+		switch (object.type) {
+			case "rect": return `Rect [${Math.round(object.left)}, ${Math.round(object.top)}]`;
+			case "polygon": return `Polygon [${Math.round(object.left)}, ${Math.round(object.top)}]`;
+			case "ellipse": return `Ellipse [${Math.round(object.left)}, ${Math.round(object.top)}]`;
+			default:
+				return;
+		}
+	},
 
-		_performSwap: async function(canvas, toAdd, toRemove) {
-			if (toRemove) {
-				let center = toRemove.getCenterPoint();
-				this._focus(center.x, center.y);
-				await sleep(150); //let user to orient where canvas moved before deleting the element
-				canvas.remove(toRemove);				
-				this._removeFromBoard(toRemove);
+	_getObjectDefaultIcon: function (object) {
+		return { "rect": "crop_5_4", "polygon": "share", "ellipse": "circle" }[object.type];
+	},
 
-				if (toAdd) {
-					canvas.add(toAdd);
-					openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(toAdd);
-					this._addToBoard(toAdd);
-				}
-				canvas.renderAll();
+	_performSwap: async function (canvas, toAdd, toRemove) {
+		if (toRemove) {
+			let center = toRemove.getCenterPoint();
+			this._focus(center.x, center.y);
+			await sleep(150); //let user to orient where canvas moved before deleting the element
+			canvas.remove(toRemove);
+			this._removeFromBoard(toRemove);
 
-			} else if (toAdd) {
-				let center = toAdd.getCenterPoint();
-				this._focus(center.x, center.y);	
-				await sleep(150); //let user to orient where canvas moved before deleting the element
+			if (toAdd) {
 				canvas.add(toAdd);
-				openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(toAdd);
-				canvas.renderAll();
+				this._context.overlay.fabricCanvas().setActiveObject(toAdd);
 				this._addToBoard(toAdd);
 			}
-		},
+			canvas.renderAll();
 
-		_findObjectOnCanvasById: function(id) {
-			// console.log(this.overlay.fabricCanvas()._objects);
-			// console.log(coords);
-			// console.log(this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords));
-	
-			// return this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords);
-
-			//todo fabric.js should have some way how to avoid linear iteration over all objects...
-			let target = null;
-			openseadragon_image_annotations.overlay.fabricCanvas()._objects.some(o => {
-				if (o.incrementId === id) {
-					target = o;
-					return true;
-				}
-				return false;
-			});
-			return target;
-		},
-	}, // end of namespace history
-
-	messenger: {
-		MSG_INFO: {class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>'},
-		MSG_WARN: {class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />'},
-		MSG_ERR: {class: "Toast--error", icon:'<path fill-rule="evenodd" d="M10 1H4L0 5v6l4 4h6l4-4V5l-4-4zm3 9.5L9.5 14h-5L1 10.5v-5L4.5 2h5L13 5.5v5zM6 4h2v5H6V4zm0 6h2v2H6v-2z" />'},
-		_timer: null,
-
-		init: function() {
-			//$("body").append('<div class="popUpHide" id="annotation-messages-container"><span id="annotation-messages"></span>&emsp;<span onclick="openseadragon_image_annotations.messenger.hide(false);" style="cursor:pointer;" class="material-icons">close</span></div>');
-			$("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
-			  <span class="Toast-icon"><svg width="12" height="16"v id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
-			  <span id="annotation-messages" class="Toast-content v-align-middle"></span>
-			  <button class="Toast-dismissButton" onclick="openseadragon_image_annotations.messenger.hide(false);">
-			    <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
-			  </button>
-			  </div>`);
-			this._body = $("#annotation-messages-container");
-			this._board = $("#annotation-messages");
-			this._icon = $("#annotation-icon");
-		},
-
-		show: function(text, delayMS, importance) {
-
-			this._board.html(text);
-			this._icon.html(importance.icon);
-			this._body.removeClass(); //all
-			this._body.addClass(`Toast position-fixed ${importance.class}`)
-			this._body.removeClass("popUpHide");
-			this._body.addClass("popUpEnter");
-
-			if (delayMS > 1000) {
-				this._timer = setTimeout(this.hide.bind(this), delayMS);
-			}
-		},
-
-		hide: function(_autoCalled=true) {
-			console.log("remove", this._body)
-			this._body.removeClass("popUpEnter");
-			this._body.addClass("popUpHide");
-
-			if (!_autoCalled) {
-				clearTimeout(this._timer);
-			}
-			this._timer = null;
+		} else if (toAdd) {
+			let center = toAdd.getCenterPoint();
+			this._focus(center.x, center.y);
+			await sleep(150); //let user to orient where canvas moved before deleting the element
+			canvas.add(toAdd);
+			this._context.overlay.fabricCanvas().setActiveObject(toAdd);
+			canvas.renderAll();
+			this._addToBoard(toAdd);
 		}
-	}  // end of namespace messenger
+	},
 
-}; // end of namespace
+	_findObjectOnCanvasById: function (id) {
+		// console.log(this.overlay.fabricCanvas()._objects);
+		// console.log(coords);
+		// console.log(this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords));
+
+		// return this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords);
+
+		//todo fabric.js should have some way how to avoid linear iteration over all objects...
+		let target = null;
+		this._context.overlay.fabricCanvas()._objects.some(o => {
+			if (o.incrementId === id) {
+				target = o;
+				return true;
+			}
+			return false;
+		});
+		return target;
+	}
+	// end of namespace history
+
+
+
+}
+
+
+
+/*------------ Initialization of OSD Annotations ------------*/
+var openseadragon_image_annotations = new OSDAnnotations();
+  
+  
+PLUGINS.osd.addHandler('open', function() {
+	var options = {
+		scale: PLUGINS.imageLayer.source.Image.Size.Width,
+		fireRightClick: true
+	};
+
+	openseadragon_image_annotations.initialize(PLUGINS.postData.annotations, options);
+});
+  
+  
+
+
+	//RELICS:
+  
+	  // // load optional images for decision layer
+	  //viewer.addHandler('open', loadOptions);
+	  // // initialize fabricjs overlay with annotation control
+	  // viewer.addHandler('open', initialize_annotations);
+	  // // set name of downloadable annotation file based on experiment and slide name
+	  // viewer.addHandler('open', nameAnnotFile);
+
+  
+	  /* ------------------Custom functions for handlers-------------*/
+  
+  
+	  /* initialize_annotations()
+	  Create annotation overlay and enables annotation control(add, edit, dowload...)
+	  
+	  - scale: width of source image (annotationcanvas is created with same width)
+	  - json_annotation: json string from annotations export
+	  */
+
+	  
+	 // function nameAnnotFile(self) {
+		// var probabs_url_array = urlProbabilities.split("/");
+		// var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
+		// var experiment = probabs_url_array.pop();
+		// var file_name = [experiment, slide].join(":");
+		// document.getElementById('download_link1').download = file_name + ".json";
+		// document.getElementById('download_link2').download = file_name + ".xml";
+	 // };
