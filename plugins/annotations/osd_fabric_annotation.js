@@ -39,8 +39,11 @@ OSDAnnotations = function (incoming) {
 		this[key] = incoming[key];
 	}
 
+	//Classes defined in other local JS files
 	this.messenger = new Messenger();
 	this.history = new History(this);
+	this.modifyTool = new FreeFormTool(this);
+	this.polygon = new Polygon(this);
 };
 
 OSDAnnotations.prototype = {
@@ -1916,94 +1919,94 @@ if ($(this).attr('data-ref') === 'on'){
 		}
 	},
 
-	enlargePolygonToContain: async function (polygon, points) {
+	// enlargePolygonToContain: async function (polygon, points) {
 
-		console.log("enlarge poly")
+	// 	console.log("enlarge poly")
 
-		var polypoints = polygon.get("points")
+	// 	var polypoints = polygon.get("points")
 
-		//TODO WHEN PROCESSING I KNOW WHICH INDICES ARE OUT/IN SO THERE IT SHOULD CROSS THE BORDER AND THUS MERGE...
+	// 	//TODO WHEN PROCESSING I KNOW WHICH INDICES ARE OUT/IN SO THERE IT SHOULD CROSS THE BORDER AND THUS MERGE...
 
-		let res = [];
-		var inside = false;
-		polypoints.forEach(p => {
-			if (robustPointInPolygon(points, p) === 1) {
-				res.push([p.x, p.y]);
-				if (inside) {
-					inside = false;
-					//todo
-				}
-			} else {
-				if (!inside) {
-					inside = true;
-					//todo
-				}
-			}
-		});
-
-
-
-		//suppose polygon is bigger than appended region, keep region edge points too (0)		
-		points.forEach(p => {
-			if (robustPointInPolygon(polypoints, p) > -1) {
-				res.push([p.x, p.y]);
-			}
-		});
+	// 	let res = [];
+	// 	var inside = false;
+	// 	polypoints.forEach(p => {
+	// 		if (robustPointInPolygon(points, p) === 1) {
+	// 			res.push([p.x, p.y]);
+	// 			if (inside) {
+	// 				inside = false;
+	// 				//todo
+	// 			}
+	// 		} else {
+	// 			if (!inside) {
+	// 				inside = true;
+	// 				//todo
+	// 			}
+	// 		}
+	// 	});
 
 
-		res = hull(res, 80);
-		points = [];
-		res.forEach(p => {
-			points.push(new OpenSeadragon.Point(p[0], p[1]))
-		})
 
-		// console.log("OOK");
-		// console.log(res1);
-		// console.log(res2);
-
-		// var i1 = 0, i2 = 0, j1=0, j2 = 0, d1=Infinity, d2=Infinity;
-		// for (let i = 0; i < res1.length; i++) {
-		// 	for (let j = 0; j < res2.length; j++) {
-
-		// 		let d = res1[i].distanceTo(res2[i]);
-		// 		if (d < d1) {
-		// 			i1 = i;
-		// 			j1 = j;
-		// 		} 
-		// 		// else if (d < d2) {
-		// 		// 	i2 = i;
-		// 		// 	j2 = j;
-		// 		// }
-		// 	}
-		// }
+	// 	//suppose polygon is bigger than appended region, keep region edge points too (0)		
+	// 	points.forEach(p => {
+	// 		if (robustPointInPolygon(polypoints, p) > -1) {
+	// 			res.push([p.x, p.y]);
+	// 		}
+	// 	});
 
 
-		// console.log(i1, j1);
-		// //shift res1 array so that the last point is the closest point to the appended region
-		// let result = [...res1.slice(res1.length-i1-1, res1.length), ...res1.slice(0, res1.length-i1-1)];
+	// 	res = hull(res, 80);
+	// 	points = [];
+	// 	res.forEach(p => {
+	// 		points.push(new OpenSeadragon.Point(p[0], p[1]))
+	// 	})
 
-		// //decide whether to add res2 in normal or reversed order, start with j1 th vertex
-		// let toLeftJ = j1-1 < 0 ? res2.length - 1 : j1-1;
-		// let toRightJ = (j1+1)%res2.length;
-		// if (res2[toLeftJ].distanceTo(res1[(i1+1) % res1.length]) < res2[toRightJ].distanceTo(res1[(i1+1) % res1.length])) {
-		// 	//j1+1 th vertex closer (array should end with it)
-		// 	res2 = [...res2.slice(j1, res2.length), ...res2.slice(0, j1)];
-		// } else {
-		// 	//j1-1 th vertex closer (array should end with it)
-		// 	res2 = [...res2.slice(res1.length-j1-1, res2.length), ...res2.slice(0, res1.length-j1-1)];
-		// }
-		// result = result.concat(res2);
-		// console.log(result);
+	// 	// console.log("OOK");
+	// 	// console.log(res1);
+	// 	// console.log(res2);
 
-		// this.overlay.fabricCanvas().remove(targetObject);
-		this.currentAnnotationObject = this.createCopyPolygon(polygon, points);
-		this.overlay.fabricCanvas().remove(polygon);
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-		this.history.push(this.currentAnnotationObject, polygon);
-		this.overlay.fabricCanvas().renderAll();
-		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+	// 	// var i1 = 0, i2 = 0, j1=0, j2 = 0, d1=Infinity, d2=Infinity;
+	// 	// for (let i = 0; i < res1.length; i++) {
+	// 	// 	for (let j = 0; j < res2.length; j++) {
 
-	},
+	// 	// 		let d = res1[i].distanceTo(res2[i]);
+	// 	// 		if (d < d1) {
+	// 	// 			i1 = i;
+	// 	// 			j1 = j;
+	// 	// 		} 
+	// 	// 		// else if (d < d2) {
+	// 	// 		// 	i2 = i;
+	// 	// 		// 	j2 = j;
+	// 	// 		// }
+	// 	// 	}
+	// 	// }
+
+
+	// 	// console.log(i1, j1);
+	// 	// //shift res1 array so that the last point is the closest point to the appended region
+	// 	// let result = [...res1.slice(res1.length-i1-1, res1.length), ...res1.slice(0, res1.length-i1-1)];
+
+	// 	// //decide whether to add res2 in normal or reversed order, start with j1 th vertex
+	// 	// let toLeftJ = j1-1 < 0 ? res2.length - 1 : j1-1;
+	// 	// let toRightJ = (j1+1)%res2.length;
+	// 	// if (res2[toLeftJ].distanceTo(res1[(i1+1) % res1.length]) < res2[toRightJ].distanceTo(res1[(i1+1) % res1.length])) {
+	// 	// 	//j1+1 th vertex closer (array should end with it)
+	// 	// 	res2 = [...res2.slice(j1, res2.length), ...res2.slice(0, j1)];
+	// 	// } else {
+	// 	// 	//j1-1 th vertex closer (array should end with it)
+	// 	// 	res2 = [...res2.slice(res1.length-j1-1, res2.length), ...res2.slice(0, res1.length-j1-1)];
+	// 	// }
+	// 	// result = result.concat(res2);
+	// 	// console.log(result);
+
+	// 	// this.overlay.fabricCanvas().remove(targetObject);
+	// 	this.currentAnnotationObject = this.createCopyPolygon(polygon, points);
+	// 	this.overlay.fabricCanvas().remove(polygon);
+	// 	this.overlay.fabricCanvas().add(this.currentAnnotationObject);
+	// 	this.history.push(this.currentAnnotationObject, polygon);
+	// 	this.overlay.fabricCanvas().renderAll();
+	// 	this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+
+	// },
 
 	// initialize polygon (p) edit by showing polygon points and make them interactive
 	// todo move to polygon object class and create also class for circle & rect and move things there all conceerning modification, creation
@@ -2050,7 +2053,7 @@ if ($(this).attr('data-ref') === 'on'){
 		this.overlay.fabricCanvas().sendToBack(this.polygon.currentlyEddited);
 	},
 
-	// change position of one of the polygons points (p) and redrawn polygon
+	// change position of one of the polygons points (p) and redraw polygon
 	editPolygon: function (p) {
 		let curr = this.polygon.currentlyEddited;
 		curr.points[p.name] = { x: p.getCenterPoint().x, y: p.getCenterPoint().y };
@@ -2230,466 +2233,8 @@ if ($(this).attr('data-ref') === 'on'){
 			window.removeEventListener("mousemove", this._listener);
 			this._listener = null;
 		},
-	},
-
-
-	// name space for polygon manupulation
-	polygon: {
-		min: 99,
-		max: 999999,
-		polygonBeingCreated: false, // is polygon being drawn/edited
-		pointArray: new Array(),
-		lineArray: new Array(),
-		activeLine: null,
-		activeShape: false,
-		currentlyEddited: null,
-		originallyEddited: null,
-		input_attributes: {},
-
-		// initialize attributes, prepare for new drawing
-		init: function (isNew = true) {
-			this.polygonBeingCreated = isNew;
-			this.pointArray = new Array();
-			this.lineArray = new Array();
-			this.activeLine = null;
-			this.activeShape = false;
-			this.currentlyEddited = null;
-			this.input_attributes = {};
-			this.originallyEddited = null;
-		},
-		addPoint: function (x, y) {
-			// get name of point
-			var random = Math.floor(Math.random() * (this.max - this.min + 1)) + this.min;
-			var id = new Date().getTime() + random;
-			// calcute size of the point(1000px - 20px) based on zoom (0-1.1)
-			var zoom = openseadragon_image_annotations.overlay.fabricCanvas().getZoom();
-			var circle_size = 0;
-			if (zoom < 0.01) { circle_size = 1000 }
-			else if (zoom < 0.03) { circle_size = 500 }
-			else if (zoom < 0.1) { circle_size = 100 }
-			else if (zoom < 0.3) { circle_size = 50 }
-			else { circle_size = 20 };
-			//create circle representation of the point
-			var circle = new fabric.Circle({
-				radius: circle_size,
-				fill: '#F58B8B',
-				stroke: '#333333',
-				strokeWidth: 0.5,
-				left: x,
-				top: y,
-				selectable: false,
-				hasBorders: false,
-				hasControls: false,
-				originX: 'center',
-				originY: 'center',
-				id: id,
-				objectCaching: false,
-				type: "_polygon.controls.circle"
-			});
-			if (this.pointArray.length == 0) {
-				circle.set({
-					fill: 'red'
-				})
-			}
-			circle.lockMovementX = circle.lockMovementY = true;
-
-			var points = [x, y, x, y];
-			line = new fabric.Line(points, {
-				strokeWidth: 4,
-				fill: '#red',
-				stroke: '#999999',
-				class: 'line',
-				originX: 'center',
-				originY: 'center',
-				selectable: false,
-				hasBorders: false,
-				hasControls: false,
-				evented: false,
-				objectCaching: false
-			});
-
-			if (this.activeShape) {
-				var points = this.activeShape.get("points");
-				points.push({
-					x: x,
-					y: y
-				});
-				var polygon = openseadragon_image_annotations.createPolygon(points);
-				polygon.selectable = false;
-				polygon.hasBorders = false;
-				polygon.hasControls = false;
-				polygon.evented = false;
-				polygon.objectCaching = false;
-
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.activeShape);
-				openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-				this.activeShape = polygon;
-				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-			}
-			else {
-				var polyPoint = [{ x: x, y: y }];
-				var polygon = openseadragon_image_annotations.createPolygon(polyPoint);
-				polygon.selectable = false;
-				polygon.hasBorders = false;
-				polygon.hasControls = false;
-				polygon.evented = false;
-				polygon.objectCaching = false;
-				this.activeShape = polygon;
-				openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-			}
-			this.activeLine = line;
-
-			this.pointArray.push(circle);
-			this.lineArray.push(line);
-
-			openseadragon_image_annotations.overlay.fabricCanvas().add(line);
-			openseadragon_image_annotations.overlay.fabricCanvas().add(circle);
-			openseadragon_image_annotations.overlay.fabricCanvas().selection = false;
-		},
-
-		// generate finished polygon
-		generatePolygon: function (pointArray) {
-			var points = new Array();
-			$.each(pointArray, function (index, point) {
-				points.push({
-					x: point.left,
-					y: point.top
-				});
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(point);
-			});
-
-			if (!this.currentlyEddited) {
-				$.each(this.lineArray, function (index, line) {
-					openseadragon_image_annotations.overlay.fabricCanvas().remove(line);
-				});
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.activeShape).remove(this.activeLine);
-			} else {
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.currentlyEddited);
-			};
-
-
-			if (pointArray.length < 3) {
-				this.init(false); //clear
-				return;
-			}
-
-			openseadragon_image_annotations.currentAnnotationObject = openseadragon_image_annotations.createPolygon(points);
-			//todo callback with deletion completion of active polygon/currently modified one? need to delete also all the circles!!
-			//if polygon is being drawn, delete it
-			// if (openseadragon_image_annotations.polygon.polygonBeingCreated == true) {
-			// 	openseadragon_image_annotations.polygon.activeShape.remove();
-			// 	openseadragon_image_annotations.polygon.pointArray.forEach(function (point) {
-			// 		openseadragon_image_annotations.overlay.fabricCanvas().remove(point)
-			// 	});
-			// 	openseadragon_image_annotations.polygon.lineArray.forEach(function (line) {
-			// 		openseadragon_image_annotations.overlay.fabricCanvas().remove(line)
-			// 	});
-			// 	openseadragon_image_annotations.polygon.polygonBeingCreated = false;}
-
-
-
-			// add polygon to canvas, switxh to edit mode, select it, set input form and show the input form
-			openseadragon_image_annotations.overlay.fabricCanvas().add(openseadragon_image_annotations.currentAnnotationObject);
-			//originallyEdited is null if new polygon, else history can redo
-			openseadragon_image_annotations.history.push(openseadragon_image_annotations.currentAnnotationObject, this.originallyEddited);
-
-
-			//TODO open by default edit mode or not?
-			// if (openseadragon_image_annotations.mouseMode != "editAnnotation" && openseadragon_image_annotations.mouseMode != "OSD") {
-			// 	document.getElementById("editAnnotation").click();
-			// };
-			// 		open... TODO .setActive(this.currentAnnotationObject);
-			// openseadragon_image_annotations.currentAnnotationObject.set(this.input_attributes);
-			// openseadragon_image_annotations.set_input_form(openseadragon_image_annotations.currentAnnotationObject);
-			// $("#input_form").show();
-			// document.getElementById('edit').disabled = false;
-
-			this.init(false); //clear
-		}
-	}, // end of plygon namespace
-
-
-	//tool for object modification: draw on canvas to add (add=true) or remove (add=false) parts of fabric.js object
-	//any object is first converted to polygon
-	modifyTool: {
-		polygon: null,
-		radius: 50,
-		mousePos: null,
-
-		SQRT2DIV2: 0.707106781187,
-
-		//initialize any object for cursor-drawing modification
-		init: function (object, atPosition, radius, add = true) {
-			switch (object.type) {
-				case 'rect':
-					let w = object.width, h = object.height;
-					this._createPolygonAndSetupFrom([{ x: object.left, y: object.top },
-					{ x: object.left + w, y: object.top },
-					{ x: object.left + w, y: object.top + h },
-					{ x: object.left, y: object.top + h }
-					], object);
-					break;
-				case 'ellipse':
-					//see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
-					//formula author https://math.stackexchange.com/users/299599/ng-chung-tak
-					let pow2e = 1 - (object.ry * object.ry) / (object.rx * object.rx),
-						pow3e = pow2e * Math.sqrt(pow2e),
-						pow4e = pow2e * pow2e,
-						pow6e = pow3e * pow3e;
-
-					let step = Math.PI / 16, points = [];
-
-					for (let t = 0; t < 2 * Math.PI; t += step) {
-						let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
-							+ ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
-							+ (29 * pow6e / 6144) * Math.sin(6 * t);
-						points.push({ x: object.rx * Math.cos(param) + object.left + object.rx, y: object.ry * Math.sin(param) + object.top + object.ry });
-					}
-					this._createPolygonAndSetupFrom(points, object);
-					break;
-				case 'polygon':
-					this._setupPolygon(object);
-					break;
-				default:
-					this.polygon = null;
-					openseadragon_image_annotations.messenger.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, openseadragon_image_annotations.messenger.MSG_WARN);
-					return;
-			}
-
-			if (add) this.update = this.union;
-			else this.update = this.subtract;
-
-			this.setRadius(radius);
-
-			this.mousePos = atPosition;
-		},
-
-		setRadius: function (radius) {
-			var zoom = openseadragon_image_annotations.overlay.fabricCanvas().getZoom();
-			if (zoom < 0.01) { this.radius = 50 * radius; }
-			else if (zoom < 0.03) { this.radius = 25 * radius; }
-			else if (zoom < 0.1) { this.radius = 5 * radius; }
-			else if (zoom < 0.3) { this.radius = 2 * radius; }
-			else { this.radius = radius; };
-		},
-
-		//update step meant to be executed on mouse move event
-		update: null,
-
-		//final step
-		finish: function () {
-			if (this.polygon) {
-				this.polygon.lockMovementX = false;
-				this.polygon.lockMovementY = false;
-
-				if (this.polygon.incrementId != this.initial.incrementId) {
-					//incrementID is used by history - if ID equal, no changes were made -> no record
-					openseadragon_image_annotations.history.push(this.polygon, this.initial);
-				}
-				let outcome = this.polygon;
-				this.polygon = null;
-				this.initial = null;
-				this.mousePos = null;
-				return outcome;
-			}
-			return null;
-		},
-
-		//TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
-		union: function (nextMousePos) {
-			if (!this.polygon || openseadragon_image_annotations.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
-
-			let radPoints = this.getCircleShape(nextMousePos);
-			var polypoints = this.polygon.get("points");
-			//avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-			if (openseadragon_image_annotations.toDistanceObj(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
-			this.mousePos = nextMousePos;
-
-			//compute union
-			var union = greinerHormann.union(polypoints, radPoints);
-
-			if (union) {
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.polygon);
-
-				if (typeof union[0][0] === 'number') { // single linear ring
-					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(union, this.radius / 5));
-					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-					this.polygon = polygon;
-				} else {
-					if (union.length > 1) union = this._unify(union);
-
-					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(union[0], this.radius / 5));
-					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-					this.polygon = polygon;
-				}
-
-				this.polygon.lockMovementX = false;
-				this.polygon.lockMovementY = false;
-				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-
-			} else {
-				console.log("NO UNION FOUND");
-			}
-		},
-
-		subtract: function (nextMousePos) {
-			if (!this.polygon || openseadragon_image_annotations.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
-
-			let radPoints = this.getCircleShape(nextMousePos);
-			var polypoints = this.polygon.get("points");
-			this.mousePos = nextMousePos;
-
-			var difference = greinerHormann.diff(polypoints, radPoints);
-			if (difference) {
-				openseadragon_image_annotations.overlay.fabricCanvas().remove(this.polygon);
-				if (typeof difference[0][0] === 'number') { // single linear ring
-					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference, this.radius / 5));
-					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-					this.polygon = polygon;
-				} else {
-					if (difference.length > 1) difference = this._unify(difference);
-
-					let maxIdx = 0, maxArea = 0;
-					for (let j = 0; j < difference.length; j++) {
-						let measure = this._findApproxBoundBoxSize(difference[j]);
-						if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
-						let area = measure.diffX * measure.diffY;
-						if (area > maxArea) {
-							maxArea = area;
-							maxIdx = j;
-						}
-					}
-
-					if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
-						//this.polygon.comment = this.initial.comment; //for some reason not preserved
-						openseadragon_image_annotations.history.push(null, this.initial);
-						this.polygon = null;
-						this.initial = null;
-						this.mousePos = null;
-						return;
-					}
-
-					var polygon = openseadragon_image_annotations.createCopyPolygon(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
-					openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-					this.polygon = polygon;
-				}
-
-				this.polygon.lockMovementX = false;
-				this.polygon.lockMovementY = false;
-				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-			} else {
-				console.log("NO DIFFERENCE FOUND");
-			}
-		},
-
-		getScreenToolRadius: function () {
-			return openseadragon_image_annotations.toScreenCoords(0, 0).distanceTo(openseadragon_image_annotations.toScreenCoords(0, this.radius));
-		},
-
-		//initialize object so that it is ready to be modified
-		_setupPolygon: function (polyObject) {
-			openseadragon_image_annotations.currentAnnotationObject = polyObject;
-
-			polyObject.lockMovementX = true;
-			polyObject.lockMovementY = true;
-
-			this.polygon = polyObject;
-			this.initial = polyObject;
-		},
-
-		//create polygon from points and initialize so that it is ready to be modified
-		_createPolygonAndSetupFrom: function (points, object) {
-			let polygon = openseadragon_image_annotations.createCopyPolygon(object, points);
-			polygon.type = "polygon";
-
-			//TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'
-			openseadragon_image_annotations.overlay.fabricCanvas().remove(object);
-
-			openseadragon_image_annotations.overlay.fabricCanvas().add(polygon);
-			openseadragon_image_annotations.history.push(polygon, object);
-
-			this._setupPolygon(polygon);
-		},
-
-		//try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
-		_unify: function (unions) {
-			let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
-
-			unions.forEach(u => {
-				primary.push(this._simplifyPolygon(u, this.radius / 5));
-			});
-			while (i < len) {
-				i++;
-				let j = 0;
-				for (; j < primary.length - 1; j += 2) {
-					let ress = greinerHormann.union(primary[j], primary[j + 1]);
-
-					if (typeof ress[0][0] === 'number') {
-						secondary = [ress].concat(secondary); //reverse order for different union call in the next loop
-					} else {
-						secondary = ress.concat(secondary); //reverse order for different union call
-					}
-				}
-				if (j == primary.length - 1) secondary.push(primary[j]);
-				primary = secondary;
-				secondary = [];
-			}
-			return primary;
-		},
-
-		//remove on-line (horizontal/vertical only) points or points that are too close
-		_simplifyPolygon: function (points, threshold) {
-			if (points.length < 20) return points;
-			let p1 = points[0], p2 = points[1];
-			let result = [p1];
-
-			for (var i = 2; i < points.length; i++) {
-				if (openseadragon_image_annotations.toDistanceObj(p1, p2) < threshold
-					|| (Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-					|| (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
-					p2 = points[i];
-					continue;
-				}
-
-				p1 = p2;
-				p2 = points[i];
-				result.push(p1);
-			}
-			result.push(p2);
-			return result;
-		},
-
-		//when removing parts of polygon, decide which one has smaller area and will be removed
-		_findApproxBoundBoxSize: function (points) {
-			if (points.length < 3) return { diffX: 0, diffY: 0 };
-			let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-			for (let i = 1; i < points.length; i++) {
-				maxX = Math.max(maxX, points[i].x);
-				maxY = Math.max(maxY, points[i].y);
-				minX = Math.min(minX, points[i].x);
-				minY = Math.min(minY, points[i].y);
-			}
-			return { diffX: maxX - minX, diffY: maxY - minY };
-		},
-
-		//create approximated polygon of drawing tool
-		getCircleShape: function (fromPoint) {
-			let diagonal = this.radius * this.SQRT2DIV2;
-			return [
-				{ x: fromPoint.x - this.radius, y: fromPoint.y },
-				{ x: fromPoint.x - diagonal, y: fromPoint.y + diagonal },
-				{ x: fromPoint.x, y: fromPoint.y + this.radius },
-				{ x: fromPoint.x + diagonal, y: fromPoint.y + diagonal },
-				{ x: fromPoint.x + this.radius, y: fromPoint.y },
-				{ x: fromPoint.x + diagonal, y: fromPoint.y - diagonal },
-				{ x: fromPoint.x, y: fromPoint.y - this.radius },
-				{ x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
-			]
-		},
 	}
 }; // end of namespace
-
-
 
 
 
@@ -2737,233 +2282,6 @@ Messenger.prototype = {
 	}
 }  // end of namespace messenger
 
-
-History = function (context) {
-	this.buffer = [];
-	this._buffidx = 0;
-	this.BUFFER_LENGTH = null;
-	this._lastValidIndex = -1;
-	this._autoIncrement = 0;
-	this._boardSelected = null;
-	this._context = context;
-}
-History.prototype = {
-
-	//TODO history: populate BOARD when annotation file is loaded (some for object loop)
-	init: function (historySize = 30, jquerySelector = "body") {
-		PLUGINS.appendToMainMenu("Board", `<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
-		<!--TODO dirty relying on a global-->
-		<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
-		<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>`,
-		 `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
-			</div>
-		</div>`, 'annotation-board');
-
-		this.board = $("#annotation-logs");
-		this.undoBtn = $("#history-undo");
-		this.redoBtn = $("#history-redo");
-
-		this.BUFFER_LENGTH = historySize;
-	},
-
-	back: function () {
-		if (this.buffer[this._buffidx]) {
-			this._performSwap(this._context.overlay.fabricCanvas(),
-				this.buffer[this._buffidx].back, this.buffer[this._buffidx].forward)
-
-			//this.bufferLastRemoved = this.buffer[this._buffidx];
-			//this.buffer[this._buffidx] = null;
-
-
-			this._buffidx--;
-			if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
-			//if we went around and finished where we once were, stop
-			if (this._lastValidIndex === this._buffidx) {
-				//lose one object to prevent from cycling
-				this.buffer[this._lastValidIndex] = null;
-
-				this._lastValidIndex--;
-				if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
-			}
-
-			if (this.redoBtn) this.redoBtn.css("color", "white");
-		}
-
-		if (this.undoBtn) {
-			let color = this.buffer[this._buffidx] ? "white" : "gray";
-			this.undoBtn.css("color", color);
-		}
-	},
-
-	redo: function () {
-		if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
-			this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-
-			this._performSwap(this._context.overlay.fabricCanvas(),
-				this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back)
-		}
-
-		if (this.redoBtn) {
-			let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "white" : "gray";
-			this.redoBtn.css("color", color);
-		}
-		if (this.undoBtn) this.undoBtn.css("color", "white");
-	},
-
-	push: function (newObject, previous = null) {
-		if (newObject) {
-			this._addToBoard(newObject);
-		}
-
-		if (previous) {
-			//todo not necessarily ID present
-			this._removeFromBoard(previous);
-		}
-
-		console.log("PREV", previous, "NEXT", newObject);
-
-		this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-		this.buffer[this._buffidx] = { forward: newObject, back: previous };
-		this._lastValidIndex = this._buffidx; //new object creation overiddes history
-
-		if (this.undoBtn && this.redoBtn) {
-			this.undoBtn.css("color", "white");
-			this.redoBtn.css("color", "gray");
-		}
-	},
-
-	highlight: function (object) {
-		if (this._boardSelected) {
-			this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('color-bg-tertiary');
-		}
-		if (object) {
-			this.board.find(`#log-object-${object.incrementId}`).addClass('color-bg-tertiary');
-		}
-		this._boardSelected = object;
-	},
-
-	_focus: function (cx, cy, objectId = null) {
-		var target = PLUGINS.dataLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
-		if (objectId !== null) {
-			var targetObj = this._findObjectOnCanvasById(objectId);
-			if (targetObj) {
-				this._context.overlay.fabricCanvas().setActiveObject(targetObj);
-			}
-		}
-		PLUGINS.osd.viewport.panTo(target);
-		PLUGINS.osd.viewport.applyConstraints();
-	},
-
-	_updateBoardText: function (object, text) {
-		console.log(text);
-		if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
-		this.board.find(`#log-object-${object.incrementId} span.desc`).html(text);
-	},
-
-	_removeFromBoard: function (object) {
-		this.board.children(`#log-object-${object.incrementId}`).remove();
-	},
-
-	_addToBoard: function (object) {
-		let desc = "", icon = "";
-		if (!object.comment) {
-			desc = this._getObjectDefaultDescription(object);
-			icon = this._getObjectDefaultIcon(object);
-		} else {
-			desc = object.comment;
-			if (desc === this._context.leftClickLabel || desc === this._context.rightClickLabel) {
-				//auto labelling - append coords to distinguish
-				desc += ` [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-			}
-			icon = this._getObjectDefaultIcon(object);
-		}
-
-		if (!object.incrementId) {
-			object.incrementId = this._autoIncrement;
-			this._autoIncrement++;
-		}
-
-		let center = object.getCenterPoint();
-		//todo relying on a dirty global
-		this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="openseadragon_image_annotations.history._focus(${center.x}, ${center.y}, ${object.incrementId});">
-			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
-				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
-				<span class="material-icons" onclick="
-				 if ($(this).html() === 'edit') {
-					$(this).prev().prop('disabled', false); 
-					$(this).html('save'); 
-				 } else {
-					 $(this).html('edit');
-					 $(this).prev().prop('disabled', true); 
-					 openseadragon_image_annotations.history._findObjectOnCanvasById(${object.incrementId}).set({comment: $(this).prev().val()});
-				 }">edit</span> 
-			</div>`);
-	},
-
-	_getObjectDefaultDescription: function (object) {
-		switch (object.type) {
-			case "rect": return `Rect [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-			case "polygon": return `Polygon [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-			case "ellipse": return `Ellipse [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-			default:
-				return;
-		}
-	},
-
-	_getObjectDefaultIcon: function (object) {
-		return { "rect": "crop_5_4", "polygon": "share", "ellipse": "circle" }[object.type];
-	},
-
-	_performSwap: async function (canvas, toAdd, toRemove) {
-		if (toRemove) {
-			let center = toRemove.getCenterPoint();
-			this._focus(center.x, center.y);
-			await sleep(150); //let user to orient where canvas moved before deleting the element
-			canvas.remove(toRemove);
-			this._removeFromBoard(toRemove);
-
-			if (toAdd) {
-				canvas.add(toAdd);
-				this._context.overlay.fabricCanvas().setActiveObject(toAdd);
-				this._addToBoard(toAdd);
-			}
-			canvas.renderAll();
-
-		} else if (toAdd) {
-			let center = toAdd.getCenterPoint();
-			this._focus(center.x, center.y);
-			await sleep(150); //let user to orient where canvas moved before deleting the element
-			canvas.add(toAdd);
-			this._context.overlay.fabricCanvas().setActiveObject(toAdd);
-			canvas.renderAll();
-			this._addToBoard(toAdd);
-		}
-	},
-
-	_findObjectOnCanvasById: function (id) {
-		// console.log(this.overlay.fabricCanvas()._objects);
-		// console.log(coords);
-		// console.log(this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords));
-
-		// return this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords);
-
-		//todo fabric.js should have some way how to avoid linear iteration over all objects...
-		let target = null;
-		this._context.overlay.fabricCanvas()._objects.some(o => {
-			if (o.incrementId === id) {
-				target = o;
-				return true;
-			}
-			return false;
-		});
-		return target;
-	}
-	// end of namespace history
-
-
-
-}
 
 
 

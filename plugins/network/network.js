@@ -1,4 +1,8 @@
 Network = function () {
+    //comply to the documentation:
+	this.id = "network_dev";
+	PLUGINS.each[this.id].instance = this;
+
     //controlPanelId is incomming parameter, defines where to add HTML
     PLUGINS.appendToMainMenu("Network control panel", "<!--nothing in title html-->", `HERE I CAN ADD CUSTOM CONTROLS, HTML CONTENT etc...`, "idOfTheOuterDivContainer");
 

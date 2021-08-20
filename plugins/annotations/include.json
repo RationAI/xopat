@@ -7,6 +7,9 @@
         "ext/greiner-hormann.min.js",
         "ext/point-in-polygon.js",
         "ext/hull.js",
+        "objects.js",
+        "free_form_tool.js",
+        "history.js",
         "osd_fabric_annotation.js"
     ],
     "flag": null,

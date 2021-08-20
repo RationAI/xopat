@@ -375,7 +375,8 @@ ViaWebGL.prototype = {
 
     _buildVisualisation: function (order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
-            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", _this = this, usableShaders = 0;
+            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", 
+                _this = this, usableShaders = 0, simultaneouslyVisible = 0;
 
             order.forEach(dataId => {
 
@@ -387,13 +388,17 @@ ViaWebGL.prototype = {
                 } else if (visSetup[dataId].definition && visSetup[dataId].execution && visSetup[dataId].sampler2D) {
                     let visible = false;
                     usableShaders++;
-                    if (visSetup[dataId].visible == 1) {
+
+                    //make visible textures if 'visible' flag set and if GPU has enough texture units
+                    if (visSetup[dataId].visible == 1 && simultaneouslyVisible < _this.max_textures) {
                         definition += visSetup[dataId]["definition"];
                         execution += visSetup[dataId]["execution"];
                         glload += visSetup[dataId]["glLoaded"];
                         gldraw += visSetup[dataId]["glDrawing"];
                         visible = true;
+                        simultaneouslyVisible++;
                     }
+
                     //reverse order append to show first the last drawn element (top)
                     html = _this.htmlShaderPartHeader(dataId, visSetup[dataId]["html"], visible, true) + html;
                     js += visSetup[dataId]["js"];

@@ -25,8 +25,6 @@ Supported arguments for `index.php` - the visualisation itself, can be passed bo
 
 _Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif&new=1
 
-`index.php` supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow integrating functionality
-to the visualiser.
 
 The visualisation always needs `image` and `layer` data so that it knows what to render (will be changed in near future).
 Then, based on the presence of `visualisation` the user is
@@ -79,6 +77,9 @@ All items are required except for items inside `params` field and the exception 
 The `user_setup.php` user setup is now only more like a demo, not yet properly implemented since there is no support
 for multiple data (in images) yet.
 
+####  `plugins.php`
+The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow integrating functionality
+to the visualiser. See `./plugins/README.md`.
 
 ### `./webgl/`
 Contains modified version of WebGl plugin for OpenSeadragon. Contains also a folder with used shaders (will be slowly moved to `./dynamic_shaders/`).
@@ -86,14 +87,9 @@ Contains modified version of WebGl plugin for OpenSeadragon. Contains also a fol
 ### `./dynamic_shaders/`
 `PHP` scripts that generate 'shader parts'. These scripts use `"shaders"` array to create a shader used for each visualisation.
 
-### `./external/`
-Consists of unmodified third-party javascript libraries.
+### `./osd/` or `./osd_debug/`
+OpenSeadragon third-party javascript library. `debug` contains unminified version for debugging.
 
-### `./images/`
-Icons for OSD.
+### `./plugins/`
+Where folders with plugins are placed.
 
-### `./annotations/`
-Plugin for annotations support.
-
-### `./network/`
-Plugin for neural networks development visualisation support.
