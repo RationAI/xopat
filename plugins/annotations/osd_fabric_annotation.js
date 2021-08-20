@@ -9,9 +9,13 @@ OSDAnnotations = function (incoming) {
 	this.DEFAULT_LEFT_LABEL = "Left Click";
 	this.DEFAULT_RIGHT_LABEL = "Right Click";
 
-	this.origX = "";
-	this.origY = "";
-	this.overlay = "";
+	this.overlay = null;
+	this.Modes = Object.freeze({
+		AUTO: 0,
+		CUSTOM: 1,
+		EDIT: 2,
+		FREE_FORM_TOOL: 3,
+	});
 
 	/*
 	Global setting to show/hide annotations on default
@@ -19,31 +23,26 @@ OSDAnnotations = function (incoming) {
 	this.showAnnotations = true;
 	/* Annotation property related data */
 	this.currentAnnotationObject = "rect";
-	this.currentAnnotationObjectUpdater = () => { }; //if user drags what function is being used to update
+	this.currentAnnotationObjectUpdater = null; //if user drags what function is being used to update
 	this.annotationType = "rect";
 	this.currentAnnotationColor = "#ff2200";
-	this.leftClickColor = "#58994c";
-	this.rightClickColor = "#d71818";
-	this.leftClickLabel = "Left Click";
-	this.rightClickLabel = "Right Click";
-	this.alphaSensitivity = 65; //at what threshold the auto region outline stops
 
-	/* Mouse touch related data */
-	//TODO move to cursor class object
-	this.mouseTime = 0; //OSD handler click timer
-	this.isDown = false;   //FABRIC handler click down recognition
-	this.isOverObject = false;
+	this.alphaSensitivity = 65; //at what threshold the auto region outline stops
 
 	// Assign from incoming terms
 	for (var key in incoming) {
 		this[key] = incoming[key];
 	}
 
-	//Classes defined in other local JS files
+	// Classes defined in other local JS files
 	this.messenger = new Messenger();
 	this.history = new History(this);
 	this.modifyTool = new FreeFormTool(this);
+
+	// Annotation Objects
 	this.polygon = new Polygon(this);
+	this.ellipse = new Ellipse(this);
+	this.rectangle = new Rect(this);
 };
 
 OSDAnnotations.prototype = {
@@ -83,29 +82,33 @@ if ($(this).attr('data-ref') === 'on'){
 	$(this).html('visibility');
 	$(this).attr('data-ref', 'on');
 }"> visibility</span>`,
-`<br>Opacity:<br>
-<input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
-
+`<span>Opacity: &emsp;</span><input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
+<div class="radio-group">
+		<button class="btn btn-selected" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> crop_5_4 </span></button>
+		<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> panorama_fish_eye </span></button>
+		<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> share </span></button>		  
+</div>
 <a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
 <a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
 `<div id="imageAnnotationToolbarContent">
-			Brush:
-			<div class="radio-group">
-				<button class="btn" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';"><span class="material-icons"> crop_5_4 </span></button>
-				<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';"><span class="material-icons"> panorama_fish_eye </span></button>
-				<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';"><span class="material-icons"> share </span></button>		  
+			<br>
+			<div>
+			  <input type="text" class="form-control"  style="width:275px; border-top-right-radius: 0;border-bottom-right-radius: 0;" value="Left Click" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
+			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px; border-top-left-radius: 0;  border-bottom-left-radius: 0;" name="leftClickColor" value="${openseadragon_image_annotations.objectOptionsLeftClick.fill}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
 			</div>
-			<div class="input-group">
-			  <input type="text" class="form-control"  style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
-			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
-			</div>
-			<div class="input-group">
-			<input type="text" class="form-control" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
-			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="max-width:45px; height:32px;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
+			<div>
+			<input type="text" class="form-control" style="width:275px; border-top-right-radius: 0;	border-bottom-right-radius: 0;" value="Right Click" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
+			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px;  border-top-left-radius: 0; border-bottom-left-radius: 0;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.objectOptionsRightClick.fill}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
 			  </div>
 			<br>
-			<p1>Automatic tool threshold:</p1>
+			<div style='width:65%;' class='d-inline-block'>
+			<span>Automatic tool threshold:</span>
 			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
+			
+			</div>
+			<div style='width:25%;' class='d-inline-block'>
+			<span>Brush:</span><br>	<button class="btn btn-selected" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse"><span class="material-icons"> panorama_fish_eye </span></button><br>
+			</div>
 			</div>`);
 
 		this.history.init(50);
@@ -168,35 +171,35 @@ if ($(this).attr('data-ref') === 'on'){
 `);
 
 
+		// $("body").append(
+		// 	`<div id="input_form" style="display:none">
+		// 	<table>
+		// 	<tr>
+		// 		<td>category</td>
+		// 		<td>
+		// 		<select id="annotation_group" tabindex="2" name="Group">
+		// 			<option value="None" selected>None</option>
+		// 			<option value="Carcinoma">Carcinoma</option>
+		// 			<option value="Exclude">Exclude</option>
+		// 			<option value="Another pathology">Another pathology</option>
+		// 		</select>
+		// 		</td>
+		// 	</tr>
+		// 	<tr>
+		// 		<td>treshold</td>
+		// 		<td id="annotation_threshold">1</td>
+		// 	</tr>
+		// 	<tr>
+		// 		<td colspan="2"><textarea id="annotation_comment" placeholder="Add a comment..." name="text" rows="2" tabindex="3"></textarea></td>
+		// 	</tr>
+		// 	</table>
+		// </div>`);
+
 		//form for object property modification
-		$("body").append(
-			`<div id="input_form" style="display:none">
-			<table>
-			<tr>
-				<td>category</td>
-				<td>
-				<select id="annotation_group" tabindex="2" name="Group">
-					<option value="None" selected>None</option>
-					<option value="Carcinoma">Carcinoma</option>
-					<option value="Exclude">Exclude</option>
-					<option value="Another pathology">Another pathology</option>
-				</select>
-				</td>
-			</tr>
-			<tr>
-				<td>treshold</td>
-				<td id="annotation_threshold">1</td>
-			</tr>
-			<tr>
-				<td colspan="2"><textarea id="annotation_comment" placeholder="Add a comment..." name="text" rows="2" tabindex="3"></textarea></td>
-			</tr>
-			</table>
-		</div><div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-		`);
+		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`);
 
 		this.cursor.init();
-		this.annotationForm = $("#input_form");
-
+		this.opacity = $("#opacity_control");
 
 		/****************************************************************************************************************
 	
@@ -210,13 +213,12 @@ if ($(this).attr('data-ref') === 'on'){
 		mouse:down event listener
 		On mousedown:
 			- mark isDown as true. On mouse:up, we draw annotations if isDown is true.
-			- set origX, origY as the initial click location.
 			- initialize the correct function based on what the currentAnnotationType is.
 			*/
 		// this.overlay.fabricCanvas().observe('mouse:down', function(o) {
 		// 	//todo prevent clicking both buttons simultaneously, some mode which tells which key is active adn allow that one only
 		// 	if (!openseadragon_image_annotations.showAnnotations) return;
-		// 	openseadragon_image_annotations.mouseTime = Date.now();
+		// 	openseadragon_image_annotations.cursor.mouseTime = Date.now();
 
 		// 	if (o.button === 1) fabricHandleLeftClickDown(o);
 		// 	else if (o.button === 3) fabricHandleRightClickDown(o);
@@ -224,7 +226,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		$('.upper-canvas').mousedown(function (event) {
 			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
-			openseadragon_image_annotations.mouseTime = Date.now();
+			openseadragon_image_annotations.cursor.mouseTime = Date.now();
 
 			if (event.which === 1) fabricHandleLeftClickDown(event);
 			else if (event.which === 3) fabricHandleRightClickDown(event);
@@ -260,13 +262,13 @@ if ($(this).attr('data-ref') === 'on'){
 				this.currentAnnotationObjectUpdater = null;
 				switch (openseadragon_image_annotations.annotationType) {
 					case 'polygon':
-						openseadragon_image_annotations.polygonClickAction(o, pointer.x, pointer.y);
+						openseadragon_image_annotations.polygon.updateCreate(pointer.x, pointer.y, isLeftClick);
 						return; //no mouse motion tracking	 
 					case 'rect':
-						openseadragon_image_annotations.initializeRectangle(pointer.x, pointer.y);
+						openseadragon_image_annotations.rectangle.initCreate(pointer.x, pointer.y, isLeftClick);
 						break;
 					case 'ellipse':
-						openseadragon_image_annotations.initializeEllipse(pointer.x, pointer.y);
+						openseadragon_image_annotations.ellipse.initCreate(pointer.x, pointer.y, isLeftClick);
 						break;
 					default:
 						return; //other types not support, no mouse motion tracking
@@ -278,7 +280,7 @@ if ($(this).attr('data-ref') === 'on'){
 				if (!currentObject) {
 
 					//create tool-shaped object
-					currentObject = openseadragon_image_annotations.createPolygon(openseadragon_image_annotations.modifyTool.getCircleShape(pointer), isLeftClick);
+					currentObject = openseadragon_image_annotations.polygon.create(openseadragon_image_annotations.modifyTool.getCircleShape(pointer), openseadragon_image_annotations.objectOptions(isLeftClick));
 					openseadragon_image_annotations.overlay.fabricCanvas().add(currentObject);
 					openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(currentObject);
 					openseadragon_image_annotations.history.push(currentObject);
@@ -292,13 +294,11 @@ if ($(this).attr('data-ref') === 'on'){
 				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
 			}
 
-			openseadragon_image_annotations.isDown = true;
-			openseadragon_image_annotations.origX = pointer.x;
-			openseadragon_image_annotations.origY = pointer.y;
+			openseadragon_image_annotations.cursor.isDown = true;
 		}
 
 		function handleFabricKeyDownInEditMode(o) {
-			// openseadragon_image_annotations.isDown = true;
+			// openseadragon_image_annotations.cursor.isDown = true;
 
 			// if (!o.target) return;
 
@@ -311,7 +311,7 @@ if ($(this).attr('data-ref') === 'on'){
 			// 	//init another
 			// 	console.log("init")
 			// 	var polygon = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
-			// 	openseadragon_image_annotations.initializeEditPolygon(polygon);
+			// 	openseadragon_image_annotations.polygon.edit(polygon);
 			// 	openseadragon_image_annotations.set_input_form(o.target);
 			// 	$("#input_form").show();
 			// } else if (o.target.type == "rect" || o.target.type == "ellipse" || o.target.type == "polygon") {
@@ -319,9 +319,7 @@ if ($(this).attr('data-ref') === 'on'){
 			// 	$("#input_form").show();
 			// }
 
-			// openseadragon_image_annotations.isDown = true;
-			// openseadragon_image_annotations.origX = pointer.x;
-			// openseadragon_image_annotations.origY = pointer.y;
+			// openseadragon_image_annotations.cursor.isDown = true;
 		}
 
 		/*
@@ -330,10 +328,10 @@ if ($(this).attr('data-ref') === 'on'){
 			 - when in editing mode, OSD is disabled and this handler fires
 		*/
 		// this.overlay.fabricCanvas().on('mouse:up', function(o) {
-		// 	if (!openseadragon_image_annotations.showAnnotations || !openseadragon_image_annotations.isDown) return;
+		// 	if (!openseadragon_image_annotations.showAnnotations || !openseadragon_image_annotations.cursor.isDown) return;
 		// 	console.log("fabric mouse up")
 
-		// 	openseadragon_image_annotations.isDown = false;			
+		// 	openseadragon_image_annotations.cursor.isDown = false;			
 
 		// 	if (o.button === 1) fabricHandleLeftClickUp(o);
 		// 	else if (o.button === 3) fabricHandleRightClickUp(o);
@@ -342,7 +340,7 @@ if ($(this).attr('data-ref') === 'on'){
 		$('.upper-canvas').mouseup(function (event) {
 			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
 			//if (openseadragon_image_annotations.isMouseOSDInteractive() && (!event.ctrlKey || !event.altKey || !event.shiftKey)) return;
-			openseadragon_image_annotations.isDown = false;
+			openseadragon_image_annotations.cursor.isDown = false;
 
 			console.log("UP");
 
@@ -365,9 +363,9 @@ if ($(this).attr('data-ref') === 'on'){
 		}
 
 		function handleFabricKeyUpInOSDMode(o) {
-			openseadragon_image_annotations.isDown = false;
+			openseadragon_image_annotations.cursor.isDown = false;
 			PLUGINS.osd.setMouseNavEnabled(true);
-			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
+			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
 
 			if (o.altKey) {
 
@@ -423,18 +421,20 @@ if ($(this).attr('data-ref') === 'on'){
 
 			var pointer = openseadragon_image_annotations.overlay.fabricCanvas().getPointer(o.e);
 
-			if (!openseadragon_image_annotations.isDown) return;
+			if (!openseadragon_image_annotations.cursor.isDown) return;
 
 			if (openseadragon_image_annotations.key_code === "AltLeft") {
 				if (openseadragon_image_annotations.isMouseOSDInteractive() && openseadragon_image_annotations.currentAnnotationObjectUpdater) {
-					openseadragon_image_annotations.currentAnnotationObjectUpdater(pointer.x, pointer.y);
+
+					openseadragon_image_annotations.currentAnnotationObjectUpdater.updateCreate(pointer.x, pointer.y);
 					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 				}
 			} else if (openseadragon_image_annotations.key_code === "ShiftLeft") {
 				openseadragon_image_annotations.modifyTool.update(pointer);
 			} else if (openseadragon_image_annotations.key_code === "AltRight") {
 				if (openseadragon_image_annotations.isMouseOSDInteractive() && !openseadragon_image_annotations.currentAnnotationObjectUpdater) {
-					openseadragon_image_annotations.currentAnnotationObjectUpdater(pointer.x, pointer.y);
+
+					openseadragon_image_annotations.currentAnnotationObjectUpdater.updateCreate(pointer.x, pointer.y);
 					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 				}
 			}
@@ -451,7 +451,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 			var objType = o.target.get('type');
 			if (objType == "_polygon.controls.circle") {
-				openseadragon_image_annotations.editPolygon(o.target);
+				openseadragon_image_annotations.polygon.updateEdit(o.target);
 				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 			}
 		});
@@ -465,7 +465,7 @@ if ($(this).attr('data-ref') === 'on'){
 		// 	if (!openseadragon_image_annotations.showAnnotations) return;
 
 		// 	if (!openseadragon_image_annotations.isMouseOSDInteractive()) {
-		// 		openseadragon_image_annotations.isOverObject = true;
+		// 		openseadragon_image_annotations.cursor.isOverObject = true;
 		// 		console.log("fabric object over")
 
 		// 		if (o.target && (o.target.type == "rect" || o.target.type == "polygon") && !(openseadragon_image_annotations.polygon.polygonBeingCreated) && !(openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject())) {
@@ -485,7 +485,7 @@ if ($(this).attr('data-ref') === 'on'){
 		// this.overlay.fabricCanvas().on('mouse:out', function (o) {
 		// 	if (!openseadragon_image_annotations.showAnnotations) return;
 
-		// 	openseadragon_image_annotations.isOverObject = false;
+		// 	openseadragon_image_annotations.cursor.isOverObject = false;
 		// 	console.log("fabric object out")
 
 		// 	if (!(openseadragon_image_annotations.isMouseOSDInteractive() && openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject())) {
@@ -500,7 +500,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		this.overlay.fabricCanvas().on('selection:cleared', function (e) {
 			if (!openseadragon_image_annotations.showAnnotations || openseadragon_image_annotations.isMouseOSDInteractive()) return;
-			$("#input_form").hide();
+			//$("#input_form").hide();
 		});
 
 		// this.overlay.fabricCanvas().on('before:selection:cleared', function(e) {
@@ -531,13 +531,13 @@ if ($(this).attr('data-ref') === 'on'){
 
 		PLUGINS.osd.addHandler("canvas-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-			openseadragon_image_annotations.mouseTime = Date.now();
+			openseadragon_image_annotations.cursor.mouseTime = Date.now();
 
 			//if clicked on object, highlight it
 			openseadragon_image_annotations.currentAnnotationObject = openseadragon_image_annotations.overlay.fabricCanvas().findTarget(e.originalEvent);
 			if (openseadragon_image_annotations.currentAnnotationObject) {
 				openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(openseadragon_image_annotations.currentAnnotationObject);
-				openseadragon_image_annotations.mouseTime = 0;
+				openseadragon_image_annotations.cursor.mouseTime = 0;
 				return;
 			}
 
@@ -548,15 +548,23 @@ if ($(this).attr('data-ref') === 'on'){
 		PLUGINS.osd.addHandler("canvas-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
-			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
+			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
 			if (delta > 100) return; // just navigate if click longer than 100ms
+
+			let isLeftClick = true;
+			switch (e.originalEvent.which) {
+				case 1: break;
+				case 3: isLeftClick = false;
+					break;
+				default: return;
+			}
 
 			switch (openseadragon_image_annotations.currentAnnotationObject.type) {
 				case 'rect':
-					openseadragon_image_annotations.createApproxRectangle(e.position);
+					openseadragon_image_annotations.createApproxRectangle(e.position, isLeftClick);
 					break;
 				case 'ellipse':
-					openseadragon_image_annotations.createApproxEllipse(e.position);
+					openseadragon_image_annotations.createApproxEllipse(e.position, isLeftClick);
 					break;
 				case 'polygon':
 					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
@@ -570,22 +578,30 @@ if ($(this).attr('data-ref') === 'on'){
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
 			if (e.button != 2 || e.originalEvent.shiftKey || e.originalEvent.altKey) return; //plain right click only
-			openseadragon_image_annotations.mouseTime = Date.now();
+			openseadragon_image_annotations.cursor.mouseTime = Date.now();
 			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: false };
 		});
 
 		PLUGINS.osd.addHandler("canvas-nonprimary-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
 
-			let delta = Date.now() - openseadragon_image_annotations.mouseTime;
+			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
 			if (delta > 100) return; // just navigate if click longer than 100ms
+
+			let isLeftClick = true;
+			switch (e.originalEvent.which) {
+				case 1: break;
+				case 3: isLeftClick = false;
+					break;
+				default: return;
+			}
 
 			switch (openseadragon_image_annotations.currentAnnotationObject.type) {
 				case 'rect':
-					openseadragon_image_annotations.createApproxRectangle(e.position);
+					openseadragon_image_annotations.createApproxRectangle(e.position, isLeftClick);
 					break;
 				case 'ellipse':
-					openseadragon_image_annotations.createApproxEllipse(e.position);
+					openseadragon_image_annotations.createApproxEllipse(e.position, isLeftClick);
 					break;
 				case 'polygon':
 					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
@@ -650,17 +666,17 @@ if ($(this).attr('data-ref') === 'on'){
 					if (e.shiftKey) openseadragon_image_annotations.history.redo();
 					else openseadragon_image_annotations.history.back();
 				} else if (e.code === "AltLeft") {
-					if (!openseadragon_image_annotations.isDown) {
+					if (!openseadragon_image_annotations.cursor.isDown) {
 						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
 						PLUGINS.osd.setMouseNavEnabled(true);
 					}
 
 					if (this.polygon.polygonBeingCreated) {
-						this.polygon.generatePolygon(this.polygon.pointArray);
+						this.polygon.finish();
 						PLUGINS.osd.setMouseNavEnabled(true);
 					}
 				} else if (e.code === "ShiftLeft") {
-					if (!openseadragon_image_annotations.isDown) {
+					if (!openseadragon_image_annotations.cursor.isDown) {
 						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
 
 						openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
@@ -799,7 +815,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 
 		// listen for changes in opacity slider and change opacity for each annotation
-		$("#opacity_control").on("input", function () {
+		this.opacity.on("input", function () {
 			var opacity = $(this).val();
 			openseadragon_image_annotations.overlay.fabricCanvas().forEachObject(function (obj) {
 				obj.opacity = opacity;
@@ -824,8 +840,8 @@ if ($(this).attr('data-ref') === 'on'){
 				o.target.height *= o.target.scaleY;
 				o.target.scaleX = 1;
 				o.target.scaleY = 1;
-				openseadragon_image_annotations.set_input_form(o.target);
-				$("#input_form").show();
+				//openseadragon_image_annotations.set_input_form(o.target);
+				//$("#input_form").show();
 
 			};
 
@@ -844,7 +860,7 @@ if ($(this).attr('data-ref') === 'on'){
 				});
 
 			// create new polygon with updated coordinates
-			var modified_polygon = this.createPolygon(transformedPoints);
+			var modified_polygon = this.polygon.create(transformedPoints, original_polygon.isLeftClick);
 			// remove orignal polygon and replace it with modified one
 			canvas.remove(original_polygon);
 			canvas.add(modified_polygon).renderAll();
@@ -855,7 +871,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 			//todo what about setting active control points correctly? maybe not possible with ctrl, so default is not show
 			canvas.setActiveObject(modified_polygon);
-			openseadragon_image_annotations.set_input_form(modified_polygon);
+			//openseadragon_image_annotations.set_input_form(modified_polygon);
 			//$("#input_form").show();
 		});
 
@@ -886,28 +902,6 @@ if ($(this).attr('data-ref') === 'on'){
 		return JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold']));
 	},
 
-	/****************************************************************************************************************
-	
-											 HTML ANNOTATIONS: AWAILABLE CONTROLS
-	
-	*****************************************************************************************************************/
-
-	// simpleAnnotationControl: function () {
-	// 	openseadragon_image_annotations.annotationType = "polygon";
-	// 	openseadragon_image_annotations.setMouseOSDInteractive(true);
-	// 	//todo left/right click should pass the value to the object info
-	// 	return `
-	// 		<p1>Automatic tool threshold:</p1>
-	// 		<input title="What is the threshold under which automatic tool refuses to select."  type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
-	// 		<br>
-	// 		<label><input type="text" style="max-width:75%" value="${openseadragon_image_annotations.leftClickLabel}" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
-	// 		  <input type="color" id="leftClickColor" name="leftClickColor" value="${openseadragon_image_annotations.leftClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
-	// 		</label>
-	// 		<label><input type="text" style="max-width:75%" value="${openseadragon_image_annotations.rightClickLabel}" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
-	// 		  <input type="color" id="rightClickColor" name="rightClickColor" value="${openseadragon_image_annotations.rightClickColor}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
-	// 		</label>
-	// 		`;
-	// },
 
 	/****************************************************************************************************************
 
@@ -940,13 +934,13 @@ if ($(this).attr('data-ref') === 'on'){
 			//this.setFabricCanvasInteractivity(true);
 			//this.deselectFabricObjects();
 			PLUGINS.osd.setMouseNavEnabled(true);
-			$("#input_form").hide();
+			//$("#input_form").hide();
 			this.overlay.fabricCanvas().defaultCursor = "crosshair";
 			this.overlay.fabricCanvas().hoverCursor = "pointer";
 
 			if (this.polygon.currentlyEddited) {
 				//save if eddited
-				this.polygon.generatePolygon(this.polygon.pointArray);
+				this.polygon.finish();
 			}
 
 			let active = this.overlay.fabricCanvas().getActiveObject();
@@ -963,8 +957,8 @@ if ($(this).attr('data-ref') === 'on'){
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
 				active.hasControls = true;
-				if (active.type == "polygon") this.initializeEditPolygon(active);
-				this.set_input_form(active);
+				if (active.type == "polygon") this.polygon.initEdit(active);
+				//this.set_input_form(active);
 				//$("#input_form").show();
 			}
 		}
@@ -997,20 +991,20 @@ if ($(this).attr('data-ref') === 'on'){
 	*****************************************************************************************************************/
 
 	//todo generic function that creates object? kinda copy paste
-	createApproxEllipse: function (eventPosition) {
+	createApproxEllipse: function (eventPosition, isLeftClick) {
 		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		this.currentAnnotationObject = this.createEllipse(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2);
-		this.currentAnnotationObjectUpdater = this.updateEllipseDimens;
+		this.currentAnnotationObject = this.ellipse.create(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2, openseadragon_image_annotations.objectOptions(isLeftClick));
+		this.currentAnnotationObjectUpdater = this.ellipse;
 		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
 		this.history.push(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().renderAll();
 	},
 
-	createApproxRectangle: function (eventPosition) {
+	createApproxRectangle: function (eventPosition, isLeftClick) {
 		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		this.currentAnnotationObject = this.createRectangle(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y);
-		this.currentAnnotationObjectUpdater = this.updateRectangleWidth;
+		this.currentAnnotationObject = this.rectangle.create(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y, openseadragon_image_annotations.objectOptions(isLeftClick));
+		this.currentAnnotationObjectUpdater = this.rectangle;
 		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
 		this.history.push(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
@@ -1237,7 +1231,8 @@ if ($(this).attr('data-ref') === 'on'){
 			if (counter % 100 == 0) { await sleep(200); }
 		}
 
-		this.currentAnnotationObject = this.createPolygon(Array.from(points));
+		//todo hardcoded true, this func probably wont survive anyway
+		this.currentAnnotationObject = this.polygon.create(Array.from(points), this.objectOptions(true));
 		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
 		this.history.push(this.currentAnnotationObject);
 		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
@@ -1304,11 +1299,6 @@ if ($(this).attr('data-ref') === 'on'){
 			return;
 		}
 
-		// this._bitArray.clear();
-		// let startIdx = this._bitArray.startXY();
-		// this._growRegion(x, y, startIdx, startIdx, this._bitArray, points, speed, this.isValidPixel.bind(this));
-		//// this._bitArray.drawXY(500, 500, 900, 700);
-
 		points = hull(points, 2 * speed);
 		let p1 = points[0]; p2 = points[1];
 		let result = [this.toGlobalPointXY(p1[0], p1[1])];
@@ -1326,7 +1316,7 @@ if ($(this).attr('data-ref') === 'on'){
 			result.push(this.toGlobalPointXY(p1[0], p1[1]));
 		}
 
-		this.currentAnnotationObject = this.createPolygon(result);
+		this.currentAnnotationObject = this.polygon.create(result, this.objectOptions(this.currentAnnotationObject ? this.currentAnnotationObject.isLeftClick : true));
 		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
 
 		this.history.push(this.currentAnnotationObject);
@@ -1390,57 +1380,6 @@ if ($(this).attr('data-ref') === 'on'){
 		return { top: top, left: left, bottom: bottom, right: right }
 	},
 
-
-	// BITWISE MAP OF VISITED AREAS, USE INTEGER FLAGS TO REDUCE THE ARRAY LENGTH
-	// (e.g. linear nxn matrix array, each cell stores __bitArray.cells.length__ positions)
-	// with javascript, safe to use up to 31 bits (we use 30)
-	_bitArray: {
-		dimension: 2000,
-		arr: [],
-
-		cells: [1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 8, 1 << 9,
-		1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16, 1 << 17, 1 << 18, 1 << 19,
-		1 << 20, 1 << 21, 1 << 22, 1 << 23, 1 << 24, 1 << 25, 1 << 26, 1 << 27, 1 << 28, 1 << 29],
-
-		isFlag: function (i, j) {
-			let idx = i * this.dimension + j;
-			let flag = this.arr[Math.floor(idx / this.cells.length)];
-
-			return (flag & this.cells[idx % this.cells.length]) > 0;
-		},
-
-		setFlag: function (i, j, flag = true) {
-			let idx = i * this.dimension + j;
-			if (flag) {
-				// |    to add selection (1 on the only place we want to add)
-				this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] | this.cells[idx % this.cells.length];
-			} else {
-				// & ~   to negate the selection (0 on the only place we want to clear) and bit-wise and this mask to arr
-				this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] & ~this.cells[idx % this.cells.length];
-			}
-		},
-
-		//for growing region
-		startXY: function () {
-			return Math.floor(this.dimension / 2);
-		},
-
-		clear: function () {
-			this.arr = [];
-		},
-
-		// drawXY: function (i, j, width, height) {
-		// 	var line = "";
-		// 	for (; i < width; i++) {
-		// 		line = "";
-		// 		for (; j < height; j++) {
-		// 			line += this.isFlag(i,j) ? "█" : "x";
-		// 		}
-		// 		console.log(line);
-		// 	}
-
-		// }
-	},
 
 	//if first direction cannot be persued, other take over for some time
 	// primaryDirection - where pixel is tested, directions - where the recursion is branching, resultingPoints - to push border points(result),
@@ -1642,156 +1581,48 @@ if ($(this).attr('data-ref') === 'on'){
 
 	/****************************************************************************************************************
  
-									 OBJECTS (Avoid creation on multiple places, keep consistent defaults)
+					OBJECT PROPERTIES - passed to object.create(...)
  
 	 *****************************************************************************************************************/
 
-	createRectangle: function (left, top, width, height, isLeftClick = null) {
-		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
+	objectOptionsLeftClick: {
+		fill: "#58994c",
+		selectable: true,
+		strokeWidth: 2,
+		borderColor: '#fbb802',
+		cornerColor: '#fbb802',
+		stroke: 'black',
+		borderScaleFactor: 3,
+		hasControls: false,
+		//todo get it once
+		isLeftClick: true,
+		hasRotatingPoint: false,
+		comment: null
+		},
 
-		return new fabric.Rect({
-			left: left,
-			top: top,
-			fill: leftClick ? this.leftClickColor : this.rightClickColor,
-			isLeftClick: leftClick,
-			opacity: $("#opacity_control").val(),
-			strokeWidth: 2,
-			stroke: 'black',
-			width: width,
-			height: height,
-			scaleX: 1,
-			scaleY: 1,
-			type: 'rect',
-			hasRotatingPoint: false,
-			borderColor: '#fbb802',
-			cornerColor: '#fbb802',
-			borderScaleFactor: 3,
-			hasControls: false,
-			comment: leftClick ?
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
-				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
-		});
+	objectOptionsRightClick:{
+		fill: "#d71818",
+		selectable: true,
+		strokeWidth: 2,
+		borderColor: '#fbb802',
+		cornerColor: '#fbb802',
+		stroke: 'black',
+		borderScaleFactor: 3,
+		hasControls: false,
+		//todo get it once
+		isLeftClick: false,
+		hasRotatingPoint: false,
+		comment: null
 	},
 
-	createCopyRectangle: function (ofObject, left, top, width, height) {
-		return new fabric.Rect({
-			left: left,
-			top: top,
-			fill: ofObject.fill,
-			isLeftClick: ofObject.isLeftClick,
-			opacity: ofObject.opacity,
-			strokeWidth: ofObject.strokeWidth,
-			stroke: ofObject.stroke,
-			width: width,
-			height: height,
-			scaleX: ofObject.scaleX,
-			scaleY: ofObject.scaleY,
-			type: ofObject.type,
-			hasRotatingPoint: ofObject.hasRotatingPoint,
-			borderColor: ofObject.borderColor,
-			cornerColor: ofObject.cornerColor,
-			borderScaleFactor: ofObject.borderScaleFactor,
-			hasControls: false,
-			comment: ofObject.comment
-		});
+	objectOptions: function(isLeftClick) {
+		if (isLeftClick) {
+			this.objectOptionsLeftClick.opacity = this.opacity.val();
+			return this.objectOptionsLeftClick;
+		}
+		this.objectOptionsRightClick.opacity = this.opacity.val();
+		return this.objectOptionsRightClick;
 	},
-
-	createEllipse: function (left, top, rx, ry, isLeftClick = null) {
-		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
-
-		return new fabric.Ellipse({
-			left: left,
-			top: top,
-			originX: 'left',
-			originY: 'top',
-			rx: rx,
-			ry: ry,
-			angle: 0,
-			fill: leftClick ? this.leftClickColor : this.rightClickColor,
-			stroke: 'black',
-			strokeWidth: 2,
-			opacity: $("#opacity_control").val(),
-			type: 'ellipse',
-			isLeftClick: leftClick,
-			selectable: true,
-			hasRotatingPoint: false,
-			borderColor: '#fbb802',
-			cornerColor: '#fbb802',
-			borderScaleFactor: 3,
-			hasControls: false,
-			comment: leftClick ?
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
-				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
-		});
-	},
-
-	createCopyEllipse: function (ofObject, left, top, rx, ry) {
-		return new fabric.Ellipse({
-			left: left,
-			top: top,
-			originX: ofObject.originX,
-			originY: ofObject.originY,
-			rx: rx,
-			ry: ry,
-			angle: ofObject.angle,
-			fill: ofObject.fill,
-			stroke: ofObject.stroke,
-			strokeWidth: ofObject.strokeWidth,
-			opacity: ofObject.opacity,
-			type: ofObject.type,
-			isLeftClick: ofObject.isLeftClick,
-			selectable: ofObject.selectable,
-			hasRotatingPoint: ofObject.hasRotatingPoint,
-			borderColor: ofObject.borderColor,
-			cornerColor: ofObject.cornerColor,
-			borderScaleFactor: ofObject.borderScaleFactor,
-			hasControls: ofObject.hasControls,
-			comment: ofObject.comment,
-		});
-	},
-
-	createPolygon: function (points, isLeftClick = null) {
-		var leftClick = (typeof isLeftClick === "boolean") ? isLeftClick : this.currentAnnotationObject.isLeftClick;
-
-		return new fabric.Polygon(points, {
-			hasRotatingPoint: false,
-			fill: leftClick ? this.leftClickColor : this.rightClickColor,
-			stroke: 'black',
-			strokeWidth: 2,
-			isLeftClick: leftClick,
-			opacity: $("#opacity_control").val(),
-			type: 'polygon',
-			selectable: true,
-			borderColor: '#fbb802',
-			cornerColor: '#fbb802',
-			borderScaleFactor: 3,
-			hasControls: false,
-			comment: leftClick ?
-				(this.leftClickLabel === this.DEFAULT_LEFT_LABEL ? null : this.leftClickLabel) :
-				(this.rightClickLabel === this.DEFAULT_RIGHT_LABEL ? null : this.rightClickLabel)
-		});
-	},
-
-	createCopyPolygon: function (ofObject, newPoints, evented = true) {
-		return new fabric.Polygon(newPoints, {
-			hasRotatingPoint: ofObject.hasRotatingPoint,
-			fill: ofObject.fill,
-			stroke: ofObject.stroke,
-			strokeWidth: ofObject.strokeWidth,
-			isLeftClick: ofObject.isLeftClick,
-			opacity: ofObject.opacity,
-			type: ofObject.type,
-			selectable: ofObject.selectable,
-			borderColor: ofObject.borderColor,
-			cornerColor: ofObject.cornerColor,
-			borderScaleFactor: ofObject.borderScaleFactor,
-			comment: ofObject.comment,
-			selectable: evented,
-			hasControls: ofObject.hasControls,
-			evented: evented,
-		});
-	},
-
 
 	/****************************************************************************************************************
  
@@ -1799,270 +1630,6 @@ if ($(this).attr('data-ref') === 'on'){
  
 	 *****************************************************************************************************************/
 
-
-	// initialize rectabgle of 1x1 from point(x,y)
-	initializeRectangle: function (x, y) {
-		this.currentAnnotationObject = this.createRectangle(x, y, 1, 1);
-		this.currentAnnotationObjectUpdater = this.updateRectangleWidth;
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-	},
-
-	initializeEllipse: function (x, y) {
-		this.currentAnnotationObject = this.createEllipse(x, y, 1, 1);
-		this.currentAnnotationObjectUpdater = this.updateEllipseDimens;
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-	},
-
-	updateRectangleWidth: function (x, y) {
-		if (this.origX > x) {
-			this.currentAnnotationObject.set({ left: Math.abs(x) });
-		};
-		if (this.origY > y) {
-			this.currentAnnotationObject.set({ top: Math.abs(y) });
-		};
-		var width = Math.abs(x - this.origX);
-		var height = Math.abs(y - this.origY);
-		this.currentAnnotationObject.set({ width: width, height: height });
-	},
-
-	updateEllipseDimens: function (x, y) {
-		if (this.origX > x) {
-			this.currentAnnotationObject.set({ left: Math.abs(x) });
-		};
-		if (this.origY > y) {
-			this.currentAnnotationObject.set({ top: Math.abs(y) });
-		};
-		var width = Math.abs(x - this.origX) / 2;
-		var height = Math.abs(y - this.origY) / 2;
-		this.currentAnnotationObject.set({ rx: width, ry: height });
-	},
-
-	enlargeRectToContain: function (rect, points) {
-		let w = rect.width,
-			h = rect.height;
-		points.push({ x: rect.left, y: rect.top });
-		points.push({ x: rect.left + w, y: rect.top });
-		points.push({ x: rect.left, y: rect.top + h });
-		points.push({ x: rect.left + w, y: rect.top + h });
-		var minX = points[0].x,
-			minY = points[0].y,
-			maxX = minX,
-			maxY = minY;
-
-		points.forEach(p => {
-			if (p.x > maxX) maxX = p.x;
-			if (p.y > maxY) maxY = p.y;
-			if (p.x < minX) minX = p.x;
-			if (p.y < minY) minY = p.y;
-		});
-
-		let newObject = this.createCopyRectangle(rect, minX, minY, maxX - minX, maxY - minY);
-		this.overlay.fabricCanvas().remove(rect);
-		this.overlay.fabricCanvas().add(newObject);
-		this.history.push(newObject, rect);
-
-		this.overlay.fabricCanvas().renderAll();
-		this.overlay.fabricCanvas().setActiveObject(newObject);
-	},
-
-	enlargeEllipseToContain: function (ellipse, points) {
-		let w = ellipse.rx * 2,
-			h = ellipse.ry * 2;
-		points.push({ x: ellipse.left, y: ellipse.top });
-		points.push({ x: ellipse.left + w, y: ellipse.top });
-		points.push({ x: ellipse.left, y: ellipse.top + h });
-		points.push({ x: ellipse.left + w, y: ellipse.top + h });
-
-		var minX = points[0].x,
-			minY = points[0].y,
-			maxX = minX,
-			maxY = minY;
-
-		points.forEach(p => {
-			if (p.x > maxX) maxX = p.x;
-			if (p.y > maxY) maxY = p.y;
-			if (p.x < minX) minX = p.x;
-			if (p.y < minY) minY = p.y;
-		});
-
-		let newObject = this.createCopyEllipse(ellipse, minX, minY, (maxX - minX) / 2, (maxY - minY) / 2);
-		this.overlay.fabricCanvas().add(newObject);
-		this.overlay.fabricCanvas().remove(ellipse);
-		this.history.push(newObject, ellipse);
-
-		this.overlay.fabricCanvas().renderAll();
-		this.overlay.fabricCanvas().setActiveObject(newObject);
-	},
-
-	polygonClickAction: function (o, x, y) {
-		// if polygon mode was not active start drawing polygon
-		if (!this.polygon.polygonBeingCreated) {
-			this.polygon.init();
-			console.log(this.polygon.polygonBeingCreated);
-		}
-		this.polygon.addPoint(x, y);
-	},
-
-
-	// add new point to polygon while drawing
-	updatePolygon: function (x, y) {
-		if (this.polygon.activeLine && this.polygon.activeLine.class == "line") {
-			this.polygon.activeLine.set({ x2: x, y2: y });
-			var points = this.polygon.activeShape.get("points");
-			points[this.polygon.pointArray.length] = {
-				x: x,
-				y: y
-			}
-			this.polygon.activeShape.set({
-				points: points
-			});
-		}
-	},
-
-	// enlargePolygonToContain: async function (polygon, points) {
-
-	// 	console.log("enlarge poly")
-
-	// 	var polypoints = polygon.get("points")
-
-	// 	//TODO WHEN PROCESSING I KNOW WHICH INDICES ARE OUT/IN SO THERE IT SHOULD CROSS THE BORDER AND THUS MERGE...
-
-	// 	let res = [];
-	// 	var inside = false;
-	// 	polypoints.forEach(p => {
-	// 		if (robustPointInPolygon(points, p) === 1) {
-	// 			res.push([p.x, p.y]);
-	// 			if (inside) {
-	// 				inside = false;
-	// 				//todo
-	// 			}
-	// 		} else {
-	// 			if (!inside) {
-	// 				inside = true;
-	// 				//todo
-	// 			}
-	// 		}
-	// 	});
-
-
-
-	// 	//suppose polygon is bigger than appended region, keep region edge points too (0)		
-	// 	points.forEach(p => {
-	// 		if (robustPointInPolygon(polypoints, p) > -1) {
-	// 			res.push([p.x, p.y]);
-	// 		}
-	// 	});
-
-
-	// 	res = hull(res, 80);
-	// 	points = [];
-	// 	res.forEach(p => {
-	// 		points.push(new OpenSeadragon.Point(p[0], p[1]))
-	// 	})
-
-	// 	// console.log("OOK");
-	// 	// console.log(res1);
-	// 	// console.log(res2);
-
-	// 	// var i1 = 0, i2 = 0, j1=0, j2 = 0, d1=Infinity, d2=Infinity;
-	// 	// for (let i = 0; i < res1.length; i++) {
-	// 	// 	for (let j = 0; j < res2.length; j++) {
-
-	// 	// 		let d = res1[i].distanceTo(res2[i]);
-	// 	// 		if (d < d1) {
-	// 	// 			i1 = i;
-	// 	// 			j1 = j;
-	// 	// 		} 
-	// 	// 		// else if (d < d2) {
-	// 	// 		// 	i2 = i;
-	// 	// 		// 	j2 = j;
-	// 	// 		// }
-	// 	// 	}
-	// 	// }
-
-
-	// 	// console.log(i1, j1);
-	// 	// //shift res1 array so that the last point is the closest point to the appended region
-	// 	// let result = [...res1.slice(res1.length-i1-1, res1.length), ...res1.slice(0, res1.length-i1-1)];
-
-	// 	// //decide whether to add res2 in normal or reversed order, start with j1 th vertex
-	// 	// let toLeftJ = j1-1 < 0 ? res2.length - 1 : j1-1;
-	// 	// let toRightJ = (j1+1)%res2.length;
-	// 	// if (res2[toLeftJ].distanceTo(res1[(i1+1) % res1.length]) < res2[toRightJ].distanceTo(res1[(i1+1) % res1.length])) {
-	// 	// 	//j1+1 th vertex closer (array should end with it)
-	// 	// 	res2 = [...res2.slice(j1, res2.length), ...res2.slice(0, j1)];
-	// 	// } else {
-	// 	// 	//j1-1 th vertex closer (array should end with it)
-	// 	// 	res2 = [...res2.slice(res1.length-j1-1, res2.length), ...res2.slice(0, res1.length-j1-1)];
-	// 	// }
-	// 	// result = result.concat(res2);
-	// 	// console.log(result);
-
-	// 	// this.overlay.fabricCanvas().remove(targetObject);
-	// 	this.currentAnnotationObject = this.createCopyPolygon(polygon, points);
-	// 	this.overlay.fabricCanvas().remove(polygon);
-	// 	this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-	// 	this.history.push(this.currentAnnotationObject, polygon);
-	// 	this.overlay.fabricCanvas().renderAll();
-	// 	this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
-
-	// },
-
-	// initialize polygon (p) edit by showing polygon points and make them interactive
-	// todo move to polygon object class and create also class for circle & rect and move things there all conceerning modification, creation
-	initializeEditPolygon: function (p) {
-		//save original input form attributes
-		this.polygon.init(false);
-		this.polygon.input_attributes = {
-			comment: p.comment,
-			a_group: p.a_group,
-			threshold: p.threshold,
-		};
-		var points = p.get("points");
-		var zoom = this.overlay.fabricCanvas().getZoom();
-		var circle_size = 0;
-		if (zoom < 0.01) { circle_size = 1000 }
-		else if (zoom < 0.03) { circle_size = 500 }
-		else if (zoom < 0.1) { circle_size = 100 }
-		else if (zoom < 0.3) { circle_size = 50 }
-		else { circle_size = 20 };
-
-		points.forEach(function (point, index) {
-			var circle = new fabric.Circle({
-				radius: circle_size,
-				fill: 'red',
-				left: point.x,
-				top: point.y,
-				originX: 'center',
-				originY: 'center',
-				hasControls: false,
-				hasBorders: false,
-				name: index,
-				type: "_polygon.controls.circle"
-			});
-			openseadragon_image_annotations.polygon.pointArray.push(circle);
-			openseadragon_image_annotations.overlay.fabricCanvas().add(circle);
-		});
-		openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-
-
-		this.polygon.originallyEddited = p;
-		this.polygon.currentlyEddited = this.createCopyPolygon(p, points, false);
-		this.overlay.fabricCanvas().remove(p);
-		this.overlay.fabricCanvas().add(this.polygon.currentlyEddited);
-		this.overlay.fabricCanvas().sendToBack(this.polygon.currentlyEddited);
-	},
-
-	// change position of one of the polygons points (p) and redraw polygon
-	editPolygon: function (p) {
-		let curr = this.polygon.currentlyEddited;
-		curr.points[p.name] = { x: p.getCenterPoint().x, y: p.getCenterPoint().y };
-		this.overlay.fabricCanvas().remove(curr);
-		//todo do not create copy, just keep the same polygon
-		this.polygon.currentlyEddited = this.createCopyPolygon(curr, curr.points, false);
-		this.overlay.fabricCanvas().add(this.polygon.currentlyEddited);
-		this.overlay.fabricCanvas().sendToBack(this.polygon.currentlyEddited);
-	},
 
 	setFabricCanvasInteractivity: function (boolean) {
 		this.overlay.fabricCanvas().forEachObject(function (object) {
@@ -2146,42 +1713,39 @@ if ($(this).attr('data-ref') === 'on'){
 				objects[i].lockUniScaling = true;
 			}
 			this.overlay.fabricCanvas().deactivateAll().renderAll();
-			$("#input_form").hide();
+			//$("#input_form").hide();
 		}
 		this.overlay.fabricCanvas().renderAll();
 	},
 
 	// set input form with default values or annotation attributes
 	//(e.g if annotation was imported)
-	set_input_form: function (annotation) {
-		return;
-		//todo remove this feature?
+	// set_input_form: function (annotation) {
+	// 	//todo remove this feature?
 
-		if (annotation.comment) {
-			document.getElementById("annotation_comment").value = annotation.comment;
-		} else { document.getElementById("annotation_comment").value = "" };
+	// 	if (annotation.comment) {
+	// 		document.getElementById("annotation_comment").value = annotation.comment;
+	// 	} else { document.getElementById("annotation_comment").value = "" };
 
-		if (!(annotation.a_group)) {
-			annotation.set({ a_group: "None" })
-		};
-		document.getElementById("annotation_group").value = annotation.a_group;
-
-
-		//todo more modular?
-		// if (!(annotation.threshold)) {
-		// 	annotation.set({ threshold: document.getElementById("Threshold").innerHTML })
-		// };
-		document.getElementById("annotation_threshold").innerHTML = annotation.threshold;
-
-		// set position of the input form
-		var viewport_coordinates = PLUGINS.osd.world.getItemAt(0).imageToViewportCoordinates(annotation.left + annotation.width, annotation.top);
-		var pixel_coordinates = PLUGINS.osd.viewport.pixelFromPoint(viewport_coordinates);
-		document.getElementById("input_form").style.position = "absolute";
-		document.getElementById("input_form").style.top = String(pixel_coordinates.y - 10) + "px";
-		document.getElementById("input_form").style.left = String(pixel_coordinates.x + 10) + "px";
+	// 	if (!(annotation.a_group)) {
+	// 		annotation.set({ a_group: "None" })
+	// 	};
+	// 	document.getElementById("annotation_group").value = annotation.a_group;
 
 
-	},
+	// 	//todo more modular?
+	// 	// if (!(annotation.threshold)) {
+	// 	// 	annotation.set({ threshold: document.getElementById("Threshold").innerHTML })
+	// 	// };
+	// 	document.getElementById("annotation_threshold").innerHTML = annotation.threshold;
+
+	// 	// set position of the input form
+	// 	var viewport_coordinates = PLUGINS.osd.world.getItemAt(0).imageToViewportCoordinates(annotation.left + annotation.width, annotation.top);
+	// 	var pixel_coordinates = PLUGINS.osd.viewport.pixelFromPoint(viewport_coordinates);
+	// 	document.getElementById("input_form").style.position = "absolute";
+	// 	document.getElementById("input_form").style.top = String(pixel_coordinates.y - 10) + "px";
+	// 	document.getElementById("input_form").style.left = String(pixel_coordinates.x + 10) + "px";
+	// },
 
 	//cursor management (TODO move here other stuff involving cursor too)
 	// updater: function(mousePosition: OSD Point instance, cursorObject: object that is being shown underneath cursor)
@@ -2191,6 +1755,12 @@ if ($(this).attr('data-ref') === 'on'){
 		_updater: null,
 		_node: null,
 		_toolRadius: 0,
+
+			/* Mouse touch related data */
+		//TODO move to cursor class object
+		mouseTime: 0, //OSD handler click timer
+		isDown: false,  //FABRIC handler click down recognition
+		//isOverObject: false,
 
 		init: function () {
 			this._node = document.getElementById("annotation-cursor");
@@ -2283,8 +1853,6 @@ Messenger.prototype = {
 }  // end of namespace messenger
 
 
-
-
 /*------------ Initialization of OSD Annotations ------------*/
 var openseadragon_image_annotations = new OSDAnnotations();
   
@@ -2299,34 +1867,3 @@ PLUGINS.osd.addHandler('open', function() {
 });
   
   
-
-
-	//RELICS:
-  
-	  // // load optional images for decision layer
-	  //viewer.addHandler('open', loadOptions);
-	  // // initialize fabricjs overlay with annotation control
-	  // viewer.addHandler('open', initialize_annotations);
-	  // // set name of downloadable annotation file based on experiment and slide name
-	  // viewer.addHandler('open', nameAnnotFile);
-
-  
-	  /* ------------------Custom functions for handlers-------------*/
-  
-  
-	  /* initialize_annotations()
-	  Create annotation overlay and enables annotation control(add, edit, dowload...)
-	  
-	  - scale: width of source image (annotationcanvas is created with same width)
-	  - json_annotation: json string from annotations export
-	  */
-
-	  
-	 // function nameAnnotFile(self) {
-		// var probabs_url_array = urlProbabilities.split("/");
-		// var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
-		// var experiment = probabs_url_array.pop();
-		// var file_name = [experiment, slide].join(":");
-		// document.getElementById('download_link1').download = file_name + ".json";
-		// document.getElementById('download_link2').download = file_name + ".xml";
-	 // };

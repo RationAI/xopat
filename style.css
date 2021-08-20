@@ -50,6 +50,10 @@
     cursor: auto;
 }
 
+.btn-selected {
+    background: #666d76 !important;
+}
+
 /**
 =====================
 UTILITIES

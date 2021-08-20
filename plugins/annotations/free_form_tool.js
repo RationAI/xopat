@@ -103,13 +103,13 @@ FreeFormTool.prototype = {
             this._context.overlay.fabricCanvas().remove(this.polygon);
 
             if (typeof union[0][0] === 'number') { // single linear ring
-                var polygon = this._context.createCopyPolygon(this.polygon, this._simplifyPolygon(union, this.radius / 5));
+                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union, this.radius / 5));
                 this._context.overlay.fabricCanvas().add(polygon);
                 this.polygon = polygon;
             } else {
                 if (union.length > 1) union = this._unify(union);
 
-                var polygon = this._context.createCopyPolygon(this.polygon, this._simplifyPolygon(union[0], this.radius / 5));
+                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union[0], this.radius / 5));
                 this._context.overlay.fabricCanvas().add(polygon);
                 this.polygon = polygon;
             }
@@ -134,7 +134,8 @@ FreeFormTool.prototype = {
         if (difference) {
             this._context.overlay.fabricCanvas().remove(this.polygon);
             if (typeof difference[0][0] === 'number') { // single linear ring
-                var polygon = this._context.createCopyPolygon(this.polygon, this._simplifyPolygon(difference, this.radius / 5));
+
+                var polygon = this._context.polygon.create(this._simplifyPolygon(difference, this.radius / 5), this._context.objectOptions(this.polygon.isLeftClick));
                 this._context.overlay.fabricCanvas().add(polygon);
                 this.polygon = polygon;
             } else {
@@ -160,7 +161,7 @@ FreeFormTool.prototype = {
                     return;
                 }
 
-                var polygon = this._context.createCopyPolygon(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
+                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
                 this._context.overlay.fabricCanvas().add(polygon);
                 this.polygon = polygon;
             }
@@ -190,7 +191,8 @@ FreeFormTool.prototype = {
 
     //create polygon from points and initialize so that it is ready to be modified
     _createPolygonAndSetupFrom: function (points, object) {
-        let polygon = this._context.createCopyPolygon(object, points);
+        //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
+        let polygon = this._context.polygon.copy(object, points);
         polygon.type = "polygon";
 
         //TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'

@@ -20,8 +20,8 @@ Supported arguments for `index.php` - the visualisation itself, can be passed bo
 - `image` - argument that defines //TODO STILL IN DEVELOPMENT
 - `layer` - will be removed in future, defines the (only supported for now) data pyramidal tiff
 - `visualisation` - a `JSON` structure describing the visualisation setup, **only allowed in `POST`**
-- `dev` - switch that enables direct rendering of network output
 - `new` - switch that tells the visualisation to request user to setup visualisation if not defined
+- inherited switches and other **POST-only** parameters from plugins used (e.g. `dev` - switch that enables direct rendering of network output) 
 
 _Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif&new=1
 
