@@ -2,20 +2,19 @@
 /**
  * Bi-colors shader
  * 
- * $_GET expected parameters:
+ * $_GET/$_POST expected parameters:
  *  index - unique number in the compiled shader
- * $_GET supported parameters:
+ * $_GET/$_POST supported parameters:
  *  colorHigh - color to fill-in areas with high values (-->255), url encoded '#ffffff' format or digits only 'ffffff', default "#ff0000"
  *  colorLow - color to fill-in areas with low values (-->0), url encoded '#ffffff' format or digits only 'ffffff', default "#7cfc00"
  *  ctrlColor - whether to allow color modification, true or false, default true
  *  ctrlThreshold - whether to allow threshold modification, true or false, default true
  *  ctrlOpacity - whether to allow opacity modification, true or false, default true
+ *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
+ *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
  * 
- * colors shader will read underlying data (red component) and output
- * to canvas defined color with opacity based on the data
- * (0.0 => transparent, 1.0 => opaque)
- * supports thresholding - outputs color on areas above certain value
- * mapping html input slider 0-100 to .0-1.0
+ * this shader considers insignificant values to be around the middle (0.5), and significant are low or high values,
+ * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively 
  */
 require_once("init.php");
 

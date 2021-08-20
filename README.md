@@ -69,7 +69,7 @@ All items are required except for items inside `params` field and the exception 
     - `data` - both name and id (in future, id will be a lone parameter), defines the data (id will in the pyramidal 
         tiff directory define the data to use)
     - one of the following two:
-        - `type` - type of shader to use, supported now are `color`, `edge`, `identity`, can be missing if `source` is defined
+        - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity`; can be missing if `source` is defined
         - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined
     - `visible` -  `1` or `0`, whether by default the data layer is visible
     - `params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid

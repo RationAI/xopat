@@ -2,14 +2,16 @@
 /**
  * Colors shader
  * 
- * $_GET expected parameters:
+ * $_GET/$_POST expected parameters:
  *  index - unique number in the compiled shader
- * $_GET supported parameters:
+ * $_GET/$_POST supported parameters:
  *  color - color to fill-in areas with values, url encoded '#ffffff' format or digits only 'ffffff', default "#d2eb00"
- *  ctrlColor - whether to allow color modification, true or false, default true
- *  ctrlThreshold - whether to allow threshold modification, true or false, default true
- *  ctrlOpacity - whether to allow opacity modification, true or false, default true
- *  inverse - low values are high opacities instead of high values
+ *  ctrlColor - whether to allow color modification, 1 or 0, default 1
+ *  ctrlThreshold - whether to allow threshold modification, 1 or 0, default 1
+ *  ctrlOpacity - whether to allow opacity modification, 1 or 0, default 1
+ *  inverse - low values are high opacities instead of high values, 1 or 0, default 0
+ *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
+ *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
  * 
  * colors shader will read underlying data (red component) and output
  * to canvas defined color with opacity based on the data
@@ -47,7 +49,7 @@ $invertOpacity = (isset($data["inverse"]) && $data["inverse"] == "1");
 $logScale = (isset($data["logScale"]) && $data["logScale"] == "1");
 
 //other values
-$logScaleMax = isset($data["logScaleMax"]) ? toShaderFloatString($data["logScaleMax"], 100, 2) : "100.0";
+$logScaleMax = isset($data["logScaleMax"]) ? toShaderFloatString($data["logScaleMax"], 100, 2) : "1.0";
 $samplerName = "tile_data_{$uniqueId}";
 
 //definition part

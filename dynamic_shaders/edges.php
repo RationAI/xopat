@@ -2,13 +2,13 @@
 /**
  * Edges shader
  * 
- * $_GET expected parameters:
+ * $_GET/$_POST expected parameters:
  *  index - unique number in the compiled shader
- * $_GET supported parameters:
+ * $_GET/$_POST supported parameters:
  *  color - color to fill-in areas with values, url encoded '#ffffff' format or digits only 'ffffff', default "#d2eb00"
- *  ctrlColor - whether to allow color modification, true or false, default true
- *  ctrlThreshold - whether to allow threshold modification, true or false, default true
- *  ctrlOpacity - whether to allow opacity modification, true or false, default true
+ *  ctrlColor - whether to allow color modification, 1 or 0, default 1
+ *  ctrlThreshold - whether to allow threshold modification, 1 or 0, default 1
+ *  ctrlOpacity - whether to allow opacity modification, 1 or 0, default 1
  * 
  */
 require_once("init.php");
@@ -31,9 +31,9 @@ if (isset($data["color"])) {
 
 $samplerName = "tile_data_{$uniqueId}";
 
-$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"]);
-$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"]);
-$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"]);
+$allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] == "1");
+$allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] == "1");
+$allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] == "1");
 
 $r = $r / 255;
 $g = $g / 255;

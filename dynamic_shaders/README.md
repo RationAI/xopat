@@ -32,6 +32,9 @@ The output is a JSON-encoded object where keys are `data` items from `shaders`, 
 of certain shader-part script (described below). The only additional field is `order` having an integer from `1` that
 tells in which order was certain object processed (the order in which `shaders` array was passed in `POST`).
 
+### `defined.php`
+Contains definitions of shader names, filenames, parameter names, parameters-to-HTML-input mapping and short descriptions.
+
 ### `[shader_part].php`
 Required parameter (`GET` or `POST`) is `index`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
 that can be passed from outer `params` field.
@@ -146,7 +149,7 @@ Saving and retriving data is important for between-visualisation switching. When
 executed. That means the user would lose all presets from the visualisation use history. Here you can nicely cache your variable values so that all changes will be preserved.
 Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
 
-#### Example of sending user input values to the GPU
+### Example of sending user input values to the GPU
 We will define an input for user to be able to control a shader uniform variable.
 ```HTML
 <span> Value to send to shader:</span>
