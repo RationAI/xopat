@@ -32,7 +32,7 @@ The output is a JSON-encoded object where keys are `data` items from `shaders`, 
 of certain shader-part script (described below). The only additional field is `order` having an integer from `1` that
 tells in which order was certain object processed (the order in which `shaders` array was passed in `POST`).
 
-### `__shader_part__.php`
+### `[shader_part].php`
 Required parameter (`GET` or `POST`) is `index`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
 that can be passed from outer `params` field.
 
@@ -129,16 +129,61 @@ You can see which global variables and functions are available. The resulting co
 `show(...)`. TODO possible boost: The performance can be enhanced in reverse-order rendering if the first `show(...)` call uses alpha
 of `1`, the rest of the shader execution can be aborted. This is visualisator-independent and now considered pointless.
 
+#### ~~Global~~ Local ~~functions and~~ variables only - JavaScript inside GLDrawing/GLLoaded
+Of course you can use global variables here too (especially the ones defined in pure `js` part), but these two evens are placed inside two functions that
+provide you with two local variables:
+- `glLoaded` is passed two parameters: `(program, gl)` : `program` is the current program in use, `gl` is the instance of WebGL, so you can call stuff like `my_var_location = gl.getUniformLocation(program, 'nameOfUniformInShader');`
+- `glDrawing` is passed two parameters: `(gl, e)` : `gl` is the instance of WebGL, `e` is the current drawing event object (see OSD API, contains for example `tiledImage` property - a reference to the corresponding TiledImage object instance), so you can call stuff like `gl.uniform1f(my_var_location, value);`
+ 
+
 #### Global functions and variables - JavaScript
 For javascript, you can use
 - `redraw();` - will trigger update to the whole canvas, WebGL will be used to update it
-- `loadCache( key, defaultValue )` - will load data
+- `loadCache( key, defaultValue )` - will load saved data
 - `saveCache( key, value )` - will save data
-Saving cache is important for between-visualisation switching. When your visualisation is loaded (not necessarily for the first time), all your `js` code is
-executed. That means the user would lose all presents from the use history. Here you can nicely cache and load your variable values so that all changes will be preserved.
+
+Saving and retriving data is important for between-visualisation switching. When your visualisation is loaded (not necessarily for the first time), all your `js` code is
+executed. That means the user would lose all presets from the visualisation use history. Here you can nicely cache your variable values so that all changes will be preserved.
 Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
 
+#### Example of sending user input values to the GPU
+We will define an input for user to be able to control a shader uniform variable.
+```HTML
+<span> Value to send to shader:</span>
+<input type="number" id="my-input-type-number-for-this-variable" onchange="myAwesomeOnChangeHandler(this);" min="0" max="100" step="1">
+<br>
+```
+Then, we will add some `JavaScript` code to add logic around the input.
+```
+//load cached value or default value of 48
+var myUniqueNameForVariable = loadCache("myUniqueNameForVariable", 48);
 
-For more complex examples, see scripts themselves. **Non-unique names of variables and functions will cause the shader compilation failure or other
+//update HTML input to reflect current state
+$("#my-input-type-number-for-this-variable").val(myUniqueNameForVariable);
+
+//called onChange
+function myAwesomeOnChangeHandler(self) {
+   //get the user input
+   myUniqueNameForVariable = $(self).val();
+   //save the new value
+   saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+   //global function, part of API, update canvas
+   redraw();
+}
+
+//we will want to later send the variable to shader, it is done by a location parameter
+var myUniqueNameForVariableLocationWebGL = null;
+```
+And finally, we can use `glLoaded` and `glDrawing` to send the user input to the GPU
+
+```
+myUniqueNameForVariableLocationWebGL = gl.getUniformLocation(program, 'theNameForUniformWeUsedInTheShaderDefinitionPart');
+```
+```
+gl.uniform1f(myUniqueNameForVariableLocationWebGL, myUniqueNameForVariable);
+```
+
+
+For more complex examples, see scripts themselves. **Non-unique names of variables and functions may cause the shader compilation failure or other
 namespace collision.** 
-We recommend to extend each custom variable and function name with `$uniqueId`, both for `GLSL` and `JavaScript`.
+We recommend to extend each custom variable and function name with `$uniqueId`, both for `GLSL` and `JavaScript` parts - of course after you include `init.php`.
