@@ -10,9 +10,14 @@ Rect = function(context) {
     this._context = context;
     this._origX = null;
     this._origY = null;
+    this.type = "rect";
 }
 
 Rect.prototype = {
+    getCurrentObject: function() {
+        return this._current;
+    },
+
     create: function (left, top, width, height, options) {
 		return new fabric.Rect($.extend({
             left: left,
@@ -54,22 +59,21 @@ Rect.prototype = {
     initCreate: function (x, y, isLeftClick=true) {
         this._origX = x;
         this._origY = y;
-        this._context.currentAnnotationObject = this.create(x, y, 1, 1, this._context.objectOptions(isLeftClick));
-        this._context.currentAnnotationObjectUpdater = this;
-        this._context.overlay.fabricCanvas().add(this._context.currentAnnotationObject);
+        this._current = this.create(x, y, 1, 1, this._context.objectOptions(isLeftClick));
+        this._context.overlay.fabricCanvas().add(this._current);
     },
 
 
     updateCreate: function (x, y) {
         if (this._origX > x) {
-            this._context.currentAnnotationObject.set({ left: Math.abs(x) });
+            this._current.set({ left: Math.abs(x) });
         };
         if (this._origY > y) {
-            this._context.currentAnnotationObject.set({ top: Math.abs(y) });
+            this._current.set({ top: Math.abs(y) });
         };
         var width = Math.abs(x - this._origX);
         var height = Math.abs(y - this._origY);
-        this._context.currentAnnotationObject.set({ width: width, height: height });    
+        this._current.set({ width: width, height: height });    
     },
 
     initEdit: function(p) {
@@ -89,9 +93,14 @@ Ellipse = function(context) {
     this._context = context;
     this._origX = null;
     this._origY = null;
+    this.type = "ellipse";
 }
 
 Ellipse.prototype = {
+    getCurrentObject: function() {
+        return this._current;
+    },
+
     create: function (left, top, rx, ry, options) {
 		return new fabric.Ellipse($.extend({
             left: left,
@@ -137,21 +146,20 @@ Ellipse.prototype = {
     initCreate: function (x, y, isLeftClick=true) {
         this._origX = x;
         this._origY = y;
-        this._context.currentAnnotationObject = this.create(x, y, 1, 1, this._context.objectOptions(isLeftClick));
-        this._context.currentAnnotationObjectUpdater = this;
-        this._context.overlay.fabricCanvas().add(this._context.currentAnnotationObject);
+        this._current = this.create(x, y, 1, 1, this._context.objectOptions(isLeftClick));
+        this._context.overlay.fabricCanvas().add(this._current);
     },
 
     updateCreate: function (x, y) {
 		if (this._origX > x) {
-			this._context.currentAnnotationObject.set({ left: Math.abs(x) });
+			this._current.set({ left: Math.abs(x) });
 		};
 		if (this._origY > y) {
-			this._context.currentAnnotationObject.set({ top: Math.abs(y) });
+			this._current.set({ top: Math.abs(y) });
 		};
 		var width = Math.abs(x - this._origX) / 2;
 		var height = Math.abs(y - this._origY) / 2;
-		this._context.currentAnnotationObject.set({ rx: width, ry: height });
+		this._current.set({ rx: width, ry: height });
     },
 
     initEdit: function(p) {
@@ -168,6 +176,7 @@ Ellipse.prototype = {
 }
 
 // name space for polygon manupulation
+//todo rename to underscore if private
 Polygon = function (context) {
     // min: 99,
     // max: 999999,
@@ -175,14 +184,19 @@ Polygon = function (context) {
     this.pointArray = null;
     this.lineArray = null;
     this.activeLine = null;
-    this.activeShape = false;
+    this._current = null;
     this.currentlyEddited = null;
     this.originallyEddited = null;
     this.input_attributes = {};
     this._context = context;
+    this.type = "polygon";
 }
 
 Polygon.prototype = {
+    getCurrentObject: function() {
+        return this._current;
+    },
+
    	create: function (points, options) {
 		return new fabric.Polygon(points, $.extend({
 			type: 'polygon'			
@@ -211,24 +225,11 @@ Polygon.prototype = {
 	},
 
 
-    // initialize attributes, prepare for new drawing
-    initCreate: function (isNew=true) {
-        this.polygonBeingCreated = isNew;
-        this.pointArray = new Array();
-        this.lineArray = new Array();
-        this.activeLine = null;
-        this.activeShape = false;
-        this.currentlyEddited = null;
-        this.input_attributes = {};
-        this.originallyEddited = null;
-    },
-
-
-    updateCreate: function (x, y, isLeftClick=true) {
-
+    initCreate: function (x, y, isLeftClick=true) {
         if (!this.polygonBeingCreated) {
-			this.initCreate();
+			this._initialize();
 		}
+        this.isLeftClick = isLeftClick;
 
         // get name of point
         // var random = Math.floor(Math.random() * (this.max - this.min + 1)) + this.min;
@@ -280,8 +281,8 @@ Polygon.prototype = {
             objectCaching: false
         });
 
-        if (this.activeShape) {
-            var points = this.activeShape.get("points");
+        if (this._current) {
+            var points = this._current.get("points");
             points.push({
                 x: x,
                 y: y
@@ -293,9 +294,9 @@ Polygon.prototype = {
             polygon.evented = false;
             polygon.objectCaching = false;
 
-            this._context.overlay.fabricCanvas().remove(this.activeShape);
+            this._context.overlay.fabricCanvas().remove(this._current);
             this._context.overlay.fabricCanvas().add(polygon);
-            this.activeShape = polygon;
+            this._current = polygon;
             this._context.overlay.fabricCanvas().renderAll();
         }
         else {
@@ -306,7 +307,7 @@ Polygon.prototype = {
             polygon.hasControls = false;
             polygon.evented = false;
             polygon.objectCaching = false;
-            this.activeShape = polygon;
+            this._current = polygon;
             this._context.overlay.fabricCanvas().add(polygon);
         }
         this.activeLine = line;
@@ -319,8 +320,25 @@ Polygon.prototype = {
         this._context.overlay.fabricCanvas().selection = false;
     },
 
+    updateCreate: function (x, y) {
+        let last = this.pointArray[this.pointArray.length-1],
+            dy = last.top - y,
+            dx = last.left - x;
+
+        var zoom = this._context.overlay.fabricCanvas().getZoom();
+        var powRad = 20;
+        if (zoom < 0.01) { powRad = 50*powRad; }
+        else if (zoom < 0.03) { powRad = 20*powRad; }
+        else if (zoom < 0.1) { powRad = 5*powRad; }
+        else if (zoom < 0.3) { powRad = 2.5*powRad; }
+        powRad = powRad * powRad;
+        if (dx*dx + dy*dy > powRad) {
+            this.initCreate(x, y, this.isLeftClick);
+        }    
+    },
+
     initEdit: function(p) {
-        this.initCreate(false);
+        this._initialize(false);
 		this.input_attributes = {
 			comment: p.comment,
 			a_group: p.a_group,
@@ -390,8 +408,8 @@ Polygon.prototype = {
             $.each(this.lineArray, function (index, line) {
                 _this._context.overlay.fabricCanvas().remove(line);
             });
-            this._context.overlay.fabricCanvas().remove(this.activeShape).remove(this.activeLine);
-            left = this.activeShape.isLeftClick;
+            this._context.overlay.fabricCanvas().remove(this._current).remove(this.activeLine);
+            left = this._current.isLeftClick;
         } else {
             this._context.overlay.fabricCanvas().remove(this.currentlyEddited);
             left = this.originallyEddited.isLeftClick;
@@ -399,15 +417,15 @@ Polygon.prototype = {
 
 
         if (this.pointArray.length < 3) {
-            this.init(false); //clear
+            this._initialize(false); //clear
             return;
         }
 
-        this._context.currentAnnotationObject = this.create(points, this._context.objectOptions(left));
+        this._current = this.create(points, this._context.objectOptions(left));
         //todo callback with deletion completion of active polygon/currently modified one? need to delete also all the circles!!
         //if polygon is being drawn, delete it
         // if (this._context.polygon.polygonBeingCreated == true) {
-        // 	this._context.polygon.activeShape.remove();
+        // 	this._context.polygon._current.remove();
         // 	this._context.polygon.pointArray.forEach(function (point) {
         // 		this._context.overlay.fabricCanvas().remove(point)
         // 	});
@@ -419,21 +437,33 @@ Polygon.prototype = {
 
 
         // add polygon to canvas, switxh to edit mode, select it, set input form and show the input form
-        this._context.overlay.fabricCanvas().add(this._context.currentAnnotationObject);
+        this._context.overlay.fabricCanvas().add(this._current);
+        this._context.overlay.fabricCanvas().setActiveObject(this._current);
         //originallyEdited is null if new polygon, else history can redo
-        this._context.history.push(this._context.currentAnnotationObject, this.originallyEddited);
+        this._context.history.push(this._current, this.originallyEddited);
 
 
         //TODO open by default edit mode or not?
         // if (this._context.mouseMode != "editAnnotation" && this._context.mouseMode != "OSD") {
         // 	document.getElementById("editAnnotation").click();
         // };
-        // 		open... TODO .setActive(this.currentAnnotationObject);
-        // this._context.currentAnnotationObject.set(this.input_attributes);
-        // this._context.set_input_form(this._context.currentAnnotationObject);
+        // 		open... TODO .setActive(this._current);
+        // this._context._current.set(this.input_attributes);
+        // this._context.set_input_form(this._context._current);
         // $("#input_form").show();
         // document.getElementById('edit').disabled = false;
 
-        this.initCreate(false); //clear
+        this._initialize(false); //clear
+    },
+
+    _initialize: function(isNew=true) {
+        this.polygonBeingCreated = isNew;
+        this.pointArray = new Array();
+        this.lineArray = new Array();
+        this.activeLine = null;
+        this._current = null;
+        this.currentlyEddited = null;
+        this.input_attributes = {};
+        this.originallyEddited = null;
     }
 }

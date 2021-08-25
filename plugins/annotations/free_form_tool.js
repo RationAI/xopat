@@ -10,7 +10,7 @@ FreeFormTool = function (context) {
 
 FreeFormTool.prototype = {
     //initialize any object for cursor-drawing modification
-    init: function (object, atPosition, radius, add = true) {
+    init: function (object, atPosition, add = true) {
         switch (object.type) {
             case 'rect':
                 let w = object.width, h = object.height;
@@ -49,9 +49,6 @@ FreeFormTool.prototype = {
 
         if (add) this.update = this.union;
         else this.update = this.subtract;
-
-        this.setRadius(radius);
-
         this.mousePos = atPosition;
     },
 
@@ -70,13 +67,11 @@ FreeFormTool.prototype = {
     //final step
     finish: function () {
         if (this.polygon) {
-            this.polygon.lockMovementX = false;
-            this.polygon.lockMovementY = false;
 
-            if (this.polygon.incrementId != this.initial.incrementId) {
+           // if (this.polygon.incrementId != this.initial.incrementId) {
                 //incrementID is used by history - if ID equal, no changes were made -> no record
-                this._context.history.push(this.polygon, this.initial);
-            }
+                this._context.history.push(this.polygon);
+            //}
             let outcome = this.polygon;
             this.polygon = null;
             this.initial = null;
@@ -114,8 +109,6 @@ FreeFormTool.prototype = {
                 this.polygon = polygon;
             }
             this.polygon.objectCaching = false;
-            this.polygon.lockMovementX = false;
-            this.polygon.lockMovementY = false;
             this._context.overlay.fabricCanvas().renderAll();
 
         } else {
@@ -153,8 +146,7 @@ FreeFormTool.prototype = {
                 }
 
                 if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
-                    //this.polygon.comment = this.initial.comment; //for some reason not preserved
-                    this._context.history.push(null, this.initial);
+                    this._context.history.push(null, this.initial); 
                     this.polygon = null;
                     this.initial = null;
                     this.mousePos = null;
@@ -166,8 +158,6 @@ FreeFormTool.prototype = {
                 this.polygon = polygon;
             }
             this.polygon.objectCaching = false;
-            this.polygon.lockMovementX = false;
-            this.polygon.lockMovementY = false;
             this._context.overlay.fabricCanvas().renderAll();
         } else {
             console.log("NO DIFFERENCE FOUND");
@@ -182,11 +172,9 @@ FreeFormTool.prototype = {
     _setupPolygon: function (polyObject) {
         this._context.currentAnnotationObject = polyObject;
 
-        polyObject.lockMovementX = true;
-        polyObject.lockMovementY = true;
-
         this.polygon = polyObject;
         this.initial = polyObject;
+        this._context.history.push(null, this.initial);
     },
 
     //create polygon from points and initialize so that it is ready to be modified
@@ -197,6 +185,7 @@ FreeFormTool.prototype = {
 
         //TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'
         this._context.overlay.fabricCanvas().remove(object);
+        //this._context.history.push(null, this.object);
 
         this._context.overlay.fabricCanvas().add(polygon);
         this._context.history.push(polygon, object);

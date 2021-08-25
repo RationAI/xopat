@@ -1,4 +1,5 @@
 *.txt
+*.old
 old_trials/**
 webgl/shaders/**
 .idea/

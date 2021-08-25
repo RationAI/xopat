@@ -16,13 +16,13 @@ OSDAnnotations = function (incoming) {
 		EDIT: 2,
 		FREE_FORM_TOOL: 3,
 	});
+	this.mode = this.Modes.AUTO;
 
 	/*
 	Global setting to show/hide annotations on default
 	*/
 	this.showAnnotations = true;
 	/* Annotation property related data */
-	this.currentAnnotationObject = "rect";
 	this.currentAnnotationObjectUpdater = null; //if user drags what function is being used to update
 	this.annotationType = "rect";
 	this.currentAnnotationColor = "#ff2200";
@@ -101,13 +101,17 @@ if ($(this).attr('data-ref') === 'on'){
 			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px;  border-top-left-radius: 0; border-bottom-left-radius: 0;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.objectOptionsRightClick.fill}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
 			  </div>
 			<br>
-			<div style='width:65%;' class='d-inline-block'>
+			<div style='width:60%;' class='d-inline-block'>
 			<span>Automatic tool threshold:</span>
 			<input title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
 			
 			</div>
-			<div style='width:25%;' class='d-inline-block'>
-			<span>Brush:</span><br>	<button class="btn btn-selected" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse"><span class="material-icons"> panorama_fish_eye </span></button><br>
+			<div style='width:18%;' class='d-inline-block'>
+			<span>Brush:</span><br>	<button class="btn btn-selected" type="button" name="freeFormToolType" id="fft-type" autocomplete="off"><span class="material-icons"> panorama_fish_eye </span></button><br>
+			</div>
+
+			<div style='width:18%;' class='d-inline-block'>
+			<span>Size:</span><br>	<input class="form-control" type="number" min="1" max="500" name="freeFormToolSize" id="fft-size" autocomplete="off" value="50" onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);"><br>
 			</div>
 			</div>`);
 
@@ -170,36 +174,233 @@ if ($(this).attr('data-ref') === 'on'){
   </div>
 `);
 
-
-		// $("body").append(
-		// 	`<div id="input_form" style="display:none">
-		// 	<table>
-		// 	<tr>
-		// 		<td>category</td>
-		// 		<td>
-		// 		<select id="annotation_group" tabindex="2" name="Group">
-		// 			<option value="None" selected>None</option>
-		// 			<option value="Carcinoma">Carcinoma</option>
-		// 			<option value="Exclude">Exclude</option>
-		// 			<option value="Another pathology">Another pathology</option>
-		// 		</select>
-		// 		</td>
-		// 	</tr>
-		// 	<tr>
-		// 		<td>treshold</td>
-		// 		<td id="annotation_threshold">1</td>
-		// 	</tr>
-		// 	<tr>
-		// 		<td colspan="2"><textarea id="annotation_comment" placeholder="Add a comment..." name="text" rows="2" tabindex="3"></textarea></td>
-		// 	</tr>
-		// 	</table>
-		// </div>`);
-
 		//form for object property modification
 		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`);
 
 		this.cursor.init();
 		this.opacity = $("#opacity_control");
+		this.toolRadius = $("#fft-size");
+
+		/****************************************************************************************************************
+	
+									Annotations MODES implementation
+	
+		*****************************************************************************************************************/
+
+
+		function initCreateAutoAnnotation(pointer, event, isLeftClick) {
+			//if clicked on object, highlight it
+			let active = openseadragon_image_annotations.overlay.fabricCanvas().findTarget(event);
+			if (active) {
+				openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(active);
+				openseadragon_image_annotations.cursor.mouseTime = 0;
+				return;
+			}
+		}
+
+		function finishCreateAutoAnnotation(point, event, isLeftClick) {
+			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
+			if (delta > 200) return; // just navigate if click longer than 100ms
+
+			switch (openseadragon_image_annotations.annotationType) {
+				case 'rect':
+					openseadragon_image_annotations.createApproxRectangle(point, isLeftClick);
+					break;
+				case 'ellipse':
+					openseadragon_image_annotations.createApproxEllipse(point, isLeftClick);
+					break;
+				case 'polygon':
+					openseadragon_image_annotations.createRegionGrowingOutline(point, isLeftClick);
+					break;
+				default:
+					break;
+			}
+		}
+		
+		function initCreateCustomAnnotation(point, event, isLeftClick) {
+			let _this = openseadragon_image_annotations;
+
+			switch (_this.annotationType) {
+				case 'polygon':
+					_this.currentAnnotationObjectUpdater = _this.polygon;
+					break;	 
+				case 'rect':
+					_this.currentAnnotationObjectUpdater = _this.rectangle;
+					break;
+				case 'ellipse':
+					_this.currentAnnotationObjectUpdater = _this.ellipse;
+					break;
+				default:
+					return; //other types not support, no mouse motion tracking
+			}
+			let pointer = _this.toGlobalPointXY(point.x, point.y);
+			_this.currentAnnotationObjectUpdater.initCreate(pointer.x, pointer.y, isLeftClick);
+		}
+
+		function finishCreateCustomAnnotation(point, event, isLeftClick) {
+			let _this = openseadragon_image_annotations;
+			if (!_this.currentAnnotationObjectUpdater) return;
+			let delta = Date.now() - _this.cursor.mouseTime;
+
+			// if click too short, user probably did not want to create such object, discard
+			if (delta < 200) { 
+				//TODO this deletes created elements if wrong event registered (sometimes)
+				switch (_this.currentAnnotationObjectUpdater.type) {
+					case 'rect':
+					case 'ellipse': //clean
+						_this.overlay.fabricCanvas().remove(_this.currentAnnotationObjectUpdater.getCurrentObject());
+						return;
+					case 'polygon': // polygon valid short click 
+						break;
+					default:
+						return;
+				}
+			}
+
+			switch (_this.currentAnnotationObjectUpdater.type) {
+				case 'rect':
+				case 'ellipse':
+					let obj = _this.currentAnnotationObjectUpdater.getCurrentObject();
+					_this.history.push(obj);
+					_this.overlay.fabricCanvas().setActiveObject(obj);
+					_this.overlay.fabricCanvas().renderAll();
+					// $("#input_form").show();
+					break;
+				case 'polygon': //no action, polygon is being created by click 
+				default:
+					break;
+			}
+		}
+
+		function initFreeFormTool(point, event, isLeftClick) {
+			let _this = openseadragon_image_annotations;
+			let currentObject = _this.overlay.fabricCanvas().getActiveObject();
+			console.log(_this.overlay.fabricCanvas().getActiveObject());
+
+			let pointer = _this.toGlobalPointXY(point.x, point.y);
+			if (!currentObject) {
+				//create tool-shaped object
+				currentObject = _this.polygon.create(_this.modifyTool.getCircleShape(pointer), _this.objectOptions(isLeftClick));
+				_this.overlay.fabricCanvas().add(currentObject);
+				_this.overlay.fabricCanvas().setActiveObject(currentObject);
+				_this.history.push(currentObject);
+			}
+
+			_this.modifyTool.init(currentObject, point, isLeftClick);
+			_this.modifyTool.update(pointer);
+		}
+
+		function finishFreeFormTool(point, event, isLeftClick) {
+			let _this = openseadragon_image_annotations;
+			let result = _this.modifyTool.finish();
+			if (result) _this.overlay.fabricCanvas().setActiveObject(result);
+		}
+
+		function handleRightClickUp(o, point) {
+			let _this = openseadragon_image_annotations;
+			switch (_this.mode) {
+				case _this.Modes.AUTO:
+					finishCreateAutoAnnotation(point, o, false);
+					break;
+				case _this.Modes.CUSTOM:
+					finishCreateCustomAnnotation(point, o, false);
+					break;
+				case _this.Modes.FREE_FORM_TOOL:
+					finishFreeFormTool(point, o, false);
+					break;
+				case _this.Modes.EDIT:
+					break;
+				default: 
+					console.error("Invalid action!");
+					return;
+			}
+			_this.cursor.isDown = false;
+		}
+
+		function handleLeftClickUp(o, point) {
+			// if (openseadragon_image_annotations.isMouseOSDInteractive()) {
+			// 	handleFabricKeyUpInOSDMode(o);
+			// } else {
+			// 	handleFabricKeyUpInEditMode(o);
+			// }
+
+			let _this = openseadragon_image_annotations;
+			switch (_this.mode) {
+				case _this.Modes.AUTO:
+					finishCreateAutoAnnotation(point, o, true);
+					break;
+				case _this.Modes.CUSTOM:
+					finishCreateCustomAnnotation(point, o, true);
+					break;
+				case _this.Modes.FREE_FORM_TOOL:
+					finishFreeFormTool(point, o, true);
+					break;
+				case _this.Modes.EDIT:
+					let obj = _this.overlay.fabricCanvas().getActiveObject();
+					if (obj) {
+						obj.set({lockMovementX: true, lockMovementY: true});
+					}
+					break;
+				default: 
+					console.error("Invalid action!");
+					return;
+			}
+			_this.cursor.isDown = false;
+		}
+
+		function handleRightClickDown(o, point) {
+			let _this = openseadragon_image_annotations;
+			_this.cursor.mouseTime = Date.now();
+			_this.cursor.isDown = true;
+			switch (_this.mode) {
+				case _this.Modes.AUTO:
+					initCreateAutoAnnotation(point, o, false);
+					break;
+				case _this.Modes.CUSTOM:
+					initCreateCustomAnnotation(point, o, false);
+					break;
+				case _this.Modes.FREE_FORM_TOOL:
+					initFreeFormTool(point, o, false);
+					break;
+				case _this.Modes.EDIT:
+					break;
+				default: 
+					console.error("Invalid action!");
+					return;
+			}
+		}
+
+		function handleLeftClickDown(o, point) {
+			// if (openseadragon_image_annotations.isMouseOSDInteractive()) {
+			// 	handleFabricKeyDownInOSDMode(o, true);
+			// } else {
+			// 	handleFabricKeyDownInEditMode(o);
+			// }
+
+			let _this = openseadragon_image_annotations;
+			_this.cursor.mouseTime = Date.now();
+			_this.cursor.isDown = true;
+			switch (_this.mode) {
+				case _this.Modes.AUTO:
+					initCreateAutoAnnotation(point, o, true);
+					break;
+				case _this.Modes.CUSTOM:
+					initCreateCustomAnnotation(point, o, true);
+					break;
+				case _this.Modes.FREE_FORM_TOOL:
+					initFreeFormTool(point, o, true);
+					break;
+				case _this.Modes.EDIT:
+					let obj = _this.overlay.fabricCanvas().getActiveObject();
+					if (obj) {
+						obj.set({lockMovementX: false, lockMovementY: false});
+					}
+					break;
+				default: 
+					console.error("Invalid action!");
+					return;
+			}
+		}
 
 		/****************************************************************************************************************
 	
@@ -208,231 +409,40 @@ if ($(this).attr('data-ref') === 'on'){
 		*****************************************************************************************************************/
 
 
-
-		/*
-		mouse:down event listener
-		On mousedown:
-			- mark isDown as true. On mouse:up, we draw annotations if isDown is true.
-			- initialize the correct function based on what the currentAnnotationType is.
-			*/
-		// this.overlay.fabricCanvas().observe('mouse:down', function(o) {
-		// 	//todo prevent clicking both buttons simultaneously, some mode which tells which key is active adn allow that one only
-		// 	if (!openseadragon_image_annotations.showAnnotations) return;
-		// 	openseadragon_image_annotations.cursor.mouseTime = Date.now();
-
-		// 	if (o.button === 1) fabricHandleLeftClickDown(o);
-		// 	else if (o.button === 3) fabricHandleRightClickDown(o);
-		// });
-
 		$('.upper-canvas').mousedown(function (event) {
-			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
-			openseadragon_image_annotations.cursor.mouseTime = Date.now();
+			if (!openseadragon_image_annotations.showAnnotations) return;
 
-			if (event.which === 1) fabricHandleLeftClickDown(event);
-			else if (event.which === 3) fabricHandleRightClickDown(event);
+			if (event.which === 1) handleLeftClickDown(event, {x: event.pageX, y: event.pageY});
+			else if (event.which === 3) handleRightClickDown(event, {x: event.pageX, y: event.pageY});
 		});
-
-		function fabricHandleRightClickDown(o) {
-			console.log("fabric right mouse down");
-			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-				handleFabricKeyDownInOSDMode(o, false);
-			}
-		}
-
-		function fabricHandleLeftClickDown(o) {
-			console.log("fabric mouse down");
-
-			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-				handleFabricKeyDownInOSDMode(o, true);
-			} else {
-				handleFabricKeyDownInEditMode(o);
-			}
-		}
-
-		function handleFabricKeyDownInOSDMode(o, isLeftClick) {
-			var pointer = openseadragon_image_annotations.overlay.fabricCanvas().getPointer(o);
-
-			if (o.altKey) {
- 
-				//todo dirty, just send isLeftClick flag
-				openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: isLeftClick };
-				openseadragon_image_annotations.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
-				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-
-				this.currentAnnotationObjectUpdater = null;
-				switch (openseadragon_image_annotations.annotationType) {
-					case 'polygon':
-						openseadragon_image_annotations.polygon.updateCreate(pointer.x, pointer.y, isLeftClick);
-						return; //no mouse motion tracking	 
-					case 'rect':
-						openseadragon_image_annotations.rectangle.initCreate(pointer.x, pointer.y, isLeftClick);
-						break;
-					case 'ellipse':
-						openseadragon_image_annotations.ellipse.initCreate(pointer.x, pointer.y, isLeftClick);
-						break;
-					default:
-						return; //other types not support, no mouse motion tracking
-				}
-
-			} else if (o.shiftKey) { //shift key, let fabric.js mouse track do the job (need disabled OSD navigation)
-
-				let currentObject = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
-				if (!currentObject) {
-
-					//create tool-shaped object
-					currentObject = openseadragon_image_annotations.polygon.create(openseadragon_image_annotations.modifyTool.getCircleShape(pointer), openseadragon_image_annotations.objectOptions(isLeftClick));
-					openseadragon_image_annotations.overlay.fabricCanvas().add(currentObject);
-					openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(currentObject);
-					openseadragon_image_annotations.history.push(currentObject);
-				}
-				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
-
-				openseadragon_image_annotations.modifyTool.init(currentObject, openseadragon_image_annotations.toScreenCoords(pointer.x, pointer.y), 100, isLeftClick);
-				openseadragon_image_annotations.modifyTool.update(pointer);
-			} else {
-				//problem when click on cavas and the browser is not in focus, prevent current selection from removal
-				openseadragon_image_annotations.currentAnnotationObject = null; //  IMPORTANT!
-			}
-
-			openseadragon_image_annotations.cursor.isDown = true;
-		}
-
-		function handleFabricKeyDownInEditMode(o) {
-			// openseadragon_image_annotations.cursor.isDown = true;
-
-			// if (!o.target) return;
-
-			// if (o.target && o.target.type == "polygon" && openseadragon_image_annotations.polygon.currentlyEddited != o.target) {
-			// 	//edit polygon only if new one selected
-			// 	if (openseadragon_image_annotations.polygon.currentlyEddited) {
-			// 		//save if switch to other polygon
-			// 		openseadragon_image_annotations.polygon.generatePolygon(openseadragon_image_annotations.polygon.pointArray);
-			// 	}
-			// 	//init another
-			// 	console.log("init")
-			// 	var polygon = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
-			// 	openseadragon_image_annotations.polygon.edit(polygon);
-			// 	openseadragon_image_annotations.set_input_form(o.target);
-			// 	$("#input_form").show();
-			// } else if (o.target.type == "rect" || o.target.type == "ellipse" || o.target.type == "polygon") {
-			// 	openseadragon_image_annotations.set_input_form(o.target);
-			// 	$("#input_form").show();
-			// }
-
-			// openseadragon_image_annotations.cursor.isDown = true;
-		}
-
-		/*
-			Handle fabric mouse up event
-			 - when holding ALT key, OSD is temporarily disabled and this handler fires
-			 - when in editing mode, OSD is disabled and this handler fires
-		*/
-		// this.overlay.fabricCanvas().on('mouse:up', function(o) {
-		// 	if (!openseadragon_image_annotations.showAnnotations || !openseadragon_image_annotations.cursor.isDown) return;
-		// 	console.log("fabric mouse up")
-
-		// 	openseadragon_image_annotations.cursor.isDown = false;			
-
-		// 	if (o.button === 1) fabricHandleLeftClickUp(o);
-		// 	else if (o.button === 3) fabricHandleRightClickUp(o);
-		// });
 
 		$('.upper-canvas').mouseup(function (event) {
-			if (!openseadragon_image_annotations.showAnnotations || PLUGINS.osd.isMouseNavEnabled()) return;
-			//if (openseadragon_image_annotations.isMouseOSDInteractive() && (!event.ctrlKey || !event.altKey || !event.shiftKey)) return;
-			openseadragon_image_annotations.cursor.isDown = false;
+			if (!openseadragon_image_annotations.showAnnotations) return;
 
-			console.log("UP");
-
-			if (event.which === 1) fabricHandleLeftClickUp(event);
-			else if (event.which === 3) fabricHandleRightClickUp(event);
+			if (event.which === 1) handleLeftClickUp(event, {x: event.pageX, y: event.pageY});
+			else if (event.which === 3) handleRightClickUp(event, {x: event.pageX, y: event.pageY});
 		});
 
-		function fabricHandleRightClickUp(o) {
-			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-				handleFabricKeyUpInOSDMode(o);
-			}
-		}
-
-		function fabricHandleLeftClickUp(o) {
-			if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-				handleFabricKeyUpInOSDMode(o);
-			} else {
-				handleFabricKeyUpInEditMode(o);
-			}
-		}
-
-		function handleFabricKeyUpInOSDMode(o) {
-			openseadragon_image_annotations.cursor.isDown = false;
-			PLUGINS.osd.setMouseNavEnabled(true);
-			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
-
-			if (o.altKey) {
-
-				if (!openseadragon_image_annotations.currentAnnotationObject) return;
-
-				if (delta < 100) { // if click too short, user probably did not want to create such object, discard
-					//TODO this deletes created elements if wrong event registered (sometimes)
-					switch (openseadragon_image_annotations.currentAnnotationObject.type) {
-						case 'rect':
-						case 'ellipse': //clean
-							console.log("REMOVED OBJECT WITHOUT HISTORY");
-							openseadragon_image_annotations.overlay.fabricCanvas().remove(openseadragon_image_annotations.currentAnnotationObject);
-							return;
-						case 'polygon':
-						default:
-							return;
-					}
-				}
-
-				switch (openseadragon_image_annotations.currentAnnotationObject.type) {
-					case 'rect':
-					case 'ellipse':
-						//openseadragon_image_annotations.overlay.fabricCanvas().remove(openseadragon_image_annotations.currentAnnotationObject)
-						//openseadragon_image_annotations.overlay.fabricCanvas().add(openseadragon_image_annotations.currentAnnotationObject);
-						openseadragon_image_annotations.history.push(openseadragon_image_annotations.currentAnnotationObject);
-						openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-						openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(openseadragon_image_annotations.currentAnnotationObject);
-						// openseadragon_image_annotations.set_input_form(openseadragon_image_annotations.currentAnnotationObject);
-						// $("#input_form").show();
-						openseadragon_image_annotations.currentAnnotationObject = "";
-						break;
-					case 'polygon': //no action, polygon is being created by click 
-					default:
-						break;
-				}
-
-			} else if (o.shiftKey) {
-				let result = openseadragon_image_annotations.modifyTool.finish();
-				if (result) openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(result);
-			}
-		}
-
-		function handleFabricKeyUpInEditMode(isLeftClick) {
-			//useful... or delete?
-		}
-
-
+	
 		/*
 			Update object when user hodls ALT and moving with mouse (openseadragon_image_annotations.isMouseOSDInteractive() == true)
 		*/
 		this.overlay.fabricCanvas().on('mouse:move', function (o) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
+			let _this = openseadragon_image_annotations;
+			if (!_this.showAnnotations || !_this.cursor.isDown) return;
 
-			var pointer = openseadragon_image_annotations.overlay.fabricCanvas().getPointer(o.e);
+			var pointer = _this.overlay.fabricCanvas().getPointer(o.e);
 
-			if (!openseadragon_image_annotations.cursor.isDown) return;
-
-			if (openseadragon_image_annotations.key_code === "AltLeft") {
+			if (_this.mode === _this.Modes.CUSTOM) {
 				if (openseadragon_image_annotations.isMouseOSDInteractive() && openseadragon_image_annotations.currentAnnotationObjectUpdater) {
 
 					openseadragon_image_annotations.currentAnnotationObjectUpdater.updateCreate(pointer.x, pointer.y);
 					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
 				}
-			} else if (openseadragon_image_annotations.key_code === "ShiftLeft") {
+			} else if (_this.mode === _this.Modes.FREE_FORM_TOOL) {
 				openseadragon_image_annotations.modifyTool.update(pointer);
-			} else if (openseadragon_image_annotations.key_code === "AltRight") {
-				if (openseadragon_image_annotations.isMouseOSDInteractive() && !openseadragon_image_annotations.currentAnnotationObjectUpdater) {
+			} else if (_this.mode === _this.Modes.EDIT) {
+				if (openseadragon_image_annotations.isMouseOSDInteractive() && openseadragon_image_annotations.currentAnnotationObjectUpdater) {
 
 					openseadragon_image_annotations.currentAnnotationObjectUpdater.updateCreate(pointer.x, pointer.y);
 					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
@@ -456,61 +466,6 @@ if ($(this).attr('data-ref') === 'on'){
 			}
 		});
 
-		/*
-		 mouse:over event listener
-		 if mouse is over polygon or rectangle and polygon is not being edited
-		 and no other annotation is selected, show input form
-				 */
-		// this.overlay.fabricCanvas().on('mouse:over', function (o) {
-		// 	if (!openseadragon_image_annotations.showAnnotations) return;
-
-		// 	if (!openseadragon_image_annotations.isMouseOSDInteractive()) {
-		// 		openseadragon_image_annotations.cursor.isOverObject = true;
-		// 		console.log("fabric object over")
-
-		// 		if (o.target && (o.target.type == "rect" || o.target.type == "polygon") && !(openseadragon_image_annotations.polygon.polygonBeingCreated) && !(openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject())) {
-		// 			var annotation = o.target;
-		// 			openseadragon_image_annotations.set_input_form(annotation);
-		// 			$("#input_form").show();
-		// 		};
-		// 	}
-		// });
-
-		/*
-		 mouse:out event listener
-		 when mouse leaves the annotation hide imput form
-		 (only if anootation is not selected in edit mode !, then input form should stay so it can be edited,
-	   it will be hidden after edit mode is cancelled of annotation id deselected)
-				 */
-		// this.overlay.fabricCanvas().on('mouse:out', function (o) {
-		// 	if (!openseadragon_image_annotations.showAnnotations) return;
-
-		// 	openseadragon_image_annotations.cursor.isOverObject = false;
-		// 	console.log("fabric object out")
-
-		// 	if (!(openseadragon_image_annotations.isMouseOSDInteractive() && openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject())) {
-		// 		$("#input_form").hide();
-		// 	};
-		// });
-
-		/*
-			selection:cleared
-			 hide input form when annotaion is deselected
-					*/
-
-		this.overlay.fabricCanvas().on('selection:cleared', function (e) {
-			if (!openseadragon_image_annotations.showAnnotations || openseadragon_image_annotations.isMouseOSDInteractive()) return;
-			//$("#input_form").hide();
-		});
-
-		// this.overlay.fabricCanvas().on('before:selection:cleared', function(e) {
-		// 	console.log("DELSELETCL", e);
-		// 	if(e && e.target){
-		// 		//e.target.set('shadow',null);
-		// 		e.target.hasControls = !openseadragon_image_annotations.isMouseOSDInteractive();
-		// 	} 
-		// });
-
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
 				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
@@ -519,177 +474,113 @@ if ($(this).attr('data-ref') === 'on'){
 			}
 		});
 
-
 		/****************************************************************************************************************
 
 											 E V E N T  L I S T E N E R S: OSD (clicks without alt or shift)
-						OpenSeadragon listeners for adding annotation in navigation mode, can
-						temporarily disable the navigation when a key is held to allow user-driven
-						object creation, default is automatic creation
+			Since event listeners on fabricJS are disabled when using OSD interactive mode (and vice versa), 
+			we register both listeners for OSD and fabricjs
 
 		*****************************************************************************************************************/
 
 		PLUGINS.osd.addHandler("canvas-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-			openseadragon_image_annotations.cursor.mouseTime = Date.now();
-
-			//if clicked on object, highlight it
-			openseadragon_image_annotations.currentAnnotationObject = openseadragon_image_annotations.overlay.fabricCanvas().findTarget(e.originalEvent);
-			if (openseadragon_image_annotations.currentAnnotationObject) {
-				openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(openseadragon_image_annotations.currentAnnotationObject);
-				openseadragon_image_annotations.cursor.mouseTime = 0;
-				return;
-			}
-
-			//else create automated version of openseadragon_image_annotations.annotationType object
-			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: true };
+			//todo not unified e.position (here in screen cords, fabric uses image coords)
+			handleLeftClickDown(e.originalEvent, e.position);
 		});
 
 		PLUGINS.osd.addHandler("canvas-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-
-			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
-			if (delta > 100) return; // just navigate if click longer than 100ms
-
-			let isLeftClick = true;
-			switch (e.originalEvent.which) {
-				case 1: break;
-				case 3: isLeftClick = false;
-					break;
-				default: return;
-			}
-
-			switch (openseadragon_image_annotations.currentAnnotationObject.type) {
-				case 'rect':
-					openseadragon_image_annotations.createApproxRectangle(e.position, isLeftClick);
-					break;
-				case 'ellipse':
-					openseadragon_image_annotations.createApproxEllipse(e.position, isLeftClick);
-					break;
-				case 'polygon':
-					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
-					break;
-				default:
-					break;
-			}
+			handleLeftClickUp(e.originalEvent, e.position);
 		});
 
 		PLUGINS.osd.addHandler("canvas-nonprimary-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-
-			if (e.button != 2 || e.originalEvent.shiftKey || e.originalEvent.altKey) return; //plain right click only
-			openseadragon_image_annotations.cursor.mouseTime = Date.now();
-			openseadragon_image_annotations.currentAnnotationObject = { type: openseadragon_image_annotations.annotationType, isLeftClick: false };
+			handleRightClickDown(e.originalEvent, e.position);
 		});
 
 		PLUGINS.osd.addHandler("canvas-nonprimary-release", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-
-			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
-			if (delta > 100) return; // just navigate if click longer than 100ms
-
-			let isLeftClick = true;
-			switch (e.originalEvent.which) {
-				case 1: break;
-				case 3: isLeftClick = false;
-					break;
-				default: return;
-			}
-
-			switch (openseadragon_image_annotations.currentAnnotationObject.type) {
-				case 'rect':
-					openseadragon_image_annotations.createApproxRectangle(e.position, isLeftClick);
-					break;
-				case 'ellipse':
-					openseadragon_image_annotations.createApproxEllipse(e.position, isLeftClick);
-					break;
-				case 'polygon':
-					openseadragon_image_annotations.createRegionGrowingOutline(e.position);
-					break;
-				default:
-					break;
-			}
+			handleRightClickUp(e.originalEvent, e.position);
 		});
 
+		$(PLUGINS.osd.element).on('contextmenu', function (event) {
+			event.preventDefault();
+		});
+	
 		/****************************************************************************************************************
 
 											 E V E N T  L I S T E N E R S: GENERAL
 
 		*****************************************************************************************************************/
 
-
-
-		$(PLUGINS.osd.element).on('contextmenu', function (event) {
-			event.preventDefault();
-		});
-
 		document.addEventListener('keydown', (e) => {
-			if (!openseadragon_image_annotations.showAnnotations || !openseadragon_image_annotations.isMouseOSDInteractive()) return;
+			let _this = openseadragon_image_annotations;
+
+			// switching mode only when no mode AUTO and mouse is up
+			if (!_this.showAnnotations || _this.mode !== _this.Modes.AUTO || _this.cursor.isDown) return;
+			
 			if (e.code === "AltLeft") {
 				PLUGINS.osd.setMouseNavEnabled(false);
+				_this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
+				_this.mode = _this.Modes.CUSTOM;
 			} else if (e.code === "ShiftLeft") {
 				PLUGINS.osd.setMouseNavEnabled(false);
-				openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
-				openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "crosshair";
+				_this.overlay.fabricCanvas().hoverCursor = "crosshair";
 				//todo value of radius from user
-				// openseadragon_image_annotations.modifyTool.setRadius(100); //so that cursor radius that is being taken from here will be correct before midify tool init
+				_this.modifyTool.setRadius(parseFloat(_this.toolRadius.val())); //so that cursor radius that is being taken from here will be correct before midify tool init
 
-				openseadragon_image_annotations.cursor.show();
+				_this.cursor.show();
+				_this.mode = _this.Modes.FREE_FORM_TOOL;
 			} else if (e.code === "AltRight") {
-				openseadragon_image_annotations.setMouseOSDInteractive(false);
+				_this.setMouseOSDInteractive(false);
+				_this.mode = _this.Modes.EDIT;
 			}
-			openseadragon_image_annotations.key_code = e.code;
-
 		});
 
 		document.addEventListener('keyup', (e) => {
+			let _this = openseadragon_image_annotations;
+			if (!_this.showAnnotations) return;
 
-			openseadragon_image_annotations.key_code = null;
-			if (!openseadragon_image_annotations.showAnnotations) return;
-
-			if (!openseadragon_image_annotations.isMouseOSDInteractive()) {
-				if (e.code === "AltRight") {
-					openseadragon_image_annotations.setMouseOSDInteractive(true);
-					let active = this.overlay.fabricCanvas().getActiveObject();
-					if (active) active.hasControls = false;
-				}
-			} else {
-				if (e.code === "Delete") {
-					openseadragon_image_annotations.removeActiveObject();
-					openseadragon_image_annotations.currentAnnotationObject = null;
-				}
-
-				//todo delete valid in both modes?
-				//if (!openseadragon_image_annotations.isMouseOSDInteractive()) return;
-
-				if (e.ctrlKey && e.code === "KeyY") {
-					if (e.shiftKey) openseadragon_image_annotations.history.redo();
-					else openseadragon_image_annotations.history.back();
-				} else if (e.code === "AltLeft") {
-					if (!openseadragon_image_annotations.cursor.isDown) {
-						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
-						PLUGINS.osd.setMouseNavEnabled(true);
-					}
-
-					if (this.polygon.polygonBeingCreated) {
-						this.polygon.finish();
-						PLUGINS.osd.setMouseNavEnabled(true);
-					}
-				} else if (e.code === "ShiftLeft") {
-					if (!openseadragon_image_annotations.cursor.isDown) {
-						//ALTHOUGH mouse nav enabled in click up in FABRIC, not recognized if alt key down when releasing -- do it here
-
-						openseadragon_image_annotations.overlay.fabricCanvas().defaultCursor = "crosshair";
-						openseadragon_image_annotations.overlay.fabricCanvas().hoverCursor = "pointer";
-						PLUGINS.osd.setMouseNavEnabled(true);
-						openseadragon_image_annotations.cursor.hide();
-					}
-				}
+			if (e.code === "Delete") {
+				_this.removeActiveObject();
+				return;
 			}
 
+			if (e.ctrlKey && e.code === "KeyY") {
+				if (e.shiftKey) _this.history.redo();
+				else _this.history.back();
+				return;
+			}
 
+			if (e.code === "AltRight" && _this.mode === _this.Modes.EDIT) {
+				_this.setMouseOSDInteractive(true);
+				// let active = _this.overlay.fabricCanvas().getActiveObject();
+				// if (active) active.hasControls = false;
+				_this.mode = _this.Modes.AUTO;
+				return;
+			}
+
+			if (e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) {
+
+				if (_this.currentAnnotationObjectUpdater) {
+					_this.currentAnnotationObjectUpdater.finish();
+					_this.currentAnnotationObjectUpdater = null;
+				}
+				PLUGINS.osd.setMouseNavEnabled(true);
+				_this.mode = _this.Modes.AUTO;
+				return;
+			} 
+			
+			if (e.code === "ShiftLeft" && _this.mode === _this.Modes.FREE_FORM_TOOL) {
+				_this.overlay.fabricCanvas().hoverCursor = "pointer";
+				_this.mode = _this.Modes.AUTO;
+				_this.cursor.hide();
+				PLUGINS.osd.setMouseNavEnabled(true);
+				_this.overlay.fabricCanvas().renderAll();
+
+				return;				
+			}	
 		});
-
 
 
 		// listen for annotation send button
@@ -791,7 +682,7 @@ if ($(this).attr('data-ref') === 'on'){
 				// append whole annotation to annotations
 				xml_annotations.appendChild(xml_annotation);
 			}
-			return doc
+			return doc;
 		};
 
 		function generate_rect_ASAP_coord(rect) {
@@ -826,7 +717,7 @@ if ($(this).attr('data-ref') === 'on'){
 		});
 
 		/*
-  listener form object:modified
+  			listener form object:modified
 			-recalcute coordinates for annotations
 		*/
 		this.overlay.fabricCanvas().on("object:modified", function (o) {
@@ -970,20 +861,6 @@ if ($(this).attr('data-ref') === 'on'){
 		return this.mouseOSDInteractive;
 	},
 
-	removeActiveObject: function () {
-		let toRemove = this.overlay.fabricCanvas().getActiveObject();
-		if (toRemove) {
-			if (toRemove.type === "rect" || toRemove.type === "polygon" || toRemove.type === "ellipse") {
-				this.overlay.fabricCanvas().remove(toRemove);
-				this.history.push(null, toRemove);
-				this.overlay.fabricCanvas().renderAll();
-			} else if (toRemove) {
-				this.overlay.fabricCanvas().remove(toRemove);
-
-			}
-		}
-	},
-
 	/****************************************************************************************************************
 
 									A N N O T A T I O N S (Automatic)
@@ -993,30 +870,28 @@ if ($(this).attr('data-ref') === 'on'){
 	//todo generic function that creates object? kinda copy paste
 	createApproxEllipse: function (eventPosition, isLeftClick) {
 		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		this.currentAnnotationObject = this.ellipse.create(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2, openseadragon_image_annotations.objectOptions(isLeftClick));
+		let obj = this.ellipse.create(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2, openseadragon_image_annotations.objectOptions(isLeftClick));
 		this.currentAnnotationObjectUpdater = this.ellipse;
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-		this.history.push(this.currentAnnotationObject);
-		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+		this.overlay.fabricCanvas().add(obj);
+		this.history.push(obj);
+		this.overlay.fabricCanvas().setActiveObject(obj);
 		this.overlay.fabricCanvas().renderAll();
 	},
 
 	createApproxRectangle: function (eventPosition, isLeftClick) {
 		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		this.currentAnnotationObject = this.rectangle.create(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y, openseadragon_image_annotations.objectOptions(isLeftClick));
+		let obj = this.rectangle.create(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y, openseadragon_image_annotations.objectOptions(isLeftClick));
 		this.currentAnnotationObjectUpdater = this.rectangle;
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-		this.history.push(this.currentAnnotationObject);
-		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+		this.overlay.fabricCanvas().add(obj);
+		this.history.push(obj);
+		this.overlay.fabricCanvas().setActiveObject(obj);
 		this.overlay.fabricCanvas().renderAll();
 	},
 
 	createOutline: async function (eventPosition) {
 		console.log("called outline");
 
-		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		//var imagePoint = PLUGINS.dataLayer.viewportToImageCoordinates(viewportPos);
-		var originPoint = PLUGINS.osd.viewport.pixelFromPoint(viewportPos);
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(new OpenSeadragon.Point(eventPosition.x, eventPosition.y));
 		this.changeTile(viewportPos);
 
 		//todo unused, maybe round origin point...?
@@ -1029,8 +904,8 @@ if ($(this).attr('data-ref') === 'on'){
 			return (pix[3] > this.alphaSensitivity && (pix[0] > 200 || pix[1] > 200));
 		}
 
-		var x = originPoint.x;  // current x position
-		var y = originPoint.y;  // current y position
+		var x = eventPosition.x;  // current x position
+		var y = eventPosition.y;  // current y position
 		var direction = "UP"; // current direction of outline
 
 		let origPixel = this.getPixelData(eventPosition);
@@ -1232,19 +1107,18 @@ if ($(this).attr('data-ref') === 'on'){
 		}
 
 		//todo hardcoded true, this func probably wont survive anyway
-		this.currentAnnotationObject = this.polygon.create(Array.from(points), this.objectOptions(true));
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
-		this.history.push(this.currentAnnotationObject);
-		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+		let obj = this.polygon.create(Array.from(points), this.objectOptions(true));
+		this.overlay.fabricCanvas().add(obj);
+		this.history.push(obj);
+		this.overlay.fabricCanvas().setActiveObject(obj);
 		this.overlay.fabricCanvas().renderAll();
 
-		$(".to-delete").remove();
+		//$(".to-delete").remove();
 	},
 
-	createRegionGrowingOutline: function (eventPosition) {
+	createRegionGrowingOutline: function (eventPosition, isLeftClick) {
 
 		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		var originPoint = PLUGINS.osd.viewport.pixelFromPoint(viewportPos);
 		this.changeTile(viewportPos);
 
 		let points = [];
@@ -1252,8 +1126,8 @@ if ($(this).attr('data-ref') === 'on'){
 			return (pix[3] > this.alphaSensitivity && (pix[0] > 200 || pix[1] > 200));
 		}
 
-		var x = originPoint.x;
-		var y = originPoint.y;
+		var x = eventPosition.x;
+		var y = eventPosition.y;
 
 		let origPixel = this.getPixelData(eventPosition);
 		if (!this.comparator(origPixel)) {
@@ -1316,11 +1190,11 @@ if ($(this).attr('data-ref') === 'on'){
 			result.push(this.toGlobalPointXY(p1[0], p1[1]));
 		}
 
-		this.currentAnnotationObject = this.polygon.create(result, this.objectOptions(this.currentAnnotationObject ? this.currentAnnotationObject.isLeftClick : true));
-		this.overlay.fabricCanvas().add(this.currentAnnotationObject);
+		let obj = this.polygon.create(result, this.objectOptions(isLeftClick));
+		this.overlay.fabricCanvas().add(obj);
 
-		this.history.push(this.currentAnnotationObject);
-		this.overlay.fabricCanvas().setActiveObject(this.currentAnnotationObject);
+		this.history.push(obj);
+		this.overlay.fabricCanvas().setActiveObject(obj);
 		this.overlay.fabricCanvas().renderAll();
 
 		//$(".to-delete").remove();
@@ -1594,11 +1468,12 @@ if ($(this).attr('data-ref') === 'on'){
 		stroke: 'black',
 		borderScaleFactor: 3,
 		hasControls: false,
-		//todo get it once
+		lockMovementY: true,
+		lockMovementX: true,
 		isLeftClick: true,
 		hasRotatingPoint: false,
 		comment: null
-		},
+	},
 
 	objectOptionsRightClick:{
 		fill: "#d71818",
@@ -1609,7 +1484,8 @@ if ($(this).attr('data-ref') === 'on'){
 		stroke: 'black',
 		borderScaleFactor: 3,
 		hasControls: false,
-		//todo get it once
+		lockMovementY: true,
+		lockMovementX: true,
 		isLeftClick: false,
 		hasRotatingPoint: false,
 		comment: null
@@ -1641,29 +1517,28 @@ if ($(this).attr('data-ref') === 'on'){
 		this.overlay.fabricCanvas().deactivateAll().renderAll();
 	},
 
+	removeActiveObject: function () {
+		let toRemove = this.overlay.fabricCanvas().getActiveObject();
+		if (toRemove) {
+			if (toRemove.type === "rect" || toRemove.type === "polygon" || toRemove.type === "ellipse") {
+				this.overlay.fabricCanvas().remove(toRemove);
+				this.history.push(null, toRemove);
+				this.overlay.fabricCanvas().renderAll();
+			} else if (toRemove) {
+				this.overlay.fabricCanvas().remove(toRemove);
 
-	// delete the currently selected annotation from the canvas
-	deleteActiveAnnotation: function () {
-		// Break out if no annotation is currently selected
-		if (this.overlay.fabricCanvas().getActiveObject() == null) {
+			}
+		} else {
 			this.messenger.show("Please select the annotation you would like to delete", 3000, this.messenger.MSG_INFO);
-			return;
 		}
-		var annotation = this.overlay.fabricCanvas().getActiveObject();
-		if (annotation.type == "rect" || annotation.type == "polygon") {
-			annotation.remove();
-		};
-
 	},
 
 	// Get all objects from canvas
 	deleteAllAnnotations: function () {
 		var objects = openseadragon_image_annotations.overlay.fabricCanvas().getObjects();
 		/* if objects is null, catch */
-		if (objects.length == 0) {
-			console.log("No annotations on canvas to delete");
-			return;
-		}
+		if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
+
 		var objectsLength = objects.length
 		for (var i = 0; i < objectsLength; i++) {
 			this.history.push(null, objects[objectsLength - i - 1]);
@@ -1671,9 +1546,7 @@ if ($(this).attr('data-ref') === 'on'){
 		}
 	},
 
-
 	turnAnnotationsOnOff: function (on) {
-
 		var objects = this.overlay.fabricCanvas().getObjects();
 		if (on) {
 			this.showAnnotations = true;
@@ -1717,35 +1590,6 @@ if ($(this).attr('data-ref') === 'on'){
 		}
 		this.overlay.fabricCanvas().renderAll();
 	},
-
-	// set input form with default values or annotation attributes
-	//(e.g if annotation was imported)
-	// set_input_form: function (annotation) {
-	// 	//todo remove this feature?
-
-	// 	if (annotation.comment) {
-	// 		document.getElementById("annotation_comment").value = annotation.comment;
-	// 	} else { document.getElementById("annotation_comment").value = "" };
-
-	// 	if (!(annotation.a_group)) {
-	// 		annotation.set({ a_group: "None" })
-	// 	};
-	// 	document.getElementById("annotation_group").value = annotation.a_group;
-
-
-	// 	//todo more modular?
-	// 	// if (!(annotation.threshold)) {
-	// 	// 	annotation.set({ threshold: document.getElementById("Threshold").innerHTML })
-	// 	// };
-	// 	document.getElementById("annotation_threshold").innerHTML = annotation.threshold;
-
-	// 	// set position of the input form
-	// 	var viewport_coordinates = PLUGINS.osd.world.getItemAt(0).imageToViewportCoordinates(annotation.left + annotation.width, annotation.top);
-	// 	var pixel_coordinates = PLUGINS.osd.viewport.pixelFromPoint(viewport_coordinates);
-	// 	document.getElementById("input_form").style.position = "absolute";
-	// 	document.getElementById("input_form").style.top = String(pixel_coordinates.y - 10) + "px";
-	// 	document.getElementById("input_form").style.left = String(pixel_coordinates.x + 10) + "px";
-	// },
 
 	//cursor management (TODO move here other stuff involving cursor too)
 	// updater: function(mousePosition: OSD Point instance, cursorObject: object that is being shown underneath cursor)

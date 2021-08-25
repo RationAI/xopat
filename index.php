@@ -75,7 +75,8 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
   
   <!-- OSD -->
-  <script src="./osd_debug/openseadragon.js"></script>
+  <script src="./osd/openseadragon.min.js"></script>
+  <!-- <script src="./osd_debug/openseadragon.js"></script>
 
   <script src="./osd_debug/eventsource.js"></script>
   <script src="./osd_debug/rectangle.js"></script>
@@ -110,7 +111,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <script src="./osd_debug/tmstilesource.js"></script>
   <script src="./osd_debug/viewport.js"></script>
   <script src="./osd_debug/world.js"></script>
-  <script src="./osd_debug/zoomifytilesource.js"></script>
+  <script src="./osd_debug/zoomifytilesource.js"></script> -->
 
   <script src="./webgl/openSeadragonGLdynamic.js"></script>
   <script src="./webgl/viaWebGLdynamic.js"></script>
@@ -151,8 +152,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
       <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
 
-          <span class="material-icons inline-pin"
-          onclick="$(this).parents().eq(1).children().eq(1).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
+          <span class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
           
           <select name="shaders" id="shaders" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
             <!--populated with shaders from the list -->
@@ -454,6 +454,22 @@ if($errorSource) {
       redraw();
     }
 
+    
+    function pinClick(jQSelf, jQTargetParent) {
+      if (jQTargetParent.hasClass('force-visible')) {
+        jQTargetParent.removeClass('force-visible');
+        jQTargetParent.addClass('force-hidden');
+        jQSelf.removeClass('pressed');
+        jQSelf.addClass('locked')
+      } else if (jQTargetParent.hasClass('force-hidden')) {
+        jQTargetParent.removeClass('force-hidden');
+        jQSelf.removeClass('locked')
+      } else {
+        jQSelf.addClass('pressed');
+        jQTargetParent.addClass('force-visible');
+      }
+    }
+
     /**
      * Exporting of visualisation
      *  
@@ -510,7 +526,7 @@ if($errorSource) {
       },
       appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel"><div>
-        <span class="material-icons inline-pin" onclick="$(this).parent().parent().children().eq(2).toggleClass('force-visible'); $(this).toggleClass('pressed');"> push_pin </span>
+        <span class="material-icons inline-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
         <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
         </div>
         <div>	
@@ -528,6 +544,7 @@ if($errorSource) {
       PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
       PLUGINS.dataLayer = viewer.world.getItemAt(layerIDX);
     });
+  
   </script>
 
     <!-- PLUGINS -->

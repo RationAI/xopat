@@ -10,9 +10,10 @@
 }
 
 .inner-panel {
-    padding: 3px 5px 5px 9px;
+    padding: 3px 5px 15px 9px;
     position: relative;
-    margin-bottom: 12px;
+    /*margin-bottom: 12px;*/
+    background-color: var(--color-bg-primary);
 }
 
 .inner-panel .inner-panel-content {
@@ -31,6 +32,7 @@
     overflow: hidden;
 }
 
+
 .inner-panel:hover .inner-panel-hidden {
     max-height: 100vw;
     transition: max-height 0.15s ease-in-out;
@@ -41,9 +43,22 @@
     vertical-align: baseline !important;
 }
 
+.locked.inline-pin {
+    color: var(--color-icon-secondary) !important;
+}
+
+.locked::before {
+    content: '';
+    position: absolute;
+    width: 17px;
+    height: 22px;
+    background: repeating-linear-gradient( 44deg, transparent, transparent 12px, var(--color-bg-primary) 11px, var(--color-bg-primary) 15px );
+    transform: translate(3px, -1px);
+} 
+
 .shader-part {
     cursor: ns-resize;
-    background-image: linear-gradient(to right, #3a414b , #22272e);
+    background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));/*dirty using border color but not usable BG colors*/
 }
 
 .non-draggable {
@@ -51,7 +66,7 @@
 }
 
 .btn-selected {
-    background: #666d76 !important;
+    background: var(--color-border-overlay) !important; /*dirty using border color but not usable BG colors*/
 }
 
 /**
@@ -80,6 +95,12 @@ UTILITIES
     max-height: initial !important;
 }
 
+.force-hidden {
+    display: none !important;
+    visibility: none !important;
+    max-height: 0 !important;
+}
+
 /* Disabled overlay on div */
 .disabled::after {
     content: '';
@@ -90,10 +111,7 @@ UTILITIES
     left: 0;
     filter: brightness(0.3);
     background: #808080e6;
-    
 }
-
-
 
 /* For somre reason Github css does not style input range */
 input[type=range] { height: 25px;  -webkit-appearance: none; margin: 3px 0; width: 65%; background: transparent; vertical-align: middle; margin: 0;}
@@ -140,6 +158,7 @@ select::-ms-expand {
   font-style: normal;
   font-size: 24px;  /* Preferred icon size */
   display: inline-block;
+  color: var( --color-icon-primary) !important;
   line-height: 1;
   text-transform: none;
   letter-spacing: normal;

@@ -159,6 +159,9 @@ openSeadragonGL.prototype = {
             }
         }.bind(this);
         this.openSD.addHandler('tile-drawing', cacheHandler);
+
+        this.openSD.navigator.addHandler('tile-drawing', cacheHandler);
+        this.openSD.navigator.addHandler('tile-loaded', this.interface["tile-loaded"].bind(this));
     },
 
     // Joint keys
