@@ -76,7 +76,7 @@ FreeFormTool.prototype = {
             if (result && this.polygon.points.length * 0.1 <= result.points.length) {
                 this._context.overlay.fabricCanvas().remove(this.polygon);
                 this.polygon = result;
-                console.log(result);
+                //console.log(result);
                 this._context.overlay.fabricCanvas().add(result);
                 this._context.overlay.fabricCanvas().renderAll();
             }
@@ -108,7 +108,7 @@ FreeFormTool.prototype = {
         if (!this.polygon || this._context.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
-        console.log(radPoints);
+        //console.log(radPoints);
         var polypoints = this.polygon.get("points");
         //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
         if (this._context.toDistanceObj(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();

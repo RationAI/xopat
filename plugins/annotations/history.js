@@ -54,11 +54,11 @@ History.prototype = {
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
             }
 
-            if (this.redoBtn) this.redoBtn.css("color", "white");
+            if (this.redoBtn) this.redoBtn.css("color", "var(--color-icon-primary)");
         }
 
         if (this.undoBtn) {
-            let color = this.buffer[this._buffidx] ? "white" : "gray";
+            let color = this.buffer[this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
             this.undoBtn.css("color", color);
         }
     },
@@ -72,10 +72,10 @@ History.prototype = {
         }
 
         if (this.redoBtn) {
-            let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "white" : "gray";
+            let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
             this.redoBtn.css("color", color);
         }
-        if (this.undoBtn) this.undoBtn.css("color", "white");
+        if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
     },
 
     push: function (newObject, previous = null) {
@@ -95,8 +95,8 @@ History.prototype = {
         this._lastValidIndex = this._buffidx; //new object creation overiddes history
 
         if (this.undoBtn && this.redoBtn) {
-            this.undoBtn.css("color", "white");
-            this.redoBtn.css("color", "gray");
+            this.undoBtn.css("color", "var(--color-icon-primary)");
+            this.redoBtn.css("color", "var(--color-icon-tertiary)");
         }
     },
 

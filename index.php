@@ -475,9 +475,9 @@ if($errorSource) {
      *  
      */
     function exportVisualisation() {
-      var annotations = openseadragon_image_annotations.getJSONContent();
-      var visCache = JSON.stringify(seaGL.viaGL.getCache());
-      var doc = `<!DOCTYPE html>
+      let annotations = openseadragon_image_annotations.getJSONContent();
+      let visCache = JSON.stringify(seaGL.viaGL.getCache());
+      let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
@@ -505,8 +505,8 @@ if($errorSource) {
     <\/script>
 </body>
 </html>`;
-			var output = new Blob([doc], { type: 'text/html' });
-			var downloadURL = window.URL.createObjectURL(output);
+			let output = new Blob([doc], { type: 'text/html' });
+			let downloadURL = window.URL.createObjectURL(output);
       var downloader = document.getElementById("export-visualisation");
 			downloader.href = downloadURL;
       downloader.download = "export.html";

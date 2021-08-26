@@ -3,7 +3,7 @@
 Dynamic `PHP` scripting allows for painless plugin creation and insertion. A plugin must be in its own folder placed
  here (`./plugins/`). Inside, one file must exist (otherwise the plugin won't load):
  
-### `includes.json`
+### `include.json`
 Since we're in `JavaScript`, a `JSON` file is required that defines the plugin and it's inclusion:
 
 ````json
@@ -33,8 +33,10 @@ multiple plugins dependency but in future, this could be also an array)
 
 ### Must do's
 - A plugin must define on global scope its instance in a variable named after `id` from `includes.json`.
-- A plugin must attach it's instance into `PLUGINS.each.[plugin id]` object as a key `instance`
-- A pluing must attach HTML elements only using.... or append to a global `body` tag.
+    - e.g. `var myAwesomePluginId = new MyAwesomePlugin(...);`
+- A plugin must attach it's instance into `PLUGINS.each[plugin id]` object as a key `instance`.
+    - e.g. `PLUGINS.each['myAwesomePluginId'].instance = this;` in constructor
+- A plugin must attach HTML elements only using functions from `PLUGINS` global variable described below, or append directly to a global `body` tag.
 
 ### Global interface
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 

@@ -1,5 +1,5 @@
-#system-message { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%));}
-
+#system-message { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
+#system-message .material-icons {color: var(--color-border-inverse);}
 #main-panel {
     z-index: 9999;
 }
@@ -158,7 +158,7 @@ select::-ms-expand {
   font-style: normal;
   font-size: 24px;  /* Preferred icon size */
   display: inline-block;
-  color: var( --color-icon-primary) !important;
+  color: var( --color-icon-primary);
   line-height: 1;
   text-transform: none;
   letter-spacing: normal;
