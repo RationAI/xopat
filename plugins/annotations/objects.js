@@ -49,11 +49,12 @@ Rect.prototype = {
             borderColor: ofObject.borderColor,
             cornerColor: ofObject.cornerColor,
             borderScaleFactor: ofObject.borderScaleFactor,
-            hasControls: false,
+            hasControls: ofObject.hasControls,
+            lockMovementX: ofObject.lockMovementX,
+            lockMovementY: ofObject.lockMovementY,
             comment: ofObject.comment
         });    
 	},
-
 
     // initialize attributes, prepare for new drawing
     initCreate: function (x, y, isLeftClick=true) {
@@ -62,7 +63,6 @@ Rect.prototype = {
         this._current = this.create(x, y, 1, 1, this._context.objectOptions(isLeftClick));
         this._context.overlay.fabricCanvas().add(this._current);
     },
-
 
     updateCreate: function (x, y) {
         if (this._origX > x) {
@@ -137,6 +137,8 @@ Ellipse.prototype = {
             cornerColor: ofObject.cornerColor,
             borderScaleFactor: ofObject.borderScaleFactor,
             hasControls: ofObject.hasControls,
+            lockMovementX: ofObject.lockMovementX,
+            lockMovementY: ofObject.lockMovementY,
             comment: ofObject.comment,
         });     
 	},
@@ -220,6 +222,8 @@ Polygon.prototype = {
 			comment: ofObject.comment,
 			selectable: evented,
 			hasControls: ofObject.hasControls,
+            lockMovementX: ofObject.lockMovementX,
+            lockMovementY: ofObject.lockMovementY,
 			evented: evented,
 		});
 	},

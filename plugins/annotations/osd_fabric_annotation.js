@@ -43,6 +43,8 @@ OSDAnnotations = function (incoming) {
 	this.polygon = new Polygon(this);
 	this.ellipse = new Ellipse(this);
 	this.rectangle = new Rect(this);
+
+
 };
 
 OSDAnnotations.prototype = {
@@ -187,7 +189,6 @@ if ($(this).attr('data-ref') === 'on'){
 	
 		*****************************************************************************************************************/
 
-
 		function initCreateAutoAnnotation(pointer, event, isLeftClick) {
 			//if clicked on object, highlight it
 			let active = openseadragon_image_annotations.overlay.fabricCanvas().findTarget(event);
@@ -264,7 +265,7 @@ if ($(this).attr('data-ref') === 'on'){
 					_this.history.push(obj);
 					_this.overlay.fabricCanvas().setActiveObject(obj);
 					_this.overlay.fabricCanvas().renderAll();
-					// $("#input_form").show();
+					_this.overlay.fabricCanvas().setActiveObject(obj);
 					break;
 				case 'polygon': //no action, polygon is being created by click 
 				default:
@@ -275,15 +276,20 @@ if ($(this).attr('data-ref') === 'on'){
 		function initFreeFormTool(point, event, isLeftClick) {
 			let _this = openseadragon_image_annotations;
 			let currentObject = _this.overlay.fabricCanvas().getActiveObject();
-			console.log(_this.overlay.fabricCanvas().getActiveObject());
-
+			
 			let pointer = _this.toGlobalPointXY(point.x, point.y);
 			if (!currentObject) {
-				//create tool-shaped object
-				currentObject = _this.polygon.create(_this.modifyTool.getCircleShape(pointer), _this.objectOptions(isLeftClick));
-				_this.overlay.fabricCanvas().add(currentObject);
-				_this.overlay.fabricCanvas().setActiveObject(currentObject);
-				_this.history.push(currentObject);
+				if (_this._cachedSelection) {
+					//cached selection from shift press event, because sometimes the click event deselected active object
+					currentObject = _this._cachedSelection;
+					_this._cachedSelection = null;
+				} else {
+					//create tool-shaped object
+					currentObject = _this.polygon.create(_this.modifyTool.getCircleShape(pointer), _this.objectOptions(isLeftClick));
+					_this.overlay.fabricCanvas().add(currentObject);
+					_this.overlay.fabricCanvas().setActiveObject(currentObject);
+					_this.history.push(currentObject);
+				}
 			}
 
 			_this.modifyTool.init(currentObject, point, isLeftClick);
@@ -524,6 +530,9 @@ if ($(this).attr('data-ref') === 'on'){
 				_this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
 				_this.mode = _this.Modes.CUSTOM;
 			} else if (e.code === "ShiftLeft") {
+				//dirty but when a mouse is clicked, for some reason active object is deselected
+				_this._cachedSelection = _this.overlay.fabricCanvas().getActiveObject();
+
 				PLUGINS.osd.setMouseNavEnabled(false);
 				_this.overlay.fabricCanvas().hoverCursor = "crosshair";
 				//todo value of radius from user
@@ -843,7 +852,7 @@ if ($(this).attr('data-ref') === 'on'){
 			//this.setFabricCanvasInteractivity(true);
 			PLUGINS.osd.setMouseNavEnabled(false);
 			this.overlay.fabricCanvas().defaultCursor = "auto";
-			this.overlay.fabricCanvas().hoverCursor = "move";
+			//this.overlay.fabricCanvas().hoverCursor = "move";
 
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
@@ -1625,8 +1634,8 @@ if ($(this).attr('data-ref') === 'on'){
 			this.updateRadius();
 			this._node.style.width = (this._toolRadius * 2) + "px";
 			this._node.style.height = (this._toolRadius * 2) + "px";
-			// this._node.style.top = e.pageY + "px";
-			// this._node.style.left = e.pageX + "px";
+			this._node.style.top = "0px";
+			this._node.style.left = "0px";
 
 			const c = this._node;
 
@@ -1634,8 +1643,6 @@ if ($(this).attr('data-ref') === 'on'){
 			this._listener = e => {
 				c.style.top = e.pageY + "px";
 				c.style.left = e.pageX + "px";
-
-
 			};
 			window.addEventListener("mousemove", this._listener);
 		},

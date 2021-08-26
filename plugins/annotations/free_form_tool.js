@@ -6,11 +6,13 @@ FreeFormTool = function (context) {
     this.mousePos = null;
     this.SQRT2DIV2 = 0.707106781187;
     this._context = context;
+    this._update = null;
 }
 
 FreeFormTool.prototype = {
+
     //initialize any object for cursor-drawing modification
-    init: function (object, atPosition, add = true) {
+    init: function (object, atPosition, add=true) {
         switch (object.type) {
             case 'rect':
                 let w = object.width, h = object.height;
@@ -47,8 +49,7 @@ FreeFormTool.prototype = {
                 return;
         }
 
-        if (add) this.update = this.union;
-        else this.update = this.subtract;
+        this._update = add ? this._union : this._subtract;
         this.mousePos = atPosition;
     },
 
@@ -62,16 +63,37 @@ FreeFormTool.prototype = {
     },
 
     //update step meant to be executed on mouse move event
-    update: null,
+    update: function(point) {
+        if (!this.polygon) {
+            console.warn("FreeFormTool:invalid state.");
+            return;
+        }
+
+        try {
+            let result = this._update(point);
+
+            //result must exist and new no. of points must be at least 10% of the previous
+            if (result && this.polygon.points.length * 0.1 <= result.points.length) {
+                this._context.overlay.fabricCanvas().remove(this.polygon);
+                this.polygon = result;
+                console.log(result);
+                this._context.overlay.fabricCanvas().add(result);
+                this._context.overlay.fabricCanvas().renderAll();
+            }
+        } catch (e) {
+            console.warn("FreeFormTool: something went wrong, ignoring...", e);
+        }
+    },
 
     //final step
     finish: function () {
         if (this.polygon) {
-
-           // if (this.polygon.incrementId != this.initial.incrementId) {
+            delete this.initial.moveCursor;
+            delete this.polygon.moveCursor;
+            if (this.polygon.incrementId != this.initial.incrementId) {
                 //incrementID is used by history - if ID equal, no changes were made -> no record
-                this._context.history.push(this.polygon);
-            //}
+                this._context.history.push(this.polygon, this.initial);
+            }
             let outcome = this.polygon;
             this.polygon = null;
             this.initial = null;
@@ -82,41 +104,53 @@ FreeFormTool.prototype = {
     },
 
     //TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
-    union: function (nextMousePos) {
+    _union: function (nextMousePos) {
         if (!this.polygon || this._context.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
+        console.log(radPoints);
         var polypoints = this.polygon.get("points");
         //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
         if (this._context.toDistanceObj(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
         this.mousePos = nextMousePos;
 
         //compute union
-        var union = greinerHormann.union(polypoints, radPoints);
+        try {
+            var union = greinerHormann.union(polypoints, radPoints);
+        } catch (e) {
+            console.warn("Unable to unify polygon with tool.", this.polygon, radPoints, e);
+            return null;
+        }
 
         if (union) {
-            this._context.overlay.fabricCanvas().remove(this.polygon);
-
             if (typeof union[0][0] === 'number') { // single linear ring
-                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union, this.radius / 5));
-                this._context.overlay.fabricCanvas().add(polygon);
-                this.polygon = polygon;
+                // var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union, this.radius / 5));
             } else {
                 if (union.length > 1) union = this._unify(union);
 
-                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union[0], this.radius / 5));
-                this._context.overlay.fabricCanvas().add(polygon);
-                this.polygon = polygon;
-            }
-            this.polygon.objectCaching = false;
-            this._context.overlay.fabricCanvas().renderAll();
+                let maxIdx = 0,maxScore = 0;
+                for (let j = 0; j < union.length; j++) {
+                    let measure = this._findApproxBoundBoxSize(union[j]);
+                    if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
+                    let area = measure.diffX * measure.diffY;
+                    let score = 2*area + union[j].length;
+                    if (score > maxScore) {
+                        maxScore = score;
+                        maxIdx = j;
+                    }
+                }
 
-        } else {
-            console.log("NO UNION FOUND");
-        }
+                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union[maxIdx], this.radius / 5));
+                polygon.objectCaching = false;
+            }
+            return polygon;
+        } 
+          
+        console.log("NO UNION FOUND");
+        return null;
     },
 
-    subtract: function (nextMousePos) {
+    _subtract: function (nextMousePos) {
         if (!this.polygon || this._context.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
@@ -125,43 +159,44 @@ FreeFormTool.prototype = {
 
         var difference = greinerHormann.diff(polypoints, radPoints);
         if (difference) {
-            this._context.overlay.fabricCanvas().remove(this.polygon);
             if (typeof difference[0][0] === 'number') { // single linear ring
-
                 var polygon = this._context.polygon.create(this._simplifyPolygon(difference, this.radius / 5), this._context.objectOptions(this.polygon.isLeftClick));
-                this._context.overlay.fabricCanvas().add(polygon);
-                this.polygon = polygon;
             } else {
                 if (difference.length > 1) difference = this._unify(difference);
 
-                let maxIdx = 0, maxArea = 0;
+                let maxIdx = 0, maxArea = 0, maxScore = 0;
                 for (let j = 0; j < difference.length; j++) {
                     let measure = this._findApproxBoundBoxSize(difference[j]);
                     if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
                     let area = measure.diffX * measure.diffY;
-                    if (area > maxArea) {
+                    let score = 2*area + difference[j].length;
+                    if (score > maxScore) {
                         maxArea = area;
+                        maxScore = score;
                         maxIdx = j;
                     }
                 }
 
                 if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
-                    this._context.history.push(null, this.initial); 
+                    //this.polygon.comment = this.initial.comment; //for some reason not preserved
+                    delete this.initial.moveCursor;
+                    delete this.polygon.moveCursor;
+                    this._context.overlay.fabricCanvas().remove(this.polygon);
+                    this._context.history.push(null, this.initial);
+
                     this.polygon = null;
                     this.initial = null;
                     this.mousePos = null;
-                    return;
+                    return null;
                 }
 
                 var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
-                this._context.overlay.fabricCanvas().add(polygon);
-                this.polygon = polygon;
+                polygon.objectCaching = false;               
             }
-            this.polygon.objectCaching = false;
-            this._context.overlay.fabricCanvas().renderAll();
-        } else {
-            console.log("NO DIFFERENCE FOUND");
-        }
+            return polygon;
+        } 
+        console.log("NO DIFFERENCE FOUND");
+        return null;
     },
 
     getScreenToolRadius: function () {
@@ -170,11 +205,10 @@ FreeFormTool.prototype = {
 
     //initialize object so that it is ready to be modified
     _setupPolygon: function (polyObject) {
-        this._context.currentAnnotationObject = polyObject;
-
         this.polygon = polyObject;
         this.initial = polyObject;
-        this._context.history.push(null, this.initial);
+
+        polyObject.moveCursor = 'crosshair';
     },
 
     //create polygon from points and initialize so that it is ready to be modified
@@ -185,7 +219,6 @@ FreeFormTool.prototype = {
 
         //TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'
         this._context.overlay.fabricCanvas().remove(object);
-        //this._context.history.push(null, this.object);
 
         this._context.overlay.fabricCanvas().add(polygon);
         this._context.history.push(polygon, object);
@@ -201,16 +234,17 @@ FreeFormTool.prototype = {
             primary.push(this._simplifyPolygon(u, this.radius / 5));
         });
         while (i < len) {
+            if (primary.length < 2) break;
+
             i++;
             let j = 0;
             for (; j < primary.length - 1; j += 2) {
                 let ress = greinerHormann.union(primary[j], primary[j + 1]);
 
                 if (typeof ress[0][0] === 'number') {
-                    secondary = [ress].concat(secondary); //reverse order for different union call in the next loop
-                } else {
-                    secondary = ress.concat(secondary); //reverse order for different union call
+                    ress = [ress]; 
                 }
+                secondary = ress.concat(secondary); //reverse order for different union call in the next loop
             }
             if (j == primary.length - 1) secondary.push(primary[j]);
             primary = secondary;
