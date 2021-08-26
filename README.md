@@ -23,7 +23,7 @@ Supported arguments for `index.php` - the visualisation itself, can be passed bo
 - `new` - switch that tells the visualisation to request user to setup visualisation if not defined
 - inherited switches and other **POST-only** parameters from plugins used (e.g. `dev` - switch that enables direct rendering of network output) 
 
-_Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif&new=1
+_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif&new=1
 
 
 The visualisation always needs `image` and `layer` data so that it knows what to render (will be changed in near future).
