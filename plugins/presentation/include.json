@@ -1,0 +1,10 @@
+{
+    "id": "automatic_presentation",
+    "name": "Recording and playback of presentation",
+    "includes" : [
+        "presenter.js"
+    ],
+    "flag": "presentation",
+    "priority": 0,
+    "requires": null
+}
