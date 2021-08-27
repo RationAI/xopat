@@ -26,7 +26,7 @@ to define a global variable with the same name, e.g define in the global scope:
 - `name` is a plugin name 
 - `includes` is a list of files relative to the plugin folder to include 
 - `flag` can be either `null` (the plugin is included implicitly) or a keyword, in that case the plugin is included only and only
-if `GET` or `POST` variable contains `keyword` with value `1`
+if `GET` or `POST` data contains `keyword` with value `1`
 - `priority` is a number that defines the load order among other plugins (greater number is loaded later and thus has more content available)
 - `requries` can be either null or a string that describes an id of another plugin that must be already loaded before this plugin (we don't expect
 multiple plugins dependency but in future, this could be also an array)

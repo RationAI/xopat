@@ -43,8 +43,6 @@ OSDAnnotations = function (incoming) {
 	this.polygon = new Polygon(this);
 	this.ellipse = new Ellipse(this);
 	this.rectangle = new Rect(this);
-
-
 };
 
 OSDAnnotations.prototype = {
@@ -95,12 +93,12 @@ if ($(this).attr('data-ref') === 'on'){
 `<div id="imageAnnotationToolbarContent">
 			<br>
 			<div>
-			  <input type="text" class="form-control"  style="width:275px; border-top-right-radius: 0;border-bottom-right-radius: 0;" value="Left Click" onchange="openseadragon_image_annotations.leftClickLabel = $(this).val();" title="Default comment for left mouse button." >
-			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px; border-top-left-radius: 0;  border-bottom-left-radius: 0;" name="leftClickColor" value="${openseadragon_image_annotations.objectOptionsLeftClick.fill}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'leftClickColor');">
+			  <input type="text" class="form-control"  style="width:275px; border-top-right-radius: 0;border-bottom-right-radius: 0;" value="Left Click" onchange="openseadragon_image_annotations.objectOptionsLeftClick.comment = $(this).val();" title="Default comment for left mouse button." >
+			  <input type="color" id="leftClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px; border-top-left-radius: 0;  border-bottom-left-radius: 0;" name="leftClickColor" value="${openseadragon_image_annotations.objectOptionsLeftClick.fill}" onchange="openseadragon_image_annotations.objectOptionsLeftClick.fill = $(this).val();">
 			</div>
 			<div>
-			<input type="text" class="form-control" style="width:275px; border-top-right-radius: 0;	border-bottom-right-radius: 0;" value="Right Click" onchange="openseadragon_image_annotations.rightClickLabel = $(this).val();" title="Default comment for right mouse button." >
-			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px;  border-top-left-radius: 0; border-bottom-left-radius: 0;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.objectOptionsRightClick.fill}" onchange="openseadragon_image_annotations.setColor($(this).val(), 'rightClickColor');">
+			<input type="text" class="form-control" style="width:275px; border-top-right-radius: 0;	border-bottom-right-radius: 0;" value="Right Click" onchange="openseadragon_image_annotations.objectOptionsRightClick.comment = $(this).val();" title="Default comment for right mouse button." >
+			  <input type="color" id="rightClickColor" class="form-control input-lm input-group-button" style="width:45px; height:32px;  border-top-left-radius: 0; border-bottom-left-radius: 0;"  height:100%;"name="rightClickColor" value="${openseadragon_image_annotations.objectOptionsRightClick.fill}" onchange="openseadragon_image_annotations.objectOptionsRightClick.fill = $(this).val();">
 			  </div>
 			<br>
 			<div style='width:60%;' class='d-inline-block'>

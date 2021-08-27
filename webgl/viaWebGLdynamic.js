@@ -422,19 +422,9 @@ bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
 
-float _blend_channel(float fg, float bg) {
-    if (bg < 0.5) {
-        return 2.0 * bg * fg;
-    }
-    return 1.0 - 2.0 * (1.0 - bg) * (1.0 - fg);
-}
 void show(vec4 color) {
-    if (close(gl_FragColor.a, 0.0)) {
-        gl_FragColor = color;
-    } else {
-        gl_FragColor = vec4(color.a * color.rgb + (1.0-color.a) * gl_FragColor.rgb, max(color.a, gl_FragColor.a));
-    }
-    //gl_FragColor = vec4(_blend_channel(color.r, gl_FragColor.r), _blend_channel(color.g, gl_FragColor.g), _blend_channel(color.b, gl_FragColor.b), max(color.a, gl_FragColor.a));
+    float t = color.a + gl_FragColor.a - color.a*gl_FragColor.a;
+    gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
 }
 
 ${definition}
