@@ -133,9 +133,13 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   </div>
 
   <!-- Panel -->
-  <div id="main-panel" class="position-fixed d-flex flex-column right-0 height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+  <span id="main-panel-show" class="material-icons" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
 
-    <div id="navigator-container" class="inner-panel position-fixed right-0 top-0" style="width: 400px;">
+  <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+
+  <div class='position-relative'>
+    <span id="main-panel-hide" class="material-icons" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
+    <div id="navigator-container" class="inner-panel position-absolute right-0 top-0" style="width: 400px;">
       <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
     </div>
 
@@ -167,6 +171,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
 
    <!-- Appended controls for other plugins -->
   </div>
+</div>
 
   <!-- Auto-appended scripts -->
   <div id="auto-scripts"></div>

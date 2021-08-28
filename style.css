@@ -2,6 +2,23 @@
 #system-message .material-icons {color: var(--color-border-inverse);}
 #main-panel {
     z-index: 9999;
+    right: 0;
+    transition: right 0.3s;
+}
+
+#main-panel-hide {
+    position: fixed;
+    z-index: 99999;
+    top: 5px;
+    cursor: pointer;
+}
+
+#main-panel-show {
+    position: fixed;
+    z-index: 999;
+    top: 5px;
+    right: 5px;
+    cursor: pointer;
 }
 
 #shader-options span {

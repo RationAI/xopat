@@ -37,9 +37,9 @@ Presenter.prototype = {
             springStiffness: 6.5
         });
 
-        this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='2000' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = $(this).val();"> ms&nbsp;</div><div class='timeline-point' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
-        <input class='form-control' type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = $(this).val();"> sec <br>
-        <input class='form-control' type='number' min='0' value='6.5' step='0.1' title='Fade in out' onchange="automatic_presentation._steps[${this._maxIdx}].springStiffness = $(this).val();"> (1=linear)
+        this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='2000' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = parseFloat($(this).val());"> ms&nbsp;</div><div class='timeline-point' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
+        <input class='form-control' type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = parseFloat($(this).val());"> sec <br>
+        <input class='form-control' type='number' min='0' value='6.5' step='0.1' title='Fade in out' onchange="automatic_presentation._steps[${this._maxIdx}].springStiffness = parseFloat($(this).val());"> (1=linear)
         </div></div>`);
         this._highlight(this._container.children().eq(this._maxIdx));
         this._maxIdx++;
@@ -73,7 +73,7 @@ Presenter.prototype = {
         view.centerSpringX.springStiffness = 
         view.centerSpringY.springStiffness = 
         view.zoomSpring.springStiffness = 
-            state.springStiffness
+            state.springStiffness;
 
         if (direct) {
             view.fitBoundsWithConstraints(state.bounds);
@@ -94,9 +94,9 @@ Presenter.prototype = {
         this.playStep(this._idx);
         let view = PLUGINS.osd.viewport;
 
-        this._centerSpringXStiffness = view.centerSpringX.springStiffness;
-        this._centerSpringYStiffness = view.centerSpringY.springStiffness;
-        this._zoomSpringStiffness = view.zoomSpring.springStiffness;
+        // this._centerSpringXStiffness = view.centerSpringX.springStiffness;
+        // this._centerSpringYStiffness = view.centerSpringY.springStiffness;
+        // this._zoomSpringStiffness = view.zoomSpring.springStiffness;
     },
 
     playFromIndex: function(index) {
@@ -111,7 +111,9 @@ Presenter.prototype = {
             return;
         }
 
-        this._currentStep = this._setDelayed(this._steps[index].delay, index);
+        let previousDuration = index > 0 ? this._steps[index-1].animationTime : 0;
+        console.log("delay", previousDuration);
+                this._currentStep = this._setDelayed(this._steps[index].delay + previousDuration * 1000, index);
 
         this._currentStep.promise.then(atIndex => {
                 let _this = automatic_presentation;
@@ -127,10 +129,10 @@ Presenter.prototype = {
             this._currentStep = null;
         }
         this._playBtn.removeClass("timeline-play");
-        let view = PLUGINS.osd.viewport;
-        view.centerSpringX.springStiffness = this._centerSpringXStiffness;
-        view.centerSpringY.springStiffness = this._centerSpringYStiffness;
-        view.zoomSpring.springStiffness = this._zoomSpringStiffness;
+        // let view = PLUGINS.osd.viewport;
+        // view.centerSpringX.springStiffness = this._centerSpringXStiffness;
+        // view.centerSpringY.springStiffness = this._centerSpringYStiffness;
+        // view.zoomSpring.springStiffness = this._zoomSpringStiffness;
     },
 
     _setDelayed: function(ms, index) {
