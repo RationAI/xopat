@@ -1,30 +1,29 @@
 .timeline-point {
-/*    width: 9px;
-    height: 20px; */
     display: inline-block;
     background: lightgray;
     border-radius: 16%;
-    height: 37px;
     vertical-align: middle;
     padding-right: 5px;
 }
 
 .timeline-point input {
-    height: 37px;
     width: 50px;
+    height: 27px;
 }
 
 .timeline-path {
     display: inline-block;    
    background: lightgray;
-border-radius: 12%;
-
+    border-radius: 12%;
 }
 
 .timeline-path input {
     background: transparent;
     border: none;
-    width: 55px;
+    width: 40px;
+    text-align: right;
+    padding-right: 0;
+    padding-left: 4px;
 }
 
 .selected .timeline-point {

@@ -13,7 +13,7 @@ Presenter = function () {
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
 <br><br>
-<div class='' id='playback-timeline' style='display: table-row;'>
+<div class='' id='playback-timeline'>
 </div>
     
     `, "auto-recorder");
@@ -31,13 +31,13 @@ Presenter.prototype = {
             zoomLevel: view.getZoom(),
             point: view.getCenter(),
             delay: 2000,
-            animationTime: 1.4
+            animationTime: 1.4,
+            springStiffness: 6.5
         });
 
-        this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='2000' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = $(this).val();"> ms &nbsp;</div>
-        <div class='timeline-point' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
-        <input class='form-control' type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = $(this).val();"> s <br>
-
+        this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='2000' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = $(this).val();"> ms&nbsp;</div><div class='timeline-point' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
+        <input class='form-control' type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = $(this).val();"> sec <br>
+        <input class='form-control' type='number' min='0' value='6.5' step='0.1' title='Fade in out' onchange="automatic_presentation._steps[${this._maxIdx}].springStiffness = $(this).val();"> (1=linear)
         </div></div>`);
         this._highlight(this._container.children().eq(this._maxIdx));
         this._maxIdx++;
@@ -51,7 +51,7 @@ Presenter.prototype = {
         this._jumpAt(atIndex);
     },
 
-    _jumpAt: function(index) {
+    _jumpAt: function(index, direct=true) {
         if (this._steps.length <= index) {
             this.stop();
             return;
@@ -62,11 +62,23 @@ Presenter.prototype = {
         view.centerSpringX.animationTime =
         view.centerSpringY.animationTime =
         view.zoomSpring.animationTime =
-        state.animationTime;
+            state.animationTime;
+
+        view.centerSpringX.springStiffness = 
+        view.centerSpringY.springStiffness = 
+        view.zoomSpring.springStiffness = 
+            state.springStiffness
 
         view.panTo(state.point);
         view.zoomTo(state.zoomLevel);
         view.applyConstraints();
+
+        // if (direct) {
+        //     view.zoomTo(state.zoomLevel, state.point);
+        // } else {
+        //     view.zoomTo(state.zoomLevel);
+        // }
+        // view.applyConstraints();
 
         this._highlight(this._container.children().eq(index));
     },
@@ -74,11 +86,15 @@ Presenter.prototype = {
     play: function() {
         this._playBtn.addClass("timeline-play");
         this.playStep(this._idx);
-        this._defaultAnimationTime = PLUGINS.osd.viewport.animationTime;
-
-        this._centerSpringXAnimationTime = PLUGINS.osd.viewport.centerSpringX.animationTime;
-        this._centerSpringYAnimationTime = PLUGINS.osd.viewport.centerSpringY.animationTime;
-        this._zoomSpringAnimationTime = PLUGINS.osd.viewport.zoomSpring.animationTime;
+        let view = PLUGINS.osd.viewport;
+       
+        this._defaultAnimationTime = view.animationTime;
+        this._centerSpringXAnimationTime = view.centerSpringX.animationTime;
+        this._centerSpringYAnimationTime = view.centerSpringY.animationTime;
+        this._zoomSpringAnimationTime = view.zoomSpring.animationTime;
+        this._centerSpringXStiffness = view.centerSpringX.springStiffness;
+        this._centerSpringYStiffness = view.centerSpringY.springStiffness;
+        this._zoomSpringStiffness = view.zoomSpring.springStiffness;
     },
 
     playFromIndex: function(index) {
@@ -109,9 +125,13 @@ Presenter.prototype = {
         }
         this._playBtn.removeClass("timeline-play");
 
-        PLUGINS.osd.viewport.centerSpringX.animationTime = this._centerSpringXAnimationTime;
-        PLUGINS.osd.viewport.centerSpringY.animationTime = this._centerSpringYAnimationTime;
-        PLUGINS.osd.viewport.zoomSpring.animationTime = this._zoomSpringAnimationTime;
+        let view = PLUGINS.osd.viewport;
+        view.centerSpringX.animationTime = this._centerSpringXAnimationTime;
+        view.centerSpringY.animationTime = this._centerSpringYAnimationTime;
+        view.zoomSpring.animationTime = this._zoomSpringAnimationTime;
+        view.centerSpringX.springStiffness = this._centerSpringXStiffness;
+        view.centerSpringY.springStiffness = this._centerSpringYStiffness;
+        view.zoomSpring.springStiffness = this._zoomSpringStiffness;
     },
 
     _setDelayed: function(ms, index) {
