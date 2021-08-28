@@ -186,21 +186,21 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
 
   var DisplayError = {
     msgTitle: $("#system-message-title"),
-        msgDetails: $("#system-message-details"),
-        msgContainer: $("#system-message"), 
-        screenContainer: $("#viewer-container"),
+    msgDetails: $("#system-message-details"),
+    msgContainer: $("#system-message"), 
+    screenContainer: $("#viewer-container"),
       
-        show: function(title, description) {
-          this.msgTitle.html(title);
-          this.msgDetails.html(description);
-          this.msgContainer.removeClass("d-none");
-          this.screenContainer.addClass("disabled");
-        },
+    show: function(title, description) {
+        this.msgTitle.html(title);
+        this.msgDetails.html(description);
+        this.msgContainer.removeClass("d-none");
+        this.screenContainer.addClass("disabled");
+    },
 
-        hide: function() {
-          this.msgContainer.addClass("d-none");
-          this.screenContainer.removeClass("disabled");
-        }    
+    hide: function() {
+        this.msgContainer.addClass("d-none");
+        this.screenContainer.removeClass("disabled");
+    }    
   }   
 
 <?php

@@ -88,8 +88,9 @@ EOF;
 $execution = <<<EOF
 
     float data_{$uniqueId} = texture2D($samplerName, v_tile_pos).r;
-    float dist_{$uniqueId} = 0.01;
+    float dist_{$uniqueId} = 0.005 * sqrt(sqrt(zoom_{$uniqueId}));
 
+    
     float up_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
     float bottom_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
     float left_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;
@@ -104,8 +105,8 @@ $execution = <<<EOF
                                 right_{$uniqueId}, up2_{$uniqueId}, bottom2_{$uniqueId}, left2_{$uniqueId}, right2_{$uniqueId});
                                                                
     //we don't know the ZOOM max level, opacity created empirically
-    float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
-    show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * borderOpacity_{$uniqueId} * threshold_opacity_{$uniqueId}));
+    //float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
+    show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * threshold_opacity_{$uniqueId}));
     
 EOF;
 
