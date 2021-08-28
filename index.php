@@ -239,6 +239,7 @@ if($errorSource) {
       maxZoomPixelRatio: 1,
       showNavigator:  true,
       //navigatorAutoFade:  false,
+      showNavigationControl: false,
       navigatorId: "panel-navigator",
       // debugMode:  true,  
     });

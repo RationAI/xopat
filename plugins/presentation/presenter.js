@@ -11,6 +11,7 @@ Presenter = function () {
     PLUGINS.appendToMainMenu("Recorder", "", `
 <button class='btn' onclick="automatic_presentation.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
+<button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
 <button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
 <br><br>
 <div class='' id='playback-timeline'>
@@ -30,6 +31,7 @@ Presenter.prototype = {
         this._steps.push({
             zoomLevel: view.getZoom(),
             point: view.getCenter(),
+            bounds: view.getBounds(),
             delay: 2000,
             animationTime: 1.4,
             springStiffness: 6.5
@@ -59,6 +61,10 @@ Presenter.prototype = {
         let state = this._steps[index],
             view = PLUGINS.osd.viewport;
         
+        this._centerSpringXAnimationTime = view.centerSpringX.animationTime;
+        this._centerSpringYAnimationTime = view.centerSpringY.animationTime;
+        this._zoomSpringAnimationTime = view.zoomSpring.animationTime;
+
         view.centerSpringX.animationTime =
         view.centerSpringY.animationTime =
         view.zoomSpring.animationTime =
@@ -69,17 +75,17 @@ Presenter.prototype = {
         view.zoomSpring.springStiffness = 
             state.springStiffness
 
-        view.panTo(state.point);
-        view.zoomTo(state.zoomLevel);
+        if (direct) {
+            view.fitBoundsWithConstraints(state.bounds);
+        } else {
+            view.panTo(state.point);
+            view.zoomTo(state.zoomLevel);
+        }
         view.applyConstraints();
 
-        // if (direct) {
-        //     view.zoomTo(state.zoomLevel, state.point);
-        // } else {
-        //     view.zoomTo(state.zoomLevel);
-        // }
-        // view.applyConstraints();
-
+        view.centerSpringX.animationTime = this._centerSpringXAnimationTime;
+        view.centerSpringY.animationTime = this._centerSpringYAnimationTime;
+        view.zoomSpring.animationTime = this._zoomSpringAnimationTime;
         this._highlight(this._container.children().eq(index));
     },
 
@@ -87,11 +93,7 @@ Presenter.prototype = {
         this._playBtn.addClass("timeline-play");
         this.playStep(this._idx);
         let view = PLUGINS.osd.viewport;
-       
-        this._defaultAnimationTime = view.animationTime;
-        this._centerSpringXAnimationTime = view.centerSpringX.animationTime;
-        this._centerSpringYAnimationTime = view.centerSpringY.animationTime;
-        this._zoomSpringAnimationTime = view.zoomSpring.animationTime;
+
         this._centerSpringXStiffness = view.centerSpringX.springStiffness;
         this._centerSpringYStiffness = view.centerSpringY.springStiffness;
         this._zoomSpringStiffness = view.zoomSpring.springStiffness;
@@ -109,8 +111,9 @@ Presenter.prototype = {
             return;
         }
 
-        this._currentStep = this._setDelayed(this._steps[index].delay, index)
-            .then(atIndex => {
+        this._currentStep = this._setDelayed(this._steps[index].delay, index);
+
+        this._currentStep.promise.then(atIndex => {
                 let _this = automatic_presentation;
                 _this._jumpAt(atIndex);
                 _this._idx++;
@@ -124,27 +127,26 @@ Presenter.prototype = {
             this._currentStep = null;
         }
         this._playBtn.removeClass("timeline-play");
-
         let view = PLUGINS.osd.viewport;
-        view.centerSpringX.animationTime = this._centerSpringXAnimationTime;
-        view.centerSpringY.animationTime = this._centerSpringYAnimationTime;
-        view.zoomSpring.animationTime = this._zoomSpringAnimationTime;
         view.centerSpringX.springStiffness = this._centerSpringXStiffness;
         view.centerSpringY.springStiffness = this._centerSpringYStiffness;
         view.zoomSpring.springStiffness = this._zoomSpringStiffness;
     },
 
     _setDelayed: function(ms, index) {
+        var timeout;
         var p = new Promise(function(resolve, reject) {
-            this._timeout = setTimeout(function() {
+            timeout = setTimeout(function() {
                 resolve(index);
             }, ms);
-            this.cancel = function() {
-                reject(new Error("Timeout"));
-                clearTimeout(this._timeout);
-            };
         });
-        return p;
+
+        return {
+            promise: p,
+            cancel: function() {
+                clearTimeout(timeout);
+            }
+        };
     },
 
     _highlight: function(node) {
