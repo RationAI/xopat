@@ -90,7 +90,6 @@ $execution = <<<EOF
     float data_{$uniqueId} = texture2D($samplerName, v_tile_pos).r;
     float dist_{$uniqueId} = 0.005 * sqrt(sqrt(zoom_{$uniqueId}));
 
-    
     float up_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
     float bottom_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
     float left_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;

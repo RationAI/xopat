@@ -13,6 +13,7 @@ Presenter = function () {
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
 <button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn' onclick="automatic_presentation.removeHighlightedRecord();"><span class="material-icons">delete</span></button>
 <br><br>
 <div class='' id='playback-timeline'>
 </div>
@@ -26,6 +27,9 @@ Presenter = function () {
 Presenter.prototype = {
 
     addRecord: function() {
+        if (this._playing) {
+            return;
+        }
         let view = PLUGINS.osd.viewport;
 
         this._steps.push({
@@ -45,8 +49,17 @@ Presenter.prototype = {
         this._maxIdx++;
     },
 
+    removeHighlightedRecord: function() {
+        if (!this._currentHighlight) {
+           return;
+        }
+        this._currentHighlight.html("");
+        this._currentHighlight = null;
+        this._steps[this._idx] = null;
+    },
+
     selectPoint: function(atIndex) {
-        if (this._steps.length <= atIndex) {
+        if (this._playing || this._steps.length <= atIndex) {
             return;
         }
         this._idx = atIndex;
@@ -54,8 +67,7 @@ Presenter.prototype = {
     },
 
     _jumpAt: function(index, direct=true) {
-        if (this._steps.length <= index) {
-            this.stop();
+        if (!this._steps[index] || this._steps.length <= index) {
             return;
         }
         let state = this._steps[index],
@@ -90,9 +102,12 @@ Presenter.prototype = {
     },
 
     play: function() {
+        if (this._playing || this._idx+1 === this._steps.length) return;
+
         this._playBtn.addClass("timeline-play");
         this.playStep(this._idx);
         let view = PLUGINS.osd.viewport;
+        this._playing = true;
 
         // this._centerSpringXStiffness = view.centerSpringX.springStiffness;
         // this._centerSpringYStiffness = view.centerSpringY.springStiffness;
@@ -100,35 +115,48 @@ Presenter.prototype = {
     },
 
     playFromIndex: function(index) {
+        if (this._playing) {
+            return;
+        }
         this._idx = index;
         this.play();
     },
 
     playStep(index) {
+        while (this._steps.length > index && !this._steps[index]) {
+            index++;
+        }
+
         if (this._steps.length <= index) {
             this._currentStep = null;
             this.stop();
             return;
         }
-
-        let previousDuration = index > 0 ? this._steps[index-1].animationTime : 0;
-        console.log("delay", previousDuration);
-                this._currentStep = this._setDelayed(this._steps[index].delay + previousDuration * 1000, index);
-
+        
+        let prevIdx = index > 0 ? index-1 : 0;
+        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].animationTime * 1000 : 0;
+        this._currentStep = this._setDelayed(this._steps[index].delay + previousDuration, index);
         this._currentStep.promise.then(atIndex => {
-                let _this = automatic_presentation;
-                _this._jumpAt(atIndex);
-                _this._idx++;
-                _this.playStep(_this._idx);
-            });
+            let _this = automatic_presentation;
+            _this._jumpAt(atIndex);
+            _this._idx  = atIndex + 1;
+            _this.playStep(_this._idx);
+        });
     },
 
     stop: function() {
+        if (!this._playing) {
+            return;
+        }
+
         if (this._currentStep) {
             this._currentStep.cancel();
             this._currentStep = null;
         }
         this._playBtn.removeClass("timeline-play");
+        this._playing = false;
+
         // let view = PLUGINS.osd.viewport;
         // view.centerSpringX.springStiffness = this._centerSpringXStiffness;
         // view.centerSpringY.springStiffness = this._centerSpringYStiffness;
@@ -151,12 +179,13 @@ Presenter.prototype = {
         };
     },
 
-    _highlight: function(node) {
+    _highlight: function(node, index) {
         if (this._oldHighlight) {
             this._oldHighlight.removeClass("selected");
         }
         node.addClass("selected");
         this._oldHighlight = node;
+        this._currentHighlight = node;
     }
 }
 
