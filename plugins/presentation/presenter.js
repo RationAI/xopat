@@ -8,17 +8,13 @@ Presenter = function () {
 	PLUGINS.each[this.id].instance = this;
 
     //controlPanelId is incomming parameter, defines where to add HTML
-    PLUGINS.appendToMainMenu("Recorder", "", `
+    PLUGINS.appendToMainMenuExtended("Recorder", "", `
 <button class='btn' onclick="automatic_presentation.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
 <button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
 <button class='btn' onclick="automatic_presentation.removeHighlightedRecord();"><span class="material-icons">delete</span></button>
-<br><br>
-<div class='' id='playback-timeline'>
-</div>
-    
-    `, "auto-recorder");
+<br><br>`, `<div class='' id='playback-timeline'></div>`, "auto-recorder");
 
     this._container = $("#playback-timeline");
     this._playBtn = $("#presenter-play-icon");

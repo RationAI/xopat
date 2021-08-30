@@ -113,7 +113,8 @@ if ($(this).attr('data-ref') === 'on'){
 			<div style='width:18%;' class='d-inline-block'>
 			<span>Size:</span><br>	<input class="form-control" type="number" min="1" max="500" name="freeFormToolSize" id="fft-size" autocomplete="off" value="50" onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);"><br>
 			</div>
-			</div>`);
+			</div>`, 
+			"annotations-panel");
 
 		this.history.init(50);
 
@@ -149,10 +150,7 @@ if ($(this).attr('data-ref') === 'on'){
 	  <span class="octicon octicon-flame material-icons" viewBox="0 0 16 16" width="16" height="16"> error</span>
 	  Avoid auto-appending of large areas (mainly large probability tile chunks), the algorithm is still not optimized and the vizualiation would freeze. In that case, close the tab and reopen a new one.
 	</div>
-      
-
       <br>
-	  
 	  <h4 class="mt-2"><span class="material-icons">highlight_alt</span>Alt+Drag, Alt+Click</h4>
         <p>With left alt on a keyboard, you can create custom shapes. Simply hold the left alt key and drag for rectangle/ellipse, or click-place points of a polygon. Once you release alt,
         the polygon will be created. With other shapes, to finish the drag is enough.</p>
