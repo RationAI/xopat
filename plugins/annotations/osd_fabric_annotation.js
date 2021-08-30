@@ -173,7 +173,22 @@ if ($(this).attr('data-ref') === 'on'){
 `);
 
 		//form for object property modification
-		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`);
+		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
+		<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="
+		switch($(this).val()) {
+			case 'auto': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO); break;
+			case 'alt-left': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.CUSTOM); break;
+			case 'shift': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.FREE_FORM_TOOL); break;
+			case 'alt-right': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.EDIT); break;
+		} return false;
+		">
+		<option value="auto" selected>automatic shape & navigation</option>
+		<option value="alt-left">✍ custom shape (⌨ Left Alt)</option>
+		<option value="shift">🖌 free form tool (⌨ Left Shift)</option>
+		<option value="alt-right">✎ edit shape (⌨ Right Alt)</option>
+		</select>`);
+
+		this._modesJqNode = $("#annotation-mode");
 
 		this.cursor.init();
 		this.opacity = $("#opacity_control");
@@ -300,6 +315,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		function handleRightClickUp(o, point) {
 			let _this = openseadragon_image_annotations;
+			if (!_this.cursor.isDown) return;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
 					finishCreateAutoAnnotation(point, o, false);
@@ -325,8 +341,8 @@ if ($(this).attr('data-ref') === 'on'){
 			// } else {
 			// 	handleFabricKeyUpInEditMode(o);
 			// }
-
 			let _this = openseadragon_image_annotations;
+			if (!_this.cursor.isDown) return;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
 					finishCreateAutoAnnotation(point, o, true);
@@ -352,6 +368,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		function handleRightClickDown(o, point) {
 			let _this = openseadragon_image_annotations;
+			if (_this.cursor.isDown) return;
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 			switch (_this.mode) {
@@ -380,6 +397,7 @@ if ($(this).attr('data-ref') === 'on'){
 			// }
 
 			let _this = openseadragon_image_annotations;
+			if (_this.cursor.isDown) return;
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 			switch (_this.mode) {
@@ -522,24 +540,16 @@ if ($(this).attr('data-ref') === 'on'){
 			if (!_this.showAnnotations || _this.mode !== _this.Modes.AUTO || _this.cursor.isDown) return;
 			
 			if (e.code === "AltLeft") {
-				PLUGINS.osd.setMouseNavEnabled(false);
-				_this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
-				_this.mode = _this.Modes.CUSTOM;
+				_this.setMode(_this.Modes.CUSTOM);
+				e.preventDefault();
 			} else if (e.code === "ShiftLeft") {
-				//dirty but when a mouse is clicked, for some reason active object is deselected
-				_this._cachedSelection = _this.overlay.fabricCanvas().getActiveObject();
-
-				PLUGINS.osd.setMouseNavEnabled(false);
-				_this.overlay.fabricCanvas().hoverCursor = "crosshair";
-				//todo value of radius from user
-				_this.modifyTool.setRadius(parseFloat(_this.toolRadius.val())); //so that cursor radius that is being taken from here will be correct before midify tool init
-
-				_this.cursor.show();
-				_this.mode = _this.Modes.FREE_FORM_TOOL;
+				_this.setMode(_this.Modes.FREE_FORM_TOOL);
+				e.preventDefault();
 			} else if (e.code === "AltRight") {
-				_this.setMouseOSDInteractive(false);
-				_this.mode = _this.Modes.EDIT;
+				_this.setMode(_this.Modes.EDIT);
+				e.preventDefault();
 			}
+
 		});
 
 		document.addEventListener('keyup', (e) => {
@@ -557,35 +567,16 @@ if ($(this).attr('data-ref') === 'on'){
 				return;
 			}
 
-			if (e.code === "AltRight" && _this.mode === _this.Modes.EDIT) {
-				_this.setMouseOSDInteractive(true);
-				// let active = _this.overlay.fabricCanvas().getActiveObject();
-				// if (active) active.hasControls = false;
-				_this.mode = _this.Modes.AUTO;
-				return;
-			}
+			if ((e.code === "AltRight" && _this.mode === _this.Modes.EDIT) 
+				|| (e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) 
+				|| (e.code === "ShiftLeft" && _this.mode === _this.Modes.FREE_FORM_TOOL)) {
 
-			if (e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) {
-
-				if (_this.currentAnnotationObjectUpdater) {
-					_this.currentAnnotationObjectUpdater.finish();
-					_this.currentAnnotationObjectUpdater = null;
-				}
-				PLUGINS.osd.setMouseNavEnabled(true);
-				_this.mode = _this.Modes.AUTO;
-				return;
-			} 
-			
-			if (e.code === "ShiftLeft" && _this.mode === _this.Modes.FREE_FORM_TOOL) {
-				_this.overlay.fabricCanvas().hoverCursor = "pointer";
-				_this.mode = _this.Modes.AUTO;
-				_this.cursor.hide();
-				PLUGINS.osd.setMouseNavEnabled(true);
-				_this.overlay.fabricCanvas().renderAll();
-
-				return;				
+				_this.setMode(this.Modes.AUTO);	
+				e.preventDefault();		
 			}	
 		});
+
+
 
 
 		// listen for annotation send button
@@ -1594,6 +1585,75 @@ if ($(this).attr('data-ref') === 'on'){
 			//$("#input_form").hide();
 		}
 		this.overlay.fabricCanvas().renderAll();
+	},
+
+	setMode: function(mode) {
+		if (mode === this.mode) return;
+
+		if (this.mode === this.Modes.AUTO) {
+			this._setModeFromAuto(mode);
+		} else if (mode !== this.Modes.AUTO) {
+			this._setModeToAuto();	
+			this._setModeFromAuto(mode);
+		} else {
+			this._setModeToAuto();
+		}
+	},
+
+	_setModeFromAuto: function(mode) {
+		switch(mode) {
+			case this.Modes.CUSTOM:
+				PLUGINS.osd.setMouseNavEnabled(false);
+				this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
+				this._modesJqNode.val("alt-left");
+				break;
+			case this.Modes.FREE_FORM_TOOL:
+				//dirty but when a mouse is clicked, for some reason active object is deselected
+				this._cachedSelection = this.overlay.fabricCanvas().getActiveObject();
+				this._modesJqNode.val("shift");
+				PLUGINS.osd.setMouseNavEnabled(false);
+				this.overlay.fabricCanvas().hoverCursor = "crosshair";
+				//todo value of radius from user
+				this.modifyTool.setRadius(parseFloat(this.toolRadius.val())); //so that cursor radius that is being taken from here will be correct before midify tool init
+				this.cursor.show();
+				break;	
+			case this.Modes.EDIT:
+				this.setMouseOSDInteractive(false);
+				this._modesJqNode.val("alt-right");
+				break;
+			default:
+				console.warn("Invalid mode:", mode);
+				return;
+		}
+		this.mode = mode;
+	},
+
+	_setModeToAuto: function() {
+		switch(this.mode) {
+			case this.Modes.CUSTOM:
+				if (this.currentAnnotationObjectUpdater) {
+					this.currentAnnotationObjectUpdater.finish();
+					this.currentAnnotationObjectUpdater = null;
+				}
+				PLUGINS.osd.setMouseNavEnabled(true);
+				break;
+			case this.Modes.FREE_FORM_TOOL:
+				this.overlay.fabricCanvas().hoverCursor = "pointer";
+				this.cursor.hide();
+				PLUGINS.osd.setMouseNavEnabled(true);
+				this.overlay.fabricCanvas().renderAll();
+				break;	
+			case this.Modes.EDIT:
+				this.setMouseOSDInteractive(true);
+				// let active = _this.overlay.fabricCanvas().getActiveObject();
+				// if (active) active.hasControls = false;
+				break;
+			default:
+				console.warn("Invalid mode:", mode);
+				return;
+		}
+		this.mode = this.Modes.AUTO;
+		this._modesJqNode.val("auto");
 	},
 
 	//cursor management (TODO move here other stuff involving cursor too)
