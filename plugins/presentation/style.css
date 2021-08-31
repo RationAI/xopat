@@ -1,6 +1,6 @@
 .timeline-point {
     display: inline-block;
-    background: lightgray;
+    background: var(--color-scale-gray-3);
     border-radius: 16%;
     vertical-align: middle;
     padding-right: 5px;
@@ -13,7 +13,7 @@
 
 .timeline-path {
     display: inline-block;    
-   background: lightgray;
+   background: var(--color-scale-gray-3);
     border-radius: 12%;
 }
 

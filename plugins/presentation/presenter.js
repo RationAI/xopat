@@ -8,7 +8,8 @@ Presenter = function () {
 	PLUGINS.each[this.id].instance = this;
 
     //controlPanelId is incomming parameter, defines where to add HTML
-    PLUGINS.appendToMainMenuExtended("Recorder", "", `
+    PLUGINS.appendToMainMenuExtended("Recorder", `<span onclick="this.nextSibling.click();" title="Import Recording" style="cursor: pointer;">Import <span class="material-icons">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="automatic_presentation.import(event);" />
+    <span onclick="automatic_presentation.export();" title="Export Recording" style="cursor: pointer;">Export <span class="material-icons">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
 <button class='btn' onclick="automatic_presentation.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
@@ -27,8 +28,7 @@ Presenter.prototype = {
             return;
         }
         let view = PLUGINS.osd.viewport;
-
-        this._steps.push({
+        this._addRecord({
             zoomLevel: view.getZoom(),
             point: view.getCenter(),
             bounds: view.getBounds(),
@@ -36,7 +36,10 @@ Presenter.prototype = {
             animationTime: 1.4,
             springStiffness: 6.5
         });
+    },
 
+    _addRecord: function(record) {
+        this._steps.push(record);
         this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='2000' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = parseFloat($(this).val());"> ms&nbsp;</div><div class='timeline-point' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
         <input class='form-control' type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = parseFloat($(this).val());"> sec <br>
         <input class='form-control' type='number' min='0' value='6.5' step='0.1' title='Fade in out' onchange="automatic_presentation._steps[${this._maxIdx}].springStiffness = parseFloat($(this).val());"> (1=linear)
@@ -157,6 +160,40 @@ Presenter.prototype = {
         // view.centerSpringX.springStiffness = this._centerSpringXStiffness;
         // view.centerSpringY.springStiffness = this._centerSpringYStiffness;
         // view.zoomSpring.springStiffness = this._zoomSpringStiffness;
+    },
+
+    export: function() {
+        let output = new Blob([JSON.stringify(this._steps)], { type: 'text/plain' });
+        let downloadURL = window.URL.createObjectURL(output);
+        var downloader = document.getElementById("export-recording");
+                downloader.href = downloadURL;
+        downloader.download = "visualisation-recording.json";
+        downloader.click();
+    },
+
+    import: function(event) {
+        let file = event.target.files[0];
+        if (!file) return;
+        let fileReader = new FileReader();
+        let _this = this;
+        fileReader.onload = function(e) {
+
+          let json = JSON.parse(e.target.result);
+          _this._idx = 0;
+          _this._maxIdx = 0;
+          _this._steps = [];
+          _this._currentStep = null;
+          _this._container.html("");
+
+          for (let i = 0; i < json.length; i++) {
+            //recreate 'classes'
+            json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
+            json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
+
+            _this._addRecord(json[i]);
+          }
+        }
+        fileReader.readAsText(file);
     },
 
     _setDelayed: function(ms, index) {

@@ -372,7 +372,38 @@ if($errorSource) {
       this.lastScroll = this.currentScroll; //Set last scroll to now
     });
 
-
+    document.addEventListener('keydown', (e) => {
+      let bounds = viewer.viewport.getBounds(),
+          zoom = viewer.viewport.getZoom(),
+          speed = 0.3;
+			switch (e.key) {
+        case "Down": // IE/Edge specific value
+        case "ArrowDown":
+          bounds.y += speed*bounds.height;
+          break;
+        case "Up": // IE/Edge specific value
+        case "ArrowUp":
+          bounds.y -= speed*bounds.height;
+          break;
+        case "Left": // IE/Edge specific value
+        case "ArrowLeft":
+          bounds.x -= speed*bounds.width;
+          break;
+        case "Right": // IE/Edge specific value
+        case "ArrowRight":
+          bounds.x += speed*bounds.width;
+          break;
+        case "+":
+          viewer.viewport.zoomTo(zoom + zoom * speed * 3);
+          return;
+        case "-":
+          viewer.viewport.zoomTo(zoom - zoom * speed * 2);
+          return;
+        default:
+          return; // Quit when this doesn't handle the key event.
+      }
+      viewer.viewport.fitBounds(bounds);
+		});
 
     /**
      * Made with love by @fitri
@@ -550,7 +581,6 @@ if($errorSource) {
       PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
       PLUGINS.dataLayer = viewer.world.getItemAt(layerIDX);
     });
-  
   </script>
 
     <!-- PLUGINS -->
