@@ -87,7 +87,14 @@ openSeadragonGL.prototype = {
         this.upToDateTStamp = Date.now();
 
         imageTile._drawer.context.clearRect(0, 0, imageTile._drawer.context.canvas.width, imageTile._drawer.context.canvas.height);
+        console.log(this.openSD.navigator);
+
+        var imageTileNav = this.openSD.navigator.world.getItemAt(idx);
+        imageTileNav._drawer.context.clearRect(0, 0, imageTileNav._drawer.context.canvas.width, imageTileNav._drawer.context.canvas.height);
+
+
         world.draw();
+        this.openSD.navigator.world.draw();
     },
 
     /**

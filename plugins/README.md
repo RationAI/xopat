@@ -56,7 +56,9 @@ This global variable contains a lot of useful references:
     - `hiddenHtml`: body of the plugin control panel, visible on hover onlyor when pinned
     - `id`: id that is given to the outer container, you can for example delete the panel later 
 - `appendToMainMenuRaw(html, id)` - if you need more freedom, we recommend to use functions above if possible
-- `postData` - JSON variant of `PHP`'s `$_POST` variable
+- `postData` - JSON variant of `PHP`'s `$_POST` variable, data sent inside a `POST` request
+- `addPostExport(name, callback)` - when the visualisation is being exported, append the output `string` value of `callback` (should not contain `'` character) into `POST` data with name `name` (should be unique)
+    - e.g. if you want to find `myValue` in `postData`, register: `PLUGINS.addPostExport("myValue", this.valueCallback.bind(this));` where we bind this to the callback so that it can access our plugin instance using `this`
 - `each` - object of **plugin id** to other **plugin `includes` data** mapping
 
 #### `redraw()`

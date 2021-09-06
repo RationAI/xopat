@@ -158,7 +158,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
 
           <span class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
           
-          <select name="shaders" id="shaders" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
+          <select name="shaders" id="shaders" style="max-width: 88%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
             <!--populated with shaders from the list -->
           </select>          
         </div>
@@ -512,7 +512,6 @@ if($errorSource) {
      *  
      */
     function exportVisualisation() {
-      let annotations = openseadragon_image_annotations.getJSONContent();
       let visCache = JSON.stringify(seaGL.viaGL.getCache());
       let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -525,8 +524,6 @@ if($errorSource) {
     <input type="hidden" id="image" name="image">
     <input type="hidden" id="layer" name="layer">
     <input type="hidden" id="cache" name="cache">
-    <input type="hidden" id="dev" name="dev">
-    <input type="hidden" id="annotations" name="annotations">
     <input type="submit" value="">
     </form>
   <script type="text/javascript">
@@ -535,13 +532,24 @@ if($errorSource) {
     document.getElementById("image").value = '<?php echo $dataSource["image"]; ?>';
     document.getElementById("layer").value = '<?php echo $dataSource["layer"]; ?>';
     document.getElementById("cache").value = '${visCache}';
-    document.getElementById("dev").value = '<?php echo $networkDevelopment; ?>';
-    document.getElementById("annotations").value = '${annotations}';
 
-    document.getElementById("redirect").submit();
-    <\/script>
-</body>
-</html>`;
+    var form = document.getElementById("redirect");
+    var node;`;
+    
+    //todo add all flags, but only if present in POST.... can be done via PHP
+    for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
+      let toExport = PLUGINS._exportHandlers[i];
+      if (toExport) {
+        let value = toExport.call();
+        doc += `node = document.createElement("input");
+        node.setAttribute("type", "hidden");
+        node.setAttribute("name", '${toExport.name}');
+        node.setAttribute("value", '${value}');
+        form.appendChild(node);`;
+      }
+    }
+
+      doc += `form.submit();<\/script></body></html>`;
 			let output = new Blob([doc], { type: 'text/html' });
 			let downloadURL = window.URL.createObjectURL(output);
       var downloader = document.getElementById("export-visualisation");
@@ -554,7 +562,7 @@ if($errorSource) {
    /*---------------------------------------------------------*/
    /*------------ PLUGINS ------------------------------------*/
    /*---------------------------------------------------------*/
-  var mainPanel = $("#main-panel");
+
    var PLUGINS = {
       osd: viewer,
       seaGL: seaGL,
@@ -573,8 +581,12 @@ if($errorSource) {
       appendToMainMenuRaw: function(html, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel">${html}</div>`);
       },
+      addPostExport: function(name, valueHandler) {
+        this._exportHandlers.push({name: name, call: valueHandler});
+      },
       postData: <?php echo json_encode($_POST)?>,
-      each: <?php echo json_encode((object)$PLUGINS)?>
+      each: <?php echo json_encode((object)$PLUGINS)?>,
+      _exportHandlers: []
     };
 
     viewer.addHandler('open', function() {

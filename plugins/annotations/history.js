@@ -12,9 +12,9 @@ History.prototype = {
 
     //TODO history: populate BOARD when annotation file is loaded (some for object loop)
     init: function (historySize = 30) {
-        PLUGINS.appendToMainMenu("Board", `<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
+        PLUGINS.appendToMainMenu("Board", `<span class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
 		<!--TODO dirty relying on a global-->
-		<span class="material-icons" style="color:gray; cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
+		<span class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
 		<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
@@ -68,14 +68,14 @@ History.prototype = {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
             this._performSwap(this._context.overlay.fabricCanvas(),
-                this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back)
-        }
+                this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back);
 
-        if (this.redoBtn) {
-            let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
-            this.redoBtn.css("color", color);
+            if (this.redoBtn) {
+                let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
+                this.redoBtn.css("color", color);
+            }
+            if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
         }
-        if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
     },
 
     push: function (newObject, previous = null) {

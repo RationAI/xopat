@@ -88,32 +88,6 @@ $execution = <<<EOF
     }  
   }
 
-//   vec4 data = texture2D($samplerName, v_tile_pos);
-//   float log_threshold = 100.0;
-//   if (close(data.b, .5)) {
-//     return;
-//  }
- 
- 
-//  if (data.b < .5) { //green areas apped from 0 (highest) to .5 (smallest)
-//     float value = 1.0 - data.b * 2.0;
-//     float normalized_val = (log2(log_threshold + value) - log2(log_threshold))/(log2(log_threshold+1.0)-log2(log_threshold));
-//     if (normalized_val > threshold_{$uniqueId}) {
-//        gl_FragColor = vec4(.0, 1.0, .0, normalized_val);
-//     } else {
-//        gl_FragColor = vec4(.0);
-//     }
-    
-//  } else {  //red areas apped from 1 (highest) to .5 (smallest)
-//     float value = (data.b - 0.5) * 2.0;
-//     float normalized_val = (log2(log_threshold + value) - log2(log_threshold))/(log2(log_threshold+1.0)-log2(log_threshold));
-//     if (normalized_val > threshold_{$uniqueId}) {
-//        gl_FragColor = vec4(1.0, .0, .0, normalized_val);
-//     } else {
-//        gl_FragColor = vec4(.0);
-//     }
-//  }
-
 EOF;
 
 //glLoad, glDraw

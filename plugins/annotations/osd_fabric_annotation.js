@@ -59,6 +59,7 @@ OSDAnnotations.prototype = {
 
 		this.setMouseOSDInteractive(true);
 
+
 		// draw annotation from json file
 		//todo try catch error MSG if fail
 		// todo allow user to load his own annotations (probably to a separate layer)
@@ -66,9 +67,10 @@ OSDAnnotations.prototype = {
 			this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
 		}
 
+		PLUGINS.addPostExport("annotations", this.getJSONContent.bind(this));
 
 		PLUGINS.appendToMainMenuExtended("Annotations", `
-<span class="material-icons" onclick="$('#help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
+<span class="material-icons" onclick="$('#annotations-help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
 <span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
 <!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
 
@@ -119,10 +121,10 @@ if ($(this).attr('data-ref') === 'on'){
 		this.history.init(50);
 
 		$("body").append(`
-<div id="help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+<div id="annotations-help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
 <details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:700px; max-height: 600px;">
     <div class="Box-header">
-      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$('#help').css('display', 'none');">
+      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$('#annotations-help').css('display', 'none');">
         <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
       </button>
       <h3 class="Box-title">Annotations help</h3>
@@ -190,6 +192,8 @@ if ($(this).attr('data-ref') === 'on'){
 
 		this._modesJqNode = $("#annotation-mode");
 
+
+		
 		this.cursor.init();
 		this.opacity = $("#opacity_control");
 		this.toolRadius = $("#fft-size");
@@ -212,7 +216,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		function finishCreateAutoAnnotation(point, event, isLeftClick) {
 			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
-			if (delta > 200) return; // just navigate if click longer than 100ms
+			if (delta > 100) return; // just navigate if click longer than 100ms
 
 			switch (openseadragon_image_annotations.annotationType) {
 				case 'rect':
@@ -255,7 +259,7 @@ if ($(this).attr('data-ref') === 'on'){
 			let delta = Date.now() - _this.cursor.mouseTime;
 
 			// if click too short, user probably did not want to create such object, discard
-			if (delta < 200) { 
+			if (delta < 100) { 
 				//TODO this deletes created elements if wrong event registered (sometimes)
 				switch (_this.currentAnnotationObjectUpdater.type) {
 					case 'rect':
@@ -786,9 +790,8 @@ if ($(this).attr('data-ref') === 'on'){
 	}, // end of initialize
 
 	getJSONContent: function () {
-		return JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold']));
+		return JSON.stringify(openseadragon_image_annotations.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor']));
 	},
-
 
 	/****************************************************************************************************************
 
@@ -1140,6 +1143,7 @@ if ($(this).attr('data-ref') === 'on'){
 				return pix[3] > this.alphaSensitivity && pix[1] > 200;
 			}
 		}
+
 		//speed based on ZOOM level (detailed tiles can go with rougher step)
 		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
 		let level = this.currentTile.level;
@@ -1332,17 +1336,22 @@ if ($(this).attr('data-ref') === 'on'){
 				// resultingPoints.push(point); //border point
 
 				// resultingPoints.push([point.x, point.y]); //border point
+				let cc = 0;
 
 				if (maxDist < 0) {
 					do {
 						newP.x -= primaryDirection[0];
 						newP.y -= primaryDirection[1];
-					} while (!evaluator(newP));
+						cc++;
+					} while (!evaluator(newP) && cc < 500);
+					
+				}
+				if (cc < 500) {
+					resultingPoints.push([newP.x, newP.y]);
+					//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+
 				}
 
-				resultingPoints.push([newP.x, newP.y]);
-
-				//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
 				for (var i = 0; i < directions.length; i++) {
 					this._growRegionInDirections(x + directions[i][0] * speed, y + directions[i][1] * speed, directions[i], [primaryDirection], resultingPoints, speed, evaluator, maxDist--, true);
