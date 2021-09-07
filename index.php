@@ -219,40 +219,15 @@ if($errorSource) {
 ?>
 
    /*---------------------------------------------------------*/
-   /*------------ Initialization of OpenSeadragon ------------*/
+   /*------------ Initialization of Visualisation ------------*/
    /*---------------------------------------------------------*/
-    var urlImage = "<?php echo $dataSource["image"]; ?>";
-    var urlLayer = "<?php echo $dataSource["layer"]; ?>";
+  
     var setup = <?php echo $visualisation ?>;  
-    
-    //IIPIMAGE with deepzoom protocol will provide dzi tiles from tif (urlImage and layer data)
-    var baseTileSource = "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi";
-    var layerTileSource = "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi";
-
-    let sources = [baseTileSource, layerTileSource];
-    let baseIDX = 0;
-    let layerIDX = 1;
-
     var activeShader = 0;
-
-    // Initialize viewer - OpenSeadragon
-    var viewer = OpenSeadragon({
-      id: "osd",
-      prefixUrl: "osd/images/",
-      tileSources: sources,
-      showNavigator: true,
-      maxZoomPixelRatio: 1,
-      showNavigator:  true,
-      //navigatorAutoFade:  false,
-      showNavigationControl: false,
-      navigatorId: "panel-navigator",
-      // debugMode:  true,  
-    });
-    viewer.gestureSettingsMouse.clickToZoom = false;
 
     // Initialize viewer webGL extension - ViaGL
     let shaderNames = $("#shaders");
-    seaGL = new openSeadragonGL(viewer, {
+    seaGL = new openSeadragonGL({
       //todo CHECK if parameters not missing and throw error if required param missing
       htmlControlsId: "shader-options",
       scriptId: "auto-scripts",
@@ -310,11 +285,6 @@ if($errorSource) {
       }
     });
 
-    //must be defined
-    function redraw() {
-      seaGL.redraw(viewer.world, layerIDX);
-    }
-
     //Set visualisations
     setup.forEach(visualisationDef => {
       //setup all visualisations defined     
@@ -324,6 +294,48 @@ if($errorSource) {
     //Set cache
     seaGL.viaGL.setCache(<?php echo $cached; ?>);
 
+
+   /*---------------------------------------------------------*/
+   /*------------ Initialization of OpenSeadragon ------------*/
+   /*---------------------------------------------------------*/
+    var urlImage = "<?php echo $dataSource["image"]; ?>";
+    var urlLayer = "<?php echo $dataSource["layer"]; ?>";
+
+    let baseIDX = 0;
+    let layerIDX = 1;
+
+    // Initialize viewer - OpenSeadragon
+    var viewer = OpenSeadragon({
+      id: "osd",
+      prefixUrl: "osd/images/",
+      showNavigator: true,
+      maxZoomPixelRatio: 1,
+      showNavigator:  true,
+      //navigatorAutoFade:  false,
+      showNavigationControl: false,
+      navigatorId: "panel-navigator",
+      // debugMode:  true,  
+    });
+    viewer.gestureSettingsMouse.clickToZoom = false;
+
+    /*---------------------------------------------------------*/
+    /*------------ Init                          --------------*/
+    /*---------------------------------------------------------*/
+
+    seaGL.loadShaders(function() {
+      viewer.open(["/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi", "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi"]);
+    });
+    seaGL.init(viewer);
+
+    /*---------------------------------------------------------*/
+    /*------------ JS utilities and enhancements --------------*/
+    /*---------------------------------------------------------*/
+
+    //must be defined
+    function redraw() {
+      seaGL.redraw(viewer.world, layerIDX);
+    }
+
     // load desired shader upon selection
     $("#shaders").on("change", function () {
       activeShader = $(this).val();
@@ -332,16 +344,9 @@ if($errorSource) {
     });
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
-      var val = $(this).val();
+      let val = $(this).val();
       viewer.world.getItemAt(layerIDX).setOpacity(val);
     });
-
-  
-    seaGL.init();
-
-   /*---------------------------------------------------------*/
-   /*------------ JS utilities and enhancements --------------*/
-   /*---------------------------------------------------------*/
 
     /**
      * From https://github.com/openseadragon/openseadragon/issues/1690

@@ -260,9 +260,21 @@ ViaWebGL.prototype = {
     //////////////////////////////////////////////////////////////////////////////
 
     // Initialize viaGL
-    init: function () {
+    init: function() {
         if (this._initialized) {
             console.error("Already initialized!");
+            return;
+        }
+        this._initialized = true;
+        this.setDimensions(this.width, this.height);
+        this.forceSwitchShader(null, false);
+        this.ready();
+    },
+
+    // Prepare viaGL, must be called before init()
+    prepare: function (onPrepared) {
+        if (this._prepared) {
+            console.error("Already prepared!");
             return;
         }
 
@@ -277,12 +289,11 @@ ViaWebGL.prototype = {
             return;
         }
 
-        this._initialized = true;
+        this._prepared = true;
         // Allow for mouse actions on click
         if (this.hasOwnProperty('container') && this.hasOwnProperty('onclick')) {
             this.container.onclick = this[this.onclick].bind(this);
         }
-        this.setDimensions(this.width, this.height);
 
         //cache setup
         var s = document.createElement("script");
@@ -295,12 +306,15 @@ ViaWebGL.prototype = {
         delete this._cache;
 
         // Load the shaders when ready and return the promise
-        var step = [this._visualisations.map(this.getter)];
-
-        step.push(this.toProgram.bind(this));
-        step.push(this.forceSwitchShader.bind(this, null, false)); //default program left on _program variable value
-        return Promise.all(step[0]).then(step[1]).then(step[2]).then(this.ready);
+        return Promise.all(
+            this._visualisations.map(this.getter)
+        ).then(
+            this.toProgram.bind(this)
+        ).then(
+            onPrepared
+        );
     },
+
     // Make a canvas
     maker: function (options) {
         return this.context(document.createElement('canvas'));
@@ -370,7 +384,6 @@ ViaWebGL.prototype = {
             console.error(e);
             this.onException(e);
         }
-
     },
 
     _buildVisualisation: function (order, visSetup, visualisation, glLoadCall, glDrawingCall) {
@@ -423,6 +436,7 @@ bool close(float value, float target) {
 }
 
 void show(vec4 color) {
+    if (close(color.a, 0.0)) return;
     float t = color.a + gl_FragColor.a - color.a*gl_FragColor.a;
     gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
 }

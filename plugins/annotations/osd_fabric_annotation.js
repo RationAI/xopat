@@ -198,6 +198,13 @@ if ($(this).attr('data-ref') === 'on'){
 		this.opacity = $("#opacity_control");
 		this.toolRadius = $("#fft-size");
 
+
+		  window.addEventListener("focus", function(event) 
+		  { 
+			openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO);
+
+		  }, false);
+
 		/****************************************************************************************************************
 	
 									Annotations MODES implementation

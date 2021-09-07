@@ -4,35 +4,10 @@
 /* CHANGES MADE BY
 /* Jiří Horák, 2021
 */
-openSeadragonGL = function(openSD, viaGLParams) {
-
-    /* OpenSeaDragon API calls
-    ~*~*~*~*~*~*~*~*~*~*~*~*/
-    this.interface = {
-        //note: does not support switching off (e.g. if shader was used and suddenly it is switched off, it will break)
-        'tile-loaded': function(e) { 
-            if (! e.image) return;
-            
-            if (this.viaGL.willUseCanvas(e.image, e)) {
-                e.tile.webglRefresh = 0; // -> will draw immediatelly
-                e.tile.origData = e.image;      
-                var canvas = document.createElement( 'canvas' )
-                canvas.width = e.tile.sourceBounds.width;
-                canvas.height = e.tile.sourceBounds.height; 
-                e.tile.context2D = canvas.getContext('2d');
-                delete e.image;
-            }
-        }
-    };
-    this.defaults = {
-        'tile-loaded': function(callback, e) {
-            callback(e);
-        }
-    };
-
-    this.openSD = openSD;
+openSeadragonGL = function(viaGLParams) {
     this.viaGL = new ViaWebGL(viaGLParams);
     this.upToDateTStamp = Date.now();
+    this._shadersLoaded = false;
 };
 
 openSeadragonGL.prototype = {
@@ -52,6 +27,11 @@ openSeadragonGL.prototype = {
      * @param {string} visualisation program fragment shaders components
      */
     setVisualisation: function(visualisation) {
+        if (this._shadersLoaded) {
+            console.warn("Invalid action: visualisation has been already loaded.")
+            return;
+        }
+
         this.viaGL.setVisualisation(visualisation);
     },
 
@@ -61,6 +41,17 @@ openSeadragonGL.prototype = {
      */
     switchVisualisation: function(visIdx) {
         this.viaGL.switchVisualisation(visIdx);
+    },
+
+    /**
+     * Make ViaWebGL download and prepare visualisations,
+     * called inside init() if not called manually before
+     * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
+     */
+    loadShaders: function(onPrepared=function(){}) {
+        if (this._shadersLoaded) return;
+        this.viaGL.prepare(onPrepared);
+        this._shadersLoaded = true;
     },
 
     /**
@@ -92,7 +83,6 @@ openSeadragonGL.prototype = {
         var imageTileNav = this.openSD.navigator.world.getItemAt(idx);
         imageTileNav._drawer.context.clearRect(0, 0, imageTileNav._drawer.context.canvas.width, imageTileNav._drawer.context.canvas.height);
 
-
         world.draw();
         this.openSD.navigator.world.draw();
     },
@@ -103,77 +93,6 @@ openSeadragonGL.prototype = {
      */
     GL: function() {
         return this.viaGL.gl;
-    },
-
-    //////////////////////////////////////////////////////////////////////////////
-    ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
-    //////////////////////////////////////////////////////////////////////////////
-
-    // Map to viaWebGL and openSeadragon
-    init: function() {
-        // Instead of choosing loaded/drawing, always use loaded
-        this.addHandler('tile-loaded');
-
-        var open = this.merger.bind(this);
-        this.openSD.addHandler('open',open);
-        return this;
-    },
-    // User adds events
-    addHandler: function(key,custom) {
-        if (key in this.defaults){
-            this[key] = this.defaults[key];
-        }
-        if (typeof custom === 'function') {
-            this[key] = custom;
-        }
-    },
-
-    // Merge with viaGL
-    merger: function(e) {
-        // Take GL height and width from OpenSeaDragon
-        this.width = this.openSD.source.getTileWidth();
-        this.height = this.openSD.source.getTileHeight();
-        // Add all viaWebGL properties
-        for (var key of this.and(this.viaGL)) {
-            this.viaGL[key] = this[key];
-        }
-        this.viaGL.init().then(this.adder.bind(this));
-    },
-    // Add all seadragon properties
-    adder: function(e) {
-        for (var key of this.and(this.defaults)) {
-            var handler = this[key].bind(this);
-            var interface = this.interface[key].bind(this);
-            // Add all openSeadragon event handlers
-
-            //todo fix?
-            this.openSD.addHandler(key, function(e) {
-                handler.call(this, interface, e);
-            });
-        }
-
-        //hardcoded handler for re-drawing elements from cache
-        var cacheHandler = function(e) {
-            if (e.tile.webglRefresh <= this.upToDateTStamp) {
-                e.tile.webglRefresh = this.upToDateTStamp + 1;
-
-                // Render a webGL canvas to an input canvas using cached version
-                var output = this.viaGL.toCanvas(e.tile.origData, e);
-        
-                // Note: you can comment out clearing if you don't use transparency 
-                e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
-                e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
-            }
-        }.bind(this);
-        this.openSD.addHandler('tile-drawing', cacheHandler);
-
-        this.openSD.navigator.addHandler('tile-drawing', cacheHandler);
-        this.openSD.navigator.addHandler('tile-loaded', this.interface["tile-loaded"].bind(this));
-    },
-
-    // Joint keys
-    and: function(obj) {
-      return Object.keys(obj).filter(Object.hasOwnProperty,this);
     },
 
     // Add your own button to OSD controls
@@ -193,5 +112,61 @@ openSeadragonGL.prototype = {
         this.openSD.clearControls().buttons.buttons.push(new OpenSeadragon.Button(terms));
         var toolbar = new OpenSeadragon.ButtonGroup({buttons: this.openSD.buttons.buttons});
         this.openSD.addControl(toolbar.element,{anchor: OpenSeadragon.ControlAnchor.TOP_LEFT});
+    },        
+
+    //////////////////////////////////////////////////////////////////////////////
+    ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
+    //////////////////////////////////////////////////////////////////////////////
+
+
+    init: function(openSeaDragonInstance) {  
+        this.openSD = openSeaDragonInstance;
+        if (!this._shadersLoaded) {
+            this.loadShaders();
+        }
+    
+        var tileLoaded = this._tileLoaded.bind(this);
+        var tileDrawing = this._tileDrawing.bind(this);
+
+        this.openSD.addHandler('tile-drawing', tileDrawing);
+        this.openSD.addHandler('tile-loaded', tileLoaded);
+
+        this.openSD.navigator.addHandler('tile-drawing', tileDrawing);
+        this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
+         
+        let _this = this;
+        this.openSD.addHandler('open', function(e) {
+            _this.viaGL.width = _this.openSD.source.getTileWidth();
+            _this.viaGL.height = _this.openSD.source.getTileWidth();
+            _this.viaGL.init();
+        });
+ 
+        return this;
+    },
+
+    _tileLoaded: function(e) {
+        if (! e.image) return;
+        if (this.viaGL.willUseCanvas(e.image, e)) {
+            e.tile.webglRefresh = 0; // -> will draw immediatelly
+            e.tile.origData = e.image;      
+            var canvas = document.createElement( 'canvas' )
+            canvas.width = e.tile.sourceBounds.width;
+            canvas.height = e.tile.sourceBounds.height; 
+            e.tile.context2D = canvas.getContext('2d');
+            delete e.image;
+        }
+    },
+
+    _tileDrawing: function(e) {
+        if (e.tile.webglRefresh <= this.upToDateTStamp) {
+            e.tile.webglRefresh = this.upToDateTStamp + 1;
+
+            // Render a webGL canvas to an input canvas using cached version
+            var output = this.viaGL.toCanvas(e.tile.origData, e);
+
+            // Note: you can comment out clearing if you don't use transparency 
+            e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
+            e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
+        }
     }
 }
