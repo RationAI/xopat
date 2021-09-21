@@ -1,21 +1,21 @@
-#system-message { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
-#system-message .material-icons {color: var(--color-border-inverse);}
+.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
+.system-container .material-icons {color: var(--color-border-inverse);}
 #main-panel {
-    z-index: 9999;
+    z-index: 90;
     right: 0;
     transition: right 0.3s;
 }
 
 #main-panel-hide {
     position: fixed;
-    z-index: 99999;
+    z-index: 91;
     top: 5px;
     cursor: pointer;
 }
 
 #main-panel-show {
     position: fixed;
-    z-index: 999;
+    z-index: 89;
     top: 5px;
     right: 5px;
     cursor: pointer;
@@ -86,6 +86,16 @@
     background: var(--color-border-overlay) !important; /*dirty using border color but not usable BG colors*/
 }
 
+.tutorial-item {
+    transition: all .2s ease-in-out;
+    border: 3px solid transparent; background: rgb(34 39 46 / 22%); cursor:pointer;
+}
+
+.tutorial-item:hover {
+    transform: scale(1.05);
+    
+}
+
 /**
 =====================
 UTILITIES
@@ -127,7 +137,7 @@ UTILITIES
     top: 0;
     left: 0;
     filter: brightness(0.3);
-    background: #808080e6;
+    background: #22272ead;
 }
 
 /* For somre reason Github css does not style input range */

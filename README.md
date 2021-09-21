@@ -49,7 +49,7 @@ Then, based on the presence of `visualisation` the user is
                  }
              }, {
                  "data": "Probability layer",
-                 "type:": "edge", 
+                 "type": "edge", 
                  "visible": "1", 
                  "params": { 
                     "color": "#fa0058"

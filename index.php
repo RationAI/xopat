@@ -67,7 +67,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <title>Visualisation</title>
 
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./github.css">
+  <link rel="stylesheet" href="./external/primer_css.css">
 
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
@@ -116,6 +116,13 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <script src="./webgl/openSeadragonGLdynamic.js"></script>
   <script src="./webgl/viaWebGLdynamic.js"></script>
 
+  <!--Tutorials-->
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
+  <link rel="stylesheet" href="./external/enjoyhint.css">
+  <script src="./external/enjoyhint.min.js"></script>
+
 </head>
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
@@ -125,11 +132,20 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   </div>
 
   <!-- System messaging -->
-  <div id="system-message" class="d-none">
+  <div id="system-message" class="d-none system-container">
     <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('visibility', 'visible'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="visibility: hidden;"></div>
+  </div>
+
+  <!--Tutorials-->
+  <div id="tutorials-container" class="d-none system-container">
+    <div class="f1-light text-center clearfix">Select a tutorial</div>
+    <p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>
+    <br>
+    <div id="tutorials"></div>
+    <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
   </div>
 
   <!-- Panel -->
@@ -143,11 +159,12 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
       <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
     </div>
 
-    <div class="inner-panel d-flex" style="margin-top: 320px;">
-      <span> Overlay opacity: &emsp;</span>
-      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 165px;">&emsp;
-      <span onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Export <span class="material-icons">download</span></span>
+    <div id="general-controls" class="inner-panel d-flex" style="margin-top: 320px;">
+      <span> Opacity: &emsp;</span>
+      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 130px;">&emsp;
+      <span id="global-export" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Export <span class="material-icons">download</span></span>
       <a style="display:none;" id="export-visualisation"></a>
+      <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;">Tutorial <span class="material-icons">school</span></span>
     </div> <!--Height of navigator = margn top of this div + padding-->
     <div id="panel-shaders" class="inner-panel" > 
 
@@ -156,7 +173,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
       <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
 
-          <span class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+          <span id="shaders-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
           
           <select name="shaders" id="shaders" style="max-width: 88%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
             <!--populated with shaders from the list -->
@@ -318,6 +335,7 @@ if($errorSource) {
     });
     viewer.gestureSettingsMouse.clickToZoom = false;
 
+
     /*---------------------------------------------------------*/
     /*------------ Init                          --------------*/
     /*---------------------------------------------------------*/
@@ -327,6 +345,12 @@ if($errorSource) {
     });
     seaGL.init(viewer);
 
+    
+    viewer.addHandler('open-failed', function(e) {
+      //todo handle cases where image is not loaded properly
+      alert("Open failed");
+    });
+
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
@@ -335,6 +359,63 @@ if($errorSource) {
     function redraw() {
       seaGL.redraw(viewer.world, layerIDX);
     }
+
+    // Tutorial functionality
+    var Tutorials = {
+      tutorials: $("#tutorials"), 
+      tutContainer: $("#tutorials-container"),
+      screenContainer: $("#viewer-container"),
+      steps: [],
+    
+      show: function() {
+          this.tutContainer.removeClass("d-none");
+          this.screenContainer.addClass("disabled");
+      },
+
+      hide: function() {
+          this.tutContainer.addClass("d-none");
+          this.screenContainer.removeClass("disabled");
+      },
+
+      add: function(name, description, icon, steps) {
+        if (!icon) icon = "school";
+        this.tutorials.append(`
+          <div class='d-inline-block mx-1 px-2 py-2 pointer v-align-top rounded-2 tutorial-item' onclick="Tutorials.run(${this.steps.length});">
+          <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p style='max-width: 150px;'>${description}</div>`);
+        this.steps.push(steps);
+      },
+
+      run: function(index) {
+        if (index >= this.steps.length || index < 0) return;
+        $('#main-panel').css('right', '0px');
+        let enjoyhintInstance = new EnjoyHint({});
+        enjoyhintInstance.set(this.steps[index]);
+        this.hide();
+        enjoyhintInstance.run();
+      }
+    }
+
+    Tutorials.add("Basic functionality", "learn how the visualiser works", "foundation", [ {
+    'next #viewer-container' : 'You can navigate in the content either using mouse, or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
+  },{
+    'next #main-panel' : 'On the right, the Main Panel holds most functionality and also allows to interact with plugins.',
+  }, {
+    'next #navigator-container' : 'An interactive navigator can be used for orientation or to jump quickly on different areas.',
+  }, {
+    'next #general-controls' : 'These controls allow to affect the whole visualisation, which consists of two layers: the tissue scan and the data layer above.'
+  }, {
+    'next #global-opacity' : 'You can control the opacity of the data layer here.'
+  }, {
+    'next #global-export' : 'If you want to share the visualisation, you can export it here - including all active plugins and changes you\'ve made.'
+  }, {
+    'next #panel-shaders' : 'The data layer -the core visualisation functionality- can be controlled here. Hovering over the element will show additional hidden controls.'
+  }, {
+    'click #shaders-pin' : 'Click on the pin to set this controls subpanel to be always visible.'
+  }, {
+    'next #shaders' : 'Multiple different visualisations are supported - you can select which one is being displayed.'
+  }, {
+    'next #shader-options' : 'Each visualisation consists of several data parts and their interpretation. Here, you can control each part separately, and also drag-n-drop to reorder.'
+  }]);
 
     // load desired shader upon selection
     $("#shaders").on("change", function () {
@@ -378,8 +459,8 @@ if($errorSource) {
     });
 
     document.addEventListener('keydown', (e) => {
-      let bounds = viewer.viewport.getBounds(),
-          zoom = viewer.viewport.getZoom(),
+      let zoom = null,
+          bounds = viewer.viewport.getBounds(),
           speed = 0.3;
 			switch (e.key) {
         case "Down": // IE/Edge specific value
@@ -399,10 +480,15 @@ if($errorSource) {
           bounds.x += speed*bounds.width;
           break;
         case "+":
+          zoom = viewer.viewport.getZoom();
           viewer.viewport.zoomTo(zoom + zoom * speed * 3);
           return;
         case "-":
+          zoom = viewer.viewport.getZoom();
           viewer.viewport.zoomTo(zoom - zoom * speed * 2);
+          return;
+        case "h":
+          Tutorials.show();
           return;
         default:
           return; // Quit when this doesn't handle the key event.
@@ -496,7 +582,7 @@ if($errorSource) {
       redraw();
     }
 
-    
+
     function pinClick(jQSelf, jQTargetParent) {
       if (jQTargetParent.hasClass('force-visible')) {
         jQTargetParent.removeClass('force-visible');
@@ -571,6 +657,7 @@ if($errorSource) {
    var PLUGINS = {
       osd: viewer,
       seaGL: seaGL,
+      addTutorial: Tutorials.add,
       appendToMainMenu: function(title, titleHtml, html, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
       },

@@ -48,6 +48,7 @@ This global variable contains a lot of useful references:
 - `seaGL` Instance of underlying OpenSeadragon GL library
 - `imageLayer` Instance of `TiledImage` - OSD Class, a root for the tissue visualisation layer (0)
 - `dataLayer` Instance of `TiledImage` - OSD Class, a root for the data visualisation layer (1)
+- `addTutorial(title, description, icon, steps)` - add tutorial series, icon is an identifier icon string from material design (google) icons, steps is an array of objects that define the tutorial, for more info see [how are steps defined](https://github.com/xbsoftware/enjoyhint).
 - `appendToMainMenu(title, titleHtml, html, id)` - both this and functions below allow for insertion of `HTML` into the Main Panel
 - `appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id)`
     - `title`: plugin title to display
