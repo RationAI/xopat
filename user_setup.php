@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <title>Visualisation</title>
 
-  <link rel="stylesheet" href="./github.css">
+  <link rel="stylesheet" href="./external/primer_css.css">
   
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 

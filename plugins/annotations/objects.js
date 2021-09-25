@@ -1,11 +1,13 @@
 //All objects implement these functions:
 //  - create(..., options) - will create object of the type, and add all options passed in the object
 //  - copy(...) - will make copy with its properties
-//  - initCreate(...)
-//  - updateCreate(...)
-//  - initEdit(...)
-//  - updateEdit(...)
-//  - finish(...)
+//  - instantCreate(...) - will create an object on-click: approximation of underlying visualisation area
+//  - initCreate(...) - wil init manual creation
+//  - updateCreate(...) - update manual creation
+//  - initEdit(...) - init manual edit
+//  - updateEdit(...) - update manual edit
+//  - finishDirect(...) - finish any ongoing changes directly (mouse release)
+//  - finishIndirect(...) - finish any ongoing changes indirectly (state change)
 Rect = function(context) {
     this._context = context;
     this._origX = null;
@@ -56,7 +58,20 @@ Rect.prototype = {
         });    
 	},
 
-    // initialize attributes, prepare for new drawing
+    instantCreate: function(point, isLeftClick=true) {
+        let bounds = this._context._getSimpleApproxObjectBounds(point);
+		let obj = this.create(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y, this._context.objectOptions(isLeftClick));
+		//this._context.currentAnnotationObjectUpdater = this.rectangle;
+		this._context.overlay.fabricCanvas().add(obj);
+		this._context.history.push(obj);
+		this._context.overlay.fabricCanvas().setActiveObject(obj);
+		this._context.overlay.fabricCanvas().renderAll();
+    },
+
+    isValidShortCreationClick() {
+        return false;
+    },
+
     initCreate: function (x, y, isLeftClick=true) {
         this._origX = x;
         this._origY = y;
@@ -78,15 +93,24 @@ Rect.prototype = {
 
     initEdit: function(p) {
         //do nothing
-     },
+    },
  
-     updateEdit: function (p) {
+    updateEdit: function (p) {
          //do nothing
-     },
+    },
  
-     finish: function () {
-         //do nothing
-     }
+    finishDirect: function () {
+        let obj = this.getCurrentObject();
+        if (!obj) return;
+        this._context.history.push(obj);
+        this._context.overlay.fabricCanvas().setActiveObject(obj);
+        this._context.overlay.fabricCanvas().renderAll();
+        this._context.overlay.fabricCanvas().setActiveObject(obj);
+    },
+
+    finishIndirect: function () {
+        //do nothing
+    }
 }
 
 Ellipse = function(context) {
@@ -143,6 +167,19 @@ Ellipse.prototype = {
         });     
 	},
 
+    instantCreate: function(point, isLeftClick=true) {
+        let bounds = this._context._getSimpleApproxObjectBounds(point);
+		let obj = this.create(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2, this._context.objectOptions(isLeftClick));
+		//this._context.currentAnnotationObjectUpdater = this.rectangle;
+		this._context.overlay.fabricCanvas().add(obj);
+		this._context.history.push(obj);
+		this._context.overlay.fabricCanvas().setActiveObject(obj);
+		this._context.overlay.fabricCanvas().renderAll();
+    },
+
+    isValidShortCreationClick() {
+        return false;
+    },
 
     // initialize attributes, prepare for new drawing
     initCreate: function (x, y, isLeftClick=true) {
@@ -172,7 +209,16 @@ Ellipse.prototype = {
 		//do nothing
 	},
 
-    finish: function () {
+    finishDirect: function () {
+        let obj = this.getCurrentObject();
+        if (!obj) return;
+        this._context.history.push(obj);
+        this._context.overlay.fabricCanvas().setActiveObject(obj);
+        this._context.overlay.fabricCanvas().renderAll();
+        this._context.overlay.fabricCanvas().setActiveObject(obj);
+    },
+
+    finishIndirect: function () {
         //do nothing
     }
 }
@@ -228,6 +274,91 @@ Polygon.prototype = {
 		});
 	},
 
+    instantCreate: function(point, isLeftClick=true) {
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		this._context.changeTile(viewportPos);
+
+		let points = [];
+		this.comparator = function (pix) {
+			return (pix[3] > this._context.alphaSensitivity && (pix[0] > 200 || pix[1] > 200));
+		}
+
+		var x = eventPosition.x;
+		var y = eventPosition.y;
+
+		let origPixel = this._context.getPixelData(eventPosition);
+		if (!this.comparator(origPixel)) {
+			this._context.messenger.show("Outside a region - decrease sensitivity to select.", 2000, this._context.messenger.MSG_INFO);
+			return
+		};
+
+		if (origPixel[0] > 200) {
+			this.comparator = function (pix) {
+				return pix[3] > this._context.alphaSensitivity && pix[0] > 200;
+			}
+		} else {
+			this.comparator = function (pix) {
+				return pix[3] > this._context.alphaSensitivity && pix[1] > 200;
+			}
+		}
+
+		//speed based on ZOOM level (detailed tiles can go with rougher step)
+		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
+		let level = this._context.currentTile.level;
+		let maxSpeed = 24;
+		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
+
+		//	After each step approximate max distance and abort if too small
+
+		//todo same points evaluated multiple times seems to be more stable, BUT ON LARGE CANVAS!!!...
+
+		var maxX = 0, maxY = 0;
+		this._context._growRegionInDirections(x - 1, y, [-1, 0], [[0, -1], [0, 1]], points, speed, this._context.isValidPixel.bind(this._context));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+		this._context._growRegionInDirections(x + 1, y, [1, 0], [[0, -1], [0, 1]], points, speed, this._context.isValidPixel.bind(this._context));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+		this._context._growRegionInDirections(x, y + 1, [0, -1], [[-1, 0], [1, 0]], points, speed, this._context.isValidPixel.bind(this._context));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+		this._context._growRegionInDirections(x, y - 1, [0, 1], [[-1, 0], [1, 0]], points, speed, this._context.isValidPixel.bind(this._context));
+		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
+		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
+
+		if (maxX < 10 || maxY < 10) {
+			this._context.messenger.show("Failed to create region.", 3000, this._context.messenger.MSG_WARN);
+			return;
+		}
+
+		points = hull(points, 2 * speed);
+		let p1 = points[0]; p2 = points[1];
+		let result = [this._context.toGlobalPointXY(p1[0], p1[1])];
+
+		for (var i = 2; i < points.length; i++) {
+			//three consecutive points on a line, discard
+			if ((Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
+				|| (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
+				p2 = points[i];
+				continue;
+			}
+
+			p1 = p2;
+			p2 = points[i];
+			result.push(this._context.toGlobalPointXY(p1[0], p1[1]));
+		}
+
+		let obj = this.create(result, this._context.objectOptions(isLeftClick));
+		this._context.overlay.fabricCanvas().add(obj);
+
+		this._context.history.push(obj);
+		this._context.overlay.fabricCanvas().setActiveObject(obj);
+		this._context.overlay.fabricCanvas().renderAll();
+    },
+
+    isValidShortCreationClick() {
+        return true;
+    },
 
     initCreate: function (x, y, isLeftClick=true) {
         if (!this.polygonBeingCreated) {
@@ -395,8 +526,12 @@ Polygon.prototype = {
 		this._context.overlay.fabricCanvas().sendToBack(this.currentlyEddited);
 	},
 
+    finishDirect: function () {
+        //do nothing
+    },
+
     // generate finished polygon
-    finish: function () {
+    finishIndirect: function () {
         var points = new Array(), _this=this;
         $.each(this.pointArray, function (index, point) {
             points.push({
@@ -418,7 +553,6 @@ Polygon.prototype = {
             this._context.overlay.fabricCanvas().remove(this.currentlyEddited);
             left = this.originallyEddited.isLeftClick;
         };
-
 
         if (this.pointArray.length < 3) {
             this._initialize(false); //clear

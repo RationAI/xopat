@@ -23,8 +23,7 @@ OSDAnnotations = function (incoming) {
 	*/
 	this.showAnnotations = true;
 	/* Annotation property related data */
-	this.currentAnnotationObjectUpdater = null; //if user drags what function is being used to update
-	this.annotationType = "rect";
+	//this.currentAnnotationObjectUpdater = null; //if user drags what function is being used to update
 	this.currentAnnotationColor = "#ff2200";
 
 	this.alphaSensitivity = 65; //at what threshold the auto region outline stops
@@ -43,6 +42,7 @@ OSDAnnotations = function (incoming) {
 	this.polygon = new Polygon(this);
 	this.ellipse = new Ellipse(this);
 	this.rectangle = new Rect(this);
+	this.currentAnnotationObjectUpdater = this.rectangle;
 };
 
 OSDAnnotations.prototype = {
@@ -86,9 +86,9 @@ if ($(this).attr('data-ref') === 'on'){
 }"> visibility</span>`,
 `<span>Opacity: &emsp;</span><input type="range" id="opacity_control" min="0" max="1" value="0.4" step="0.1">			  
 <div class="radio-group">
-		<button class="btn btn-selected" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.annotationType='rect';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> crop_5_4 </span></button>
-		<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.annotationType='ellipse';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> panorama_fish_eye </span></button>
-		<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.annotationType='polygon';$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> share </span></button>		  
+		<button class="btn btn-selected" type="button" name="annotationType" id="rectangle" autocomplete="off" value="rect" checked onclick="openseadragon_image_annotations.currentAnnotationObjectUpdater=openseadragon_image_annotations.rectangle;$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> crop_5_4 </span></button>
+		<button class="btn" type="button" name="annotationType" id="ellipse" autocomplete="off" value="ellipse" onclick="openseadragon_image_annotations.currentAnnotationObjectUpdater=openseadragon_image_annotations.ellipse;$(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> panorama_fish_eye </span></button>
+		<button class="btn" type="button" name="annotationType" id="polygon" autocomplete="off" value="polygon" onclick="openseadragon_image_annotations.currentAnnotationObjectUpdater=openseadragon_image_annotations.polygon;(this).parent().children().removeClass('btn-selected');$(this).addClass('btn-selected');"><span class="material-icons"> share </span></button>		  
 </div>
 <a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
 <a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
@@ -199,7 +199,8 @@ if ($(this).attr('data-ref') === 'on'){
 		this.toolRadius = $("#fft-size");
 
 
-		  window.addEventListener("focus", function(event) 
+		//Window switch alt+tab makes the mode stuck
+		window.addEventListener("focus", function(event) 
 		  { 
 			openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO);
 
@@ -225,37 +226,12 @@ if ($(this).attr('data-ref') === 'on'){
 			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
 			if (delta > 100) return; // just navigate if click longer than 100ms
 
-			switch (openseadragon_image_annotations.annotationType) {
-				case 'rect':
-					openseadragon_image_annotations.createApproxRectangle(point, isLeftClick);
-					break;
-				case 'ellipse':
-					openseadragon_image_annotations.createApproxEllipse(point, isLeftClick);
-					break;
-				case 'polygon':
-					openseadragon_image_annotations.createRegionGrowingOutline(point, isLeftClick);
-					break;
-				default:
-					break;
-			}
+			this.currentAnnotationObjectUpdater.instantCreate(point, isLeftClick);
 		}
 		
 		function initCreateCustomAnnotation(point, event, isLeftClick) {
 			let _this = openseadragon_image_annotations;
 
-			switch (_this.annotationType) {
-				case 'polygon':
-					_this.currentAnnotationObjectUpdater = _this.polygon;
-					break;	 
-				case 'rect':
-					_this.currentAnnotationObjectUpdater = _this.rectangle;
-					break;
-				case 'ellipse':
-					_this.currentAnnotationObjectUpdater = _this.ellipse;
-					break;
-				default:
-					return; //other types not support, no mouse motion tracking
-			}
 			let pointer = _this.toGlobalPointXY(point.x, point.y);
 			_this.currentAnnotationObjectUpdater.initCreate(pointer.x, pointer.y, isLeftClick);
 		}
@@ -267,32 +243,13 @@ if ($(this).attr('data-ref') === 'on'){
 
 			// if click too short, user probably did not want to create such object, discard
 			if (delta < 100) { 
-				//TODO this deletes created elements if wrong event registered (sometimes)
-				switch (_this.currentAnnotationObjectUpdater.type) {
-					case 'rect':
-					case 'ellipse': //clean
-						_this.overlay.fabricCanvas().remove(_this.currentAnnotationObjectUpdater.getCurrentObject());
-						return;
-					case 'polygon': // polygon valid short click 
-						break;
-					default:
-						return;
+				if (!_this.currentAnnotationObjectUpdater.isValidShortCreationClick()) {
+					_this.overlay.fabricCanvas().remove(_this.currentAnnotationObjectUpdater.getCurrentObject());
+					return;
 				}
 			}
 
-			switch (_this.currentAnnotationObjectUpdater.type) {
-				case 'rect':
-				case 'ellipse':
-					let obj = _this.currentAnnotationObjectUpdater.getCurrentObject();
-					_this.history.push(obj);
-					_this.overlay.fabricCanvas().setActiveObject(obj);
-					_this.overlay.fabricCanvas().renderAll();
-					_this.overlay.fabricCanvas().setActiveObject(obj);
-					break;
-				case 'polygon': //no action, polygon is being created by click 
-				default:
-					break;
-			}
+			_this.currentAnnotationObjectUpdater.finishDirect();
 		}
 
 		function initFreeFormTool(point, event, isLeftClick) {
@@ -320,7 +277,7 @@ if ($(this).attr('data-ref') === 'on'){
 
 		function finishFreeFormTool(point, event, isLeftClick) {
 			let _this = openseadragon_image_annotations;
-			let result = _this.modifyTool.finish();
+			let result = _this.modifyTool.finishCreate();
 			if (result) _this.overlay.fabricCanvas().setActiveObject(result);
 		}
 
@@ -588,8 +545,6 @@ if ($(this).attr('data-ref') === 'on'){
 		});
 
 
-
-
 		// listen for annotation send button
 		$('#sendAnnotation').click(function (event) {
 			console.log("sending");
@@ -835,10 +790,12 @@ if ($(this).attr('data-ref') === 'on'){
 			this.overlay.fabricCanvas().defaultCursor = "crosshair";
 			this.overlay.fabricCanvas().hoverCursor = "pointer";
 
-			if (this.polygon.currentlyEddited) {
-				//save if eddited
-				this.polygon.finish();
-			}
+			// if (this.polygon.currentlyEddited) {
+			// 	//save if eddited
+			// 	this.polygon.finishCreate();
+			// }
+			//TODO also finish indirect if creation object changed to another object
+			this.currentAnnotationObjectUpdater.finishIndirect();
 
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
@@ -873,26 +830,6 @@ if ($(this).attr('data-ref') === 'on'){
 
 	*****************************************************************************************************************/
 
-	//todo generic function that creates object? kinda copy paste
-	createApproxEllipse: function (eventPosition, isLeftClick) {
-		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		let obj = this.ellipse.create(bounds.left.x, bounds.top.y, (bounds.right.x - bounds.left.x) / 2, (bounds.bottom.y - bounds.top.y) / 2, openseadragon_image_annotations.objectOptions(isLeftClick));
-		this.currentAnnotationObjectUpdater = this.ellipse;
-		this.overlay.fabricCanvas().add(obj);
-		this.history.push(obj);
-		this.overlay.fabricCanvas().setActiveObject(obj);
-		this.overlay.fabricCanvas().renderAll();
-	},
-
-	createApproxRectangle: function (eventPosition, isLeftClick) {
-		let bounds = this._getSimpleApproxObjectBounds(eventPosition);
-		let obj = this.rectangle.create(bounds.left.x, bounds.top.y, bounds.right.x - bounds.left.x, bounds.bottom.y - bounds.top.y, openseadragon_image_annotations.objectOptions(isLeftClick));
-		this.currentAnnotationObjectUpdater = this.rectangle;
-		this.overlay.fabricCanvas().add(obj);
-		this.history.push(obj);
-		this.overlay.fabricCanvas().setActiveObject(obj);
-		this.overlay.fabricCanvas().renderAll();
-	},
 
 	createOutline: async function (eventPosition) {
 		console.log("called outline");
@@ -1121,92 +1058,6 @@ if ($(this).attr('data-ref') === 'on'){
 
 		//$(".to-delete").remove();
 	},
-
-	createRegionGrowingOutline: function (eventPosition, isLeftClick) {
-
-		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		this.changeTile(viewportPos);
-
-		let points = [];
-		this.comparator = function (pix) {
-			return (pix[3] > this.alphaSensitivity && (pix[0] > 200 || pix[1] > 200));
-		}
-
-		var x = eventPosition.x;
-		var y = eventPosition.y;
-
-		let origPixel = this.getPixelData(eventPosition);
-		if (!this.comparator(origPixel)) {
-			this.messenger.show("Outside a region - decrease sensitivity to select.", 2000, this.messenger.MSG_INFO);
-			return
-		};
-
-		if (origPixel[0] > 200) {
-			this.comparator = function (pix) {
-				return pix[3] > this.alphaSensitivity && pix[0] > 200;
-			}
-		} else {
-			this.comparator = function (pix) {
-				return pix[3] > this.alphaSensitivity && pix[1] > 200;
-			}
-		}
-
-		//speed based on ZOOM level (detailed tiles can go with rougher step)
-		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
-		let level = this.currentTile.level;
-		let maxSpeed = 24;
-		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
-
-		//	After each step approximate max distance and abort if too small
-
-		//todo same points evaluated multiple times seems to be more stable, BUT ON LARGE CANVAS!!!...
-
-		var maxX = 0, maxY = 0;
-		this._growRegionInDirections(x - 1, y, [-1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-		this._growRegionInDirections(x + 1, y, [1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-		this._growRegionInDirections(x, y + 1, [0, -1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-		this._growRegionInDirections(x, y - 1, [0, 1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
-		maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-
-		if (maxX < 10 || maxY < 10) {
-			this.messenger.show("Failed to create region.", 3000, this.messenger.MSG_WARN);
-			return;
-		}
-
-		points = hull(points, 2 * speed);
-		let p1 = points[0]; p2 = points[1];
-		let result = [this.toGlobalPointXY(p1[0], p1[1])];
-
-		for (var i = 2; i < points.length; i++) {
-			//three consecutive points on a line, discard
-			if ((Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-				|| (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
-				p2 = points[i];
-				continue;
-			}
-
-			p1 = p2;
-			p2 = points[i];
-			result.push(this.toGlobalPointXY(p1[0], p1[1]));
-		}
-
-		let obj = this.polygon.create(result, this.objectOptions(isLeftClick));
-		this.overlay.fabricCanvas().add(obj);
-
-		this.history.push(obj);
-		this.overlay.fabricCanvas().setActiveObject(obj);
-		this.overlay.fabricCanvas().renderAll();
-
-		//$(".to-delete").remove();
-	},
-
 
 	//used to detect auto size of a primitive object (rect/ellipse)
 	_getSimpleApproxObjectBounds: function (eventPosition) {
