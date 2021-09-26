@@ -1,4 +1,4 @@
-//All objects implement these functions:
+//All objects implement these functions (no native interface support):
 //  - create(..., options) - will create object of the type, and add all options passed in the object
 //  - copy(...) - will make copy with its properties
 //  - instantCreate(...) - will create an object on-click: approximation of underlying visualisation area
@@ -8,14 +8,18 @@
 //  - updateEdit(...) - update manual edit
 //  - finishDirect(...) - finish any ongoing changes directly (mouse release)
 //  - finishIndirect(...) - finish any ongoing changes indirectly (state change)
+
 Rect = function(context) {
     this._context = context;
     this._origX = null;
     this._origY = null;
     this.type = "rect";
 }
-
 Rect.prototype = {
+    getIcon: function () {
+      return "crop_5_4";  
+    },
+
     getCurrentObject: function() {
         return this._current;
     },
@@ -80,6 +84,7 @@ Rect.prototype = {
     },
 
     updateCreate: function (x, y) {
+        if (!this._current) return;
         if (this._origX > x) {
             this._current.set({ left: Math.abs(x) });
         };
@@ -106,6 +111,7 @@ Rect.prototype = {
         this._context.overlay.fabricCanvas().setActiveObject(obj);
         this._context.overlay.fabricCanvas().renderAll();
         this._context.overlay.fabricCanvas().setActiveObject(obj);
+        this._current = undefined;
     },
 
     finishIndirect: function () {
@@ -121,6 +127,10 @@ Ellipse = function(context) {
 }
 
 Ellipse.prototype = {
+    getIcon: function () {
+        return "lens";  
+    },
+
     getCurrentObject: function() {
         return this._current;
     },
@@ -190,6 +200,8 @@ Ellipse.prototype = {
     },
 
     updateCreate: function (x, y) {
+        if (!this._current) return;
+
 		if (this._origX > x) {
 			this._current.set({ left: Math.abs(x) });
 		};
@@ -216,6 +228,7 @@ Ellipse.prototype = {
         this._context.overlay.fabricCanvas().setActiveObject(obj);
         this._context.overlay.fabricCanvas().renderAll();
         this._context.overlay.fabricCanvas().setActiveObject(obj);
+        this._current = undefined;
     },
 
     finishIndirect: function () {
@@ -241,6 +254,10 @@ Polygon = function (context) {
 }
 
 Polygon.prototype = {
+    getIcon: function () {
+        return "share";  
+    },
+
     getCurrentObject: function() {
         return this._current;
     },
@@ -275,7 +292,7 @@ Polygon.prototype = {
 	},
 
     instantCreate: function(point, isLeftClick=true) {
-		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(point);
 		this._context.changeTile(viewportPos);
 
 		let points = [];
@@ -283,24 +300,27 @@ Polygon.prototype = {
 			return (pix[3] > this._context.alphaSensitivity && (pix[0] > 200 || pix[1] > 200));
 		}
 
-		var x = eventPosition.x;
-		var y = eventPosition.y;
+		var x = point.x;
+		var y = point.y;
 
-		let origPixel = this._context.getPixelData(eventPosition);
+		let origPixel = this._context.getPixelData(point);
 		if (!this.comparator(origPixel)) {
 			this._context.messenger.show("Outside a region - decrease sensitivity to select.", 2000, this._context.messenger.MSG_INFO);
 			return
 		};
 
+                //todo ugly, move all this stuff here? 
+
 		if (origPixel[0] > 200) {
-			this.comparator = function (pix) {
-				return pix[3] > this._context.alphaSensitivity && pix[0] > 200;
+			this._context.comparator = function (pix) {
+				return pix[3] > this.alphaSensitivity && pix[0] > 200;
 			}
 		} else {
-			this.comparator = function (pix) {
-				return pix[3] > this._context.alphaSensitivity && pix[1] > 200;
+			this._context.comparator = function (pix) {
+				return pix[3] > this.alphaSensitivity && pix[1] > 200;
 			}
 		}
+ 
 
 		//speed based on ZOOM level (detailed tiles can go with rougher step)
 		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
@@ -456,6 +476,8 @@ Polygon.prototype = {
     },
 
     updateCreate: function (x, y) {
+        if (!this.polygonBeingCreated) return;
+        
         let last = this.pointArray[this.pointArray.length-1],
             dy = last.top - y,
             dx = last.left - x;

@@ -38,6 +38,31 @@
   cursor: pointer;
 }
 
+#annotations-left-click:hover:before {
+  content: "Left mouse button";
+  position: absolute;
+  font-size: smaller;
+  top: 0;
+  top: -7px;
+  left: 14px;
+}
+
+#annotations-right-click:hover:before {
+  content: "Right mouse button";
+  position: absolute;
+  font-size: smaller;
+  top: 0;
+  top: -7px;
+  left: 14px;
+}
+
+.highlighted-preset {
+  border-width: 4px !important;
+  border-color: var(--color-border-warning) !important;
+  border-style: solid !important;
+  margin: 2px !important;
+}
+
 /* TODO unused? */
 #input_form {
   display: none;
