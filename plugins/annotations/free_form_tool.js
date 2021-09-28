@@ -25,7 +25,10 @@ FreeFormTool.prototype = {
             case 'ellipse':
                 //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
                 //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
-                let pow2e = 1 - (object.ry * object.ry) / (object.rx * object.rx),
+                let reversed = object.rx < object.ry, //since I am using sqrt, need rx > ry
+                    rx = reversed ? object.ry : object.rx,
+                    ry = reversed ? object.rx : object.ry,
+                    pow2e = 1 - (ry * ry) / (rx * rx),
                     pow3e = pow2e * Math.sqrt(pow2e),
                     pow4e = pow2e * pow2e,
                     pow6e = pow3e * pow3e;
@@ -36,7 +39,11 @@ FreeFormTool.prototype = {
                     let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
                         + ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
                         + (29 * pow6e / 6144) * Math.sin(6 * t);
-                    points.push({ x: object.rx * Math.cos(param) + object.left + object.rx, y: object.ry * Math.sin(param) + object.top + object.ry });
+                    if (reversed) {
+                        points.push({ y: rx * Math.cos(param) + object.top + rx, x: ry * Math.sin(param) + object.left + ry });
+                    } else {
+                        points.push({ x: rx * Math.cos(param) + object.left + rx, y: ry * Math.sin(param) + object.top + ry });
+                    }
                 }
                 this._createPolygonAndSetupFrom(points, object);
                 break;

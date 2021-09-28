@@ -68,7 +68,7 @@ OSDAnnotations.prototype = {
 		//restore presents if any
 		PLUGINS.addPostExport("annotation_presets", this.getPresets.bind(this));
 		let presets = PLUGINS.postData.annotation_presets;
-		if (presets.length > 10) {
+		if (presets && presets.length > 10) {
 			presets = JSON.parse(presets);
 			for (let i = 0; i < presets.length; i++) {
 				let p = new Preset().fromJSONFriendlyObject(presets[i], this);
@@ -169,7 +169,7 @@ OSDAnnotations.prototype = {
 
 		function finishFreeFormTool(point, event, isLeftClick) {
 			let _this = openseadragon_image_annotations;
-			let result = _this.modifyTool.finishCreate();
+			let result = _this.modifyTool.finish();
 			if (result) _this.overlay.fabricCanvas().setActiveObject(result);
 		}
 
@@ -682,7 +682,7 @@ OSDAnnotations.prototype = {
 				case "polygon": select = `<option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon" selected>Polygon</option>`; break;
 				default: console.error('Invalid presset.'); break;
 			}
-			html += `<div class="border-md border-dashed p-1 rounded-3 d-inline-block `;
+			html += `<div class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
 			if (preset === currentPreset) {
 				html += `highlighted-preset"`;
 				_this._pressetIdx = counter;
@@ -690,8 +690,9 @@ OSDAnnotations.prototype = {
 				html += `"`;
 			}
 			html += ` style="cursor:pointer; margin: 5px;" onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');openseadragon_image_annotations._pressetIdx = $(this).index();">
-				<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="openseadragon_image_annotations._presets[$(this).parent().index()].context = openseadragon_image_annotations[this.value];">${select}</select></div>
-				<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="openseadragon_image_annotations._presets[$(this).parent().index()].color = this.value;" value="${preset.color}"></div><br>
+				<span class="material-icons position-absolute top-0 right-0 px-0" onclick="openseadragon_image_annotations._presets.splice($(this).parent().index(), 1);$(this).parent().parent().parent().parent().remove(); openseadragon_image_annotations.showPresets(${isLeftClick}); return false;">delete</span>
+				<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="openseadragon_image_annotations._presets[$(this).parents().eq(2).index()].context = openseadragon_image_annotations[this.value];">${select}</select></div>
+				<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="openseadragon_image_annotations._presets[$(this).parents().eq(2).index()].color = this.value;" value="${preset.color}"></div><br>
 				Comment<br><input class="form-control" type="text" onchange="openseadragon_image_annotations._presets[$(this).parent().index()].comment = this.value;" value="${preset.comment}"><br>
 			</div>`;
 			counter++;

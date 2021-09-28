@@ -366,6 +366,7 @@ if($errorSource) {
       tutContainer: $("#tutorials-container"),
       screenContainer: $("#viewer-container"),
       steps: [],
+      prerequisites: [],
     
       show: function() {
           this.tutContainer.removeClass("d-none");
@@ -377,17 +378,30 @@ if($errorSource) {
           this.screenContainer.removeClass("disabled");
       },
 
-      add: function(name, description, icon, steps) {
+      add: function(name, description, icon, steps, prerequisites=undefined) {
         if (!icon) icon = "school";
         this.tutorials.append(`
           <div class='d-inline-block mx-1 px-2 py-2 pointer v-align-top rounded-2 tutorial-item' onclick="Tutorials.run(${this.steps.length});">
           <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p style='max-width: 150px;'>${description}</div>`);
         this.steps.push(steps);
+        this.prerequisites.push(prerequisites);
       },
 
       run: function(index) {
         if (index >= this.steps.length || index < 0) return;
         $('#main-panel').css('right', '0px');
+        //do prerequisite setup if necessary
+        if(this.prerequisites[index]) this.prerequisites[index]();
+
+        //reset plugins visibility
+        $(".plugins-pin").each(function() {
+          let pin = $(this);
+          let container = pin.parent().children().eq(2);
+          pin.removeClass('pressed');
+          pin.removeClass('locked');
+          container.removeClass('force-visible');
+          container.removeClass('force-hidden');
+        });
         let enjoyhintInstance = new EnjoyHint({});
         enjoyhintInstance.set(this.steps[index]);
         this.hide();
@@ -396,26 +410,34 @@ if($errorSource) {
     }
 
     Tutorials.add("Basic functionality", "learn how the visualiser works", "foundation", [ {
-    'next #viewer-container' : 'You can navigate in the content either using mouse, or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
+    'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
   },{
-    'next #main-panel' : 'On the right, the Main Panel holds most functionality and also allows to interact with plugins.',
+    'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
   }, {
-    'next #navigator-container' : 'An interactive navigator can be used for orientation or to jump quickly on different areas.',
+    'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
   }, {
-    'next #general-controls' : 'These controls allow to affect the whole visualisation, which consists of two layers: the tissue scan and the data layer above.'
+    'next #general-controls' : 'These controls allow to affect <br> the whole visualisation, which consists of two layers: <br> the tissue scan and the data layer above.'
   }, {
-    'next #global-opacity' : 'You can control the opacity of the data layer here.'
+    'next #global-opacity' : 'You can control the opacity <br> of the data layer here.'
   }, {
-    'next #global-export' : 'If you want to share the visualisation, you can export it here - including all active plugins and changes you\'ve made.'
+    'next #global-export' : 'If you want to share the visualisation, <br> you can export it here - including all <br> active plugins and changes you\'ve made.'
   }, {
-    'next #panel-shaders' : 'The data layer -the core visualisation functionality- can be controlled here. Hovering over the element will show additional hidden controls.'
+    'next #panel-shaders' : 'The data layer <br>-the core visualisation functionality-<br> can be controlled here. Hovering over<br> the element will show additional hidden controls.'
   }, {
-    'click #shaders-pin' : 'Click on the pin to set this controls subpanel to be always visible.'
+    'click #shaders-pin' : 'Click on the pin to set <br>this controls subpanel to be always visible.'
   }, {
-    'next #shaders' : 'Multiple different visualisations are supported - you can select which one is being displayed.'
+    'next #shaders' : 'Multiple different visualisations <br>are supported - you can select <br>which one is being displayed.'
   }, {
-    'next #shader-options' : 'Each visualisation consists of several data parts and their interpretation. Here, you can control each part separately, and also drag-n-drop to reorder.'
-  }]);
+    'next #shader-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
+  }], function() {
+    //prerequisite - pin in default state
+    let pin = $("#shaders-pin");
+    let container = pin.parent().children().eq(1);
+    pin.removeClass('pressed');
+    pin.removeClass('locked');
+    container.removeClass('force-visible');
+    container.removeClass('force-hidden');
+  });
 
     // load desired shader upon selection
     $("#shaders").on("change", function () {
@@ -663,7 +685,7 @@ if($errorSource) {
       },
       appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel"><div>
-        <span class="material-icons inline-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
+        <span class="material-icons inline-pin plugins-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
         <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
         </div>
         <div>	
