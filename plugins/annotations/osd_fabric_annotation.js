@@ -15,7 +15,6 @@ OSDAnnotations = function (incoming) {
 	*/
 	this.showAnnotations = true;
 	/* Annotation property related data */
-	//this.currentAnnotationObjectUpdater = null; //if user drags what function is being used to update
 
 	this.alphaSensitivity = 65; //at what threshold the auto region outline stops
 
@@ -33,7 +32,8 @@ OSDAnnotations = function (incoming) {
 
 	// Classes defined in other local JS files
 	this.messenger = new Messenger();
-	this.history = new History(this);
+	this.presets = new PresetManager("presets", this);
+	this.history = new History("history", this, this.presets)
 	this.modifyTool = new FreeFormTool(this);
 
 	// Annotation Objects
@@ -41,7 +41,6 @@ OSDAnnotations = function (incoming) {
 	this.ellipse = new Ellipse(this);
 	this.rectangle = new Rect(this);
 
-	this._presets = [];
 	this._pixelReader = document.createElement('canvas');
 	this._pixelReader.width = 1;
 	this._pixelReader.height = 1;
@@ -69,27 +68,16 @@ OSDAnnotations.prototype = {
 		}
 
 		//restore presents if any
-		PLUGINS.addPostExport("annotation_presets", this.getPresets.bind(this));
+		PLUGINS.addPostExport("annotation_presets", this.presets.export.bind(this.presets));
 		let presets = PLUGINS.postData.annotation_presets;
-		if (presets && presets.length > 10) {
-			presets = JSON.parse(presets);
-			for (let i = 0; i < presets.length; i++) {
-				let p = new Preset().fromJSONFriendlyObject(presets[i], this);
-				this._presets.push(p);
-			}
-		} else {
-			this._presets.push(new Preset(this.rectangle, "", "#58994c"));
-		}
+		this.presets.import(presets);
 
 		this.initHTML();
 		//init history after my own HTML to occur below
 		this.history.init(50);
 		//cache nodes after HTML added
 		this._modesJqNode = $("#annotation-mode");
-		this._leftMouseJqNode = $("#annotations-left-click");
-		this._rightMouseJqNode = $("#annotations-right-click");
-		this.updatePreset(0, true);
-		this.updatePreset(-1, false);
+		this.presets.updatePresetsHTML();
 		this.setMouseOSDInteractive(true);
 
 		this.setupTutorials();
@@ -152,13 +140,14 @@ OSDAnnotations.prototype = {
 		function initFreeFormTool(point, event, isLeftClick) {
 			let _this = openseadragon_image_annotations;
 			let currentObject = _this.overlay.fabricCanvas().getActiveObject();
-			
+
 			let pointer = _this.toGlobalPointXY(point.x, point.y);
 			if (!currentObject) {
-				if (_this._cachedSelection) {
+				if (_this.modifyTool._cachedSelection) {
+					console.log("READ cache");
 					//cached selection from shift press event, because sometimes the click event deselected active object
-					currentObject = _this._cachedSelection;
-					_this._cachedSelection = null;
+					currentObject = _this.modifyTool._cachedSelection;
+					_this.modifyTool._cachedSelection = null;
 				} else {
 					//create tool-shaped object
 					currentObject = _this.polygon.create(_this.modifyTool.getCircleShape(pointer), _this.objectOptions(isLeftClick));
@@ -167,6 +156,7 @@ OSDAnnotations.prototype = {
 					_this.history.push(currentObject);
 				}
 			}
+
 
 			_this.modifyTool.init(currentObject, point, isLeftClick);
 			_this.modifyTool.update(pointer);
@@ -180,13 +170,14 @@ OSDAnnotations.prototype = {
 
 		function handleRightClickUp(o, point) {
 			let _this = openseadragon_image_annotations;
-			if (!_this.cursor.isDown) return;
+			//no preset valid for free form tool... TODO move condition inside switch? 
+			if (!_this.cursor.isDown || (!_this.presets.right && _this.mode !== _this.Modes.FREE_FORM_TOOL)) return;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
-					finishCreateAutoAnnotation(point, o, false, _this.currentRightAnnotationObjectUpdater.context);
+					finishCreateAutoAnnotation(point, o, false, _this.presets.right.context);
 					break;
 				case _this.Modes.CUSTOM:
-					finishCreateCustomAnnotation(point, o, false, _this.currentRightAnnotationObjectUpdater.context);
+					finishCreateCustomAnnotation(point, o, false, _this.presets.right.context);
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					finishFreeFormTool(point, o, false);
@@ -205,13 +196,13 @@ OSDAnnotations.prototype = {
 			// 	handleFabricKeyUpInEditMode(o);
 			// }
 			let _this = openseadragon_image_annotations;
-			if (!_this.cursor.isDown) return;
+			if (!_this.cursor.isDown || !_this.presets.left) return;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
-					finishCreateAutoAnnotation(point, o, true, _this.currentLeftAnnotationObjectUpdater.context);
+					finishCreateAutoAnnotation(point, o, true, _this.presets.left.context);
 					break;
 				case _this.Modes.CUSTOM:
-					finishCreateCustomAnnotation(point, o, true, _this.currentLeftAnnotationObjectUpdater.context);
+					finishCreateCustomAnnotation(point, o, true, _this.presets.left.context);
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					finishFreeFormTool(point, o, true);
@@ -225,15 +216,17 @@ OSDAnnotations.prototype = {
 
 		function handleRightClickDown(o, point) {
 			let _this = openseadragon_image_annotations;
-			if (_this.cursor.isDown) return;
+
+			//no preset valid for free form tool... TODO move condition inside switch?
+			if (_this.cursor.isDown || (!_this.presets.right && _this.mode !== _this.Modes.FREE_FORM_TOOL)) return;
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
-					initCreateAutoAnnotation(point, o, false, _this.currentRightAnnotationObjectUpdater.context);
+					initCreateAutoAnnotation(point, o, false, _this.presets.right.context);
 					break;
 				case _this.Modes.CUSTOM:
-					initCreateCustomAnnotation(point, o, false, _this.currentRightAnnotationObjectUpdater.context);
+					initCreateCustomAnnotation(point, o, false, _this.presets.right.context);
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					initFreeFormTool(point, o, false);
@@ -252,15 +245,15 @@ OSDAnnotations.prototype = {
 			// }
 
 			let _this = openseadragon_image_annotations;
-			if (_this.cursor.isDown) return;
+			if (_this.cursor.isDown || !_this.presets.left) return;
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 			switch (_this.mode) {
 				case _this.Modes.AUTO:
-					initCreateAutoAnnotation(point, o, true, _this.currentLeftAnnotationObjectUpdater.context);
+					initCreateAutoAnnotation(point, o, true, _this.presets.left.context);
 					break;
 				case _this.Modes.CUSTOM:
-					initCreateCustomAnnotation(point, o, true, _this.currentLeftAnnotationObjectUpdater.context);
+					initCreateCustomAnnotation(point, o, true, _this.presets.left.context);
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					initFreeFormTool(point, o, true);
@@ -303,14 +296,14 @@ OSDAnnotations.prototype = {
 			var pointer = _this.overlay.fabricCanvas().getPointer(o.e);
 
 			if (_this.mode === _this.Modes.CUSTOM) {
-				if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-					if (openseadragon_image_annotations.currentLeftAnnotationObjectUpdater) openseadragon_image_annotations.currentLeftAnnotationObjectUpdater.context.updateCreate(pointer.x, pointer.y);
-					if (openseadragon_image_annotations.currentRightAnnotationObjectUpdater) openseadragon_image_annotations.currentRightAnnotationObjectUpdater.context.updateCreate(pointer.x, pointer.y);
+				if (_this.isMouseOSDInteractive()) {
+					if (_this.presets.left) _this.presets.left.context.updateCreate(pointer.x, pointer.y);
+					if (_this.presets.right) _this.presets.right.context.updateCreate(pointer.x, pointer.y);
 
-					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
+					_this.overlay.fabricCanvas().renderAll();
 				}
 			} else if (_this.mode === _this.Modes.FREE_FORM_TOOL) {
-				openseadragon_image_annotations.modifyTool.update(pointer);
+				_this.modifyTool.update(pointer);
 			} 
 		});
 
@@ -381,7 +374,7 @@ OSDAnnotations.prototype = {
 			let _this = openseadragon_image_annotations;
 
 			// switching mode only when no mode AUTO and mouse is up
-			if (!_this.showAnnotations || _this.mode !== _this.Modes.AUTO || _this.cursor.isDown) return;
+			if (!_this.showAnnotations || _this.cursor.isDown) return;
 			
 			if (e.code === "AltLeft") {
 				_this.setMode(_this.Modes.CUSTOM);
@@ -418,7 +411,6 @@ OSDAnnotations.prototype = {
 
 		// listen for annotation send button
 		$('#sendAnnotation').click(function (event) {
-			console.log("sending");
 			//generate ASAPXML annotations
 			var doc = generate_ASAPxml(openseadragon_image_annotations.overlay.fabricCanvas()._objects);
 			var xml_text = new XMLSerializer().serializeToString(doc);
@@ -431,7 +423,6 @@ OSDAnnotations.prototype = {
 
 			//prepare data to be send, (file_name and xml with annotations)
 			var send_data = { "name": file_name, "xml": xml_text };
-			console.log(send_data);
 
 			$.ajaxSetup({
 				headers: {
@@ -546,7 +537,6 @@ OSDAnnotations.prototype = {
 			});
 
 			openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-
 		});
 
 		/*
@@ -628,87 +618,6 @@ OSDAnnotations.prototype = {
 
 	*****************************************************************************************************************/
 
-	updatePreset: function(index, isLeftClick) {
-		let newPreset = (index >= 0 && index < this._presets.length) ? this._presets[index] : false;
-		if (isLeftClick) {
-			this.currentLeftAnnotationObjectUpdater = newPreset;
-		} else {
-			this.currentRightAnnotationObjectUpdater = newPreset;
-		}
-		if (this.currentLeftAnnotationObjectUpdater) {
-			this._leftMouseJqNode.html(this.currentLeftAnnotationObjectUpdater.getHTML(true));
-		} else {
-			this._leftMouseJqNode.html(`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(true);"><span class="material-icons">add</span> Add</div>`);
-		}
-		if (this.currentRightAnnotationObjectUpdater) {
-			this._rightMouseJqNode.html(this.currentRightAnnotationObjectUpdater.getHTML(false));
-		} else {
-			this._rightMouseJqNode.html(`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(false);"><span class="material-icons">add</span> Add</div>`);
-		}
-	},
-
-	showPresets: function (isLeftClick) {
-		let html = "",
-			currentPreset = isLeftClick ? this.currentLeftAnnotationObjectUpdater : this.currentRightAnnotationObjectUpdater,
-			_this = this,
-			counter = 0;
-		if (!currentPreset) currentPreset = this._presets[0];
-
-		this._presets.forEach(preset => {
-			let select = "";
-			
-			switch (preset.context.type) {
-				case "rect": select = `<option value="rectangle" selected>Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Polygon</option>`; break;
-				case "ellipse": select = `<option value="rectangle">Rectangle</option><option value="ellipse" selected>Ellipse</option><option value="polygon">Polygon</option>`; break;
-				case "polygon": select = `<option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon" selected>Polygon</option>`; break;
-				default: console.error('Invalid presset.'); break;
-			}
-			html += `<div id="preset-no-${counter}" class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
-			if (preset === currentPreset) {
-				html += `highlighted-preset"`;
-				_this._pressetIdx = counter;
-			} else {
-				html += `"`;
-			}
-			html += ` style="cursor:pointer; margin: 5px;" onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');openseadragon_image_annotations._pressetIdx = $(this).index();">
-				<span class="material-icons position-absolute top-0 right-0 px-0" onclick="openseadragon_image_annotations._presets.splice($(this).parent().index(), 1);$(this).parent().parent().parent().parent().remove(); openseadragon_image_annotations.showPresets(${isLeftClick}); return false;">delete</span>
-				<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="openseadragon_image_annotations._presets[$(this).parent().parent().index()].context = openseadragon_image_annotations[this.value];">${select}</select></div>
-				<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="openseadragon_image_annotations._presets[$(this).parent().parent().index()].color = this.value;" value="${preset.color}"></div><br>
-				Comment<br><input class="form-control" type="text" onchange="openseadragon_image_annotations._presets[$(this).parent().index()].comment = this.value;" value="${preset.comment}"><br>
-			</div>`;
-			counter++;
-		});
-
-		html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
-			openseadragon_image_annotations._presets.push(new Preset(openseadragon_image_annotations.rectangle, '', '#58994c'));$(this).parent().parent().parent().parent().remove();
-			openseadragon_image_annotations.showPresets(${isLeftClick});
-		"><span class="material-icons">add</span> New</div>`;
-
-		let title = isLeftClick ? "for left click" : "for right click";
-
-		$("body").append(`
-		<div class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
-<details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
-    <div class="Box-header">
-      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
-        <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
-      </button>
-      <h3 class="Box-title">Annotations presets ${title}</h3>
-    </div>
-    <div class="overflow-auto position-relative">
-      <div class="Box-body overflow-auto" style="padding-bottom: 45px;">
-	  ${html}
-	  </div>
-	  <button id="select-annotation-preset" onclick="
-	    if (openseadragon_image_annotations._pressetIdx === undefined) { return false;} let _this = $(this);
-		setTimeout(function(){
-			_this.parent().parent().parent().remove(); openseadragon_image_annotations.updatePreset(openseadragon_image_annotations._pressetIdx, ${isLeftClick}); 
-		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>
-    </div>
-  </details-dialog>
-  </div>
-	`);
-	},
 
 	initHTML: function() {
 		PLUGINS.appendToMainMenuExtended("Annotations", `
@@ -727,17 +636,17 @@ OSDAnnotations.prototype = {
 			$(this).attr('data-ref', 'on');
 		}"> visibility</span>`,
 		`<span>Opacity: &emsp;</span><input type="range" id="annotations-opacity" min="0" max="1" value="0.4" step="0.1"><br><br>
-		<span id="annotations-left-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>
-		
+		${this.presets.presetControls()}		
 		<a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
 		<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
 		`<div id="imageAnnotationToolbarContent">
 					<br>
+					${this.presets.presetHiddenControls()}
+					<br>
 					<span class="d-inline-block" style="width:46%" title="More sensitivity means less area selected when single-clicking">Automatic shape sensitivity:</span>
 					<input style="width:50%" title="The higher the sensitivity, the smaller automatic shape (selects only higher opacity regions)." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
-					<br>				
-					<span class="d-inline-block" style="width:46%" title="Size of a brush used to modify annotations areas.">Free form tool size:</span>
-					<input style="width:50%" class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="1" max="500" name="freeFormToolSize" id="fft-size" autocomplete="off" value="50" onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);" style="height: 22px;">
+					<br>
+					${this.modifyTool.brushSizeControls()}				
 					</div>`, 
 					"annotations-panel");
 
@@ -875,14 +784,6 @@ OSDAnnotations.prototype = {
 		return JSON.stringify(this.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor']));
 	},
 
-	getPresets: function() {
-		let exported = [];
-		for (let i = 0; i < this._presets.length; i++) {
-			exported.push(this._presets[i].toJSONFriendlyObject());
-		}
-		return JSON.stringify(exported);
-	},
-
 	// 0 --> no sensitivity  100 --> most sensitive
 	setAutoOutlineSensitivity: function (sensitivity) {
 		//we map to alpha interval 20 (below no visible) to 200 (only the most opaque elements) --> interval of 180 length
@@ -905,8 +806,8 @@ OSDAnnotations.prototype = {
 			// 	this.polygon.finishCreate();
 			// }
 			//TODO also finish indirect if creation object changed to another object
-			if (this.currentLeftAnnotationObjectUpdater) this.currentLeftAnnotationObjectUpdater.context.finishIndirect();
-			if (this.currentRightAnnotationObjectUpdater) this.currentRightAnnotationObjectUpdater.context.finishIndirect();
+			if (this.presets.left) this.presets.left.context.finishIndirect();
+			if (this.presets.right) this.presets.right.context.finishIndirect();
 
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
@@ -1467,13 +1368,15 @@ OSDAnnotations.prototype = {
 	objectOptions: function(isLeftClick) {
 		if (isLeftClick) {
 			this.objectOptionsLeftClick.opacity = this.opacity.val();
-			this.objectOptionsLeftClick.fill = this.currentLeftAnnotationObjectUpdater.color;
-			this.objectOptionsLeftClick.comment = this.currentLeftAnnotationObjectUpdater.comment;
+			this.objectOptionsLeftClick.fill = this.presets.left.color;
+			this.objectOptionsLeftClick.comment = this.presets.left.comment;
+			this.objectOptionsLeftClick.presetID = this.presets.left._id;
 			return this.objectOptionsLeftClick;
 		}
 		this.objectOptionsRightClick.opacity = this.opacity.val();
-		this.objectOptionsRightClick.fill = this.currentRightAnnotationObjectUpdater.color;
-		this.objectOptionsRightClick.comment = this.currentRightAnnotationObjectUpdater.comment;
+		this.objectOptionsRightClick.fill = this.presets.right.color;
+		this.objectOptionsRightClick.comment = this.presets.right.comment;
+		this.objectOptionsRightClick.presetID = this.presets.right._id;
 		return this.objectOptionsRightClick;
 	},
 
@@ -1482,7 +1385,6 @@ OSDAnnotations.prototype = {
 									 A N N O T A T I O N S (User driven Initializers and Updaters)
  
 	 *****************************************************************************************************************/
-
 
 	setFabricCanvasInteractivity: function (boolean) {
 		this.overlay.fabricCanvas().forEachObject(function (object) {
@@ -1590,7 +1492,7 @@ OSDAnnotations.prototype = {
 				break;
 			case this.Modes.FREE_FORM_TOOL:
 				//dirty but when a mouse is clicked, for some reason active object is deselected
-				this._cachedSelection = this.overlay.fabricCanvas().getActiveObject();
+				this.modifyTool._cachedSelection = this.overlay.fabricCanvas().getActiveObject();
 				this._modesJqNode.val("shift");
 				PLUGINS.osd.setMouseNavEnabled(false);
 				this.overlay.fabricCanvas().hoverCursor = "crosshair";
@@ -1606,8 +1508,8 @@ OSDAnnotations.prototype = {
 	},
 
 	_setModeToAuto: function() {
-		if (this.currentLeftAnnotationObjectUpdater) this.currentLeftAnnotationObjectUpdater.context.finishIndirect();
-		if (this.currentRightAnnotationObjectUpdater) this.currentRightAnnotationObjectUpdater.context.finishIndirect();
+		if (this.presets.left) this.presets.left.context.finishIndirect();
+		if (this.presets.right) this.presets.right.context.finishIndirect();
 
 		switch(this.mode) {
 			case this.Modes.CUSTOM:
@@ -1682,19 +1584,15 @@ OSDAnnotations.prototype = {
 			this._listener = null;
 		},
 	}
-}; // end of namespace
+} // end of main namespace
 
-Preset = function(obj=null, comment="", color="") {
+Preset = function(id, obj=null, comment="", color="") {
 	this.comment = comment;
 	this.color = color;
 	this.context = obj;
+	this._id = id;
 }
 Preset.prototype = {
-	getHTML: function(isLeftClick) {
-		//todo instead type -> show name
-		let comment = this.comment ? this.comment : this.context.type;
-		return `<div class="border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(${isLeftClick});"><span class="material-icons" style="color: ${this.color}";>${this.context.getIcon()}</span>  ${comment}</div>`;
-	},
 	fromJSONFriendlyObject: function(parsedObject, parent) {
 		switch(parsedObject.type) {
 			case "rect": this.context = parent.rectangle; break;
@@ -1704,13 +1602,236 @@ Preset.prototype = {
 		}
 		this.comment = parsedObject.comment;
 		this.color = parsedObject.color;
+		this._id = parsedObject.id;
 		return this;
 	},
 	toJSONFriendlyObject: function() {
-		return {comment: this.comment, color: this.color, type: this.context.type};
+		return {comment: this.comment, color: this.color, type: this.context.type, id: this._id};
 	}
 } // end of namespace Preset
 
+PresetManager = function(selfName, context){
+	this._globalSelf = `openseadragon_image_annotations['${selfName}']`;
+	this._context = context;
+	this._presets = {};
+	//mouse button presets
+	this.left = undefined;
+	this.right = undefined;
+}
+PresetManager.prototype = {
+	presetControls: function() {
+		return `<span id="annotations-left-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
+	},
+
+	presetHiddenControls: function() {
+		return `<span class="d-inline-block" style="width:46%" title="Importing and exporting presets">Preset control:</span>
+		<button class="btn px-1" onclick="${this._globalSelf}.exportToFile();" id="presets-download" title="Download presets" style="height:30px;width:23%;"><span class="material-icons px-0">file_download</span>Export</button><a style="display:none;" id="presets-export"></a>
+		<button class="btn px-1" style="height:30px;width:23%;" id="presets-upload" onclick="this.nextSibling.click();" title="Import presets"><span class="material-icons px-0">file_upload</span>Import</button><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
+	},
+
+	addPreset: function() {
+		let preset = new Preset(Date.now(), this._context.rectangle, "", "#58994c");
+		this._presets[preset._id] = preset;
+		return preset;
+	},
+
+	getPreset: function(id) {
+		return this._presets[id];
+	},
+
+	removePreset: function(id) {
+		let toDelete = this._presets[id];
+		if (!toDelete) return false;
+
+		if (this._context.overlay.fabricCanvas()._objects.some(o => {
+            return o.presetID === id;
+        })) {
+			this._context.messenger.show("This preset belongs to existing annotations: it cannot be removed.", 8000, openseadragon_image_annotations.messenger.MSG_WARN);
+			return;
+		}
+
+		if (toDelete === this.right) $("#annotations-right-click").html(this.getMissingPresetHTML(false));
+		if (toDelete === this.left) $("#annotations-left-click").html(this.getMissingPresetHTML(true));
+		delete this._presets[id];
+		return true;
+	},
+
+	updatePreset: function(id, properties) {
+		let toUpdate = this._presets[id],
+			needsRefresh = false;
+		if (!toUpdate) return;
+
+		Object.entries(properties).forEach(([key, value]) => {
+			if (toUpdate[key] != value) {
+				needsRefresh = true;
+			}
+			toUpdate[key] = value;
+		});
+
+		if (!needsRefresh) return;
+		this.updatePresetsHTML();	
+		var objects = this._context.overlay.fabricCanvas().getObjects();
+		// if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
+
+		// var objectsLength = objects.length
+		// for (var i = 0; i < objectsLength; i++) {
+		// 	this.history.push(null, objects[objectsLength - i - 1]);
+		// 	objects[objectsLength - i - 1].remove();
+		// }	
+	},
+	
+	export: function() {
+		let exported = [];
+		Object.values(this._presets).forEach(value => {
+			exported.push(value.toJSONFriendlyObject());
+		});
+		return JSON.stringify(exported);
+	},
+
+	exportToFile: function() {
+        let output = new Blob([this.export()], { type: 'text/plain' });
+        let downloadURL = window.URL.createObjectURL(output);
+        var downloader = document.getElementById("presets-export");
+        downloader.href = downloadURL;
+        downloader.download = "annotation-presets.json";
+        downloader.click();
+    },
+
+	import: function(presets) {
+		$('#preset-modify-dialog').remove();
+		this._presets = {};
+		let first = null;
+		if (presets && presets.length > 10) {
+			presets = JSON.parse(presets);
+			for (let i = 0; i < presets.length; i++) {
+				let p = new Preset().fromJSONFriendlyObject(presets[i], this._context);
+				this._presets[p._id] = p;
+
+				if (!first) first = p;
+			}
+		} else {
+			first = this.addPreset();
+		}
+		this.left = first;
+		this.updatePresetsHTML();
+	},
+
+	importFromFile: function(e) {
+		let file = e.target.files[0];
+        if (!file) return;
+        let fileReader = new FileReader();
+        let _this = this;
+        fileReader.onload = function(e) {
+			_this.import(e.target.result);
+		}
+        fileReader.readAsText(file);
+	},
+
+	updatePresetsHTML: function() {
+		if (this.left) {
+			$("#annotations-left-click").html(this.getPresetControlHTML(this.left, true));
+		} else {
+			$("#annotations-left-click").html(this.getMissingPresetHTML(true));
+		}
+		if (this.right) {
+			$("#annotations-right-click").html(this.getPresetControlHTML(this.right, false));
+		} else {
+			$("#annotations-right-click").html(this.getMissingPresetHTML(false));
+		}
+	},
+
+	selectPreset: function(isLeftClick) {
+		if (!this._selection || !this._presets[this._selection]) return;
+		if (isLeftClick) {
+			this.left = this._presets[this._selection];
+		} else {
+			this.right = this._presets[this._selection];
+		}
+		this.updatePresetsHTML();
+	},
+
+	getMissingPresetHTML: function(isLeftClick) {
+		return 	`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
+	},
+
+	getPresetHTMLById: function(id, isLeftClick) {
+		if (!this._presets[id]) {
+			return "";
+		}
+		return this.getPresetHTML(this._presets[id], isLeftClick);
+	},
+
+	getPresetControlHTML: function(preset, isLeftClick) {
+		//todo instead type -> show name
+		let comment = preset.comment ? preset.comment : preset.context.type;
+		return `<div class="border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons" style="color: ${preset.color}";>${preset.context.getIcon()}</span>  ${comment}</div>`;
+	},
+
+	getPresetHTML: function(preset, isLeftClick) {
+		let select = "",
+			currentPreset = isLeftClick ? this.left : this.right;
+
+		switch (preset.context.type) {
+			case "rect": select = `<option value="rectangle" selected>Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Polygon</option>`; break;
+			case "ellipse": select = `<option value="rectangle">Rectangle</option><option value="ellipse" selected>Ellipse</option><option value="polygon">Polygon</option>`; break;
+			case "polygon": select = `<option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon" selected>Polygon</option>`; break;
+			default: console.error('Invalid presset.'); break;
+		}
+		let html = `<div id="preset-${preset._id}" class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
+		if (preset === currentPreset) {
+			html += `highlighted-preset"`;
+			this._selection = preset._id;
+		} else {
+			html += `"`;
+		}
+		return `${html} style="cursor:pointer; margin: 5px;" onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');${this._globalSelf}._selection = ${preset._id};">
+			<span class="material-icons position-absolute top-0 right-0 px-0" onclick="if (${this._globalSelf}.removePreset(${preset._id})) {$(this).parent().remove();}">delete</span>
+			<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="${this._globalSelf}.updatePreset(${preset._id}, {context: openseadragon_image_annotations[this.value]});">${select}</select></div>
+			<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="${this._globalSelf}.updatePreset(${preset._id}, {color: this.value});" value="${preset.color}"></div><br>
+			Comment<br><input class="form-control" type="text" onchange="${this._globalSelf}.updatePreset(${preset._id}, {comment: this.value});" value="${preset.comment}"><br>
+		</div>`;
+	},
+
+	showPresets: function (isLeftClick) {
+		$("#preset-modify-dialog").remove();
+		this._selection = undefined;
+
+		let html = "",
+			_this = this;
+
+		Object.values(this._presets).forEach(preset => {
+			html += _this.getPresetHTML(preset, isLeftClick);
+		});
+
+		html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
+		let id = ${this._globalSelf}.addPreset()._id; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick})); "><span class="material-icons">add</span> New</div>`;
+
+		let title = isLeftClick ? "for left click" : "for right click";
+
+		$("body").append(`
+		<div id="preset-modify-dialog" class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+<details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
+    <div class="Box-header">
+      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
+        <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
+      </button>
+      <h3 class="Box-title">Annotations presets <b>${title}</b></h3>
+    </div>
+    <div class="overflow-auto position-relative">
+      <div class="Box-body overflow-auto" style="padding-bottom: 45px;">
+	  ${html}
+	  </div>
+	  <button id="select-annotation-preset" onclick="
+	    if (${this._globalSelf}._selection === undefined) { return false;}
+		setTimeout(function(){
+			$('#preset-modify-dialog').remove(); ${this._globalSelf}.selectPreset(${isLeftClick}); 
+		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>
+    </div>
+  </details-dialog>
+  </div>
+	`);
+	},
+}
 
 Messenger = function () {
 	this.MSG_INFO = { class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' };

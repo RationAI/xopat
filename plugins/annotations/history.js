@@ -1,4 +1,5 @@
-History = function (context) {
+History = function (selfName, context, presetManager) {
+    this._globalSelf = `openseadragon_image_annotations['${selfName}']`;
     this.buffer = [];
     this._buffidx = 0;
     this.BUFFER_LENGTH = null;
@@ -6,15 +7,18 @@ History = function (context) {
     this._autoIncrement = 0;
     this._boardSelected = null;
     this._context = context;
+    this._presets = presetManager;
 }
 
 History.prototype = {
 
     //TODO history: populate BOARD when annotation file is loaded (some for object loop)
     init: function (historySize = 30) {
-        PLUGINS.appendToMainMenu("Board", `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="openseadragon_image_annotations.history.back()" id="history-undo">undo</span>
-		<!--TODO dirty relying on a global-->
-		<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="openseadragon_image_annotations.history.redo()" id="history-redo">redo</span>
+        PLUGINS.appendToMainMenu("Board", `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
+		<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
+        <span id="history-refresh" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.refresh()" id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
+        <span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
+
 		<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
@@ -41,7 +45,6 @@ History.prototype = {
 
             //this.bufferLastRemoved = this.buffer[this._buffidx];
             //this.buffer[this._buffidx] = null;
-
 
             this._buffidx--;
             if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
@@ -76,6 +79,34 @@ History.prototype = {
             }
             if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
         }
+    },
+
+    refresh: function() {
+        this.board.html("");
+        let _this = this;
+        this._context.overlay.fabricCanvas()._objects.some(o => {
+            if (!isNaN(o.incrementId)) {
+                _this._addToBoard(o);
+            }
+            return false;
+        });
+    },
+
+    sync: function() {
+        if (!confirm("This will overwrite all properties of all existing annotations - even those manually modified. Do you want to proceed?")) return;
+        this.board.html("");
+        let _this = this;
+        this._context.overlay.fabricCanvas()._objects.some(o => {
+            if (!isNaN(o.incrementId) && o.presetID) {
+                let preset = this._presets.getPreset(o.presetID);
+                if (preset) {
+                    o.fill = preset.color;
+                    o.comment = preset.comment;
+                }
+                _this._addToBoard(o);
+            }
+            return false;
+        });
     },
 
     push: function (newObject, previous = null) {
@@ -153,7 +184,7 @@ History.prototype = {
 
         let center = object.getCenterPoint();
         //todo relying on a dirty global
-        this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="openseadragon_image_annotations.history._focus(${center.x}, ${center.y}, ${object.incrementId});">
+        this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
 				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 				<span class="material-icons" onclick="
@@ -163,7 +194,7 @@ History.prototype = {
 				 } else {
 					 $(this).html('edit');
 					 $(this).prev().prop('disabled', true); 
-					 openseadragon_image_annotations.history._findObjectOnCanvasById(${object.incrementId}).set({comment: $(this).prev().val()});
+					 ${this._globalSelf}._findObjectOnCanvasById(${object.incrementId}).set({comment: $(this).prev().val()});
 				 }">edit</span> 
 			</div>`);
     },

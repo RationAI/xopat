@@ -2,7 +2,7 @@
 //any object is first converted to polygon
 FreeFormTool = function (context) {
     this.polygon = null;
-    this.radius = 50;
+    this.radius = 15;
     this.mousePos = null;
     this.SQRT2DIV2 = 0.707106781187;
     this._context = context;
@@ -61,13 +61,14 @@ FreeFormTool.prototype = {
         this.simplifier = this._context.polygon.simplify.bind(this._context.polygon);
     },
 
+    brushSizeControls: function() {
+        return `<span class="d-inline-block" style="width:46%" title="Size of a brush used to modify annotations areas.">Free form tool size:</span>
+        <input style="width:50%" class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="1" max="100" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.radius}" 
+        onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);" style="height: 22px;">`;
+    },
+
     setRadius: function (radius) {
-        var zoom = this._context.overlay.fabricCanvas().getZoom();
-        if (zoom < 0.01) { this.radius = 50 * radius; }
-        else if (zoom < 0.03) { this.radius = 25 * radius; }
-        else if (zoom < 0.1) { this.radius = 5 * radius; }
-        else if (zoom < 0.3) { this.radius = 2 * radius; }
-        else { this.radius = radius; };
+        this.radius = Math.round(Math.sqrt(this._context.getRelativePixelDiffDistSquared(radius*2)));
     },
 
     //update step meant to be executed on mouse move event
@@ -83,8 +84,9 @@ FreeFormTool.prototype = {
             //result must exist and new no. of points must be at least 10% of the previous
             if (result && this.polygon.points.length * 0.1 <= result.points.length) {
                 this._context.overlay.fabricCanvas().remove(this.polygon);
+
                 this.polygon = result;
-                //console.log(result);
+                
                 this._context.overlay.fabricCanvas().add(result);
                 this._context.overlay.fabricCanvas().renderAll();
             }
@@ -102,6 +104,7 @@ FreeFormTool.prototype = {
                 //incrementID is used by history - if ID equal, no changes were made -> no record
                 this._context.history.push(this.polygon, this.initial);
             }
+            this._cachedSelection = this.polygon;
             let outcome = this.polygon;
             this.polygon = null;
             this.initial = null;

@@ -58,7 +58,8 @@ Rect.prototype = {
             hasControls: ofObject.hasControls,
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
-            comment: ofObject.comment
+            comment: ofObject.comment,
+            presetID: ofObject.presetID
         });    
 	},
 
@@ -174,6 +175,7 @@ Ellipse.prototype = {
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
             comment: ofObject.comment,
+            presetID: ofObject.presetID
         });     
 	},
 
@@ -288,6 +290,7 @@ Polygon.prototype = {
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
 			evented: evented,
+            presetID: ofObject.presetID
 		});
 	},
 
@@ -711,8 +714,6 @@ Polygon.prototype = {
         if (points.length <= 2) return points;
 
         let tolerance = this._context.getRelativePixelDiffDistSquared(3);
-        $("#test").html(tolerance);
-
         points = highestQuality ? points : this._simplifyRadialDist(points, tolerance);
         points = this._simplifyDouglasPeucker(points, tolerance);
 
