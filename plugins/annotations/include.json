@@ -12,7 +12,7 @@
         "history.js",
         "osd_fabric_annotation.js"
     ],
-    "flag": null,
+    "flag": "draw",
     "priority": 0,
     "requires": null
 }

@@ -4,3 +4,6 @@ old_trials/**
 webgl/shaders/**
 .idea/
 Thumbs.db
+
+osd_debug/*
+!osd_debug/src

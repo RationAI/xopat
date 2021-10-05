@@ -1,5 +1,5 @@
 /*
- * OpenSeadragon - OsmTileSource
+ * OpenSeadragon - TmsTileSource
  *
  * Copyright (C) 2009 CodePlex Foundation
  * Copyright (C) 2010-2013 OpenSeadragon contributors
@@ -33,7 +33,7 @@
  */
 
 /*
- * Derived from the OSM tile source in Rainer Simon's seajax-utils project
+ * Derived from the TMS tile source in Rainer Simon's seajax-utils project
  * <http://github.com/rsimon/seajax-utils>.  Rainer Simon has contributed
  * the included code to the OpenSeadragon project under the New BSD license;
  * see <https://github.com/openseadragon/openseadragon/issues/58>.
@@ -43,19 +43,10 @@
 (function( $ ){
 
 /**
- * @class OsmTileSource
- * @classdesc A tilesource implementation for OpenStreetMap.<br><br>
- *
- * Note 1. Zoomlevels. Deep Zoom and OSM define zoom levels differently. In  Deep
- * Zoom, level 0 equals an image of 1x1 pixels. In OSM, level 0 equals an image of
- * 256x256 levels (see http://gasi.ch/blog/inside-deep-zoom-2). I.e. there is a
- * difference of log2(256)=8 levels.<br><br>
- *
- * Note 2. Image dimension. According to the OSM Wiki
- * (http://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Zoom_levels)
- * the highest Mapnik zoom level has 256.144x256.144 tiles, with a 256x256
- * pixel size. I.e. the Deep Zoom image dimension is 65.572.864x65.572.864
- * pixels.
+ * @class TmsTileSource
+ * @classdesc A tilesource implementation for Tiled Map Services (TMS).
+ * TMS tile scheme ( [ as supported by OpenLayers ] is described here
+ * ( http://openlayers.org/dev/examples/tms.html ).
  *
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
@@ -66,7 +57,7 @@
  * @param {Number} tileOverlap
  * @param {String} tilesUrl
  */
-$.OsmTileSource = function( width, height, tileSize, tileOverlap, tilesUrl ) {
+$.TmsTileSource = function( width, height, tileSize, tileOverlap, tilesUrl ) {
     var options;
 
     if( $.isPlainObject( width ) ){
@@ -80,27 +71,28 @@ $.OsmTileSource = function( width, height, tileSize, tileOverlap, tilesUrl ) {
             tilesUrl: arguments[4]
         };
     }
-    //apply default setting for standard public OpenStreatMaps service
-    //but allow them to be specified so fliks can host there own instance
-    //or apply against other services supportting the same standard
-    if( !options.width || !options.height ){
-        options.width = 65572864;
-        options.height = 65572864;
+    // TMS has integer multiples of 256 for width/height and adds buffer
+    // if necessary -> account for this!
+    var bufferedWidth = Math.ceil(options.width / 256) * 256,
+        bufferedHeight = Math.ceil(options.height / 256) * 256,
+        max;
+
+    // Compute number of zoomlevels in this tileset
+    if (bufferedWidth > bufferedHeight) {
+        max = bufferedWidth / 256;
+    } else {
+        max = bufferedHeight / 256;
     }
-    if( !options.tileSize ){
-        options.tileSize = 256;
-        options.tileOverlap = 0;
-    }
-    if( !options.tilesUrl ){
-        options.tilesUrl = "http://tile.openstreetmap.org/";
-    }
-    options.minLevel = 8;
+    options.maxLevel = Math.ceil(Math.log(max) / Math.log(2)) - 1;
+    options.tileSize = 256;
+    options.width = bufferedWidth;
+    options.height = bufferedHeight;
 
     $.TileSource.apply( this, [ options ] );
 
 };
 
-$.extend( $.OsmTileSource.prototype, $.TileSource.prototype, /** @lends OpenSeadragon.OsmTileSource.prototype */{
+$.extend( $.TmsTileSource.prototype, $.TileSource.prototype, /** @lends OpenSeadragon.TmsTileSource.prototype */{
 
 
     /**
@@ -111,10 +103,7 @@ $.extend( $.OsmTileSource.prototype, $.TileSource.prototype, /** @lends OpenSead
      * @param {String} optional - url
      */
     supports: function( data, url ){
-        return (
-            data.type &&
-            "openstreetmaps" === data.type
-        );
+        return ( data.type && "tiledmapservice" == data.type );
     },
 
     /**
@@ -137,7 +126,10 @@ $.extend( $.OsmTileSource.prototype, $.TileSource.prototype, /** @lends OpenSead
      * @param {Number} y
      */
     getTileUrl: function( level, x, y ) {
-        return this.tilesUrl + (level - 8) + "/" + x + "/" + y + ".png";
+        // Convert from Deep Zoom definition to TMS zoom definition
+        var yTiles = this.getNumTiles( level ).y - 1;
+
+        return this.tilesUrl + level + "/" + x + "/" + (yTiles - y) + ".png";
     }
 });
 

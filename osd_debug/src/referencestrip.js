@@ -85,18 +85,23 @@ $.ReferenceStrip = function ( options ) {
         scroll:     $.DEFAULT_SETTINGS.referenceStripScroll,
         clickTimeThreshold:  $.DEFAULT_SETTINGS.clickTimeThreshold
     }, options, {
-        element:                this.element
+        //required overrides
+        element:                this.element,
+        //These need to be overridden to prevent recursion since
+        //the navigator is a viewer and a viewer has a navigator
+        showNavigator:          false,
+        mouseNavEnabled:        false,
+        showNavigationControl:  false,
+        showSequenceControl:    false
     } );
 
     $.extend( this, options );
     //Private state properties
     THIS[this.id] = {
-        animating:           false
+        "animating":           false
     };
 
     this.minPixelRatio = this.viewer.minPixelRatio;
-
-    this.element.tabIndex = 0;
 
     style = this.element.style;
     style.marginTop     = '0px';
@@ -114,21 +119,14 @@ $.ReferenceStrip = function ( options ) {
     $.setElementOpacity( this.element, 0.8 );
 
     this.viewer = viewer;
-    this.tracker = new $.MouseTracker( {
-        userData:       'ReferenceStrip.tracker',
+    this.innerTracker = new $.MouseTracker( {
         element:        this.element,
-        clickHandler:   $.delegate( this, onStripClick ),
         dragHandler:    $.delegate( this, onStripDrag ),
         scrollHandler:  $.delegate( this, onStripScroll ),
         enterHandler:   $.delegate( this, onStripEnter ),
-        leaveHandler:   $.delegate( this, onStripLeave ),
+        exitHandler:    $.delegate( this, onStripExit ),
         keyDownHandler: $.delegate( this, onKeyDown ),
-        keyHandler:     $.delegate( this, onKeyPress ),
-        preProcessEventHandler: function (eventInfo) {
-            if (eventInfo.eventType === 'wheel') {
-                eventInfo.preventDefault = true;
-            }
-        }
+        keyHandler:     $.delegate( this, onKeyPress )
     } );
 
     //Controls the position and orientation of the reference strip and sets the
@@ -141,7 +139,7 @@ $.ReferenceStrip = function ( options ) {
             { anchor: $.ControlAnchor.BOTTOM_LEFT }
         );
     } else {
-        if ( "horizontal" === options.scroll ) {
+        if ( "horizontal" == options.scroll ) {
             this.element.style.width = (
                 viewerSize.x *
                 options.sizeRatio *
@@ -191,12 +189,34 @@ $.ReferenceStrip = function ( options ) {
         element.style.width         = _this.panelWidth + 'px';
         element.style.height        = _this.panelHeight + 'px';
         element.style.display       = 'inline';
-        element.style['float']      = 'left'; //Webkit
+        element.style.float         = 'left'; //Webkit
         element.style.cssFloat      = 'left'; //Firefox
         element.style.styleFloat    = 'left'; //IE
         element.style.padding       = '2px';
         $.setElementTouchActionNone( element );
-        $.setElementPointerEventsNone( element );
+
+        element.innerTracker = new $.MouseTracker( {
+            element:            element,
+            clickTimeThreshold: this.clickTimeThreshold,
+            clickDistThreshold: this.clickDistThreshold,
+            pressHandler: function ( event ) {
+                event.eventSource.dragging = $.now();
+            },
+            releaseHandler: function ( event ) {
+                var tracker = event.eventSource,
+                    id      = tracker.element.id,
+                    page    = Number( id.split( '-' )[2] ),
+                    now     = $.now();
+
+                if ( event.insideElementPressed &&
+                     event.insideElementReleased &&
+                     tracker.dragging &&
+                     ( now - tracker.dragging ) < tracker.clickTimeThreshold ) {
+                    tracker.dragging = null;
+                    viewer.goToPage( page );
+                }
+            }
+        } );
 
         this.element.appendChild( element );
 
@@ -205,13 +225,12 @@ $.ReferenceStrip = function ( options ) {
         this.panels.push( element );
 
     }
-    loadPanels( this, this.scroll === 'vertical' ? viewerSize.y : viewerSize.x, 0 );
+    loadPanels( this, this.scroll == 'vertical' ? viewerSize.y : viewerSize.x, 0 );
     this.setFocus( 0 );
 
 };
 
-/** @lends OpenSeadragon.ReferenceStrip.prototype */
-$.ReferenceStrip.prototype = {
+$.extend( $.ReferenceStrip.prototype, $.EventSource.prototype, $.Viewer.prototype, /** @lends OpenSeadragon.ReferenceStrip.prototype */{
 
     /**
      * @function
@@ -232,7 +251,7 @@ $.ReferenceStrip.prototype = {
             this.currentSelected = element;
             this.currentSelected.style.background = '#999';
 
-            if ( 'horizontal' === this.scroll ) {
+            if ( 'horizontal' == this.scroll ) {
                 //right left
                 offset = ( Number( page ) ) * ( this.panelWidth + 3 );
                 if ( offset > offsetLeft + viewerSize.x - this.panelWidth ) {
@@ -258,7 +277,7 @@ $.ReferenceStrip.prototype = {
             }
 
             this.currentPage = page;
-            onStripEnter.call( this, { eventSource: this.tracker } );
+            onStripEnter.call( this, { eventSource: this.innerTracker } );
         }
     },
 
@@ -273,6 +292,7 @@ $.ReferenceStrip.prototype = {
         return false;
     },
 
+    // Overrides Viewer.destroy
     destroy: function() {
         if (this.miniViewers) {
           for (var key in this.miniViewers) {
@@ -280,36 +300,14 @@ $.ReferenceStrip.prototype = {
           }
         }
 
-        this.tracker.destroy();
-
         if (this.element) {
-            this.viewer.removeControl( this.element );
+            this.element.parentNode.removeChild(this.element);
         }
     }
 
-};
+} );
 
 
-/**
- * @private
- * @inner
- * @function
- */
-function onStripClick( event ) {
-    if ( event.quick ) {
-        var page;
-
-        if ( 'horizontal' === this.scroll ) {
-            page = Math.floor(event.position.x / this.panelWidth);
-        } else {
-            page = Math.floor(event.position.y / this.panelHeight);
-        }
-
-        this.viewer.goToPage( page );
-    }
-
-    this.element.focus();
-}
 
 
 /**
@@ -319,15 +317,14 @@ function onStripClick( event ) {
  */
 function onStripDrag( event ) {
 
-    this.dragging = true;
-    if ( this.element ) {
-        var offsetLeft   = Number( this.element.style.marginLeft.replace( 'px', '' ) ),
+    var offsetLeft   = Number( this.element.style.marginLeft.replace( 'px', '' ) ),
         offsetTop    = Number( this.element.style.marginTop.replace( 'px', '' ) ),
         scrollWidth  = Number( this.element.style.width.replace( 'px', '' ) ),
         scrollHeight = Number( this.element.style.height.replace( 'px', '' ) ),
         viewerSize   = $.getElementSize( this.viewer.canvas );
-
-        if ( 'horizontal' === this.scroll ) {
+    this.dragging = true;
+    if ( this.element ) {
+        if ( 'horizontal' == this.scroll ) {
             if ( -event.delta.x > 0 ) {
                 //forward
                 if ( offsetLeft > -( scrollWidth - viewerSize.x ) ) {
@@ -357,6 +354,7 @@ function onStripDrag( event ) {
             }
         }
     }
+    return false;
 
 }
 
@@ -368,14 +366,13 @@ function onStripDrag( event ) {
  * @function
  */
 function onStripScroll( event ) {
-    if ( this.element ) {
-        var offsetLeft   = Number( this.element.style.marginLeft.replace( 'px', '' ) ),
+    var offsetLeft   = Number( this.element.style.marginLeft.replace( 'px', '' ) ),
         offsetTop    = Number( this.element.style.marginTop.replace( 'px', '' ) ),
         scrollWidth  = Number( this.element.style.width.replace( 'px', '' ) ),
         scrollHeight = Number( this.element.style.height.replace( 'px', '' ) ),
         viewerSize   = $.getElementSize( this.viewer.canvas );
-
-        if ( 'horizontal' === this.scroll ) {
+    if ( this.element ) {
+        if ( 'horizontal' == this.scroll ) {
             if ( event.scroll > 0 ) {
                 //forward
                 if ( offsetLeft > -( scrollWidth - viewerSize.x ) ) {
@@ -404,9 +401,9 @@ function onStripScroll( event ) {
                 }
             }
         }
-
-        event.preventDefault = true;
     }
+    //cancels event
+    return false;
 }
 
 
@@ -415,9 +412,10 @@ function loadPanels( strip, viewerSize, scroll ) {
         activePanelsStart,
         activePanelsEnd,
         miniViewer,
+        style,
         i,
         element;
-    if ( 'horizontal' === strip.scroll ) {
+    if ( 'horizontal' == strip.scroll ) {
         panelSize = strip.panelWidth;
     } else {
         panelSize = strip.panelHeight;
@@ -456,14 +454,34 @@ function loadPanels( strip, viewerSize, scroll ) {
                 ajaxHeaders:            strip.viewer.ajaxHeaders,
                 useCanvas:              strip.useCanvas
             } );
-            // Allow pointer events to pass through miniViewer's canvas/container
-            //   elements so implicit pointer capture works on touch devices
-            $.setElementPointerEventsNone( miniViewer.canvas );
-            $.setElementPointerEventsNone( miniViewer.container );
-            // We'll use event delegation from the reference strip element instead of
-            //   handling events on every miniViewer
-            miniViewer.innerTracker.setTracking( false );
-            miniViewer.outerTracker.setTracking( false );
+
+            miniViewer.displayRegion           = $.makeNeutralElement( "div" );
+            miniViewer.displayRegion.id        = element.id + '-displayregion';
+            miniViewer.displayRegion.className = 'displayregion';
+
+            style               = miniViewer.displayRegion.style;
+            style.position      = 'relative';
+            style.top           = '0px';
+            style.left          = '0px';
+            style.fontSize      = '0px';
+            style.overflow      = 'hidden';
+            style.float         = 'left'; //Webkit
+            style.cssFloat      = 'left'; //Firefox
+            style.styleFloat    = 'left'; //IE
+            style.zIndex        = 999999999;
+            style.cursor        = 'default';
+            style.width         = ( strip.panelWidth - 4 ) + 'px';
+            style.height        = ( strip.panelHeight - 4 ) + 'px';
+
+            // TODO: What is this for? Future keyboard navigation support?
+            miniViewer.displayRegion.innerTracker = new $.MouseTracker( {
+                element: miniViewer.displayRegion,
+                startDisabled: true
+            } );
+
+            element.getElementsByTagName( 'div' )[0].appendChild(
+                miniViewer.displayRegion
+            );
 
             strip.miniViewers[element.id] = miniViewer;
 
@@ -486,7 +504,7 @@ function onStripEnter( event ) {
     //element.style.border = '1px solid #555';
     //element.style.background = '#000';
 
-    if ( 'horizontal' === this.scroll ) {
+    if ( 'horizontal' == this.scroll ) {
 
         //element.style.paddingTop = "0px";
         element.style.marginBottom = "0px";
@@ -497,6 +515,7 @@ function onStripEnter( event ) {
         element.style.marginLeft = "0px";
 
     }
+    return false;
 }
 
 
@@ -505,10 +524,10 @@ function onStripEnter( event ) {
  * @inner
  * @function
  */
-function onStripLeave( event ) {
+function onStripExit( event ) {
     var element = event.eventSource.element;
 
-    if ( 'horizontal' === this.scroll ) {
+    if ( 'horizontal' == this.scroll ) {
 
         //element.style.paddingTop = "10px";
         element.style.marginBottom = "-" + ( $.getElementSize( element ).y / 2 ) + "px";
@@ -519,6 +538,7 @@ function onStripLeave( event ) {
         element.style.marginLeft = "-" + ( $.getElementSize( element ).x / 2 ) + "px";
 
     }
+    return false;
 }
 
 
@@ -530,31 +550,26 @@ function onStripLeave( event ) {
 function onKeyDown( event ) {
     //console.log( event.keyCode );
 
-    if ( !event.ctrl && !event.alt && !event.meta ) {
+    if ( !event.preventDefaultAction && !event.ctrl && !event.alt && !event.meta ) {
         switch ( event.keyCode ) {
             case 38: //up arrow
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: 1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 40: //down arrow
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: -1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 37: //left arrow
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: -1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 39: //right arrow
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: 1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             default:
                 //console.log( 'navigator keycode %s', event.keyCode );
-                event.preventDefault = false;
-                break;
+                return true;
         }
     } else {
-        event.preventDefault = false;
+        return true;
     }
 }
 
@@ -567,42 +582,35 @@ function onKeyDown( event ) {
 function onKeyPress( event ) {
     //console.log( event.keyCode );
 
-    if ( !event.ctrl && !event.alt && !event.meta ) {
+    if ( !event.preventDefaultAction && !event.ctrl && !event.alt && !event.meta ) {
         switch ( event.keyCode ) {
             case 61: //=|+
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: 1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 45: //-|_
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: -1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 48: //0|)
             case 119: //w
             case 87: //W
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: 1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 115: //s
             case 83: //S
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: -1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 97: //a
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: -1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             case 100: //d
                 onStripScroll.call( this, { eventSource: this.tracker, position: null, scroll: 1, shift: null } );
-                event.preventDefault = true;
-                break;
+                return false;
             default:
                 //console.log( 'navigator keycode %s', event.keyCode );
-                event.preventDefault = false;
-                break;
+                return true;
         }
     } else {
-        event.preventDefault = false;
+        return true;
     }
 }
 

@@ -58,6 +58,7 @@ FreeFormTool.prototype = {
 
         this._update = add ? this._union : this._subtract;
         this.mousePos = atPosition;
+        this.simplifier = this._context.polygon.simplify.bind(this._context.polygon);
     },
 
     setRadius: function (radius) {
@@ -131,7 +132,7 @@ FreeFormTool.prototype = {
 
         if (union) {
             if (typeof union[0][0] === 'number') { // single linear ring
-                // var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union, this.radius / 5));
+                // var polygon = this._context.polygon.copy(this.polygon, this.simplifier(union));
             } else {
                 if (union.length > 1) union = this._unify(union);
 
@@ -147,7 +148,7 @@ FreeFormTool.prototype = {
                     }
                 }
 
-                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(union[maxIdx], this.radius / 5));
+                var polygon = this._context.polygon.copy(this.polygon, this.simplifier(union[maxIdx]));
                 polygon.objectCaching = false;
             }
             return polygon;
@@ -167,7 +168,7 @@ FreeFormTool.prototype = {
         var difference = greinerHormann.diff(polypoints, radPoints);
         if (difference) {
             if (typeof difference[0][0] === 'number') { // single linear ring
-                var polygon = this._context.polygon.create(this._simplifyPolygon(difference, this.radius / 5), this._context.objectOptions(this.polygon.isLeftClick));
+                var polygon = this._context.polygon.create(this.simplifier(difference), this._context.objectOptions(this.polygon.isLeftClick));
             } else {
                 if (difference.length > 1) difference = this._unify(difference);
 
@@ -197,7 +198,7 @@ FreeFormTool.prototype = {
                     return null;
                 }
 
-                var polygon = this._context.polygon.copy(this.polygon, this._simplifyPolygon(difference[maxIdx], this.radius / 5));
+                var polygon = this._context.polygon.copy(this.polygon, this.simplifier(difference[maxIdx]));
                 polygon.objectCaching = false;               
             }
             return polygon;
@@ -238,7 +239,7 @@ FreeFormTool.prototype = {
         let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
 
         unions.forEach(u => {
-            primary.push(this._simplifyPolygon(u, this.radius / 5));
+            primary.push(this.simplifier(u));
         });
         while (i < len) {
             if (primary.length < 2) break;
@@ -258,28 +259,6 @@ FreeFormTool.prototype = {
             secondary = [];
         }
         return primary;
-    },
-
-    //remove on-line (horizontal/vertical only) points or points that are too close
-    _simplifyPolygon: function (points, threshold) {
-        if (points.length < 20) return points;
-        let p1 = points[0], p2 = points[1];
-        let result = [p1];
-
-        for (var i = 2; i < points.length; i++) {
-            if (this._context.toDistanceObj(p1, p2) < threshold
-                || (Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-                || (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
-                p2 = points[i];
-                continue;
-            }
-
-            p1 = p2;
-            p2 = points[i];
-            result.push(p1);
-        }
-        result.push(p2);
-        return result;
     },
 
     //when removing parts of polygon, decide which one has smaller area and will be removed

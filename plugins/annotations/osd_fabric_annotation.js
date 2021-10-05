@@ -27,7 +27,6 @@ OSDAnnotations = function (incoming) {
 	this.Modes = Object.freeze({
 		AUTO: 0,
 		CUSTOM: 1,
-		EDIT: 2,
 		FREE_FORM_TOOL: 3,
 	});
 	this.mode = this.Modes.AUTO;
@@ -43,6 +42,10 @@ OSDAnnotations = function (incoming) {
 	this.rectangle = new Rect(this);
 
 	this._presets = [];
+	this._pixelReader = document.createElement('canvas');
+	this._pixelReader.width = 1;
+	this._pixelReader.height = 1;
+	this._pixelReader = this._pixelReader.getContext('2d');
 };
 
 OSDAnnotations.prototype = {
@@ -53,7 +56,7 @@ OSDAnnotations.prototype = {
 	initialize: function (options) {
 
 		/* OSD values used by annotations */
-		this.currentTile = "";
+		this._currentTile = "";
 		this.overlay = PLUGINS.osd.fabricjsOverlay(options);
 
 		// draw annotation from json file
@@ -88,6 +91,8 @@ OSDAnnotations.prototype = {
 		this.updatePreset(0, true);
 		this.updatePreset(-1, false);
 		this.setMouseOSDInteractive(true);
+
+		this.setupTutorials();
 
 		this.cursor.init();
 		this.opacity = $("#annotations-opacity");
@@ -186,8 +191,6 @@ OSDAnnotations.prototype = {
 				case _this.Modes.FREE_FORM_TOOL:
 					finishFreeFormTool(point, o, false);
 					break;
-				case _this.Modes.EDIT:
-					break;
 				default: 
 					console.error("Invalid action!");
 					return;
@@ -213,12 +216,6 @@ OSDAnnotations.prototype = {
 				case _this.Modes.FREE_FORM_TOOL:
 					finishFreeFormTool(point, o, true);
 					break;
-				case _this.Modes.EDIT:
-					let obj = _this.overlay.fabricCanvas().getActiveObject();
-					if (obj) {
-						obj.set({lockMovementX: true, lockMovementY: true});
-					}
-					break;
 				default: 
 					console.error("Invalid action!");
 					return;
@@ -240,8 +237,6 @@ OSDAnnotations.prototype = {
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					initFreeFormTool(point, o, false);
-					break;
-				case _this.Modes.EDIT:
 					break;
 				default: 
 					console.error("Invalid action!");
@@ -269,12 +264,6 @@ OSDAnnotations.prototype = {
 					break;
 				case _this.Modes.FREE_FORM_TOOL:
 					initFreeFormTool(point, o, true);
-					break;
-				case _this.Modes.EDIT:
-					let obj = _this.overlay.fabricCanvas().getActiveObject();
-					if (obj) {
-						obj.set({lockMovementX: false, lockMovementY: false});
-					}
 					break;
 				default: 
 					console.error("Invalid action!");
@@ -322,14 +311,7 @@ OSDAnnotations.prototype = {
 				}
 			} else if (_this.mode === _this.Modes.FREE_FORM_TOOL) {
 				openseadragon_image_annotations.modifyTool.update(pointer);
-			} else if (_this.mode === _this.Modes.EDIT) {
-				if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-					if (openseadragon_image_annotations.currentLeftAnnotationObjectUpdater) openseadragon_image_annotations.currentLeftAnnotationObjectUpdater.context.updateCreate(pointer.x, pointer.y);
-					if (openseadragon_image_annotations.currentRightAnnotationObjectUpdater) openseadragon_image_annotations.currentRightAnnotationObjectUpdater.context.updateCreate(pointer.x, pointer.y);
-
-					openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-				}
-			}
+			} 
 		});
 
 
@@ -407,11 +389,7 @@ OSDAnnotations.prototype = {
 			} else if (e.code === "ShiftLeft") {
 				_this.setMode(_this.Modes.FREE_FORM_TOOL);
 				e.preventDefault();
-			} else if (e.code === "AltRight") {
-				_this.setMode(_this.Modes.EDIT);
-				e.preventDefault();
-			}
-
+			} 
 		});
 
 		document.addEventListener('keyup', (e) => {
@@ -429,8 +407,7 @@ OSDAnnotations.prototype = {
 				return;
 			}
 
-			if ((e.code === "AltRight" && _this.mode === _this.Modes.EDIT) 
-				|| (e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) 
+			if ((e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) 
 				|| (e.code === "ShiftLeft" && _this.mode === _this.Modes.FREE_FORM_TOOL)) {
 
 				_this.setMode(this.Modes.AUTO);	
@@ -652,17 +629,21 @@ OSDAnnotations.prototype = {
 	*****************************************************************************************************************/
 
 	updatePreset: function(index, isLeftClick) {
-		let toUpdate = isLeftClick ? this._leftMouseJqNode : this._rightMouseJqNode;
 		let newPreset = (index >= 0 && index < this._presets.length) ? this._presets[index] : false;
 		if (isLeftClick) {
 			this.currentLeftAnnotationObjectUpdater = newPreset;
 		} else {
 			this.currentRightAnnotationObjectUpdater = newPreset;
 		}
-		if (newPreset) {
-			toUpdate.html(newPreset.getHTML(isLeftClick));
+		if (this.currentLeftAnnotationObjectUpdater) {
+			this._leftMouseJqNode.html(this.currentLeftAnnotationObjectUpdater.getHTML(true));
 		} else {
-			toUpdate.html(`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`);
+			this._leftMouseJqNode.html(`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(true);"><span class="material-icons">add</span> Add</div>`);
+		}
+		if (this.currentRightAnnotationObjectUpdater) {
+			this._rightMouseJqNode.html(this.currentRightAnnotationObjectUpdater.getHTML(false));
+		} else {
+			this._rightMouseJqNode.html(`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="openseadragon_image_annotations.showPresets(false);"><span class="material-icons">add</span> Add</div>`);
 		}
 	},
 
@@ -682,7 +663,7 @@ OSDAnnotations.prototype = {
 				case "polygon": select = `<option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon" selected>Polygon</option>`; break;
 				default: console.error('Invalid presset.'); break;
 			}
-			html += `<div class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
+			html += `<div id="preset-no-${counter}" class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
 			if (preset === currentPreset) {
 				html += `highlighted-preset"`;
 				_this._pressetIdx = counter;
@@ -691,20 +672,22 @@ OSDAnnotations.prototype = {
 			}
 			html += ` style="cursor:pointer; margin: 5px;" onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');openseadragon_image_annotations._pressetIdx = $(this).index();">
 				<span class="material-icons position-absolute top-0 right-0 px-0" onclick="openseadragon_image_annotations._presets.splice($(this).parent().index(), 1);$(this).parent().parent().parent().parent().remove(); openseadragon_image_annotations.showPresets(${isLeftClick}); return false;">delete</span>
-				<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="openseadragon_image_annotations._presets[$(this).parents().eq(2).index()].context = openseadragon_image_annotations[this.value];">${select}</select></div>
-				<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="openseadragon_image_annotations._presets[$(this).parents().eq(2).index()].color = this.value;" value="${preset.color}"></div><br>
+				<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="openseadragon_image_annotations._presets[$(this).parent().parent().index()].context = openseadragon_image_annotations[this.value];">${select}</select></div>
+				<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="openseadragon_image_annotations._presets[$(this).parent().parent().index()].color = this.value;" value="${preset.color}"></div><br>
 				Comment<br><input class="form-control" type="text" onchange="openseadragon_image_annotations._presets[$(this).parent().index()].comment = this.value;" value="${preset.comment}"><br>
 			</div>`;
 			counter++;
 		});
 
-		html += `<div class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="openseadragon_image_annotations._presets.push(new Preset(openseadragon_image_annotations.rectangle, '', '#58994c'));$(this).parent().parent().parent().parent().remove();
-		openseadragon_image_annotations.showPresets(${isLeftClick});"><span class="material-icons">add</span> New</div>`;
+		html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
+			openseadragon_image_annotations._presets.push(new Preset(openseadragon_image_annotations.rectangle, '', '#58994c'));$(this).parent().parent().parent().parent().remove();
+			openseadragon_image_annotations.showPresets(${isLeftClick});
+		"><span class="material-icons">add</span> New</div>`;
 
 		let title = isLeftClick ? "for left click" : "for right click";
 
 		$("body").append(`
-		<div class="position-fixed" style="z-index:99999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+		<div class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
 <details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
     <div class="Box-header">
       <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
@@ -716,8 +699,11 @@ OSDAnnotations.prototype = {
       <div class="Box-body overflow-auto" style="padding-bottom: 45px;">
 	  ${html}
 	  </div>
-	  <button onclick="if (openseadragon_image_annotations._pressetIdx === undefined) { return false;} $(this).parent().parent().parent().remove(); openseadragon_image_annotations.updatePreset(openseadragon_image_annotations._pressetIdx, ${isLeftClick})" class="btn position-absolute bottom-2 right-4">Select</button>
-      
+	  <button id="select-annotation-preset" onclick="
+	    if (openseadragon_image_annotations._pressetIdx === undefined) { return false;} let _this = $(this);
+		setTimeout(function(){
+			_this.parent().parent().parent().remove(); openseadragon_image_annotations.updatePreset(openseadragon_image_annotations._pressetIdx, ${isLeftClick}); 
+		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>
     </div>
   </details-dialog>
   </div>
@@ -730,7 +716,7 @@ OSDAnnotations.prototype = {
 		<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
 		<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
 		
-		<span class="material-icons" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
+		<span class="material-icons" id="enable-disable-annotations" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
 		if ($(this).attr('data-ref') === 'on'){
 			openseadragon_image_annotations.turnAnnotationsOnOff(false);
 			$(this).html('visibility_off');
@@ -747,8 +733,8 @@ OSDAnnotations.prototype = {
 		<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
 		`<div id="imageAnnotationToolbarContent">
 					<br>
-					<span class="d-inline-block" style="width:46%" title="More sensitivity means less area selected when single-clicking">Automatic tool sensitivity:</span>
-					<input style="width:50%" title="What is the threshold under which automatic tool refuses to select." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
+					<span class="d-inline-block" style="width:46%" title="More sensitivity means less area selected when single-clicking">Automatic shape sensitivity:</span>
+					<input style="width:50%" title="The higher the sensitivity, the smaller automatic shape (selects only higher opacity regions)." type="range" id="sensitivity_auto_outline" min="0" max="100" value="${openseadragon_image_annotations.alphaSensitivity}" step="1" onchange="openseadragon_image_annotations.setAutoOutlineSensitivity($(this).val());">
 					<br>				
 					<span class="d-inline-block" style="width:46%" title="Size of a brush used to modify annotations areas.">Free form tool size:</span>
 					<input style="width:50%" class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="1" max="500" name="freeFormToolSize" id="fft-size" autocomplete="off" value="50" onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);" style="height: 22px;">
@@ -762,13 +748,11 @@ OSDAnnotations.prototype = {
 			case 'auto': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO); break;
 			case 'alt-left': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.CUSTOM); break;
 			case 'shift': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.FREE_FORM_TOOL); break;
-			case 'alt-right': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.EDIT); break;
 		} return false;
 		">
 		<option value="auto" selected>automatic shape & navigation</option>
-		<option value="alt-left">✍ custom shape (⌨ Left Alt)</option>
-		<option value="shift">🖌 free form tool (⌨ Left Shift)</option>
-		<option value="alt-right">✎ edit shape (⌨ Right Alt)</option>
+		<option value="alt-left">🖌 custom shape (⌨ Left Alt)</option>
+		<option value="shift">&#9733; free form tool (⌨ Left Shift)</option>
 		</select>`);		
 	},
 
@@ -798,7 +782,7 @@ OSDAnnotations.prototype = {
 			  <p>You can create annotations with both left and right mouse button. Each button has default color and comment you can customize.
 			  When you click on the canvas, a default object depending on a brush is created: if it is inside a visualised region, it will try to fit the underlying shape. Polygon will fail 
 			  outside vis regions, other tools create default-sized object.</p>
-			  <p><b>Automatic tool treshold</b> is the sensitivity of automatic selection: when minimized, the shape will take all surrounding areas. When set high, only the most prominent areas
+			  <p><b>Automatic shape treshold</b> is the sensitivity of automatic selection: when minimized, the shape will take all surrounding areas. When set high, only the most prominent areas
 			  will be included.</p>
 		
 			  <div class="flash mt-3 flash-error">
@@ -826,6 +810,59 @@ OSDAnnotations.prototype = {
 		  </details-dialog>
 		  </div>
 		`);
+	},
+
+	setupTutorials: function() {
+		PLUGINS.addTutorial(
+			"Annotations Plugin", "learn to use annotations", "draw", [ 
+			{
+				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
+			}, {
+				"next #annotation-board": "Annotation board is the second panel part of this plugin: <br>you can see all your objects and modify them."
+			},{
+				"click #annotations-panel-pin": "Click on the pin to keep visible all controls."
+			},{
+				"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all plugin controls and hotkeys."
+			},{
+				"next #downloadAnnotation": "Here you can download <b>just</b> your annotations.<br>This is included automatically when using global `Export` option."
+			},{
+				"next #annotations-left-click": "Each of your mouse buttons<br>can act as an annotation controls.<br>Simply assign some pre-set and start annotating!"
+			},{
+				"click #annotations-right-click": "Click here to specify an annotation<br>for your right mouse button."
+			},{
+				"next #preset-no-0": "This is an example of an annotation preset."
+			},{
+				"next #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New', then continue with 'Next'."
+			},{
+				"next #preset-no-1": "Adjust the new annotation preset:<br>choose a <b>polygon</b> as type,<br>and set any color and comment you like."
+			},{
+				"click #select-annotation-preset": "Since we've already selected<br>the pre-set by clicking on its properties,<br>choose Select to assign it to the right mouse button."
+			},{
+				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
+			},{
+				"next #viewer-container": "Try now to right-click somewhere on a canvas:<br>either you click on a data that will be<br>automatically outlined, or outside:<br>the visualisation will tell you so.<br>By simple click on a canvas, you can create automatically annotations.<br>But dragging will let you navigate."
+			},{
+				"next #sensitivity_auto_outline": "The automated annotation creation is controlled by this slider.<br>Increase the slider value to choose more opaque areas only - and vice versa."
+			},{
+				"next #annotation-mode": "Apart from the default, navigation mode, you can switch to different annotation modes here."
+			},{
+				"next #viewer-container": "Select 'custom shape' mode to drag-create annotations (or click for points adding in case of polygon).<br> You can do the selection temporarily by holding <br>Left Alt</b> key."
+			},{
+				"next #viewer-container": "Select 'free form tool' mode to adjust annotations.<br> You can do the selection temporarily by holding <br>Left Shift</b> key."
+			},{
+				"next #viewer-container": "While holding a left shift key, you can draw custom shapes,<br>or adjust existing annotations. Select any and use left mouse button to add mass,<br>right mouse button to remove mass from it.<br>Do these modifications on an edge of the selected annotation. Try it all now."
+			},{
+				"next #fft-size": "You can control the size of the free-form tool here."
+			},{
+				"next #annotation-board": "The board should now also contain new object(s).<br>You can edit the comment or click to focus the annotation easily."
+			},{
+				"click #history-undo": "A history cache will allow you to undo few last modifications.<br>Click here to undo the last step."
+			},{
+				"click #history-redo": "Click on 'redo' to return the last change.<br><b>Caveat</b>: redo history is erased on manual history change."
+			},{
+				"next #annotation-board": "Hotkeys: 'undo' can be performed by Ctrl+Z, 'redo' by Ctrl+Shift+Z.<br>'Delete' key will remove highlighted annotation<br>-simply click on the board on an annotation and hit 'delete' key."
+			}]
+		);
 	},
 
 	/****************************************************************************************************************
@@ -908,8 +945,7 @@ OSDAnnotations.prototype = {
 	createOutline: async function (eventPosition) {
 		console.log("called outline");
 
-		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(new OpenSeadragon.Point(eventPosition.x, eventPosition.y));
-		this.changeTile(viewportPos);
+		this.changeTile(eventPosition);
 
 		//todo unused, maybe round origin point...?
 		// eventPosition.x = Math.round(eventPosition.x);
@@ -1077,7 +1113,7 @@ OSDAnnotations.prototype = {
 		};
 
 		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
-		let level = this.currentTile.level;
+		let level = this._currentTile.level;
 		let maxSpeed = 24;
 		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
 
@@ -1137,9 +1173,7 @@ OSDAnnotations.prototype = {
 	_getSimpleApproxObjectBounds: function (eventPosition) {
 		//TODO move this beginning logic to handler
 
-		var viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		//var imagePoint = PLUGINS.dataLayer.viewportToImageCoordinates(viewportPos);
-		this.changeTile(viewportPos);
+		this.changeTile(eventPosition);
 
 		//todo unused, maybe round origin point...?
 		// eventPosition.x = Math.round(eventPosition.x);
@@ -1326,15 +1360,22 @@ OSDAnnotations.prototype = {
 		return Math.hypot(pointB[0] - pointA[0], pointB[1] - pointA[1]);
 	},
 
+	getRelativePixelDiffDistSquared: function(relativeDiff=1) {
+		let pointA = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+		let pointB = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
+		return Math.pow(pointB.x - pointA.x, 2) + Math.pow(pointB.y - pointA.y, 2);
+	},
+
 	// set currentTile to tile where is the event
-	changeTile: function (viewportPos) {
-		var i = 0;
-		PLUGINS.dataLayer.lastDrawn.forEach(function (tile) {
-			if (tile.bounds.containsPoint(viewportPos)) {
-				openseadragon_image_annotations.currentTile = tile;
+	changeTile: function (eventPosition) {
+		let viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+		let tiles = PLUGINS.dataLayer.lastDrawn;
+		for (let i = 0; i < tiles.length; i++) {
+			if (tiles[i].bounds.containsPoint(viewportPos)) {
+				this._currentTile = tiles[i];
 				return;
-			};
-		});
+			}	
+		}
 	},
 
 	isSimilarPixel: function (eventPosition, toPixel) {
@@ -1352,20 +1393,20 @@ OSDAnnotations.prototype = {
 
 	getPixelData: function (eventPosition) {
 		//change only if outside
-		if (!this.currentTile.bounds.containsPoint(eventPosition)) {
-			this.changeTile(PLUGINS.osd.viewport.pointFromPixel(eventPosition));
+		if (!this._currentTile.bounds.containsPoint(eventPosition)) {
+			this.changeTile(eventPosition);
 		}
 
 		// get position on a current tile
-		var x = eventPosition.x - this.currentTile.position.x;
-		var y = eventPosition.y - this.currentTile.position.y;
+		var x = eventPosition.x - this._currentTile.position.x;
+		var y = eventPosition.y - this._currentTile.position.y;
 
 		// get position on DZI tile (usually 257*257)
-		var relative_x = Math.round((x / this.currentTile.size.x) * this.currentTile.context2D.canvas.width);
-		var relative_y = Math.round((y / this.currentTile.size.y) * this.currentTile.context2D.canvas.height);
+		var relative_x = Math.round((x / this._currentTile.size.x) * this._currentTile.context2D.canvas.width);
+		var relative_y = Math.round((y / this._currentTile.size.y) * this._currentTile.context2D.canvas.height);
 
-
-		return this.currentTile.context2D.getImageData(relative_x, relative_y, 1, 1).data;
+		this._pixelReader.drawImage(this._currentTile.origData, relative_x, relative_y, 1, 1, 0, 0, 1, 1);
+		return this._pixelReader.getImageData(0, 0, 1, 1).data;
 	},
 
 	// CHECKS 4 neightbouring pixels and returns which ones are inside the specified region
@@ -1557,10 +1598,6 @@ OSDAnnotations.prototype = {
 				this.modifyTool.setRadius(parseFloat(this.toolRadius.val())); //so that cursor radius that is being taken from here will be correct before midify tool init
 				this.cursor.show();
 				break;	
-			case this.Modes.EDIT:
-				this.setMouseOSDInteractive(false);
-				this._modesJqNode.val("alt-right");
-				break;
 			default:
 				console.warn("Invalid mode:", mode);
 				return;
@@ -1582,11 +1619,6 @@ OSDAnnotations.prototype = {
 				PLUGINS.osd.setMouseNavEnabled(true);
 				this.overlay.fabricCanvas().renderAll();
 				break;	
-			case this.Modes.EDIT:
-				this.setMouseOSDInteractive(true);
-				// let active = _this.overlay.fabricCanvas().getActiveObject();
-				// if (active) active.hasControls = false;
-				break;
 			default:
 				console.warn("Invalid mode:", mode);
 				return;

@@ -75,43 +75,44 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
   
   <!-- OSD -->
-  <script src="./osd/openseadragon.min.js"></script>
-  <!-- <script src="./osd_debug/openseadragon.js"></script>
+  <!-- <script src="./osd/openseadragon.min.js"></script> -->
 
-  <script src="./osd_debug/eventsource.js"></script>
-  <script src="./osd_debug/rectangle.js"></script>
-  <script src="./osd_debug/tile.js"></script>
-  <script src="./osd_debug/tilecache.js"></script>
-  <script src="./osd_debug/tiledimage.js"></script>
-  <script src="./osd_debug/tilesource.js"></script>
-  <script src="./osd_debug/button.js"></script>
-  <script src="./osd_debug/buttongroup.js"></script>
-  <script src="./osd_debug/control.js"></script>
-  <script src="./osd_debug/controldock.js"></script>
-  <script src="./osd_debug/displayrectangle.js"></script>
-  <script src="./osd_debug/drawer.js"></script>
-  <script src="./osd_debug/dzitilesource.js"></script>
-  <script src="./osd_debug/fullscreen.js"></script>
-  <script src="./osd_debug/iiiftilesource.js"></script>
-  <script src="./osd_debug/imageloader.js"></script>
-  <script src="./osd_debug/imagetilesource.js"></script>
-  <script src="./osd_debug/legacytilesource.js"></script>
-  <script src="./osd_debug/mousetracker.js"></script>
-  <script src="./osd_debug/viewer.js"></script>
-  <script src="./osd_debug/navigator.js"></script>
-  <script src="./osd_debug/osmtilesource.js"></script>
-  <script src="./osd_debug/overlay.js"></script>
-  <script src="./osd_debug/placement.js"></script>
-  <script src="./osd_debug/point.js"></script>
-  <script src="./osd_debug/profiler.js"></script>
-  <script src="./osd_debug/referencestrip.js"></script>
-  <script src="./osd_debug/spring.js"></script>
-  <script src="./osd_debug/strings.js"></script>
-  <script src="./osd_debug/tilesourcecollection.js"></script>
-  <script src="./osd_debug/tmstilesource.js"></script>
-  <script src="./osd_debug/viewport.js"></script>
-  <script src="./osd_debug/world.js"></script>
-  <script src="./osd_debug/zoomifytilesource.js"></script> -->
+  <script src="./osd_debug/src/openseadragon.js"></script>
+
+  <script src="./osd_debug/src/eventsource.js"></script>
+  <script src="./osd_debug/src/rectangle.js"></script>
+  <script src="./osd_debug/src/tile.js"></script>
+  <script src="./osd_debug/src/tilecache.js"></script>
+  <script src="./osd_debug/src/tiledimage.js"></script>
+  <script src="./osd_debug/src/tilesource.js"></script>
+  <script src="./osd_debug/src/button.js"></script>
+  <script src="./osd_debug/src/buttongroup.js"></script>
+  <script src="./osd_debug/src/control.js"></script>
+  <script src="./osd_debug/src/controldock.js"></script>
+  <script src="./osd_debug/src/displayrectangle.js"></script>
+  <script src="./osd_debug/src/drawer.js"></script>
+  <script src="./osd_debug/src/dzitilesource.js"></script>
+  <script src="./osd_debug/src/fullscreen.js"></script>
+  <script src="./osd_debug/src/iiiftilesource.js"></script>
+  <script src="./osd_debug/src/imageloader.js"></script>
+  <script src="./osd_debug/src/imagetilesource.js"></script>
+  <script src="./osd_debug/src/legacytilesource.js"></script>
+  <script src="./osd_debug/src/mousetracker.js"></script>
+  <script src="./osd_debug/src/viewer.js"></script>
+  <script src="./osd_debug/src/navigator.js"></script>
+  <script src="./osd_debug/src/osmtilesource.js"></script>
+  <script src="./osd_debug/src/overlay.js"></script>
+  <script src="./osd_debug/src/placement.js"></script>
+  <script src="./osd_debug/src/point.js"></script>
+  <script src="./osd_debug/src/profiler.js"></script>
+  <script src="./osd_debug/src/referencestrip.js"></script>
+  <script src="./osd_debug/src/spring.js"></script>
+  <script src="./osd_debug/src/strings.js"></script>
+  <script src="./osd_debug/src/tilesourcecollection.js"></script>
+  <script src="./osd_debug/src/tmstilesource.js"></script>
+  <script src="./osd_debug/src/viewport.js"></script>
+  <script src="./osd_debug/src/world.js"></script>
+  <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
   <script src="./webgl/openSeadragonGLdynamic.js"></script>
   <script src="./webgl/viaWebGLdynamic.js"></script>
@@ -142,7 +143,7 @@ $cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
   <!--Tutorials-->
   <div id="tutorials-container" class="d-none system-container">
     <div class="f1-light text-center clearfix">Select a tutorial</div>
-    <p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>
+    <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
     <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
@@ -335,22 +336,6 @@ if($errorSource) {
     });
     viewer.gestureSettingsMouse.clickToZoom = false;
 
-
-    /*---------------------------------------------------------*/
-    /*------------ Init                          --------------*/
-    /*---------------------------------------------------------*/
-
-    seaGL.loadShaders(function() {
-      viewer.open(["/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi", "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi"]);
-    });
-    seaGL.init(viewer);
-
-    
-    viewer.addHandler('open-failed', function(e) {
-      //todo handle cases where image is not loaded properly
-      alert("Open failed");
-    });
-
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
@@ -509,9 +494,9 @@ if($errorSource) {
           zoom = viewer.viewport.getZoom();
           viewer.viewport.zoomTo(zoom - zoom * speed * 2);
           return;
-        case "h":
-          Tutorials.show();
-          return;
+        // case "h":
+        //   Tutorials.show();
+        //   return;
         default:
           return; // Quit when this doesn't handle the key event.
       }
@@ -679,13 +664,13 @@ if($errorSource) {
    var PLUGINS = {
       osd: viewer,
       seaGL: seaGL,
-      addTutorial: Tutorials.add,
+      addTutorial: Tutorials.add.bind(Tutorials),
       appendToMainMenu: function(title, titleHtml, html, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
       },
       appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id) {
         $("#main-panel").append(`<div id="${id}" class="inner-panel"><div>
-        <span class="material-icons inline-pin plugins-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
+        <span class="material-icons inline-pin plugins-pin" id="${id}-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
         <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
         </div>
         <div>	
@@ -711,6 +696,7 @@ if($errorSource) {
 
     <!-- PLUGINS -->
 <?php
+
 foreach ($PLUGINS as $_ => $plugin) {
     if (isset($plugin->flag) && $plugin->flag && !isFlag($plugin->flag)) {
       continue;
@@ -726,5 +712,22 @@ foreach ($PLUGINS as $_ => $plugin) {
     }
 }
 ?>
+
+  <script type="text/javascript">
+    /*---------------------------------------------------------*/
+    /*------------ Init                          --------------*/
+    /*---------------------------------------------------------*/
+
+    seaGL.loadShaders(function() {
+      viewer.open(["/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi", "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi"]);
+    });
+    seaGL.init(viewer);
+
+    
+    viewer.addHandler('open-failed', function(e) {
+      //todo handle cases where image is not loaded properly
+      alert("Open failed");
+    });
+  </script>
 </body>
 </html>

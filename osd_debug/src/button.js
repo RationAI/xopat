@@ -77,7 +77,6 @@ $.ButtonState = {
  * @param {OpenSeadragon.EventHandler} [options.onExit=null] Event handler callback for {@link OpenSeadragon.Button.event:exit}.
  * @param {OpenSeadragon.EventHandler} [options.onFocus=null] Event handler callback for {@link OpenSeadragon.Button.event:focus}.
  * @param {OpenSeadragon.EventHandler} [options.onBlur=null] Event handler callback for {@link OpenSeadragon.Button.event:blur}.
- * @param {Object} [options.userData=null] Arbitrary object to be passed unchanged to any attached handler methods.
  */
 $.Button = function( options ) {
 
@@ -112,8 +111,7 @@ $.Button = function( options ) {
         onEnter:            null,
         onExit:             null,
         onFocus:            null,
-        onBlur:             null,
-        userData:           null
+        onBlur:             null
 
     }, options );
 
@@ -138,13 +136,6 @@ $.Button = function( options ) {
         this.imgDown.alt  =
             this.tooltip;
 
-        // Allow pointer events to pass through the img elements so implicit
-        //   pointer capture works on touch devices
-        $.setElementPointerEventsNone( this.imgRest );
-        $.setElementPointerEventsNone( this.imgGroup );
-        $.setElementPointerEventsNone( this.imgHover );
-        $.setElementPointerEventsNone( this.imgDown );
-
         this.element.style.position = "relative";
         $.setElementTouchActionNone( this.element );
 
@@ -167,7 +158,7 @@ $.Button = function( options ) {
         this.imgDown.style.visibility  =
             "hidden";
 
-        if ($.Browser.vendor === $.BROWSERS.FIREFOX && $.Browser.version < 3) {
+        if ($.Browser.vendor == $.BROWSERS.FIREFOX && $.Browser.version < 3) {
             this.imgGroup.style.top =
             this.imgHover.style.top =
             this.imgDown.style.top  =
@@ -212,7 +203,6 @@ $.Button = function( options ) {
      */
     this.tracker = new $.MouseTracker({
 
-        userData:           'Button.tracker',
         element:            this.element,
         clickTimeThreshold: this.clickTimeThreshold,
         clickDistThreshold: this.clickDistThreshold,
@@ -237,7 +227,7 @@ $.Button = function( options ) {
         },
 
         focusHandler: function ( event ) {
-            _this.tracker.enterHandler( event );
+            this.enterHandler( event );
             /**
              * Raised when the Button element receives focus.
              *
@@ -251,7 +241,7 @@ $.Button = function( options ) {
             _this.raiseEvent( "focus", { originalEvent: event.originalEvent } );
         },
 
-        leaveHandler: function( event ) {
+        exitHandler: function( event ) {
             outTo( _this, $.ButtonState.GROUP );
             if ( event.insideElementPressed ) {
                 /**
@@ -269,7 +259,7 @@ $.Button = function( options ) {
         },
 
         blurHandler: function ( event ) {
-            _this.tracker.leaveHandler( event );
+            this.exitHandler( event );
             /**
              * Raised when the Button element loses focus.
              *
@@ -360,11 +350,9 @@ $.Button = function( options ) {
                  * @property {?Object} userData - Arbitrary subscriber-defined object.
                  */
                 _this.raiseEvent( "release", { originalEvent: event.originalEvent } );
-
-                event.preventDefault = true;
-            } else{
-                event.preventDefault = false;
+                return false;
             }
+            return true;
         }
 
     });
@@ -375,8 +363,8 @@ $.Button = function( options ) {
 $.extend( $.Button.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.Button.prototype */{
 
     /**
-     * Used by a button container element (e.g. a ButtonGroup) to transition the button state
-     * to ButtonState.GROUP.
+     * TODO: Determine what this function is intended to do and if it's actually
+     * useful as an API point.
      * @function
      */
     notifyGroupEnter: function() {
@@ -384,8 +372,8 @@ $.extend( $.Button.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.
     },
 
     /**
-     * Used by a button container element (e.g. a ButtonGroup) to transition the button state
-     * to ButtonState.REST.
+     * TODO: Determine what this function is intended to do and if it's actually
+     * useful as an API point.
      * @function
      */
     notifyGroupExit: function() {
@@ -408,28 +396,6 @@ $.extend( $.Button.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.
         this.element.disabled = false;
         $.setElementOpacity( this.element, 1.0, true );
         this.notifyGroupEnter();
-    },
-
-    destroy: function() {
-        if (this.imgRest) {
-            this.element.removeChild(this.imgRest);
-            this.imgRest = null;
-        }
-        if (this.imgGroup) {
-            this.element.removeChild(this.imgGroup);
-            this.imgGroup = null;
-        }
-        if (this.imgHover) {
-            this.element.removeChild(this.imgHover);
-            this.imgHover = null;
-        }
-        if (this.imgDown) {
-            this.element.removeChild(this.imgDown);
-            this.imgDown = null;
-        }
-        this.removeAllHandlers();
-        this.tracker.destroy();
-        this.element = null;
     }
 
 });
@@ -485,13 +451,13 @@ function inTo( button, newState ) {
     }
 
     if ( newState >= $.ButtonState.GROUP &&
-         button.currentState === $.ButtonState.REST ) {
+         button.currentState == $.ButtonState.REST ) {
         stopFading( button );
         button.currentState = $.ButtonState.GROUP;
     }
 
     if ( newState >= $.ButtonState.HOVER &&
-         button.currentState === $.ButtonState.GROUP ) {
+         button.currentState == $.ButtonState.GROUP ) {
         if( button.imgHover ){
             button.imgHover.style.visibility = "";
         }
@@ -499,7 +465,7 @@ function inTo( button, newState ) {
     }
 
     if ( newState >= $.ButtonState.DOWN &&
-         button.currentState === $.ButtonState.HOVER ) {
+         button.currentState == $.ButtonState.HOVER ) {
         if( button.imgDown ){
             button.imgDown.style.visibility = "";
         }
@@ -515,7 +481,7 @@ function outTo( button, newState ) {
     }
 
     if ( newState <= $.ButtonState.HOVER &&
-         button.currentState === $.ButtonState.DOWN ) {
+         button.currentState == $.ButtonState.DOWN ) {
         if( button.imgDown ){
             button.imgDown.style.visibility = "hidden";
         }
@@ -523,7 +489,7 @@ function outTo( button, newState ) {
     }
 
     if ( newState <= $.ButtonState.GROUP &&
-         button.currentState === $.ButtonState.HOVER ) {
+         button.currentState == $.ButtonState.HOVER ) {
         if( button.imgHover ){
             button.imgHover.style.visibility = "hidden";
         }
@@ -531,7 +497,7 @@ function outTo( button, newState ) {
     }
 
     if ( newState <= $.ButtonState.REST &&
-         button.currentState === $.ButtonState.GROUP ) {
+         button.currentState == $.ButtonState.GROUP ) {
         beginFading( button );
         button.currentState = $.ButtonState.REST;
     }

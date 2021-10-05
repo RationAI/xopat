@@ -62,6 +62,7 @@ function ImageJob (options) {
     this.image = null;
 }
 
+//FIXME imageload (rewrite once policy known)
 ImageJob.prototype = {
     errorMsg: null,
 
@@ -91,6 +92,8 @@ ImageJob.prototype = {
         // Load the tile with an AJAX request if the loadWithAjax option is
         // set. Otherwise load the image by setting the source proprety of the image object.
         if (this.loadWithAjax) {
+            //FIXME imageload (needs change)
+
             this.request = $.makeAjaxRequest({
                 url: this.src,
                 withCredentials: this.ajaxWithCredentials,
@@ -142,6 +145,9 @@ ImageJob.prototype = {
                 }
             };
         } else {
+            //FIXME imageload (if not fetched by ajax, todo: how cross origin works?)
+            //probably also needed, this is the loading part used when the page is being loaded, not updated after load
+
             if (this.crossOriginPolicy !== false) {
                 this.image.crossOrigin = this.crossOriginPolicy;
             }
@@ -262,6 +268,7 @@ function completeJob(loader, job, callback) {
         loader.jobsInProgress++;
     }
 
+    //FIXME imageload (possibly rewrte callback behaviour (THIS is the callback used in Job))
     callback(job.image, job.errorMsg, job.request);
 }
 

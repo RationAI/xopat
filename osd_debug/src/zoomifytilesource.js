@@ -18,7 +18,7 @@
      *      tilesUrl: "/test/data/zoomify/"
      * }
      *
-     * The tileSize is set to 256 (the usual Zoomify default) when it is not defined. The tileUrl must the path to the image _directory_.
+     * The tileSize is currently hardcoded to 256 (the usual Zoomify default). The tileUrl must the path to the image _directory_.
      *
      * 2) Loading image metadata from xml file: (CURRENTLY NOT SUPPORTED)
      *
@@ -44,14 +44,7 @@
      * @param {String} tilesUrl
      */
     $.ZoomifyTileSource = function(options) {
-        if(typeof options.tileSize === 'undefined'){
-            options.tileSize = 256;
-        }
-
-        if(typeof options.fileFormat === 'undefined'){
-            options.fileFormat = 'jpg';
-            this.fileFormat = options.fileFormat;
-        }
+        options.tileSize = 256;
 
         var currentImageSize = {
             x: options.width,
@@ -114,7 +107,7 @@
          * @param {String} optional - url
          */
         supports: function(data, url) {
-            return (data.type && "zoomifytileservice" === data.type);
+            return (data.type && "zoomifytileservice" == data.type);
         },
 
         /**
@@ -140,7 +133,7 @@
             var result = 0;
             var num = this._calculateAbsoluteTileNumber(level, x, y);
             result = Math.floor(num / 256);
-            return this.tilesUrl + 'TileGroup' + result + '/' + level + '-' + x + '-' + y + '.' + this.fileFormat;
+            return this.tilesUrl + 'TileGroup' + result + '/' + level + '-' + x + '-' + y + '.jpg';
 
         }
     });

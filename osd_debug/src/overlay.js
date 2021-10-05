@@ -288,7 +288,10 @@
                         style[transformProp] = "";
                     }
                 }
-                style.display = 'block';
+
+                if (style.display !== 'none') {
+                    style.display = 'block';
+                }
             }
         },
 
