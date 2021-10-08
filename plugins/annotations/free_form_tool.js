@@ -52,7 +52,7 @@ FreeFormTool.prototype = {
                 break;
             default:
                 this.polygon = null;
-                this._context.messenger.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, this._context.messenger.MSG_WARN);
+                PLUGINS.dialog.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, PLUGINS.dialog.MSG_WARN);
                 return;
         }
 

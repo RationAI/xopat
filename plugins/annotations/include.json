@@ -1,6 +1,7 @@
 {
     "id": "openseadragon_image_annotations",
     "name": "Annotations",
+    "description": "A plugin for creating and managing notes inside the visualisation.",
     "includes" : [
         "ext/fabric.min.js",
         "ext/openseadragon-fabricjs-overlay.js",

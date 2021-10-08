@@ -308,7 +308,7 @@ Polygon.prototype = {
 
 		let origPixel = this._context.getPixelData(point);
 		if (!this.comparator(origPixel)) {
-			this._context.messenger.show("Outside a region - decrease sensitivity to select.", 2000, this._context.messenger.MSG_INFO);
+			PLUGINS.dialog.show("Outside a region - decrease sensitivity to select.", 2000, PLUGINS.dialog.MSG_INFO);
 			return
 		};
 
@@ -350,7 +350,7 @@ Polygon.prototype = {
 		maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
 
 		if (maxX < 10 || maxY < 10) {
-			this._context.messenger.show("Failed to create region.", 3000, this._context.messenger.MSG_WARN);
+			PLUGINS.dialog.show("Failed to create region.", 3000, PLUGINS.dialog.MSG_WARN);
 			return;
 		}
 

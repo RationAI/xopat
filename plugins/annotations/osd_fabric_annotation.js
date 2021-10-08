@@ -31,7 +31,6 @@ OSDAnnotations = function (incoming) {
 	this.mode = this.Modes.AUTO;
 
 	// Classes defined in other local JS files
-	this.messenger = new Messenger();
 	this.presets = new PresetManager("presets", this);
 	this.history = new History("history", this, this.presets)
 	this.modifyTool = new FreeFormTool(this);
@@ -434,7 +433,7 @@ OSDAnnotations.prototype = {
 			$.post('http://ip-78-128-251-178.flt.cloud.muni.cz:5050/occlusion',  // url
 				JSON.stringify(send_data), // data to be submit
 				function (data, status, xhr) {   // success callback function
-					openseadragon_image_annotations.messenger.show('status: ' + status + ', data: ' + data.responseData, 8000, openseadragon_image_annotations.messenger.MSG_INFO);
+					PLUGINS.dialog.show('status: ' + status + ', data: ' + data.responseData, 8000, PLUGINS.dialog.MSG_INFO);
 				});
 		});
 
@@ -652,16 +651,10 @@ OSDAnnotations.prototype = {
 
 		//form for object property modification
 		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-		<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="
-		switch($(this).val()) {
-			case 'auto': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO); break;
-			case 'alt-left': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.CUSTOM); break;
-			case 'shift': openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.FREE_FORM_TOOL); break;
-		} return false;
-		">
-		<option value="auto" selected>automatic shape & navigation</option>
-		<option value="alt-left">🖌 custom shape (⌨ Left Alt)</option>
-		<option value="shift">&#9733; free form tool (⌨ Left Shift)</option>
+		<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="openseadragon_image_annotations.setMode($(this).val(), true);return false;">
+		<option value="${this.Modes.AUTO}" selected>automatic shape & navigation</option>
+		<option value="${this.Modes.CUSTOM}">🖌 custom shape (⌨ Left Alt)</option>
+		<option value="${this.Modes.FREE_FORM_TOOL}">&#9733; free form tool (⌨ Left Shift)</option>
 		</select>`);		
 	},
 
@@ -735,13 +728,15 @@ OSDAnnotations.prototype = {
 			},{
 				"next #downloadAnnotation": "Here you can download <b>just</b> your annotations.<br>This is included automatically when using global `Export` option."
 			},{
-				"next #annotations-left-click": "Each of your mouse buttons<br>can act as an annotation controls.<br>Simply assign some pre-set and start annotating!"
+				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!"
 			},{
 				"click #annotations-right-click": "Click here to specify an annotation<br>for your right mouse button."
 			},{
 				"next #preset-no-0": "This is an example of an annotation preset."
 			},{
-				"next #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New', then continue with 'Next'."
+				"click #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New'."
+			},{
+				"click #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
 			},{
 				"next #preset-no-1": "Adjust the new annotation preset:<br>choose a <b>polygon</b> as type,<br>and set any color and comment you like."
 			},{
@@ -755,7 +750,7 @@ OSDAnnotations.prototype = {
 			},{
 				"next #annotation-mode": "Apart from the default, navigation mode, you can switch to different annotation modes here."
 			},{
-				"next #viewer-container": "Select 'custom shape' mode to drag-create annotations (or click for points adding in case of polygon).<br> You can do the selection temporarily by holding <br>Left Alt</b> key."
+				"next #viewer-container": "Select 'custom shape' mode to drag-create annotations (or click for points adding in case of polygon).<br> You can do the selection temporarily by holding <br>Left Alt</b> key.<br> Note: polygon will be created from its custom points<br>only after you switch to a different mode.<br> Releasing left Alt will thus finish the polygon creation easily."
 			},{
 				"next #viewer-container": "Select 'free form tool' mode to adjust annotations.<br> You can do the selection temporarily by holding <br>Left Shift</b> key."
 			},{
@@ -768,6 +763,10 @@ OSDAnnotations.prototype = {
 				"click #history-undo": "A history cache will allow you to undo few last modifications.<br>Click here to undo the last step."
 			},{
 				"click #history-redo": "Click on 'redo' to return the last change.<br><b>Caveat</b>: redo history is erased on manual history change."
+			},{
+				"next #history-refresh": "Refreshing the board might come useful in case<br>some unexpected error caused the board miss an annotation."
+			},{
+				"next #history-sync": "You can update all objects to reflect the most recent changes on presets. <br><b>Caveat</b>: this will undo any custom modifications made to annotations (comment/color)."
 			},{
 				"next #annotation-board": "Hotkeys: 'undo' can be performed by Ctrl+Z, 'redo' by Ctrl+Shift+Z.<br>'Delete' key will remove highlighted annotation<br>-simply click on the board on an annotation and hit 'delete' key."
 			}]
@@ -864,7 +863,7 @@ OSDAnnotations.prototype = {
 
 		let origPixel = this.getPixelData(eventPosition);
 		if (!this.comparator(origPixel)) {
-			openseadragon_image_annotations.messenger.show("Outside a region - decrease the sensitivity.", openseadragon_image_annotations.messenger.MSG_INFO);
+			PLUGINS.dialog.show("Outside a region - decrease the sensitivity.", PLUGINS.dialog.MSG_INFO);
 			return
 		};
 
@@ -1031,7 +1030,7 @@ OSDAnnotations.prototype = {
 					console.log("continue");
 					continue;
 				} else {
-					this.messenger.show("Failed to create outline - no close point.", 2000, this.messenger.MSG_ERR);
+					PLUGINS.dialog.show("Failed to create outline - no close point.", 2000, PLUGINS.dialog.MSG_ERR);
 					return;
 				}
 			}
@@ -1051,7 +1050,7 @@ OSDAnnotations.prototype = {
 			$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
 			if (counter > 5000) {
-				this.messenger.show("Failed to create outline", 1500, this.messenger.MSG_ERR);
+				PLUGINS.dialog.show("Failed to create outline", 1500, PLUGINS.dialog.MSG_ERR);
 				$(".to-delete").remove();
 
 				return;
@@ -1408,7 +1407,7 @@ OSDAnnotations.prototype = {
 
 			}
 		} else {
-			this.messenger.show("Please select the annotation you would like to delete", 3000, this.messenger.MSG_INFO);
+			PLUGINS.dialog.show("Please select the annotation you would like to delete", 3000, PLUGINS.dialog.MSG_INFO);
 		}
 	},
 
@@ -1471,6 +1470,10 @@ OSDAnnotations.prototype = {
 	},
 
 	setMode: function(mode) {
+		if (typeof(mode) !== "number") {
+			mode = Number.parseInt(mode);
+		}
+
 		if (mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
@@ -1488,12 +1491,10 @@ OSDAnnotations.prototype = {
 			case this.Modes.CUSTOM:
 				PLUGINS.osd.setMouseNavEnabled(false);
 				this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
-				this._modesJqNode.val("alt-left");
 				break;
 			case this.Modes.FREE_FORM_TOOL:
 				//dirty but when a mouse is clicked, for some reason active object is deselected
 				this.modifyTool._cachedSelection = this.overlay.fabricCanvas().getActiveObject();
-				this._modesJqNode.val("shift");
 				PLUGINS.osd.setMouseNavEnabled(false);
 				this.overlay.fabricCanvas().hoverCursor = "crosshair";
 				//todo value of radius from user
@@ -1505,6 +1506,7 @@ OSDAnnotations.prototype = {
 				return;
 		}
 		this.mode = mode;
+		this._modesJqNode.val(mode);
 	},
 
 	_setModeToAuto: function() {
@@ -1526,7 +1528,7 @@ OSDAnnotations.prototype = {
 				return;
 		}
 		this.mode = this.Modes.AUTO;
-		this._modesJqNode.val("auto");
+		this._modesJqNode.val(this.Modes.AUTO);
 	},
 
 	//cursor management (TODO move here other stuff involving cursor too)
@@ -1646,7 +1648,7 @@ PresetManager.prototype = {
 		if (this._context.overlay.fabricCanvas()._objects.some(o => {
             return o.presetID === id;
         })) {
-			this._context.messenger.show("This preset belongs to existing annotations: it cannot be removed.", 8000, openseadragon_image_annotations.messenger.MSG_WARN);
+			PLUGINS.dialog.show("This preset belongs to existing annotations: it cannot be removed.", 8000, PLUGINS.dialog.MSG_WARN);
 			return;
 		}
 
@@ -1754,11 +1756,11 @@ PresetManager.prototype = {
 		return 	`<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
 	},
 
-	getPresetHTMLById: function(id, isLeftClick) {
+	getPresetHTMLById: function(id, isLeftClick, index=undefined) {
 		if (!this._presets[id]) {
 			return "";
 		}
-		return this.getPresetHTML(this._presets[id], isLeftClick);
+		return this.getPresetHTML(this._presets[id], isLeftClick, index);
 	},
 
 	getPresetControlHTML: function(preset, isLeftClick) {
@@ -1767,7 +1769,7 @@ PresetManager.prototype = {
 		return `<div class="border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons" style="color: ${preset.color}";>${preset.context.getIcon()}</span>  ${comment}</div>`;
 	},
 
-	getPresetHTML: function(preset, isLeftClick) {
+	getPresetHTML: function(preset, isLeftClick, index=undefined) {
 		let select = "",
 			currentPreset = isLeftClick ? this.left : this.right;
 
@@ -1777,7 +1779,10 @@ PresetManager.prototype = {
 			case "polygon": select = `<option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon" selected>Polygon</option>`; break;
 			default: console.error('Invalid presset.'); break;
 		}
-		let html = `<div id="preset-${preset._id}" class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
+
+		let id = index === undefined ? "" : `id="preset-no-${index}"`;
+
+		let html = `<div ${id} class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
 		if (preset === currentPreset) {
 			html += `highlighted-preset"`;
 			this._selection = preset._id;
@@ -1793,90 +1798,29 @@ PresetManager.prototype = {
 	},
 
 	showPresets: function (isLeftClick) {
-		$("#preset-modify-dialog").remove();
 		this._selection = undefined;
 
 		let html = "",
+			counter = 0,
 			_this = this;
 
 		Object.values(this._presets).forEach(preset => {
-			html += _this.getPresetHTML(preset, isLeftClick);
+			html += _this.getPresetHTML(preset, isLeftClick, counter);
+			counter++;
 		});
 
 		html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
-		let id = ${this._globalSelf}.addPreset()._id; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick})); "><span class="material-icons">add</span> New</div>`;
+		let id = ${this._globalSelf}.addPreset()._id; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, $(this).index())); "><span class="material-icons">add</span> New</div>`;
 
 		let title = isLeftClick ? "for left click" : "for right click";
 
-		$("body").append(`
-		<div id="preset-modify-dialog" class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
-<details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
-    <div class="Box-header">
-      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
-        <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
-      </button>
-      <h3 class="Box-title">Annotations presets <b>${title}</b></h3>
-    </div>
-    <div class="overflow-auto position-relative">
-      <div class="Box-body overflow-auto" style="padding-bottom: 45px;">
-	  ${html}
-	  </div>
-	  <button id="select-annotation-preset" onclick="
-	    if (${this._globalSelf}._selection === undefined) { return false;}
+		PLUGINS.dialog.showCustom("preset-modify-dialog", `Annotations presets <b>${title}</b>`, html, `<button id="select-annotation-preset" onclick="
+	    if (${this._globalSelf}._selection === undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); return false;}
 		setTimeout(function(){
 			$('#preset-modify-dialog').remove(); ${this._globalSelf}.selectPreset(${isLeftClick}); 
-		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>
-    </div>
-  </details-dialog>
-  </div>
-	`);
+		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>`);
 	},
 }
-
-Messenger = function () {
-	this.MSG_INFO = { class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' };
-	this.MSG_WARN = { class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />' };
-	this.MSG_ERR = { class: "Toast--error", icon: '<path fill-rule="evenodd" d="M10 1H4L0 5v6l4 4h6l4-4V5l-4-4zm3 9.5L9.5 14h-5L1 10.5v-5L4.5 2h5L13 5.5v5zM6 4h2v5H6V4zm0 6h2v2H6v-2z" />' };
-	this._timer = null;
-
-	$("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
-		  <span class="Toast-icon"><svg width="12" height="16"v id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
-		  <span id="annotation-messages" class="Toast-content v-align-middle"></span>
-		  <button class="Toast-dismissButton" onclick="openseadragon_image_annotations.messenger.hide(false);">
-			<svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
-		  </button>
-		  </div>`);
-
-	this._body = $("#annotation-messages-container");
-	this._board = $("#annotation-messages");
-	this._icon = $("#annotation-icon");
-}
-Messenger.prototype = {
-	show: function (text, delayMS, importance) {
-		this._board.html(text);
-		this._icon.html(importance.icon);
-		this._body.removeClass(); //all
-		this._body.addClass(`Toast position-fixed ${importance.class}`)
-		this._body.removeClass("popUpHide");
-		this._body.addClass("popUpEnter");
-
-		if (delayMS > 1000) {
-			this._timer = setTimeout(this.hide.bind(this), delayMS);
-		}
-	},
-
-	hide: function (_autoCalled = true) {
-		console.log("remove", this._body)
-		this._body.removeClass("popUpEnter");
-		this._body.addClass("popUpHide");
-
-		if (!_autoCalled) {
-			clearTimeout(this._timer);
-		}
-		this._timer = null;
-	}
-}  // end of namespace Messenger
-
 
 /*------------ Initialization of OSD Annotations ------------*/
 var openseadragon_image_annotations = new OSDAnnotations();
