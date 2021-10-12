@@ -98,30 +98,30 @@ send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
 `````
 Shader is then composed in this manner: (you can see the **global** stuff here)
 ````glsl
+#version 300 es
 precision mediump float;
 uniform vec2 u_tile_size;  //tile dimension
-varying vec2 v_tile_pos;   //in-texture position
+in vec2 v_tile_pos;        //in-texture position
 
-//linear blending of colors based on float 'ratio'
-vec4 blend(vec4 a, vec4 b, float ratio) {
-    return ratio * a + (1.0-ratio) * b;
-}
+out vec4 final_color;      //do not touch directly, fragment output
 
-//output using show(...)
-void show(vec4 color) {
-    gl_FragColor = color.a * color + (1.0-color.a) * gl_FragColor;
-}
-
-//instead of equality comparison, unusable on float values
+//instead of equality comparison that is unusable on float values
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
+}
+
+//output any color using show(...) that provides correct blending
+void show(vec4 color) {
+    if (close(color.a, 0.0)) return;
+    float t = color.a + final_color.a - color.a*final_color.a;
+    final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
 }
 
 //here is placed any code from $definition part
 ${definition}
 
 void main() {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    final_color = vec4(0.0, 0.0, 0.0, 0.0);
 
     //here is placed any code from execution part
     ${execution}

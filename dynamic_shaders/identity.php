@@ -13,7 +13,7 @@ EOF;
 //second shader part, if sampled grayscale value is significant, and above threshold, 
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
-  show(texture2D($samplerName, v_tile_pos));
+  show(texture($samplerName, v_tile_pos));
 EOF;
 
 //all other properties are not used

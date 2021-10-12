@@ -87,18 +87,18 @@ EOF;
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
 
-    float data_{$uniqueId} = texture2D($samplerName, v_tile_pos).r;
+    float data_{$uniqueId} = texture($samplerName, v_tile_pos).r;
     float dist_{$uniqueId} = 0.005 * sqrt(sqrt(zoom_{$uniqueId}));
 
-    float up_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
-    float bottom_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
-    float left_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;
-    float right_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})).r;
+    float up_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
+    float bottom_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
+    float left_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;
+    float right_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})).r;
 
-    float up2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
-    float bottom2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
-    float left2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})).r;
-    float right2_{$uniqueId} = texture2D($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})).r;
+    float up2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
+    float bottom2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
+    float left2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})).r;
+    float right2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})).r;
 
     vec4 border_{$uniqueId} = getBorder_{$uniqueId}(data_{$uniqueId}, up_{$uniqueId}, bottom_{$uniqueId}, left_{$uniqueId},
                                 right_{$uniqueId}, up2_{$uniqueId}, bottom2_{$uniqueId}, left2_{$uniqueId}, right2_{$uniqueId});

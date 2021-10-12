@@ -78,7 +78,7 @@ $defaultThresholdValue = $invertOpacity ? "100" : "1";
 
 $execution = <<<EOF
 
-  vec4 data{$uniqueId} = texture2D($samplerName, v_tile_pos);
+  vec4 data{$uniqueId} = texture($samplerName, v_tile_pos);
   $compareAgainst
   if(data{$uniqueId}.r $compConst && $comparison){
     show(vec4(color_{$uniqueId}, $alpha));

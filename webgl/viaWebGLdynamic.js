@@ -320,8 +320,9 @@ ViaWebGL.prototype = {
         return this.context(document.createElement('canvas'));
     },
     context: function (a) {
-        return a.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
-            || a.getContext('webgl', { premultipliedAlpha: false, alpha: true });
+        // return a.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
+        //     || a.getContext('webgl', { premultipliedAlpha: false, alpha: true });
+        return a.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
     },
     // Get built visualisation
     getter: function (visualisation) {
@@ -422,14 +423,12 @@ ViaWebGL.prototype = {
                 }
             });
 
-            var fragment_shader = `
+            var fragment_shader = `#version 300 es
 precision mediump float;
 uniform vec2 u_tile_size;
-varying vec2 v_tile_pos;
+in vec2 v_tile_pos;
 
-vec4 blend(vec4 a, vec4 b, float ratio) {
-    return ratio * a + (1.0-ratio) * b;
-}
+out vec4 final_color;
 
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
@@ -437,14 +436,14 @@ bool close(float value, float target) {
 
 void show(vec4 color) {
     if (close(color.a, 0.0)) return;
-    float t = color.a + gl_FragColor.a - color.a*gl_FragColor.a;
-    gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
+    float t = color.a + final_color.a - color.a*final_color.a;
+    final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
 }
 
 ${definition}
 
 void main() {
-    gl_FragColor = vec4(1., 1., 1., 0.);
+    final_color = vec4(1., 1., 1., 0.);
 
     ${execution}
 }`;
@@ -481,15 +480,15 @@ try {
 }
 `;
 
-            var vertex_shader = `
-    attribute vec4 a_pos;
-    attribute vec2 a_tile_pos;
-    varying vec2 v_tile_pos;
+            var vertex_shader = `#version 300 es
+in vec4 a_pos;
+in vec2 a_tile_pos;
+out vec2 v_tile_pos;
     
-    void main() {
-      v_tile_pos = a_tile_pos;
-      gl_Position = a_pos;
-    }
+void main() {
+    v_tile_pos = a_tile_pos;
+    gl_Position = a_pos;
+}
 `;
             visualisation.vertex_shader = vertex_shader;
             visualisation.fragment_shader = fragment_shader;
