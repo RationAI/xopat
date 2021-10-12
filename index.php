@@ -193,10 +193,10 @@ foreach ($PLUGINS as $_ => $plugin) {
   </div>
 
   <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0" style="width: 400px; background: #0000005c;">
-      <span id="global-export" class="pl-2" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Export <span class="material-icons">download</span></span>
+      <span id="global-export" class="pl-2" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;"><span class="material-icons">download</span> Export</span>
       <a style="display:none;" id="export-visualisation"></a> &emsp;
-      <span id="add-plugins" onclick="addPlugins();" title="Add plugins to the visualisation" style="cursor: pointer;">Plugins <span class="material-icons">extension</span></span>&emsp;
-      <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;">Tutorial <span class="material-icons">school</span></span>&emsp;
+      <span id="add-plugins" onclick="addPlugins();" title="Add plugins to the visualisation" style="cursor: pointer;"><span class="material-icons">extension</span> Plugins</span>&emsp;
+      <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;"><span class="material-icons">school</span> Tutorial</span>&emsp;
   </div>
 </div>
 

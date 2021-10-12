@@ -716,11 +716,11 @@ OSDAnnotations.prototype = {
 
 	setupTutorials: function() {
 		PLUGINS.addTutorial(
-			"Annotations Plugin", "learn to use annotations", "draw", [ 
+			"Annotations Plugin", "learn to use annotations (note: the tutorial is not well tested and will be split to multiple smaller ones later)", "draw", [ 
 			{
 				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
 			}, {
-				"next #annotation-board": "Annotation board is the second panel part of this plugin: <br>you can see all your objects and modify them."
+				"next #annotation-board": "Annotation board is the second panel part of this plugin: <br>useful for existing objects management."
 			},{
 				"click #annotations-panel-pin": "Click on the pin to keep visible all controls."
 			},{
@@ -740,7 +740,7 @@ OSDAnnotations.prototype = {
 			},{
 				"next #preset-no-1": "Adjust the new annotation preset:<br>choose a <b>polygon</b> as type,<br>and set any color and comment you like."
 			},{
-				"click #select-annotation-preset": "Since we've already selected<br>the pre-set by clicking on its properties,<br>choose Select to assign it to the right mouse button."
+				"click #select-annotation-preset": "Click <b>Select</b> to assign it to the right mouse button."
 			},{
 				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 			},{
