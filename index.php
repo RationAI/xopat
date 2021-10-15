@@ -119,8 +119,10 @@ foreach ($PLUGINS as $_ => $plugin) {
   <script src="./osd_debug/src/world.js"></script>
   <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
-  <script src="./webgl/openSeadragonGLdynamic.js"></script>
+  <script src="./webgl/webGLContext.js"></script>
   <script src="./webgl/viaWebGLdynamic.js"></script>
+  <script src="./webgl/openSeadragonGLdynamic.js"></script>
+
 
   <!--Tutorials-->
   <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
@@ -141,8 +143,8 @@ foreach ($PLUGINS as $_ => $plugin) {
   <div id="system-message" class="d-none system-container">
     <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('visibility', 'visible'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
-    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="visibility: hidden;"></div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
+    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
   </div>
 
   <!--Tutorials-->
@@ -260,7 +262,7 @@ if($errorSource) {
       scriptId: "auto-scripts",
       jsGlLoadedCall: "glLoaded",
       jsGlDrawingCall: "glDrawing",
-      shaderGenerator: "/iipmooviewer-jiri/OSD/dynamic_shaders/build.php",
+      shaderGenerator: "/iipmooviewer-jiri/OSD2/dynamic_shaders/build.php",
 
       //called once fully initialized
       ready: function() {

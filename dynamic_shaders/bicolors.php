@@ -48,7 +48,6 @@ $samplerName = "tile_data_{$uniqueId}";
 //definition part
 $definition = <<<EOF
 
-uniform sampler2D $samplerName;
 uniform float threshold_{$uniqueId};
 uniform float threshold_opacity_{$uniqueId};
 uniform vec3 colorHigh_{$uniqueId};
@@ -71,7 +70,7 @@ $defaultThresholdValue = $invertOpacity ? "100" : "1";
 
 $execution = <<<EOF
 
-  vec4 data_{$uniqueId} = texture($samplerName, v_tile_pos);
+  vec4 data_{$uniqueId} = {$texture('v_tile_pos')};
   if (!close(data_{$uniqueId}.b, .5)) {
     if (data_{$uniqueId}.b < .5) { //g2 color for small values
       float value_{$uniqueId} = 1.0 - data_{$uniqueId}.b * 2.0;
@@ -193,6 +192,6 @@ function colorLowChange_{$uniqueId}(self) {
 }
 EOF;
 
-send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
+send($definition, $execution, $html, $js, $glload, $gldraw);
 
 ?>						

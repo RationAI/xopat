@@ -14,9 +14,29 @@ if (isset($_GET["index"])) {
   die("No data was specified. The shader part could not be generated.");
 }
 
-$uniqueId = isset($data["uniqueId"]) ? $data["uniqueId"] : "";
-$uniqueId .= $data["index"];
+$index = $data["index"];
 
+$uniqueId = isset($data["uniqueId"]) ? $data["uniqueId"] : "";
+$uniqueId .= $index;
+
+
+//default ON
+$webGL2 = true;
+if (isset($data["webgl2"])) {
+  $webGL2 = json_decode($data["webgl2"]);
+} 
+
+//texture naming convention
+$texture_name = $webGL2 ? "vis_data_sampler_array" : "vis_data_sampler_{$index}";
+
+$texture = function($sampling_coords) {
+  global $texture_name, $webGL2, $index;
+
+  if ($webGL2) {
+    return "texture($texture_name, vec3($sampling_coords, $index))";
+  } 
+  return "texture2D($texture_name, $sampling_coords)";
+};
 
 function toShaderFloatString($value, $default, $precisionLen=5) {
   if (!is_numeric($precisionLen) || $precisionLen < 0 || $precisionLen > 9) {
@@ -41,25 +61,24 @@ function toRGBColorFromString($toParse, $default) {
   }   
 }
 
-function prepare_send($definition, $dataName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing) {
+function prepare_send($definition, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing) {
      return (object)array(
             "definition" => $definition,
             "execution" => $execution,
             "html" => $htmlPart,
             "js" => $jsPart,
             "glLoaded" => $glLoaded,
-            "glDrawing" => $glDrawing,
-            "sampler2D" => $dataName
+            "glDrawing" => $glDrawing
         );
 }
 
-function send($definition, $dataName, $execution, $htmlPart = "", $jsPart = "", $glLoaded = "", $glDrawing = "") {
-  if (!$definition || !$dataName || !$execution) {
+function send($definition, $execution, $htmlPart = "", $jsPart = "", $glLoaded = "", $glDrawing = "") {
+  if (!$definition || !$execution) {
     echo json_encode((object)array("error" => "Invalid shader.", 
-    "desc" => "Missing compulsory parameters.<br>Definition: <code>$definition</code><br>Execution: <code>$execution</code><br>Sampler name: $dataName."));
+    "desc" => "Missing compulsory parameters.<br>Definition: <code>$definition</code><br>Execution: <code>$execution</code>"));
   } else {
     echo json_encode(
-      prepare_send($definition, $dataName, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)
+      prepare_send($definition, $execution, $htmlPart, $jsPart, $glLoaded, $glDrawing)
     );
   }    
 }

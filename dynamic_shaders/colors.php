@@ -55,7 +55,6 @@ $samplerName = "tile_data_{$uniqueId}";
 //definition part
 $definition = <<<EOF
 
-uniform sampler2D $samplerName;
 uniform float threshold_{$uniqueId};
 uniform float threshold_opacity_{$uniqueId};
 uniform vec3 color_{$uniqueId};
@@ -78,7 +77,7 @@ $defaultThresholdValue = $invertOpacity ? "100" : "1";
 
 $execution = <<<EOF
 
-  vec4 data{$uniqueId} = texture($samplerName, v_tile_pos);
+  vec4 data{$uniqueId} = {$texture('v_tile_pos')};
   $compareAgainst
   if(data{$uniqueId}.r $compConst && $comparison){
     show(vec4(color_{$uniqueId}, $alpha));
@@ -173,6 +172,6 @@ function colorChange_{$uniqueId}(self) {
 }
 EOF;
 
-send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
+send($definition, $execution, $html, $js, $glload, $gldraw);
 
 ?>						

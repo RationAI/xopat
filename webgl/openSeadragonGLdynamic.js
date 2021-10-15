@@ -136,9 +136,7 @@ openSeadragonGL.prototype = {
          
         let _this = this;
         this.openSD.addHandler('open', function(e) {
-            _this.viaGL.width = _this.openSD.source.getTileWidth();
-            _this.viaGL.height = _this.openSD.source.getTileWidth();
-            _this.viaGL.init();
+            _this.viaGL.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
         });
  
         return this;
@@ -146,9 +144,10 @@ openSeadragonGL.prototype = {
 
     _tileLoaded: function(e) {
         if (! e.image) return;
-        if (this.viaGL.willUseCanvas(e.image, e)) {
+        if (this.viaGL.willUseWebGL(e.image, e)) {
             e.tile.webglRefresh = 0; // -> will draw immediatelly
-            e.tile.origData = e.image;      
+            e.tile.origData = e.image;    
+            //todo  
             var canvas = document.createElement( 'canvas' )
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height; 

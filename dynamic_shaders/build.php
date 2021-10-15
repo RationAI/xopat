@@ -5,6 +5,7 @@
  //      "data": --data identifier--
  //      "shader": --name of the shader--
  //      "params": {--shader--param--: --value--, ...}
+ //      "webgl2": --optional flag--
  //   },                
  //   ...
  //]
@@ -43,8 +44,12 @@ set_exception_handler(function($exception) {
  } catch (\Exception $e) {
    //do nothing, use default values as set above
  }
- 
 
+ if (!isset($_POST["webgl2"])) {
+    //default ON
+    $_POST["webgl2"] = "true";
+ }
+ 
  $visualisation=array();
 
  $i = 0;
@@ -62,7 +67,7 @@ set_exception_handler(function($exception) {
             $args = to_params($object->params);
             $dir = dirname($_SERVER['SCRIPT_NAME']);
             $fullurl="http://".$_SERVER['HTTP_HOST'].$dir;
-            $url = "$fullurl/{$shaders[$object->type]}.php?index=$i$uniqueId$args";
+            $url = "$fullurl/{$shaders[$object->type]}.php?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
         } else {
             $visualisation[$object->data] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist."); 
             continue;
@@ -80,7 +85,7 @@ set_exception_handler(function($exception) {
         $data->url = $url;
         if (isset($data->error) && $data->error) {
             $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
-        } else if (strlen($data->execution) < 5 || strlen($data->definition) < 5 || strlen($data->sampler2D) < 1) {
+        } else if (strlen($data->execution) < 5 || strlen($data->definition) < 5) {
             $data->error = "The requested visualisation type '$object->type' does not work properly.";
             $data->desc = "One of the compulsory parts is empty or missing: definition/execution/sampler2D member variables. Status from $url request: " . $http_response_header[0];
             $visualisation[$object->data] = $data;

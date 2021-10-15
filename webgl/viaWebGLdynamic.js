@@ -1,16 +1,11 @@
 /*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~
-/* viaWebGL
-/* Set shaders on Image or Canvas with WebGL
+/* Written by Jiří Horák, 2021
+/*
+/* Based on viaWebGL
 /* Built on 2016-9-9
 /* http://via.hoff.in
-/*
-/* CHANGES MADE BY
-/* Jiří Horák, 2021
 */
 ViaWebGL = function (incoming) {
-
-    /* Custom WebGL API calls
-    ~*~*~*~*~*~*~*~*~*~*~*~*/
 
     //default calls
     this.onFatalError = function (vis) {
@@ -25,37 +20,12 @@ ViaWebGL = function (incoming) {
     this.jsGlLoadedCall = "viaGlLoadedCall";
     this.jsGlDrawingCall = "viaGlDrawingCall";
 
-    var gl = this.maker();
-    this.running = true;
-    this.tile_size = 'u_tile_size';
-
-    // Private shader management
-    this._visualisations = [];
-
-    this._textures = [];
-    this._programs = [];
-    this._program = -1;
-    this._texture_names = [];
-    this._initialized = false;
-    this._cache = [];
-
-    this.wrap = gl.CLAMP_TO_EDGE;
-    this.tile_pos = 'a_tile_pos';
-    this.filter = gl.NEAREST;
-    this.pos = 'a_pos';
-    this.height = 128;
-    this.width = 128;
-    this.on = 0;
-    this.gl = gl;
-    // maximum textures applied at once: how many different layers are supported
-    this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
-
-    this.gl_loaded = function (program, gl) {
+    this.gl_loaded = function (gl, program) {
         //call pre-defined name of
         this._callString(this.jsGlLoadedCall, program, gl);
     };
 
-    this.gl_drawing = function (tile, e) {
+    this.gl_drawing = function (gl, tile, e) {
         this._callString(this.jsGlDrawingCall, gl, e);
         //use shaders only for certain tile source
         //todo make this more elegant (move decision into osdGL script)
@@ -67,7 +37,24 @@ ViaWebGL = function (incoming) {
         this[key] = incoming[key];
     }
 
-    this.texture.init(gl, this.max_textures);
+    this.setWebGL();
+    //todo move all the settings into corresponding webgl context classes to set uniformly
+    this.tile_size = 'u_tile_size';
+    this.wrap = this.gl.CLAMP_TO_EDGE;
+    this.tile_pos = 'a_tile_pos';
+    this.filter = this.gl.NEAREST;
+    this.pos = 'a_pos';
+
+    // Private shader management
+    this._visualisations = [];
+    
+    this._textures = [];
+    this._programs = [];
+    this._program = -1;
+    //todo handle textures based on gl version used
+    this._texture_names = [];
+    this._initialized = false;
+    this._cache = [];
 };
 
 ViaWebGL.prototype = {
@@ -137,10 +124,12 @@ ViaWebGL.prototype = {
 
     /**
      * Change the dimensions, useful for borders, used by openSeadragonGL
-     * @param {integer} width 
-     * @param {integer} height 
      */
-    setDimensions: function (width, height) {
+    setDimensions: function(width, height) {
+        if (width === this.width && height === this.height) return;
+
+        this.width = width;
+        this.height = height;
         this.gl.canvas.width = width;
         this.gl.canvas.height = height;
         this.gl.viewport(0, 0, width, height);
@@ -152,93 +141,21 @@ ViaWebGL.prototype = {
     /////////////////////////////////////////////////////////////////////////////////////
 
     // Setup program variables, each program has at least:
-
-    // FRAGMENT SHADER
-    //      precision mediump float;
-    //      uniform sampler2D u_tile;
-    //      uniform vec2 u_tile_size;
-    //      varying vec2 v_tile_pos;
-    // VERTEX SHADER (ommited, you probably don't want to touch that shader anyway)
     toBuffers: function (program) {
-        if (!this.running) return;
-
-        // Allow for custom loading
-        this.gl.useProgram(program);
-        this.visualisationInUse(this._visualisations[this._program]);
-        this['gl_loaded'].call(this, program, this.gl);
-
-        // Unchangeable square array buffer fills viewport with texture
-        var boxes = [[-1, 1, -1, -1, 1, 1, 1, -1], [0, 1, 0, 0, 1, 1, 1, 0]];
-        var buffer = new Float32Array([].concat.apply([], boxes));
-        var bytes = buffer.BYTES_PER_ELEMENT;
-        var gl = this.gl;
-        var count = 4;
-
-        // Get uniform term
-        var tile_size = gl.getUniformLocation(program, this.tile_size);
-        gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
-
-        // Get attribute terms
-        this._att = [this.pos, this.tile_pos].map(function (name, number) {
-
-            var index = Math.min(number, boxes.length - 1);
-            var vec = Math.floor(boxes[index].length / count);
-            var vertex = gl.getAttribLocation(program, name);
-
-            return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
-        });
-
-        this.texture.toBuffers(gl, this.wrap, this.filter);
-
-        this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
-
-        // Build the position and texture buffer
-        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-        gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
+        this.webGLImplementation.toBuffers(program);
     },
 
     // Renders canvas using webGL
-    // accepts image data to draw (tile) and source (string, origin of the tile)
-    //
+    // accepts image data to draw (imageElement) and source (string, origin of the tile)
     // returns canvas if webGL was used, null otherwise
-    toCanvas: function (tile, e) {
-        if (!this.running) return;
-        // Allow for custom drawing in webGL and possibly avoid using webGL at all
-
-        // TODO move this decision to tile-loaded to decide once!
-        if (!this['gl_drawing'].call(this, tile, e)) {
-            return null;
-        }
-
-        var gl = this.gl;
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        // Set Attributes for GLSL
-        this._att.map(function (x) {
-            gl.enableVertexAttribArray(x.slice(0, 1));
-            gl.vertexAttribPointer.apply(gl, x);
-        });
-
-        // Upload textures
-        this.texture.toCanvas(this._visualisations[this._program], tile, this._programs[this._program], this.gl);
-
-        // Draw everything needed to canvas
-        gl.drawArrays.apply(gl, this._drawArrays);
-
-        // Apply to container if needed
-        if (this.container) {
-            this.container.appendChild(this.gl.canvas);
-        }
-
-        this.texture.freeTextures();
-        return this.gl.canvas;
+    toCanvas: function (imageElement, e) {
+        return this.webGLImplementation.toCanvas(imageElement, e);
     },
 
     // Run handler only to decide whether particular tile uses openGL
-    willUseCanvas: function (tile, e) {
+    willUseWebGL: function (tile, e) {
         //todo dirty do it differently
-        return this['gl_drawing'].call(this, tile, e);
+        return this['gl_drawing'].call(this, this.gl, tile, e);
     },
 
     // Must be called before init()
@@ -258,18 +175,6 @@ ViaWebGL.prototype = {
     //////////////////////////////////////////////////////////////////////////////
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
-
-    // Initialize viaGL
-    init: function() {
-        if (this._initialized) {
-            console.error("Already initialized!");
-            return;
-        }
-        this._initialized = true;
-        this.setDimensions(this.width, this.height);
-        this.forceSwitchShader(null, false);
-        this.ready();
-    },
 
     // Prepare viaGL, must be called before init()
     prepare: function (onPrepared) {
@@ -295,19 +200,13 @@ ViaWebGL.prototype = {
             this.container.onclick = this[this.onclick].bind(this);
         }
 
-        //cache setup
-        var s = document.createElement("script");
-        s.type = "text/javascript";
-        // todo just define cache global variable instead...
-        s.text = `
-        var VISUALISAITION_SHADER_CACHE = ${JSON.stringify(this._cache)};
-        `;
-        document.body.appendChild(s);
+        //cache setup (GLOBAL because of its use in dynamic shader scripts)
+        VISUALISAITION_SHADER_CACHE = this._cache;
         delete this._cache;
 
         // Load the shaders when ready and return the promise
         return Promise.all(
-            this._visualisations.map(this.getter)
+            this._visualisations.map(this.getter.bind(this))
         ).then(
             this.toProgram.bind(this)
         ).then(
@@ -315,17 +214,42 @@ ViaWebGL.prototype = {
         );
     },
 
-    // Make a canvas
-    maker: function (options) {
-        return this.context(document.createElement('canvas'));
+    // Initialize viaGL
+    init: function(width, height) {
+        if (!this._prepared) {
+            console.error("The viaGL was not yet prepared. Call prepare() before init()!");
+            return;
+        }
+        if (this._initialized) {
+            console.error("Already initialized!");
+            return;
+        }
+        this._initialized = true;
+        this.setDimensions(width, height);
+        this.running = true;
+
+        this.forceSwitchShader(null, false);
+        this.ready();
     },
-    context: function (a) {
-        // return a.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
-        //     || a.getContext('webgl', { premultipliedAlpha: false, alpha: true });
-        return a.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+
+
+    setWebGL: function(options) {
+        const canvas = document.createElement('canvas');
+        this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        if (this.gl) {
+            //WebGL 2.0
+            this.webGLImplementation = new WebGL20(this, this.gl);
+            return;
+        }
+        // WebGL 1.0
+        this.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
+                    || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
+        this.webGLImplementation = new WebGL10(this, this.gl);
     },
+
     // Get built visualisation
     getter: function (visualisation) {
+        const isWebGL2 = this.webGLImplementation.isWebGL2();
 
         return new Promise(function (done) {
 
@@ -334,6 +258,8 @@ ViaWebGL.prototype = {
             var postData = new FormData();
             postData.append("shaders", JSON.stringify(visualisation["shaders"]));
             postData.append("params", JSON.stringify(visualisation["params"]));
+            postData.append("webgl2", JSON.stringify(isWebGL2));
+
             bid.send(postData);
             bid.onerror = function () {
                 if (bid.status == 200) {
@@ -389,124 +315,25 @@ ViaWebGL.prototype = {
 
     _buildVisualisation: function (order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
-            var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", 
-                _this = this, usableShaders = 0, simultaneouslyVisible = 0;
-
-            order.forEach(dataId => {
-
-                if (visSetup[dataId].error) {
-                    //todo attach warn icon
-                    html = _this.htmlShaderPartHeader(dataId, visSetup[dataId]["error"], false, false) + html;
-                    console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
-
-                } else if (visSetup[dataId].definition && visSetup[dataId].execution && visSetup[dataId].sampler2D) {
-                    let visible = false;
-                    usableShaders++;
-
-                    //make visible textures if 'visible' flag set and if GPU has enough texture units
-                    if (visSetup[dataId].visible == 1 && simultaneouslyVisible < _this.max_textures) {
-                        definition += visSetup[dataId]["definition"];
-                        execution += visSetup[dataId]["execution"];
-                        glload += visSetup[dataId]["glLoaded"];
-                        gldraw += visSetup[dataId]["glDrawing"];
-                        visible = true;
-                        simultaneouslyVisible++;
-                    }
-
-                    //reverse order append to show first the last drawn element (top)
-                    html = _this.htmlShaderPartHeader(dataId, visSetup[dataId]["html"], visible, true) + html;
-                    js += visSetup[dataId]["js"];
-                } else {
-                    //todo attach warn icon
-                    html = _this.htmlShaderPartHeader(dataId, `The requested visualisation type does not work properly.`, false, false) + html;
-                    console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
-                }
-            });
-
-            var fragment_shader = `#version 300 es
-precision mediump float;
-uniform vec2 u_tile_size;
-in vec2 v_tile_pos;
-
-out vec4 final_color;
-
-bool close(float value, float target) {
-    return abs(target - value) < 0.001;
-}
-
-void show(vec4 color) {
-    if (close(color.a, 0.0)) return;
-    float t = color.a + final_color.a - color.a*final_color.a;
-    final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
-}
-
-${definition}
-
-void main() {
-    final_color = vec4(1., 1., 1., 0.);
-
-    ${execution}
-}`;
-
-            var jsscript = `
-function saveCache(key, value) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
-        VISUALISAITION_SHADER_CACHE["${visualisation.name}"] = {};
-    }
-    VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key] = value;
-}
-function loadCache(key, defaultValue) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
-        !VISUALISAITION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
-        return defaultValue;
-    }
-    return VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key];
-}
-
-//user input might do wild things, use try-catch
-try {
-    ${js}
-
-    function ${glLoadCall}(program, gl) {
-        ${glload}
-    }
-    
-    function ${glDrawingCall}(gl, e) {
-        ${gldraw}
-    }
-} catch (error) {
-    console.error(error.message);
-    //todo try if error outside functions
-}
-`;
-
-            var vertex_shader = `#version 300 es
-in vec4 a_pos;
-in vec2 a_tile_pos;
-out vec2 v_tile_pos;
-    
-void main() {
-    v_tile_pos = a_tile_pos;
-    gl_Position = a_pos;
-}
-`;
-            visualisation.vertex_shader = vertex_shader;
-            visualisation.fragment_shader = fragment_shader;
-            visualisation.js = jsscript;
-            visualisation.html = html;
-
-            if (usableShaders < 1) {
-                throw "Empty visualisation or there is no part of the valid.";
+            let data = this.webGLImplementation.generateVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall);
+            if (data.usableShaders < 1) {
+                throw `Empty visualisation: no valid visualisation has been specified.<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visSetup)}</code><br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`;
             }
+
+            visualisation.vertex_shader = data.vertex_shader;
+            visualisation.fragment_shader = data.fragment_shader;
+            visualisation.js = data.js;
+            visualisation.html = data.html;
 
             delete visualisation.error;
             delete visualisation.desc;
         } catch (error) {
+            if (!visualisation.html) visualisation.html = "";
             visualisation.vertex_shader = "";
             visualisation.fragment_shader = "";
             visualisation.js = `function ${glLoadCall}(){} function ${glDrawingCall}(){}`;
             visualisation.error = "Failed to compose visualisation.";
-            visualisation.desc = error.message;
+            visualisation.desc = error;
         }
     },
 
@@ -603,83 +430,5 @@ void main() {
             }
         }
         this.visualisationReady(idx, vis);
-    },
-
-    texture: {
-        // Get texture
-
-        init: function (gl, maxTextureUnits) {
-            this._units = [];
-            // for (let i = 0; i < maxTextureUnits; i++) {
-            //     this._units.push({
-            //         bindConstant: `TEXTURE${i}`,
-            //         bindPointer: gl.createTexture(),
-            //     });
-            // }
-        },
-
-        toBuffers: function (gl, wrap, filter, visualisation) {
-            this.texParameteri = [
-                [gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap],
-                [gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap],
-                [gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter],
-                [gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter]
-            ];
-            this.texImage2D = [gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE];
-            this.pixelStorei = [gl.UNPACK_FLIP_Y_WEBGL, 1];
-            //todo dirty...
-            //this.init(this.gl, this._units.length);
-
-        },
-
-        toCanvas: function (visualisation, tile, program, gl) {
-
-
-            //todo bind textures by data name
-            let samplerNames = [];
-
-            visualisation.order.forEach(key => {
-                samplerNames.push(visualisation.responseData[key].sampler2D);
-            })
-
-            // if (this._units.length != 0) {
-            //     console.error("Unfreed texture units.");
-            // }
-            for (let i = 0; i < samplerNames.length; i++) {
-                if (i > this.maxTextureUnits) return;
-
-                // Bind pointer
-                //gl.bindTexture(gl.TEXTURE_2D, this._units[i].bindPointer);
-                let bindPtr = gl.createTexture();
-                //this._units.push(bindPtr);
-                let bindConst = `TEXTURE${i}`;
-                gl.bindTexture(gl.TEXTURE_2D, bindPtr);
-
-                // Apply texture parameters
-                this.texParameteri.map(function (x) {
-                    gl.texParameteri.apply(gl, x);
-                });
-                gl.pixelStorei.apply(gl, this.pixelStorei);
-
-                // Send the tile into the texture.
-                var output = this.texImage2D.concat([tile]);
-                gl.texImage2D.apply(gl, output);
-
-                //TODO why not simultaneously in tutorial?
-
-                // Bind texture unit
-                let location = gl.getUniformLocation(program, samplerNames[i]);
-                gl.uniform1i(location, i);
-                //gl.activeTexture(gl[this._units[i].bindConstant]); //TEXTURE[i]
-                gl.activeTexture(gl[bindConst]);
-                //gl.bindTexture(gl.TEXTURE_2D, this._units[i].bindPointer);
-                gl.bindTexture(gl.TEXTURE_2D, bindPtr); //why twice?
-            }
-        },
-
-        freeTextures: function () {
-            this._units.forEach(tex => this.gl.deleteTexture(tex));
-            //this._units = [];
-        }
     }
 }
