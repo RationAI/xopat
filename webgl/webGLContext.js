@@ -7,6 +7,9 @@ class WebGL10 {
        //TODO: fix how textures are allocated and freed, also limit it with 
        this.texture = {
             init: function (gl, maxTextureUnits) {
+                this.canvas = document.createElement('canvas');
+                this.canvasReader = this.canvas.getContext('2d');
+
                 this._units = [];
                 // for (let i = 0; i < maxTextureUnits; i++) {
                 //     this._units.push({
@@ -23,7 +26,6 @@ class WebGL10 {
                     [gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter],
                     [gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter]
                 ];
-                this.texImage2D = [gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE];
                 this.pixelStorei = [gl.UNPACK_FLIP_Y_WEBGL, 1];
                 //todo dirty...
                 //this.init(this.gl, this._units.length);
@@ -31,52 +33,62 @@ class WebGL10 {
             },
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-                //todo bind textures by data name
-                let samplerNames = [];
+   
 
-                visualisation.order.forEach(key => {
-                    samplerNames.push(visualisation.responseData[key].sampler2D);
-                })
-
-                // if (this._units.length != 0) {
-                //     console.error("Unfreed texture units.");
-                // }
-
-
-
-                
                 //TODO EXTRACT FROM THE IMAGE REQUIRED LAYERS
+                let _this = this,
+                    index = 0;
+                const NUM_IMAGES = 1; //Math.round(image.height / tileBounds.height); //todo enable after protocol is working
+                this.canvas.width = image.width;
+                this.canvas.height = image.height;
+                this.canvasReader.drawImage(image, 0, 0);
 
-                for (let i = 0; i < samplerNames.length; i++) {
-                    if (i > this.maxTextureUnits) return;
+                Object.values(visualisation.responseData).forEach(visSetup => {
+                    if (!visSetup.rendering) return;
+
+                    if (index >= NUM_IMAGES) {
+                        console.warn("The visualisation contains less data than layers. Skipping layer ", visSetup);
+                        return;
+                    }
 
                     // Bind pointer
-                    //gl.bindTexture(gl.TEXTURE_2D, this._units[i].bindPointer);
+                    //gl.bindTexture(gl.TEXTURE_2D, _this._units[i].bindPointer);
                     let bindPtr = gl.createTexture();
-                    //this._units.push(bindPtr);
-                    let bindConst = `TEXTURE${i}`;
+                    //_this._units.push(bindPtr);
+                    let bindConst = `TEXTURE${index}`;
                     gl.bindTexture(gl.TEXTURE_2D, bindPtr);
 
                     // Apply texture parameters
-                    this.texParameteri.map(function (x) {
+                    _this.texParameteri.map(function (x) {
                         gl.texParameteri.apply(gl, x);
                     });
-                    gl.pixelStorei.apply(gl, this.pixelStorei);
+                    gl.pixelStorei.apply(gl, _this.pixelStorei);
+
+                    let pixels = new Uint8Array(this.canvasReader.getImageData(0, index*tileBounds.height, tileBounds.width, tileBounds.height).data.buffer);
 
                     // Send the tile into the texture.
-                    var output = this.texImage2D.concat([image]);
-                    gl.texImage2D.apply(gl, output);
+                    gl.texImage2D(gl.TEXTURE_2D,
+                        0,
+                        gl.RGBA,
+                        tileBounds.width,
+                        tileBounds.height,
+                        0,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        pixels);
 
                     //TODO why not simultaneously in tutorial?
 
                     // Bind texture unit
-                    let location = gl.getUniformLocation(program, samplerNames[i]);
-                    gl.uniform1i(location, i);
-                    //gl.activeTexture(gl[this._units[i].bindConstant]); //TEXTURE[i]
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${visSetup.order}`);
+                    gl.uniform1i(location, index);
+                    //gl.activeTexture(gl[_this._units[i].bindConstant]); //TEXTURE[i]
                     gl.activeTexture(gl[bindConst]);
-                    //gl.bindTexture(gl.TEXTURE_2D, this._units[i].bindPointer);
+                    //gl.bindTexture(gl.TEXTURE_2D, _this._units[i].bindPointer);
                     gl.bindTexture(gl.TEXTURE_2D, bindPtr); //why twice?
-                }
+
+                    index++;
+                });
             },
 
             freeTextures: function (gl) {
@@ -97,7 +109,7 @@ class WebGL10 {
             _this = this, usableShaders = 0, simultaneouslyVisible = 0;
 
         order.forEach(dataId => {
-
+            visSetup[dataId].rendering = false;
             if (visSetup[dataId].error) {
                 //todo attach warn icon
                 html = _this.context.htmlShaderPartHeader(dataId, visSetup[dataId]["error"], false, false) + html;
@@ -116,6 +128,7 @@ class WebGL10 {
                     gldraw += visSetup[dataId]["glDrawing"];
                     samplers += `uniform sampler2D vis_data_sampler_${visSetup[dataId]["order"]};`;
                     visible = true;
+                    visSetup[dataId].rendering = true;
                     simultaneouslyVisible++;
                 }
 

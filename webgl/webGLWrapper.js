@@ -1,9 +1,10 @@
-/*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~
-/* Written by Jiří Horák, 2021
 /*
-/* Based on viaWebGL
-/* Built on 2016-9-9
-/* http://via.hoff.in
+* Wrapping the funcionality of WebGL to be suitable for the visualisation.
+* Written by Jiří Horák, 2021
+*
+* Based on viaWebGL
+* Built on 2016-9-9
+* http://via.hoff.in
 */
 
 class WebGLWrapper {
@@ -271,12 +272,12 @@ class WebGLWrapper {
      */
     setWebGL() {
         const canvas = document.createElement('canvas');
-        this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        if (this.gl) {
-            //WebGL 2.0
-            this.webGLImplementation = new WebGL20(this, this.gl);
-            return;
-        }
+        // this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        // if (this.gl) {
+        //     //WebGL 2.0
+        //     this.webGLImplementation = new WebGL20(this, this.gl);
+        //     return;
+        // }
         // WebGL 1.0
         this.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   

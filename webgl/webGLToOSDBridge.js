@@ -1,9 +1,12 @@
-/*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~*~
-/* openSeadragonGL - Set Shaders in OpenSeaDragon with viaWebGL
 /*
-/* CHANGES MADE BY
-/* Jiří Horák, 2021
+* Bridge between WebGLWrapper and OSD. Registers appropriate callbacks.
+* Written by Jiří Horák, 2021
+*
+* Based on OpenSeadragonGL plugin
+* https://github.com/thejohnhoffer/viaWebGL
 */
+
+
 openSeadragonGL = function(webGLWrapperParams) {
     this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
