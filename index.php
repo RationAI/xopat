@@ -120,8 +120,8 @@ foreach ($PLUGINS as $_ => $plugin) {
   <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
   <script src="./webgl/webGLContext.js"></script>
-  <script src="./webgl/viaWebGLdynamic.js"></script>
-  <script src="./webgl/openSeadragonGLdynamic.js"></script>
+  <script src="./webgl/webGLWrapper.js"></script>
+  <script src="./webgl/webGLToOSDBridge.js"></script>
 
 
   <!--Tutorials-->
@@ -254,7 +254,7 @@ if($errorSource) {
     var setup = <?php echo $visualisation ?>;  
     var activeShader = 0;
 
-    // Initialize viewer webGL extension - ViaGL
+    // Initialize viewer webGL extension - webGLWrapper
     let shaderNames = $("#shaders");
     seaGL = new openSeadragonGL({
       //todo CHECK if parameters not missing and throw error if required param missing
@@ -321,7 +321,7 @@ if($errorSource) {
     });
 
     //Set cache
-    seaGL.viaGL.setCache(<?php echo $cached; ?>);
+    seaGL.webGLWrapper.setCache(<?php echo $cached; ?>);
 
 
    /*---------------------------------------------------------*/
@@ -701,7 +701,7 @@ if($errorSource) {
    /*---------------------------------------------------------*/
 
     function constructExportVisualisationForm(customAttributes="") {
-      let visCache = JSON.stringify(seaGL.viaGL.getCache());
+      let visCache = JSON.stringify(seaGL.webGLWrapper.getCache());
       let form = `
       <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
         <input type="hidden" id="visualisation" name="visualisation">

@@ -4,8 +4,8 @@
 /* CHANGES MADE BY
 /* Jiří Horák, 2021
 */
-openSeadragonGL = function(viaGLParams) {
-    this.viaGL = new ViaWebGL(viaGLParams);
+openSeadragonGL = function(webGLWrapperParams) {
+    this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
 };
@@ -13,17 +13,17 @@ openSeadragonGL = function(viaGLParams) {
 openSeadragonGL.prototype = {
     
     foreachVisualisation: function(call) {
-        this.viaGL._visualisations.forEach(vis => {
+        this.webGLWrapper._visualisations.forEach(vis => {
             call(vis);
         });
     },
 
     currentVisualisation: function() {
-        return this.viaGL._visualisations[this.viaGL._program];
+        return this.webGLWrapper._visualisations[this.webGLWrapper._program];
     },
     
     /**
-     * Set program shaders. Just forwards the call to viaGL, for easier access.
+     * Set program shaders. Just forwards the call to webGLWrapper, for easier access.
      * @param {string} visualisation program fragment shaders components
      */
     setVisualisation: function(visualisation) {
@@ -32,7 +32,7 @@ openSeadragonGL.prototype = {
             return;
         }
 
-        this.viaGL.setVisualisation(visualisation);
+        this.webGLWrapper.setVisualisation(visualisation);
     },
 
     /**
@@ -40,7 +40,7 @@ openSeadragonGL.prototype = {
      * @param {integer} visIdx index of the visualisation 
      */
     switchVisualisation: function(visIdx) {
-        this.viaGL.switchVisualisation(visIdx);
+        this.webGLWrapper.switchVisualisation(visIdx);
     },
 
     /**
@@ -50,20 +50,20 @@ openSeadragonGL.prototype = {
      */
     loadShaders: function(onPrepared=function(){}) {
         if (this._shadersLoaded) return;
-        this.viaGL.prepare(onPrepared);
+        this.webGLWrapper.prepare(onPrepared);
         this._shadersLoaded = true;
     },
 
     /**
-     * Reorder shader: will re-generate current visualisation from dynamic data obtained from viaGL.shaderGenerator
+     * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLWrapper.shaderGenerator
      * @param {array} order array of strings that refer to ID's in the visualisation data
      */
     reorder: function(order = null) {
         if (!Array.isArray(order)) {
-            this.viaGL.rebuildVisualisation(null);
+            this.webGLWrapper.rebuildVisualisation(null);
         } else {
-            //viaGL rendering is first in order: first drawn, last in order: last drawn (atop)
-            this.viaGL.rebuildVisualisation(order.reverse());
+            //webGLWrapper rendering is first in order: first drawn, last in order: last drawn (atop)
+            this.webGLWrapper.rebuildVisualisation(order.reverse());
         }
     },
 
@@ -92,7 +92,7 @@ openSeadragonGL.prototype = {
      * @returns webGL context
      */
     GL: function() {
-        return this.viaGL.gl;
+        return this.webGLWrapper.gl;
     },
 
     // Add your own button to OSD controls
@@ -136,7 +136,7 @@ openSeadragonGL.prototype = {
          
         let _this = this;
         this.openSD.addHandler('open', function(e) {
-            _this.viaGL.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
+            _this.webGLWrapper.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
         });
  
         return this;
@@ -144,10 +144,11 @@ openSeadragonGL.prototype = {
 
     _tileLoaded: function(e) {
         if (! e.image) return;
-        if (this.viaGL.willUseWebGL(e.image, e)) {
+        if (this.webGLWrapper.willUseWebGL(e.image, e)) {
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             e.tile.origData = e.image;    
-            //todo  
+            
+            //necessary, the tile might be re-drawn upon re-zooming
             var canvas = document.createElement( 'canvas' )
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height; 
@@ -161,11 +162,27 @@ openSeadragonGL.prototype = {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
 
             // Render a webGL canvas to an input canvas using cached version
-            var output = this.viaGL.toCanvas(e.tile.origData, e);
+            var output = this.webGLWrapper.toCanvas(e.tile.origData, e);
 
             // Note: you can comment out clearing if you don't use transparency 
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
         }
+    },
+
+
+    // Possible solution to not to store the webGL output at all but to always generate it
+    // Contains 
+    _tileLoaded2: function(e) {
+        if (! e.image) return;
+        if (this.webGLWrapper.willUseWebGL(e.image, e)) {
+            e.tile.origData = e.image;    
+            e.tile.context2D = this.webGLWrapper.gl;
+            delete e.image;
+        }
+    },
+
+    _tileDrawing2: function(e) {
+        this.webGLWrapper.toCanvas(e.tile.origData, e);
     }
 }

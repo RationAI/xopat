@@ -5,73 +5,77 @@
 /* Built on 2016-9-9
 /* http://via.hoff.in
 */
-ViaWebGL = function (incoming) {
 
-    //default calls
-    this.onFatalError = function (vis) {
-        console.error(vis["error"], vis["desc"]);
+class WebGLWrapper {
+    constructor(incomingOptions) {
+        //default calls
+        this.onFatalError = function (vis) {
+            console.error(vis["error"], vis["desc"]);
+        }
+        this.htmlShaderPartHeader = function (title, html, isVisible, isControllable = true) {
+            return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
+        }
+        this.ready = function () { };
+
+        //default values that might come from options and be overwritten later
+        this.jsGlLoadedCall = "viaGlLoadedCall";
+        this.jsGlDrawingCall = "viaGlDrawingCall";
+
+        this.gl_loaded = function (gl, program) {
+            //call pre-defined name of
+            this._callString(this.jsGlLoadedCall, program, gl);
+        };
+
+        this.gl_drawing = function (gl, tile, e) {
+            this._callString(this.jsGlDrawingCall, gl, e);
+            //use shaders only for certain tile source
+            //todo make this more elegant (move decision into osdGL script)
+            return e.tiledImage.source.tilesUrl.indexOf(urlImage) === -1; //use webGL if not urlImage source
+        };
+
+        // Assign from incoming terms
+        for (var key in incomingOptions) {
+            this[key] = incomingOptions[key];
+        }
+
+        this.setWebGL();
+        //todo move all the settings into corresponding webgl context classes to set uniformly
+        this.tile_size = 'u_tile_size';
+        this.wrap = this.gl.CLAMP_TO_EDGE;
+        this.tile_pos = 'a_tile_pos';
+        this.filter = this.gl.NEAREST;
+        this.pos = 'a_pos';
+
+        // Private shader management
+        this._visualisations = [];
+
+        this._textures = [];
+        this._programs = [];
+        this._program = -1;
+        //todo handle textures based on gl version used
+        this._texture_names = [];
+        this._initialized = false;
+        this._cache = [];
     }
-    this.htmlShaderPartHeader = function (title, html, isVisible, isControllable = true) {
-        return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
-    }
-    this.ready = function () { };
 
-    //default values that might come from options and be overwritten later
-    this.jsGlLoadedCall = "viaGlLoadedCall";
-    this.jsGlDrawingCall = "viaGlDrawingCall";
-
-    this.gl_loaded = function (gl, program) {
-        //call pre-defined name of
-        this._callString(this.jsGlLoadedCall, program, gl);
-    };
-
-    this.gl_drawing = function (gl, tile, e) {
-        this._callString(this.jsGlDrawingCall, gl, e);
-        //use shaders only for certain tile source
-        //todo make this more elegant (move decision into osdGL script)
-        return e.tiledImage.source.tilesUrl.indexOf(urlImage) === -1; //use webGL if not urlImage source
-    };
-
-    // Assign from incoming terms
-    for (var key in incoming) {
-        this[key] = incoming[key];
-    }
-
-    this.setWebGL();
-    //todo move all the settings into corresponding webgl context classes to set uniformly
-    this.tile_size = 'u_tile_size';
-    this.wrap = this.gl.CLAMP_TO_EDGE;
-    this.tile_pos = 'a_tile_pos';
-    this.filter = this.gl.NEAREST;
-    this.pos = 'a_pos';
-
-    // Private shader management
-    this._visualisations = [];
-    
-    this._textures = [];
-    this._programs = [];
-    this._program = -1;
-    //todo handle textures based on gl version used
-    this._texture_names = [];
-    this._initialized = false;
-    this._cache = [];
-};
-
-ViaWebGL.prototype = {
     /**
      * Set program shaders. Vertex shader is set by default a square.
      * @param {object} visualisation visualisation setup
      */
-    setVisualisation: function (visualisation) {
+    setVisualisation(visualisation) {
+        if (this._prepared) {
+            console.error("New visualisation cannot be introduced after the visualiser was prepared.");
+            return;
+        }
         visualisation.url = this.shaderGenerator;
         this._visualisations.push(visualisation);
-    },
+    }
 
     /**
      * Rebuild visualisation and update scene
      * @param {array} order order in reverse, ID's of data as defined in setup JSON
      */
-    rebuildVisualisation: function (order) {
+    rebuildVisualisation(order) {
         var vis = this._visualisations[this._program],
             program = this._programs[this._program];
 
@@ -83,7 +87,7 @@ ViaWebGL.prototype = {
         this._detachShader(program, "FRAGMENT_SHADER");
         this._visualisationToProgram(vis, program, this._program);
         this.forceSwitchShader(null, true);
-    },
+    }
 
     /**
      * Switch to program at index: this is the index (order) in which
@@ -91,10 +95,10 @@ ViaWebGL.prototype = {
      * has been set with second setShaders(...) call, pass i=1.
      * @param {integer} i program index
      */
-    switchVisualisation: function (i) {
+    switchVisualisation(i) {
         if (this._program == i) return;
         this.forceSwitchShader(i, true);
-    },
+    }
 
     /**
      * Force switch shader (program), will reset even if the specified
@@ -102,7 +106,7 @@ ViaWebGL.prototype = {
      * invoked (e.g. some uniform variables changed)
      * @param {integer} i program index
      */
-    forceSwitchShader: function (i, preserveJS = false) {
+    forceSwitchShader(i, preserveJS = false) {
         if (!i) i = this._program;
 
         if (i >= this._programs.length) {
@@ -120,12 +124,12 @@ ViaWebGL.prototype = {
             this._program = i;
             this.toBuffers(this._programs[i]);
         }
-    },
+    }
 
     /**
      * Change the dimensions, useful for borders, used by openSeadragonGL
      */
-    setDimensions: function(width, height) {
+    setDimensions(width, height) {
         if (width === this.width && height === this.height) return;
 
         this.width = width;
@@ -133,51 +137,76 @@ ViaWebGL.prototype = {
         this.gl.canvas.width = width;
         this.gl.canvas.height = height;
         this.gl.viewport(0, 0, width, height);
-    },
+    }
 
     /////////////////////////////////////////////////////////////////////////////////////
     //// YOU PROBABLY WANT TO READ FUNCTIONS BELOW SO YOU KNOW HOW TO SET UP YOUR SHADERS
     //// BUT YOU SHOULD NOT CALL THEM DIRECTLY
     /////////////////////////////////////////////////////////////////////////////////////
 
-    // Setup program variables, each program has at least:
-    toBuffers: function (program) {
+    /**
+     * Prepare for a certain program to use, call before this program is used for rendering
+     * @param {WebGLProgram} program current program to use
+     */
+    toBuffers(program) {
         this.webGLImplementation.toBuffers(program);
-    },
+    }
 
-    // Renders canvas using webGL
-    // accepts image data to draw (imageElement) and source (string, origin of the tile)
-    // returns canvas if webGL was used, null otherwise
-    toCanvas: function (imageElement, e) {
+
+    /**
+     * Renders data using WebGL
+     * @param {<img>} imageElement image data
+     * @param {Object} e event object given by OSD on tile-drawing event
+     * @returns canvas (with transparency) with the data rendered based on current program
+     *          null if willUseWebGL(imageElement, e) would return false
+     */
+    toCanvas(imageElement, e) {
         return this.webGLImplementation.toCanvas(imageElement, e);
-    },
+    }
 
-    // Run handler only to decide whether particular tile uses openGL
-    willUseWebGL: function (tile, e) {
+    /**
+     * 
+     * @param {<img>} imageElement image data
+     * @param {Object} e event object given by OSD on tile-drawing event
+     * @returns true if the given tile associated in the event obect should be processed using WebGL
+     */
+    willUseWebGL(imageElement, e) {
         //todo dirty do it differently
-        return this['gl_drawing'].call(this, this.gl, tile, e);
-    },
+        return this['gl_drawing'].call(this, this.gl, imageElement, e);
+    }
 
-    // Must be called before init()
-    setCache: function (cache) {
-        if (typeof cache !== "object" || this._initialized) {
+    /**
+     * Set the cache data, not valid to call after initialization
+     * @param {*} cache object that contains the visualisation cache data
+     */
+    setCache(cache) {
+        if (typeof cache !== "object" || this._prepared) {
             console.error("Invalid call of loadCache!");
             return;
         }
         this._cache = cache;
-    },
+    }
 
-    getCache: function () {
+    /**
+     * Get the cache data
+     * @returns object storing visualisation cache 
+     */
+    getCache() {
         //global maintained by this script
         return VISUALISAITION_SHADER_CACHE;
-    },
+    }
 
-    //////////////////////////////////////////////////////////////////////////////
-    ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
-    //////////////////////////////////////////////////////////////////////////////
-
-    // Prepare viaGL, must be called before init()
-    prepare: function (onPrepared) {
+    /**
+     * Prepares the WebGL wrapper for being initialized. More concretely,
+     * each visualisation is prepared by downloading all necessary files (e.g. shaders),
+     * shaders are compiled and other WebGL structures initialized. It is separated from 
+     * initialization as this must be finished before OSD is ready (we must be ready to draw when the data comes).
+     * The idea is to open the protocol for OSD in onPrepared.
+     * Shaders are fetched from `visualisation.url` parameter.
+     * 
+     * @param {callback} onPrepared callback to execute after succesfull preparing.
+     */
+    prepare(onPrepared) {
         if (this._prepared) {
             console.error("Already prepared!");
             return;
@@ -201,21 +230,26 @@ ViaWebGL.prototype = {
         }
 
         //cache setup (GLOBAL because of its use in dynamic shader scripts)
-        VISUALISAITION_SHADER_CACHE = this._cache;
+        window.VISUALISAITION_SHADER_CACHE = this._cache;
         delete this._cache;
 
         // Load the shaders when ready and return the promise
         return Promise.all(
             this._visualisations.map(this.getter.bind(this))
         ).then(
-            this.toProgram.bind(this)
+            this._toProgram.bind(this)
         ).then(
             onPrepared
         );
-    },
+    }
 
-    // Initialize viaGL
-    init: function(width, height) {
+    /**
+     * Initialization. It is separated from preparation as this must be
+     * called after OSD is ready.
+     * @param {int} width width of the first tile going to be drawn
+     * @param {int} height height of the first tile going to be drawn
+     */
+    init(width, height) {
         if (!this._prepared) {
             console.error("The viaGL was not yet prepared. Call prepare() before init()!");
             return;
@@ -230,10 +264,12 @@ ViaWebGL.prototype = {
 
         this.forceSwitchShader(null, false);
         this.ready();
-    },
+    }
 
-
-    setWebGL: function(options) {
+    /**
+     * Create WebGL context and corresponding implementation (State pattern)
+     */
+    setWebGL() {
         const canvas = document.createElement('canvas');
         this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
         if (this.gl) {
@@ -245,10 +281,13 @@ ViaWebGL.prototype = {
         this.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
         this.webGLImplementation = new WebGL10(this, this.gl);
-    },
+    }
 
-    // Get built visualisation
-    getter: function (visualisation) {
+    /**
+     * Downloads shader data and fires shader linking upon success.
+     * @param {Object} visualisation setup of a concrete visualisation target, JSON object given to the visualiser
+     */
+    getter(visualisation) {
         const isWebGL2 = this.webGLImplementation.isWebGL2();
 
         return new Promise(function (done) {
@@ -271,38 +310,29 @@ ViaWebGL.prototype = {
                 return done(bid.response);
             };
         });
-    },
+    }
 
-    _loadHtml: function (visId, prevVisId, preserveJS) {
+    //////////////////////////////////////////////////////////////////////////////
+    ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
+    //////////////////////////////////////////////////////////////////////////////
+
+
+    _loadHtml(visId, prevVisId, preserveJS) {
         var htmlControls = document.getElementById(this.htmlControlsId);
-        // if (preserveJS) {
-        //     if (visId == prevVisId) return;
-        //     let oldHtmlText = htmlControls ? htmlControls.innerHTML : false;
-        //     if (oldHtmlText) {
-        //         this._visualisations[prevVisId]["html"] = oldHtmlText;
-        //     }
-        // } 
         htmlControls.innerHTML = this._visualisations[visId]["html"];
-    },
+    }
 
-    _loadScript: function (visId, prevVisId, preserveJS) {
+    _loadScript(visId, prevVisId, preserveJS) {
         var forScript = document.getElementById(this.scriptId);
-        // if (preserveJS) {
-        //     if (visId == prevVisId) return;
-        //     let oldScriptText = forScript.firstChild ? forScript.firstChild.text : false;
-        //     if (oldScriptText) {
-        //         this._visualisations[prevVisId]["js"] = oldScriptText;
-        //     }
-        // } 
         forScript.innerHTML = "";
         var script = document.createElement("script");
         script.type = "text/javascript";
         script.text = this._visualisations[visId]["js"];
         forScript.appendChild(script);
-    },
+    }
 
     // https://stackoverflow.com/questions/359788/how-to-execute-a-javascript-function-when-i-have-its-name-as-a-string
-    _callString: function (fn, ...args) {
+    _callString(fn, ...args) {
         try {
             let func = (typeof fn == "string") ? window[fn] : fn;
             if (typeof func == "function") func(...args);
@@ -311,9 +341,9 @@ ViaWebGL.prototype = {
             console.error(e);
             this.onException(e);
         }
-    },
+    }
 
-    _buildVisualisation: function (order, visSetup, visualisation, glLoadCall, glDrawingCall) {
+    _buildVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
         try {
             let data = this.webGLImplementation.generateVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall);
             if (data.usableShaders < 1) {
@@ -335,10 +365,10 @@ ViaWebGL.prototype = {
             visualisation.error = "Failed to compose visualisation.";
             visualisation.desc = error;
         }
-    },
+    }
 
     // Link shaders from strings
-    toProgram: function (responses) {
+    _toProgram(responses) {
 
         this._program = 0; //default program
 
@@ -377,15 +407,15 @@ ViaWebGL.prototype = {
         if (this._program >= this._programs.length) this._program = 0;
 
         return this._programs[0];
-    },
+    }
 
-    _detachShader: function (program, type) {
+    _detachShader(program, type) {
         var shader = program[type];
         this.gl.detachShader(program, shader);
         this.gl.deleteShader(shader);
-    },
+    }
 
-    _visualisationToProgram: function (vis, program, idx) {
+    _visualisationToProgram(vis, program, idx) {
         var gl = this.gl,
             ok = function (kind, status, value, sh) {
                 if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
@@ -432,3 +462,5 @@ ViaWebGL.prototype = {
         this.visualisationReady(idx, vis);
     }
 }
+
+
