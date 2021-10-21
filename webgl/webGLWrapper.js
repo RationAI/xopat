@@ -272,13 +272,13 @@ class WebGLWrapper {
      */
     setWebGL() {
         const canvas = document.createElement('canvas');
-        // this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        // if (this.gl) {
-        //     //WebGL 2.0
-        //     this.webGLImplementation = new WebGL20(this, this.gl);
-        //     return;
-        // }
-        // WebGL 1.0
+        this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        if (this.gl) {
+            //WebGL 2.0
+            this.webGLImplementation = new WebGL20(this, this.gl);
+            return;
+        }
+        //WebGL 1.0
         this.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
         this.webGLImplementation = new WebGL10(this, this.gl);
@@ -400,7 +400,7 @@ class WebGLWrapper {
             }
 
             let program = this.gl.createProgram();
-            this._programs.push(program); //preventive, will possibly
+            this._programs.push(program); //preventive
             vis.order = Object.keys(vis.responseData);
             this._visualisationToProgram(vis, program, i);
         }
@@ -443,8 +443,6 @@ class WebGLWrapper {
             program[type] = shader;
             return ok('Shader', 'COMPILE', shader, type);
         }
-
-        // console.log("FRAGMENT", vis["fragment_shader"]);
 
         if (!useShader(gl, program, vis["vertex_shader"], 'VERTEX_SHADER') ||
             !useShader(gl, program, vis["fragment_shader"], 'FRAGMENT_SHADER')) {

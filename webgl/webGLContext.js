@@ -329,8 +329,6 @@ class WebGL20 {
             let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
             let pixels = new Uint8Array(imageData.data.buffer);
 
-            //gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-            
             // -- Init Texture
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
@@ -468,11 +466,11 @@ void main() {
         //UNPACK_FLIP_Y_WEBGL not supported with 3D textures so sample bottom up
         return `#version 300 es
 in vec4 a_pos;
-in vec2 a_tile_pos;
 out vec2 v_tile_pos;
             
 void main() {
-    v_tile_pos = vec2(a_tile_pos.x, abs(1.0-a_tile_pos.y));
+    vec2 tex_coords = vec2(a_pos) / 2.0 + 0.5;
+    v_tile_pos = vec2(tex_coords.x, 1.0-tex_coords.y);
     gl_Position = a_pos;
 }
 `;
@@ -493,9 +491,8 @@ void main() {
         context['gl_loaded'].call(context, gl, program);
 
         // Unchangeable square array buffer fills viewport with texture
-        var boxes = [[-1, 1, -1, -1, 1, 1, 1, -1], [0, 1, 0, 0, 1, 1, 1, 0]];
-        var buffer = new Float32Array([].concat.apply([], boxes));
-        var bytes = buffer.BYTES_PER_ELEMENT;
+        var boxes = [-1, 1, -1, -1, 1, 1, 1, -1];
+        var buffer = new Float32Array(boxes);
         var count = 4;
 
         // Get uniform term
@@ -503,15 +500,7 @@ void main() {
         gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
 
         // Get attribute terms
-        //TODO fix this crappy programming
-        this._att = [context.pos, context.tile_pos].map(function (name, number) {
-
-            var index = Math.min(number, boxes.length - 1); //wtf?
-            var vec = Math.floor(boxes[index].length / count);
-            var vertex = gl.getAttribLocation(program, name);
-
-            return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
-        });
+        this._att = [gl.getAttribLocation(program, context.pos), 2, gl.FLOAT, 0, 0, 0];
 
         this.texture.toBuffers(gl, context.wrap, context.filter);
 
@@ -538,10 +527,8 @@ void main() {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         // Set Attributes for GLSL
-        this._att.map(function (x) {
-            gl.enableVertexAttribArray(x.slice(0, 1));
-            gl.vertexAttribPointer.apply(gl, x);
-        });
+        gl.enableVertexAttribArray(this._att.slice(0, 1));
+        gl.vertexAttribPointer.apply(gl, this._att);
 
         // Upload textures
         this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, context._programs[context._program], gl);

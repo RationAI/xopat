@@ -195,10 +195,11 @@ foreach ($PLUGINS as $_ => $plugin) {
   </div>
 
   <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0" style="width: 400px; background: #0000005c;">
-      <span id="global-export" class="pl-2" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;"><span class="material-icons">download</span> Export</span>
+      <span id="copy-url" class="pl-2" onclick="copyHashUrlToClipboard();" title="Get the visualisation link" style="cursor: pointer;"><span class="material-icons">link</span>Get link</span>
+      <span id="global-export" class="pl-2" onclick="exportVisualisation();" title="Export visualisation together with plugins data" style="cursor: pointer;"><span class="material-icons">download</span>Export</span>
       <a style="display:none;" id="export-visualisation"></a> &emsp;
-      <span id="add-plugins" onclick="addPlugins();" title="Add plugins to the visualisation" style="cursor: pointer;"><span class="material-icons">extension</span> Plugins</span>&emsp;
-      <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;"><span class="material-icons">school</span> Tutorial</span>&emsp;
+      <span id="add-plugins" onclick="addPlugins();" title="Add plugins to the visualisation" style="cursor: pointer;"><span class="material-icons">extension</span>Plugins</span>&emsp;
+      <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;"><span class="material-icons">school</span>Tutorial</span>&emsp;
   </div>
 </div>
 
@@ -736,6 +737,32 @@ if($errorSource) {
 
       return `${form} 
       form.submit();<\/script>`;
+    }
+
+    function copyHashUrlToClipboard() {
+
+      var url = "<?php 
+        echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); 
+      ?>/redirect.php?image=<?php 
+        echo $dataSource['image']
+      ?>&layer=<?php 
+        echo $dataSource['layer']
+      ?>#";
+
+      url += encodeURIComponent('<?php echo $visualisation ?>') + "|";
+      url += encodeURIComponent(JSON.stringify(seaGL.webGLWrapper.getCache())) + "|";
+      Object.values(PLUGINS.each).forEach(plugin => {
+        if (plugin.loaded) {
+          url += encodeURIComponent(plugin.flag) + "|";
+        }
+      });
+
+      let $temp = $("<input>");
+      $("body").append($temp);
+      $temp.val(url).select();
+      document.execCommand("copy");
+      $temp.remove();
+      Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
     }
 
     function exportVisualisation() {

@@ -61,7 +61,7 @@ $shaders_json = json_encode((object)$shader_selections);
     echo "</section>";
  // }
 
-$path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['PHP_SELF']);
+$path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 ?>
 
 <br>
