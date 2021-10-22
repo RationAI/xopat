@@ -29,8 +29,6 @@ if (isset($data["color"])) {
     $b = 0;
 } 
 
-$samplerName = "tile_data_{$uniqueId}";
-
 $allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] == "1");
 $allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] == "1");
 $allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] == "1");
@@ -42,7 +40,6 @@ $b = $b / 255;
 
 $definition = <<<EOF
 
-uniform sampler2D $samplerName;
 uniform float threshold_{$uniqueId};
 uniform float threshold_opacity_{$uniqueId};
 uniform float zoom_{$uniqueId};
@@ -87,18 +84,18 @@ EOF;
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
 
-    float data_{$uniqueId} = texture($samplerName, v_tile_pos).r;
+    float data_{$uniqueId} = {$texture('v_tile_pos')}.r;
     float dist_{$uniqueId} = 0.005 * sqrt(sqrt(zoom_{$uniqueId}));
 
-    float up_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)).r;
-    float bottom_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)).r;
-    float left_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})).r;
-    float right_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})).r;
+    float up_{$uniqueId} = {$texture("vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)")}.r;
+    float bottom_{$uniqueId} = {$texture("vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)")}.r; 
+    float left_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})")}.r; 
+    float right_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})")}.r;
 
-    float up2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
-    float bottom2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)).r;
-    float left2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})).r;
-    float right2_{$uniqueId} = texture($samplerName, vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})).r;
+    float up2_{$uniqueId} = {$texture("vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)")}.r;
+    float bottom2_{$uniqueId} = {$texture("vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)")}.r; 
+    float left2_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})")}.r; 
+    float right2_{$uniqueId} =  {$texture("vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})")}.r;
 
     vec4 border_{$uniqueId} = getBorder_{$uniqueId}(data_{$uniqueId}, up_{$uniqueId}, bottom_{$uniqueId}, left_{$uniqueId},
                                 right_{$uniqueId}, up2_{$uniqueId}, bottom2_{$uniqueId}, left2_{$uniqueId}, right2_{$uniqueId});
@@ -193,6 +190,6 @@ function colorChange_{$uniqueId}(self) {
 
 EOF;
 
-send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
+send($definition, $execution, $html, $js, $glload, $gldraw);
 
 ?>						
