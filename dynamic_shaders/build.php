@@ -3,6 +3,7 @@
  // [
  //   {
  //      "data": --data identifier--
+ //      "name": --data layer name--
  //      "shader": --name of the shader--
  //      "params": {--shader--param--: --value--, ...}
  //      "webgl2": --optional flag--
@@ -58,10 +59,12 @@ set_exception_handler(function($exception) {
     //try to get the url of shader part
     $url = "";
     if (!isset($object->type) && isset($object->source)) {
+        //shader type not set and custom source defined
         $i++;
         $args = to_params($object->params);
-        $url = "$object->source?index=$i$uniqueId$args";
-    } else if (isset($object->type) && isset($shaders[$object->type])) { 
+        $url = "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
+    } else if (isset($object->type) && isset($shaders[$object->type])) {
+        //shader type set and existing 
         if (file_exists("{$shaders[$object->type]}.php")) {
             $i++;
             $args = to_params($object->params);
@@ -71,18 +74,26 @@ set_exception_handler(function($exception) {
         } else {
             $visualisation[$object->data] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist."); 
             continue;
-        }    
+        } 
+    } else if ($object->type == "none") {
+        //shader typs is 'none'
+        $i++;
+        $args = to_params($object->params);
+        $visualisation[$object->data] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args"); 
+        continue;   
     } else {
+        //invalid shader type
         $visualisation[$object->data] = (object)array("error" => "Requested visualisation '$object->type' does not exist.", "desc" => "Undefined shader: $object->type."); 
         continue;
     } 
     
-    //try to load the shader URL
+    //try to GET the shader from URL
     try {
         $data = json_decode(file_get_contents($url));
         $data->order = $i;
         $data->visible = $object->visible;
         $data->url = $url;
+        $data->type = $object->type;
         if (isset($data->error) && $data->error) {
             $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
         } else if (strlen($data->execution) < 5 || strlen($data->definition) < 5) {
@@ -98,6 +109,11 @@ set_exception_handler(function($exception) {
     } 
  }
 
+ /**
+  * Convert array of key=>value pairs into URL GET parameter list
+  * 
+  * $array {array} parameters names mapped to data
+  */
  function to_params($array) {
     // if (!is_array($array) || !is_object($array)) {
     //     return "";
@@ -111,6 +127,7 @@ set_exception_handler(function($exception) {
     return $out;
  }
 
+ //send data
 echo json_encode((object)($visualisation));
 
 ?>

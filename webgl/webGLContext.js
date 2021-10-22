@@ -110,9 +110,12 @@ class WebGL10 {
 
         order.forEach(dataId => {
             visSetup[dataId].rendering = false;
-            if (visSetup[dataId].error) {
+            if (visSetup[dataId].type == "none") {
+                //this data is meant for other shader to use, skip
+                continue;
+            } else if (visSetup[dataId].error) {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(dataId, visSetup[dataId]["error"], false, false) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
                 console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
 
             } else if (visSetup[dataId].definition && visSetup[dataId].execution) {
@@ -133,11 +136,11 @@ class WebGL10 {
                 }
 
                 //reverse order append to show first the last drawn element (top)
-                html = _this.context.htmlShaderPartHeader(dataId, visSetup[dataId]["html"], visible, true) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["html"], visible, true) + html;
                 js += visSetup[dataId]["js"];
             } else {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(dataId, `The requested visualisation type does not work properly.`, false, false) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], `The requested visualisation type does not work properly.`, false, false) + html;
                 console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
             }
         });
@@ -366,10 +369,12 @@ class WebGL20 {
             _this = this, usableShaders = 0;
 
         order.forEach(dataId => {
-
-            if (visSetup[dataId].error) {
+            if (visSetup[dataId].type == "none") {
+                //this data is meant for other shader to use, skip
+                continue;
+            } else if (visSetup[dataId].error) {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(dataId, visSetup[dataId]["error"], false, false) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
                 console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
 
             } else if (visSetup[dataId].definition && visSetup[dataId].execution) {
@@ -386,11 +391,11 @@ class WebGL20 {
                 }
 
                 //reverse order append to show first the last drawn element (top)
-                html = _this.context.htmlShaderPartHeader(dataId, visSetup[dataId]["html"], visible, true) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["html"], visible, true) + html;
                 js += visSetup[dataId]["js"];
             } else {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(dataId, `The requested visualisation type does not work properly.`, false, false) + html;
+                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], `The requested visualisation type does not work properly.`, false, false) + html;
                 console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
             }
         });

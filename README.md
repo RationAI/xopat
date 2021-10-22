@@ -42,13 +42,15 @@ Then, based on the presence of `visualisation` the user is
       }, 
       "shaders": [
              {
-                 "data": "Annotation layer",
+                 "data": "data_identifier",
+                 "name": "Annotation layer",
                  "type:": "identity", 
                  "visible": "1", 
                  "params": { 
                  }
              }, {
-                 "data": "Probability layer",
+                 "data": "data_identifier",
+                 "name": "Probability layer",
                  "type": "edge", 
                  "visible": "1", 
                  "params": { 
@@ -66,8 +68,8 @@ All items are required except for items inside `params` field and the exception 
 - `params` - visualisation parameters, supported:
     - `uniqueId` - necessary to set up in case mutiple instances of webGL framework are running
 - `shaders` - a list of data instances tied to a certain visualisation style
-    - `data` - both name and id (in future, id will be a lone parameter), defines the data (id will in the pyramidal 
-        tiff directory define the data to use)
+    - `name` - name of the layer: displayed to the user
+    - `data` - defines the data (id=path to the pyramidal tif)
     - one of the following two:
         - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity`; can be missing if `source` is defined
         - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined

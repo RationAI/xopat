@@ -13,7 +13,8 @@ the parametrization might be lengthy. Required parameters are attributes of the 
       "params": {}, 
       "shaders": [
              {
-                 "data": "Probability layer",
+                 "name": "Probability layer",
+                 "data": "data_identifier",
                  "type:": "color", 
                  "visible": "1", 
                  "params": { 
@@ -42,14 +43,12 @@ that can be passed from outer `params` field.
 _Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/colors.php?index=1&color=#9900fa
 
 Each shader type has a shader part script that generates following JSON-encoded object output with following fields:
-- `definition` - define global variables or custom functions in the resulting shader, should define at least `sampler2D` variable where
- the visualisation sends the data for certain tile
+- `definition` - define global variables or custom functions in the resulting shader
 - `execution` - write shader code that is executed, placed inside `main{}` and can use pre-defined functions or `definition` part
 - `html` - html elements that are to be shown in the visualiser, serve for user input
 - `js` - `js` script, that helps to send user values from `html` to shader
 - `glLoaded` - `js` code executed when WebGL program is loaded, used to register uniform variables
 - `glDrawing` - `js` code executed when WebGL program is used, used to set values to uniforms
-- `sampler2D` - name of the `sampler2D` variable, so that visualiser knows where to bind the data
 
 **OR**
 
@@ -57,10 +56,15 @@ Each shader type has a shader part script that generates following JSON-encoded 
 - `desc` - detailed error description
 
 #### Global functions and variables - PHP
-There are some necessary things required to allow advanced functionality. Each file, after `init.php` inclusion can use global parameters:
+There are some necessary things required to allow advanced functionality. Each file, after `init.php` inclusion, can use global parameters:
 - `$uniqueID` - a variable to avoid namespace collision
 - `$data` - an array that contains sent parameters
-- function `send($definition, $sampler2DUniformName, $execution, $htmlPart="", $jsPart="", $glLoaded="", $glDrawing="")` for unified output style
+- `$texture_name` - name of the texture that holds data to the current shader part, with respect to the WebGL version used
+- function `$texture($sampling_coords, $id=-1)` - use this to sample the texture at `$sampling_coords`, alternatively set custon `$id` to touch data of other shaders (see at the bottom of this README)
+- function `send($definition, $execution, $htmlPart="", $jsPart="", $glLoaded="", $glDrawing="")` for unified output style
+- function `toShaderFloatString($value, $default, $precisionLen=5)` - use this function to covert a number `$value` to a string with decimal length of `$precisionLen`
+- function `toRGBColorFromString($toParse, $default)` - use this function to parse hexadecimal color representation (e.g. `#ffffff`) to an integer array [r, g, b].
+More detailed information can be found in the documentation of `init.php`.
 
 #### Global functions and variables - GLSL
 In fragment shader (`$execution` and `$definition`), there are several global functions and variables available. Example of really simple _identity_ shader part:
@@ -96,14 +100,15 @@ $js = ""; //nothing
 //print output, it is also possible to call send($definition, $samplerName, $execution); only
 send($definition, $samplerName, $execution, $html, $js, $glload, $gldraw);
 `````
-Shader is then composed in this manner: (you can see the **global** stuff here)
+Shader in WebGL 2.0 is then composed in this manner: (you can see the **global** stuff here)
 ````glsl
 #version 300 es
 precision mediump float;
 uniform vec2 u_tile_size;  //tile dimension
 in vec2 v_tile_pos;        //in-texture position
+uniform sampler2DArray vis_data_sampler_array;  //texture array with data
 
-out vec4 final_color;      //do not touch directly, fragment output
+out vec4 final_color;      //do not touch directly, fragment output, use show(...) instead
 
 //instead of equality comparison that is unusable on float values
 bool close(float value, float target) {
@@ -190,3 +195,27 @@ gl.uniform1f(myUniqueNameForVariableLocationWebGL, myUniqueNameForVariable);
 For more complex examples, see scripts themselves. **Non-unique names of variables and functions may cause the shader compilation failure or other
 namespace collision.** 
 We recommend to extend each custom variable and function name with `$uniqueId`, both for `GLSL` and `JavaScript` parts - of course after you include `init.php`.
+
+### More advanced stuff: using multiple data sources at once
+One might want to combine multiple data into one visualisation (shader) part. To do so:
+- Check the shader source code what indices the shader accessess
+    - in case you are wriging the shader yourself: use `$texture($texCoordsString, $dataIndex)` `PHP` function to access arbitrary data, e.g. use `$dataIndex=$index+$i` where `$i` is offset, `$index` is current index: this way we can say 'use data of the following layers'
+- Construct the visualisation so that the order of rendering is such that the additional data is at the index position where the shader part accesses it, following the example above:
+    ```json
+    "shaders": [
+        {
+            "name": "Shader that uses multiple data",
+            "data": "data_source_main",
+            "type:": "color", 
+            "visible": "1", 
+            "params": { 
+                "color": "#fa0058"
+            }
+        }, 
+        {
+            "data": "data_source_additional_1", //to access this data, use `$texture($texCoordsString, $index+1)` in the shader above
+            "type:": "none" //tell the visualisation not to touch this data
+            //as an exception, you can ommit other parameters here
+        }
+    ]
+    ```
