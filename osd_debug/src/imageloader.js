@@ -62,7 +62,7 @@ function ImageJob (options) {
     this.image = null;
 }
 
-//FIXME imageload (rewrite once policy known)
+//FIXME:modified_rationai
 ImageJob.prototype = {
     errorMsg: null,
 
@@ -93,6 +93,13 @@ ImageJob.prototype = {
         // set. Otherwise load the image by setting the source proprety of the image object.
         if (this.loadWithAjax) {
             //FIXME imageload (needs change)
+
+            try {
+                let parsedUrl = new URL(this.src);
+                var postData = `data=${parsedUrl.hash.substring(1)}`;
+            } catch (e) {
+                var postData = null;
+            }
 
             this.request = $.makeAjaxRequest({
                 url: this.src,
@@ -132,7 +139,8 @@ ImageJob.prototype = {
                 error: function(request) {
                     self.errorMsg = "Image load aborted - XHR error";
                     self.finish(false);
-                }
+                },
+                postData: postData
             });
 
             // Provide a function to properly abort the request.

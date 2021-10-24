@@ -150,6 +150,7 @@ foreach ($PLUGINS as $_ => $plugin) {
   <!--Tutorials-->
   <div id="tutorials-container" class="d-none system-container">
     <div class="f1-light text-center clearfix">Select a tutorial</div>
+    <p class="text-center">The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.</p>
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
@@ -413,13 +414,13 @@ if($errorSource) {
   }, {
     'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
   }, {
-    'next #general-controls' : 'These controls allow to affect <br> the whole visualisation, which consists of two layers: <br> the tissue scan and the data layer above.'
+    'next #general-controls' : 'The whole visualisation consists of two layers: <br> the tissue scan and the data layer above.<br>You can control the data layer opacity here.'
   }, {
-    'next #global-opacity' : 'You can control the opacity <br> of the data layer here.'
+    'next #copy-url' : 'To share the visualisation with URL, use this button.<br>It will copy the URL to your clipboard.<b>Plugins will be included, but without their data.'
   }, {
-    'next #global-export' : 'If you want to share the visualisation, <br> you can export it here - including all <br> active plugins and changes you\'ve made.'
+    'next #global-export' : 'If you want to share the visualisation <b>along with plugins data</b>, <br> you can export it here - all changes you\'ve made will be stored <br>(<i>note: the behaviour depends on the plugin itself</i>).'
   }, {
-    'next #panel-shaders' : 'The data layer <br>-the core visualisation functionality-<br> can be controlled here. Hovering over<br> the element will show additional hidden controls.'
+    'next #panel-shaders' : 'The data layer <br>-the core visualisation functionality-<br> can be controlled here. Hovering over<br>the element will show additional hidden controls.'
   }, {
     'click #shaders-pin' : 'Click on the pin to set <br>this controls subpanel to be always visible.'
   }, {

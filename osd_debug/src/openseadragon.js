@@ -2192,6 +2192,9 @@ function OpenSeadragon( options ){
 
         /**
          * Makes an AJAX request.
+         * 
+         * FIXME:modified_rationai
+         * 
          * @param {Object} options
          * @param {String} options.url - the url to request
          * @param {Function} options.success - a function to call on a successful response
@@ -2202,7 +2205,7 @@ function OpenSeadragon( options ){
          * @throws {Error}
          * @returns {XMLHttpRequest}
          */
-        makeAjaxRequest: function( url, onSuccess, onError ) {
+        makeAjaxRequest: function( url, onSuccess, onError, postData=null ) {
             var withCredentials;
             var headers;
             var responseType;
@@ -2216,6 +2219,7 @@ function OpenSeadragon( options ){
                 headers = url.headers;
                 responseType = url.responseType || null;
                 url = url.url;
+                postData = url.postData || null;
             }
 
             var protocol = $.getUrlProtocol( url );
@@ -2247,8 +2251,9 @@ function OpenSeadragon( options ){
                 }
             };
 
+            let method = postData ? "POST" : "GET";
             try {
-                request.open( "GET", url, true );
+                request.open( method, url, true );
 
                 if (responseType) {
                     request.responseType = responseType;
@@ -2266,7 +2271,7 @@ function OpenSeadragon( options ){
                     request.withCredentials = true;
                 }
 
-                request.send(null);
+                request.send(postData);
             } catch (e) {
                 var msg = e.message;
 
