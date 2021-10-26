@@ -10,15 +10,15 @@ class GlContextFactory {
     init(wrapper) {
         const canvas = document.createElement('canvas');
         wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        if (context.gl) {
+        if (wrapper.gl) {
             //WebGL 2.0
-            context.webGLImplementation = getContext(true, wrapper, this.gl);
+            wrapper.webGLImplementation = this.getContext(true, wrapper, wrapper.gl);
             return;
         }
         //WebGL 1.0
         wrapper.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                         || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
-        wrapper.webGLImplementation = getContext(false, wrapper, this.gl);
+        wrapper.webGLImplementation = this.getContext(false, wrapper, wrapper.gl);
     }
 
     /**
@@ -52,9 +52,9 @@ class WebGL10 {
         this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
 
         this.tile_size = 'u_tile_size';
-        this.wrap = this.gl.CLAMP_TO_EDGE;
+        this.wrap = gl.CLAMP_TO_EDGE;
         this.tile_pos = 'a_tile_pos';
-        this.filter = this.gl.NEAREST;
+        this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
        //TODO: fix how textures are allocated and freed, also limit it with 
@@ -165,7 +165,7 @@ class WebGL10 {
             visSetup[dataId].rendering = false;
             if (visSetup[dataId].type == "none") {
                 //this data is meant for other shader to use, skip
-                continue;
+                return;
             } else if (visSetup[dataId].error) {
                 //todo attach warn icon
                 html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
@@ -361,8 +361,8 @@ class WebGL20 {
         this.context = context;
         this.gl = gl;
         this.tile_size = 'u_tile_size';
-        this.wrap = this.gl.CLAMP_TO_EDGE;
-        this.filter = this.gl.NEAREST;
+        this.wrap = gl.CLAMP_TO_EDGE;
+        this.filter = gl.NEAREST;
         this.pos = 'a_pos';
  
         this.texture = {
@@ -428,7 +428,7 @@ class WebGL20 {
         order.forEach(dataId => {
             if (visSetup[dataId].type == "none") {
                 //this data is meant for other shader to use, skip
-                continue;
+                return;
             } else if (visSetup[dataId].error) {
                 //todo attach warn icon
                 html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
