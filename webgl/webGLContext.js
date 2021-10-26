@@ -1,8 +1,61 @@
+/**
+ * Interface to the modular behaviour of the WebGL plugin.
+ * extend this class, implement getContext(...) and provide
+ * your OWN rendering behaviour using a GPU.
+ */
+class GlContextFactory {
+    /**
+     * Create WebGL context and corresponding implementation (State pattern & Factory method)
+     */
+    init(wrapper) {
+        const canvas = document.createElement('canvas');
+        wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        if (context.gl) {
+            //WebGL 2.0
+            context.webGLImplementation = getContext(true, wrapper, this.gl);
+            return;
+        }
+        //WebGL 1.0
+        wrapper.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
+                        || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
+        wrapper.webGLImplementation = getContext(false, wrapper, this.gl);
+    }
+
+    /**
+     * Factory method, should be overrided
+     * @param {boolean} webGL2 true if context can use WebGL 2.0
+     * @param {*} wrapper webGL wrapper, basic visualiser funcitonality (sort of manager)
+     * @param {*} gl WebGL context
+     * @returns null (must be overriden)
+     */
+    getContext(webGL2, wrapper, gl) {
+        console.error("This is a factory method and should be implemented in a subclass.");
+        return null;
+    }
+}
+
+
+/**
+ * Implementation of factory. Default WebGL contexts.
+ */
+class DefaultGLContextFactory extends GlContextFactory {
+    getContext(webGL2, wrapper, gl) {
+        return webGL2 ? new WebGL20(wrapper, gl) : new WebGL10(wrapper, gl);
+    }
+}
+
+
 class WebGL10 {
    constructor(context, gl) {
-       this.context = context;
-       this.gl = gl;
-       this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+        this.context = context;
+        this.gl = gl;
+        this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+
+        this.tile_size = 'u_tile_size';
+        this.wrap = this.gl.CLAMP_TO_EDGE;
+        this.tile_pos = 'a_tile_pos';
+        this.filter = this.gl.NEAREST;
+        this.pos = 'a_pos';
 
        //TODO: fix how textures are allocated and freed, also limit it with 
        this.texture = {
@@ -242,11 +295,11 @@ void main() {
         var count = 4;
 
         // Get uniform term
-        var tile_size = gl.getUniformLocation(program, context.tile_size);
+        var tile_size = gl.getUniformLocation(program, this.tile_size);
         gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
 
         // Get attribute terms
-        this._att = [context.pos, context.tile_pos].map(function (name, number) {
+        this._att = [this.pos, this.tile_pos].map(function (name, number) {
 
             var index = Math.min(number, boxes.length - 1);
             var vec = Math.floor(boxes[index].length / count);
@@ -255,7 +308,7 @@ void main() {
             return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
-        this.texture.toBuffers(gl, context.wrap, context.filter);
+        this.texture.toBuffers(gl, this.wrap, this.filter);
 
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 
@@ -307,6 +360,10 @@ class WebGL20 {
     constructor(context, gl) {
         this.context = context;
         this.gl = gl;
+        this.tile_size = 'u_tile_size';
+        this.wrap = this.gl.CLAMP_TO_EDGE;
+        this.filter = this.gl.NEAREST;
+        this.pos = 'a_pos';
  
         this.texture = {
              init: function (gl) {
@@ -501,13 +558,13 @@ void main() {
         var count = 4;
 
         // Get uniform term
-        var tile_size = gl.getUniformLocation(program, context.tile_size);
+        var tile_size = gl.getUniformLocation(program, this.tile_size);
         gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
 
         // Get attribute terms
-        this._att = [gl.getAttribLocation(program, context.pos), 2, gl.FLOAT, 0, 0, 0];
+        this._att = [gl.getAttribLocation(program, this.pos), 2, gl.FLOAT, 0, 0, 0];
 
-        this.texture.toBuffers(gl, context.wrap, context.filter);
+        this.texture.toBuffers(gl, this.wrap, this.filter);
 
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 

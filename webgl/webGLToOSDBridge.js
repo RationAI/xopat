@@ -7,20 +7,28 @@
 */
 
 
-openSeadragonGL = function(webGLWrapperParams) {
+OpenSeadragonGL = function(webGLWrapperParams) {
     this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
 };
 
-openSeadragonGL.prototype = {
+OpenSeadragonGL.prototype = {
     
+    /**
+     * Runs a callback on each visualisation goal
+     * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+     */
     foreachVisualisation: function(call) {
         this.webGLWrapper._visualisations.forEach(vis => {
             call(vis);
         });
     },
 
+    /**
+     * Get the current visualisaiton goal object
+     * @returns current visualisaiton goal object
+     */
     currentVisualisation: function() {
         return this.webGLWrapper._visualisations[this.webGLWrapper._program];
     },
@@ -151,7 +159,7 @@ openSeadragonGL.prototype = {
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             e.tile.origData = e.image;    
             
-            //necessary, the tile might be re-drawn upon re-zooming
+            //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement( 'canvas' )
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height; 
@@ -171,21 +179,5 @@ openSeadragonGL.prototype = {
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
         }
-    },
-
-
-    // Possible solution to not to store the webGL output at all but to always generate it
-    // Contains 
-    _tileLoaded2: function(e) {
-        if (! e.image) return;
-        if (this.webGLWrapper.willUseWebGL(e.image, e)) {
-            e.tile.origData = e.image;    
-            e.tile.context2D = this.webGLWrapper.gl;
-            delete e.image;
-        }
-    },
-
-    _tileDrawing2: function(e) {
-        this.webGLWrapper.toCanvas(e.tile.origData, e);
     }
 }

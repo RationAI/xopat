@@ -258,7 +258,7 @@ if($errorSource) {
 
     // Initialize viewer webGL extension - webGLWrapper
     let shaderNames = $("#shaders");
-    seaGL = new openSeadragonGL({
+    seaGL = new OpenSeadragonGL({
       //todo CHECK if parameters not missing and throw error if required param missing
       htmlControlsId: "shader-options",
       scriptId: "auto-scripts",

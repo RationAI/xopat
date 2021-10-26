@@ -28,10 +28,13 @@ class WebGLWrapper {
         };
 
         this.gl_drawing = function (gl, tile, e) {
-            this._callString(this.jsGlDrawingCall, gl, e);
             //use shaders only for certain tile source
             //todo make this more elegant (move decision into osdGL script)
-            return e.tiledImage.source.tilesUrl.indexOf(urlImage) === -1; //use webGL if not urlImage source
+            if (e.tiledImage.source.tilesUrl.indexOf(urlImage) !== -1) return false; //use webGL if not urlImage source
+            
+            //otherwise setup shader uniforms...
+            this._callString(this.jsGlDrawingCall, gl, e);
+            return true; //use webGL if not urlImage source
         };
 
         // Assign from incoming terms
@@ -39,13 +42,11 @@ class WebGLWrapper {
             this[key] = incomingOptions[key];
         }
 
-        this.setWebGL();
-        //todo move all the settings into corresponding webgl context classes to set uniformly
-        this.tile_size = 'u_tile_size';
-        this.wrap = this.gl.CLAMP_TO_EDGE;
-        this.tile_pos = 'a_tile_pos';
-        this.filter = this.gl.NEAREST;
-        this.pos = 'a_pos';
+        //Initialize WebGL context: the way how tiles are being rendered
+        if (!this.glContextFactory) {
+            this.glContextFactory = new DefaultGLContextFactory(); 
+        }
+        this.glContextFactory.init(this);
 
         // Private shader management
         this._visualisations = [];
@@ -152,7 +153,6 @@ class WebGLWrapper {
     toBuffers(program) {
         this.webGLImplementation.toBuffers(program);
     }
-
 
     /**
      * Renders data using WebGL
@@ -265,23 +265,6 @@ class WebGLWrapper {
 
         this.forceSwitchShader(null, false);
         this.ready();
-    }
-
-    /**
-     * Create WebGL context and corresponding implementation (State pattern)
-     */
-    setWebGL() {
-        const canvas = document.createElement('canvas');
-        this.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        if (this.gl) {
-            //WebGL 2.0
-            this.webGLImplementation = new WebGL20(this, this.gl);
-            return;
-        }
-        //WebGL 1.0
-        this.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
-                    || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
-        this.webGLImplementation = new WebGL10(this, this.gl);
     }
 
     /**
