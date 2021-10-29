@@ -1514,7 +1514,6 @@ function loadTile( tiledImage, tile, time ) {
         ajaxHeaders: tile.ajaxHeaders,
         crossOriginPolicy: tiledImage.crossOriginPolicy,
         ajaxWithCredentials: tiledImage.ajaxWithCredentials,
-        //FIXME imageload (no changes, callback job completion definition)
         callback: function( image, errorMsg, tileRequest ){
             onTileLoad( tiledImage, tile, time, image, errorMsg, tileRequest );
         },
@@ -1536,7 +1535,7 @@ function loadTile( tiledImage, tile, time ) {
  * @param {XMLHttpRequest} tileRequest
  */
 function onTileLoad( tiledImage, tile, time, image, errorMsg, tileRequest ) {
-    if ( !image ) {         //FIXME imageload (if array does not contain required images)
+    if ( !image ) {
         $.console.log( "Tile %s failed to load: %s - error: %s", tile, tile.url, errorMsg );
         /**
          * Triggered when a tile fails to load.
@@ -1568,7 +1567,6 @@ function onTileLoad( tiledImage, tile, time, image, errorMsg, tileRequest ) {
         return;
     }
 
-    //FIXME imageload
     var finish = function() {
         var cutoff = tiledImage.source.getClosestLevel();
         setTileLoaded(tiledImage, tile, image, cutoff, tileRequest);
@@ -1606,7 +1604,6 @@ function setTileLoaded(tiledImage, tile, image, cutoff, tileRequest) {
             tile.loading = false;
             tile.loaded = true;
             if (!tile.context2D) {
-                //FIXME imageload (tile caching, needs some update, or is image object treated as anonymous, e.g. array will work too?)
                 tiledImage._tileCache.cacheTile({
                     image: image,
                     tile: tile,

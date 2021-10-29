@@ -59,18 +59,15 @@ ImageRecord.prototype = {
     },
 
     getImage: function() {
-        //FIXME imageload
         return this._image;
     },
 
     getRenderedContext: function() {
         if (!this._renderedContext) {
             var canvas = document.createElement( 'canvas' );
-            //FIXME imageload
             canvas.width = this._image.width;
             canvas.height = this._image.height;
             this._renderedContext = canvas.getContext('2d');
-            //FIXME imageload
             this._renderedContext.drawImage( this._image, 0, 0 );
             //since we are caching the prerendered image on a canvas
             //allow the image to not be held in memory

@@ -2192,23 +2192,22 @@ function OpenSeadragon( options ){
 
         /**
          * Makes an AJAX request.
-         * 
-         * FIXME:modified_rationai
-         * 
          * @param {Object} options
          * @param {String} options.url - the url to request
          * @param {Function} options.success - a function to call on a successful response
          * @param {Function} options.error - a function to call on when an error occurs
          * @param {Object} options.headers - headers to add to the AJAX request
          * @param {String} options.responseType - the response type of the the AJAX request
+         * @param {String} options.postData - HTTP POST data, GET method used if not defined
          * @param {Boolean} [options.withCredentials=false] - whether to set the XHR's withCredentials
          * @throws {Error}
          * @returns {XMLHttpRequest}
          */
-        makeAjaxRequest: function( url, onSuccess, onError, postData=null ) {
+        makeAjaxRequest: function( url, onSuccess, onError ) {
             var withCredentials;
             var headers;
             var responseType;
+            var postData;
 
             // Note that our preferred API is that you pass in a single object; the named
             // arguments are for legacy support.
@@ -2251,7 +2250,7 @@ function OpenSeadragon( options ){
                 }
             };
 
-            let method = postData ? "POST" : "GET";
+            var method = postData ? "POST" : "GET";
             try {
                 request.open( method, url, true );
 

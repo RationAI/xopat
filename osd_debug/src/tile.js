@@ -322,7 +322,6 @@ $.Tile.prototype = {
             return;
         }
 
-        //FIXME imageload (this needs to be adjusted to work with array, e.g. check if only one image and if not, then invoke some other function that will process it to make the image one --> )
         rendered = this.context2D || this.cacheImageRecord.getRenderedContext();
 
         if ( !this.loaded || !rendered ){
