@@ -505,38 +505,6 @@ class AnnotationObjectFactory {
     }
 
     /**
-     * Optimization feature, avoid repeated calling of functions init/update if
-     * it is not implemented
-     * @returns {boolean} true if initEdit(...) and updateEdit(...) are to be used
-     */
-    supportsEdit() {
-        return false;
-    }
-
-    /**
-     * Init the update process
-     * @param {Object} p object that is being modified
-     */
-    initEdit(p) {
-    }
-
-    /**
-     * TODO unclear API
-     * Update the update process
-     * @param {Event} o fabricjs event from object moving listener
-     */
-    updateEdit(o) {
-    }
-
-    /**
-     * TODO unclear API
-     * Update the update process
-     * @param {Event} o fabricjs event from object moving listener
-     */
-    updateEditSelf(o) {
-    }
-
-    /**
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was performed directly by the user.
      */
@@ -817,18 +785,6 @@ class Ellipse extends AnnotationObjectFactory {
         this._current.set({ rx: width, ry: height });
     }
 
-    updateEditSelf(o) {
-        //todo necessary? probably delete
-
-        //set correct coordinates when object is scaling
-        o.target.width *= o.target.scaleX;
-        o.target.height *= o.target.scaleY;
-        o.target.scaleX = 1;
-        o.target.scaleY = 1;
-        //openseadragon_image_annotations.set_input_form(o.target);
-        //$("#input_form").show();
-    }
-
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return;
@@ -1059,103 +1015,8 @@ class Polygon extends AnnotationObjectFactory {
         }
     }
 
-
-    supportsEdit() {
-        return true;
-    }
-
     isImplicit() {
         return false;
-    }
-
-    initEdit(p) {
-        this._initialize(false);
-        this.input_attributes = {
-            comment: p.comment,
-            a_group: p.a_group,
-            threshold: p.threshold,
-        };
-        var points = p.get("points");
-        var zoom = this._context.canvas().getZoom();
-        var circle_size = 0;
-        if (zoom < 0.01) { circle_size = 1000 }
-        else if (zoom < 0.03) { circle_size = 500 }
-        else if (zoom < 0.1) { circle_size = 100 }
-        else if (zoom < 0.3) { circle_size = 50 }
-        else { circle_size = 20 }
-
-        var _this = this;
-
-        points.forEach(function (point, index) {
-            var circle = new fabric.Circle({
-                radius: circle_size,
-                fill: 'red',
-                left: point.x,
-                top: point.y,
-                originX: 'center',
-                originY: 'center',
-                hasControls: false,
-                hasBorders: false,
-                name: index,
-                type: "_polygon.controls.circle"
-            });
-            _this.pointArray.push(circle);
-            _this._context.overlay.fabricCanvas().add(circle);
-        });
-        this._context.overlay.fabricCanvas().renderAll();
-
-
-        this.originallyEddited = p;
-        this.currentlyEddited = this.copy(p, points);
-        this.currentlyEddited.evented = false;
-        this._context.overlay.fabricCanvas().remove(p);
-        this._context.overlay.fabricCanvas().add(this.currentlyEddited);
-        this._context.overlay.fabricCanvas().sendToBack(this.currentlyEddited);
-    }
-
-    updateEdit(o) {
-        let p = o.target;
-        let curr = this.currentlyEddited;
-        curr.points[p.name] = { x: p.getCenterPoint().x, y: p.getCenterPoint().y };
-        this._context.overlay.fabricCanvas().remove(curr);
-        //todo do not create copy, just keep the same polygon
-        this.currentlyEddited = this.copy(curr, curr.points);
-        this.currentlyEddited.evented = false;
-        this._context.overlay.fabricCanvas().add(this.currentlyEddited);
-        this._context.overlay.fabricCanvas().sendToBack(this.currentlyEddited);
-    }
-
-    updateEditSelf(o) {
-        //todofix...
-        if (this.currentlyEddited) return;
-
-        var canvas = this._context.overlay.fabricCanvas();
-        var original_polygon = o.target;
-        var matrix = original_polygon.calcTransformMatrix();
-        var transformedPoints = original_polygon.get("points")
-            .map(function (p) {
-                return new fabric.Point(
-                    p.x - original_polygon.pathOffset.x,
-                    p.y - original_polygon.pathOffset.y);
-            })
-            .map(function (p) {
-                return fabric.util.transformPoint(p, matrix);
-            });
-
-        // create new polygon with updated coordinates
-        var modified_polygon = this.polygon.create(transformedPoints, original_polygon.isLeftClick);
-        // remove orignal polygon and replace it with modified one
-        canvas.remove(original_polygon);
-        canvas.add(modified_polygon).renderAll();
-        // TODO keep HISTORY in edit mode?
-        // openseadragon_image_annotations.history.push(modified_polygon, original_polygon);
-        // openseadragon_image_annotations.history.highlight(modified_polygon)
-
-
-        //todo what about setting active control points correctly? maybe not possible with ctrl, so default is not show
-        canvas.setActiveObject(modified_polygon);
-        //openseadragon_image_annotations.set_input_form(modified_polygon);
-        //$("#input_form").show();
     }
 
     // generate finished polygon

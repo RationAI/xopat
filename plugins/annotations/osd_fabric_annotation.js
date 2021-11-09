@@ -312,24 +312,9 @@ OSDAnnotations.prototype = {
 		});
 
 
-		/*
-		object:moving event listener
-		if object that is move is cirlce (on of the polygon points),
-		start editPolygon function which will update point coordinates
-				*/
-		this.overlay.fabricCanvas().on('object:moving', function (o) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
-
-			var objType = o.target.get('type');
-			//todo dirty
-			if (objType === "_polygon.controls.circle") {
-				openseadragon_image_annotations.polygonFactory.updateEdit(o);
-				openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-			}
-		});
-
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
+				//todo remove?
 				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
 				openseadragon_image_annotations.history.highlight(e.target);
 				e.target.hasControls = !openseadragon_image_annotations.isMouseOSDInteractive();
@@ -468,17 +453,6 @@ OSDAnnotations.prototype = {
 			});
 
 			openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
-		});
-
-		/*
-  			listener form object:modified
-			-recalcute coordinates for annotations
-		*/
-		this.overlay.fabricCanvas().on("object:modified", function (o) {
-			if (!openseadragon_image_annotations.showAnnotations || openseadragon_image_annotations.isMouseOSDInteractive()) return;
-
-			let factory = openseadragon_image_annotations.getAnnotationObjectFactory(o.target.type);
-			if (factory !== undefined) factory.updateEditSelf(o);
 		});
 
 		// TODO delete?    update annotation group (from input form)
@@ -756,8 +730,6 @@ OSDAnnotations.prototype = {
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
 				active.hasControls = true; //todo remove?
-				let factory = this.getAnnotationObjectFactory(active.type);
-				if (factory !== undefined) factory.initEdit(active);
 			}
 		}
 		this.mouseOSDInteractive = isOSDInteractive;

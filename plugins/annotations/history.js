@@ -221,7 +221,8 @@ History.prototype = {
         let self = this._editSelection.self;
         self.html('edit');
         self.prev().prop('disabled', true);
-        this._findObjectOnCanvasById(this._editSelection.incrementId).set({comment: self.prev().val()});
+        let obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
+        if (obj) obj.set({comment: self.prev().val()})
 
         if (!switches) {
             $('#annotation-board').css('background', 'none');
