@@ -6,18 +6,49 @@
   content: "Left mouse button";
   position: absolute;
   font-size: smaller;
-  top: 0;
   top: -7px;
   left: 14px;
+  z-index: 21;
 }
 
 #annotations-right-click:hover:before {
   content: "Right mouse button";
   position: absolute;
   font-size: smaller;
-  top: 0;
   top: -7px;
   left: 14px;
+  z-index: 21;
+}
+
+#annotations-right-click:hover .quick_selection {
+  display: block;
+}
+#annotations-right-click .quick_selection {
+  position: absolute;
+  display: none;
+  width: 151px;
+  overflow-y: scroll;
+  max-height: 80px;
+  border-width: 3px !important;
+  border-top: none;
+  top: 33px;
+  z-index: 21;
+}
+
+
+#annotations-left-click:hover .quick_selection {
+  display: block;
+}
+#annotations-left-click .quick_selection {
+  position: absolute;
+  display: none;
+  width: 151px;
+  overflow-y: scroll;
+  max-height: 80px;
+  border-width: 3px !important;
+  border-top: none;
+  top: 33px;
+  z-index: 21;
 }
 
 .highlighted-preset {

@@ -1,5 +1,5 @@
 History = function (selfName, context, presetManager) {
-    this._globalSelf = `openseadragon_image_annotations['${selfName}']`;
+    this._globalSelf = `${context.id}['${selfName}']`;
     this.buffer = [];
     this._buffidx = 0;
     this.BUFFER_LENGTH = null;
@@ -100,13 +100,14 @@ History.prototype = {
             if (!isNaN(o.incrementId) && o.presetID) {
                 let preset = this._presets.getPreset(o.presetID);
                 if (preset) {
-                    o.fill = preset.color;
+                    o.fill = preset.fill;
                     o.comment = preset.comment;
                 }
                 _this._addToBoard(o);
             }
             return false;
         });
+        this._context.overlay.fabricCanvas().renderAll();
     },
 
     push: function (newObject, previous = null) {
@@ -133,18 +134,18 @@ History.prototype = {
 
     highlight: function (object) {
         if (this._boardSelected) {
-            this.board.find(`#log-object-${this._boardSelected.incrementId}`).removeClass('color-bg-tertiary');
+            this.board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
         if (object) {
-            this.board.find(`#log-object-${object.incrementId}`).addClass('color-bg-tertiary');
+            this.board.find(`#log-object-${object.incrementId}`).css("background", "#ffffff1f");
         }
         this._boardSelected = object;
     },
 
     _focus: function (cx, cy, objectId = null) {
-        var target = PLUGINS.dataLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+        let target = PLUGINS.dataLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
         if (objectId !== null) {
-            var targetObj = this._findObjectOnCanvasById(objectId);
+            let targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
                 this._context.overlay.fabricCanvas().setActiveObject(targetObj);
             }
@@ -188,29 +189,61 @@ History.prototype = {
 			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
 				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 				<span class="material-icons" onclick="
-				 if ($(this).html() === 'edit') {
-					$(this).prev().prop('disabled', false); 
-					$(this).html('save'); 
+				 let self = $(this);
+				 if (self.html() === 'edit') {
+					${this._globalSelf}._boardItemEdit(self, ${object.incrementId});
 				 } else {
-					 $(this).html('edit');
-					 $(this).prev().prop('disabled', true); 
-					 ${this._globalSelf}._findObjectOnCanvasById(${object.incrementId}).set({comment: $(this).prev().val()});
+					${this._globalSelf}._boardItemSave();
 				 }">edit</span> 
 			</div>`);
     },
 
-    _getObjectDefaultDescription: function (object) {
-        switch (object.type) {
-            case "rect": return `Rect [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-            case "polygon": return `Polygon [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-            case "ellipse": return `Ellipse [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-            default:
-                return;
+    _boardItemEdit(self, objectId) {
+        if (this._editSelection) {
+            this._boardItemSave(true);
+        } else {
+            $('#annotation-board').css('background', 'var(--color-merge-box-error-indicator-bg)');
+            this._context.setMouseOSDInteractive(false);
         }
+
+        self.prev().prop('disabled', false);
+        self.html('save');
+
+        //todo possible problem with storing dynamic html node
+        this._editSelection = {
+            incrementId: objectId,
+            self: self
+        }
+    } ,
+
+    _boardItemSave(switches=false) {
+        if (!this._editSelection) return;
+        let self = this._editSelection.self;
+        self.html('edit');
+        self.prev().prop('disabled', true);
+        this._findObjectOnCanvasById(this._editSelection.incrementId).set({comment: self.prev().val()});
+
+        if (!switches) {
+            $('#annotation-board').css('background', 'none');
+            this._context.setMouseOSDInteractive(true);
+        }
+        this._editSelection = undefined;
+    } ,
+
+    _getObjectDefaultDescription: function (object) {
+        let factory = this._context.getAnnotationObjectFactory(object.type);
+        if (factory !== undefined) {
+            return factory.getDescription(object);
+        }
+        return undefined;
     },
 
     _getObjectDefaultIcon: function (object) {
-        return { "rect": "crop_5_4", "polygon": "share", "ellipse": "circle" }[object.type];
+        let factory = this._context.getAnnotationObjectFactory(object.type);
+        if (factory !== undefined) {
+            return factory.getIcon();
+        }
+        return undefined;
     },
 
     _performSwap: async function (canvas, toAdd, toRemove) {

@@ -73,11 +73,15 @@ foreach ($PLUGINS as $_ => $plugin) {
 
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./external/primer_css.css">
+  <!--
+  Possible external dependency
+  <link href="https://unpkg.com/@primer/css@^16.0.0/dist/primer.css" rel="stylesheet" />
+  -->
 
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
-  <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
   
   <!-- OSD -->
   <!-- <script src="./osd/openseadragon.min.js"></script> -->
@@ -125,7 +129,6 @@ foreach ($PLUGINS as $_ => $plugin) {
 
 
   <!--Tutorials-->
-  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
   <link rel="stylesheet" href="./external/enjoyhint.css">
@@ -169,8 +172,12 @@ foreach ($PLUGINS as $_ => $plugin) {
     </div>
 
     <div id="general-controls" class="inner-panel d-flex" style="margin-top: 320px;">
-      <span> Opacity: &emsp;</span>
-      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 230px;">&emsp;
+        <!--TODO export also these values? -->
+      <label for="global-opacity"> Opacity: &nbsp;</label>
+      <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 200px;">&emsp;
+        <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
+        <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
+               onchange="viewer.world.getItemAt(baseIDX).setOpacity(this.checked ? 1 : 0);">
     </div> <!--Height of navigator = margn top of this div + padding-->
     <div id="panel-shaders" class="inner-panel" > 
 
@@ -341,8 +348,7 @@ if($errorSource) {
       prefixUrl: "osd/images/",
       showNavigator: true,
       maxZoomPixelRatio: 1,
-      showNavigator:  true,
-      //navigatorAutoFade:  false,
+      blendTime: 0,
       showNavigationControl: false,
       navigatorId: "panel-navigator",
       // debugMode:  true,  
@@ -438,7 +444,7 @@ if($errorSource) {
   });
 
     // load desired shader upon selection
-    $("#shaders").on("change", function () {
+    shaderNames.on("change", function () {
       activeShader = $(this).val();
       seaGL.switchVisualisation(activeShader);
       redraw();
@@ -596,7 +602,8 @@ if($errorSource) {
     }
 
     function shaderPartToogleOnOff(self) {
-      if (self.checked == true) {
+        //todo test if working, otherwise:  if (self.checked == true) {
+      if (self.checked) {
         seaGL.currentVisualisation().responseData[self.dataset.id].visible = 1;
         self.parentNode.parentNode.classList.remove("shader-part-error");
       } else {
@@ -770,7 +777,7 @@ if($errorSource) {
       let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8"><title>Visualisation export</title>
 </head>
 <body>
 ${constructExportVisualisationForm()}
@@ -854,7 +861,7 @@ foreach ($PLUGINS as $_ => $plugin) {
       echo "<link rel=\"stylesheet\" href=\"" . PLUGIN_FOLDER . $plugin->directory . "/style.css\">";
     }
     //add plugin includes
-    foreach ($plugin->includes as $_ => $file) {
+    foreach ($plugin->includes as $__ => $file) {
       echo "<script src=\"" . PLUGIN_FOLDER . $plugin->directory . "/$file\"></script>";
     }
   }

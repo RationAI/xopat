@@ -13,52 +13,25 @@ FreeFormTool.prototype = {
 
     //initialize any object for cursor-drawing modification
     init: function (object, atPosition, add=true) {
-        switch (object.type) {
-            case 'rect':
-                let w = object.width, h = object.height;
-                this._createPolygonAndSetupFrom([{ x: object.left, y: object.top },
-                { x: object.left + w, y: object.top },
-                { x: object.left + w, y: object.top + h },
-                { x: object.left, y: object.top + h }
-                ], object);
-                break;
-            case 'ellipse':
-                //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
-                //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
-                let reversed = object.rx < object.ry, //since I am using sqrt, need rx > ry
-                    rx = reversed ? object.ry : object.rx,
-                    ry = reversed ? object.rx : object.ry,
-                    pow2e = 1 - (ry * ry) / (rx * rx),
-                    pow3e = pow2e * Math.sqrt(pow2e),
-                    pow4e = pow2e * pow2e,
-                    pow6e = pow3e * pow3e;
 
-                let step = Math.PI / 16, points = [];
-
-                for (let t = 0; t < 2 * Math.PI; t += step) {
-                    let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
-                        + ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
-                        + (29 * pow6e / 6144) * Math.sin(6 * t);
-                    if (reversed) {
-                        points.push({ y: rx * Math.cos(param) + object.top + rx, x: ry * Math.sin(param) + object.left + ry });
-                    } else {
-                        points.push({ x: rx * Math.cos(param) + object.left + rx, y: ry * Math.sin(param) + object.top + ry });
-                    }
-                }
-                this._createPolygonAndSetupFrom(points, object);
-                break;
-            case 'polygon':
+        let objectFactory = this._context.getAnnotationObjectFactory(object.type);
+        if (objectFactory !== undefined) {
+            if (objectFactory.isImplicit()) {
+                //object can be used immedietaly
                 this._setupPolygon(object);
-                break;
-            default:
-                this.polygon = null;
-                PLUGINS.dialog.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, PLUGINS.dialog.MSG_WARN);
-                return;
+            } else {
+                let points = objectFactory.toPointArray(object, AnnotationObjectFactory.withObjectPoint, 1);
+                this._createPolygonAndSetupFrom(points, object);
+            }
+        } else {
+            this.polygon = null;
+            PLUGINS.dialog.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, PLUGINS.dialog.MSG_WARN);
+            return;
         }
 
         this._update = add ? this._union : this._subtract;
         this.mousePos = atPosition;
-        this.simplifier = this._context.polygon.simplify.bind(this._context.polygon);
+        this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
     },
 
     brushSizeControls: function() {
@@ -68,7 +41,9 @@ FreeFormTool.prototype = {
     },
 
     setRadius: function (radius) {
-        this.radius = Math.round(Math.sqrt(this._context.getRelativePixelDiffDistSquared(radius*2)));
+        let pointA = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
+        this.radius = Math.round(Math.sqrt(Math.pow(pointB.x - pointA.x, 2) + Math.pow(pointB.y - pointA.y, 2)));
     },
 
     //update step meant to be executed on mouse move event
@@ -100,7 +75,7 @@ FreeFormTool.prototype = {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
-            if (this.polygon.incrementId != this.initial.incrementId) {
+            if (this.polygon.incrementId !== this.initial.incrementId) {
                 //incrementID is used by history - if ID equal, no changes were made -> no record
                 this._context.history.push(this.polygon, this.initial);
             }
@@ -116,13 +91,13 @@ FreeFormTool.prototype = {
 
     //TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
     _union: function (nextMousePos) {
-        if (!this.polygon || this._context.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
+        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
         //console.log(radPoints);
         var polypoints = this.polygon.get("points");
         //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-        if (this._context.toDistanceObj(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
+        if (this.toDistancePointsAsObjects(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
         this.mousePos = nextMousePos;
 
         //compute union
@@ -135,7 +110,7 @@ FreeFormTool.prototype = {
 
         if (union) {
             if (typeof union[0][0] === 'number') { // single linear ring
-                // var polygon = this._context.polygon.copy(this.polygon, this.simplifier(union));
+                // var polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(union));
             } else {
                 if (union.length > 1) union = this._unify(union);
 
@@ -151,7 +126,7 @@ FreeFormTool.prototype = {
                     }
                 }
 
-                var polygon = this._context.polygon.copy(this.polygon, this.simplifier(union[maxIdx]));
+                var polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(union[maxIdx]));
                 polygon.objectCaching = false;
             }
             return polygon;
@@ -162,16 +137,17 @@ FreeFormTool.prototype = {
     },
 
     _subtract: function (nextMousePos) {
-        if (!this.polygon || this._context.toDistanceObj(this.mousePos, nextMousePos) < this.radius / 3) return;
+        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
         var polypoints = this.polygon.get("points");
         this.mousePos = nextMousePos;
 
-        var difference = greinerHormann.diff(polypoints, radPoints);
+        let difference = greinerHormann.diff(polypoints, radPoints);
         if (difference) {
+            let polygon;
             if (typeof difference[0][0] === 'number') { // single linear ring
-                var polygon = this._context.polygon.create(this.simplifier(difference), this._context.objectOptions(this.polygon.isLeftClick));
+                polygon = this._context.polygon.create(this.simplifier(difference), this._context.presets.getAnnotationOptions(this.polygon.isLeftClick));
             } else {
                 if (difference.length > 1) difference = this._unify(difference);
 
@@ -201,7 +177,7 @@ FreeFormTool.prototype = {
                     return null;
                 }
 
-                var polygon = this._context.polygon.copy(this.polygon, this.simplifier(difference[maxIdx]));
+                polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(difference[maxIdx]));
                 polygon.objectCaching = false;               
             }
             return polygon;
@@ -211,8 +187,12 @@ FreeFormTool.prototype = {
     },
 
     getScreenToolRadius: function () {
-        return this._context.toScreenCoords(0, 0).distanceTo(this._context.toScreenCoords(0, this.radius));
+        return PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
+            .distanceTo(
+                PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
+            );
     },
+
 
     //initialize object so that it is ready to be modified
     _setupPolygon: function (polyObject) {
@@ -224,8 +204,10 @@ FreeFormTool.prototype = {
 
     //create polygon from points and initialize so that it is ready to be modified
     _createPolygonAndSetupFrom: function (points, object) {
+        //TODO avoid re-creation of polygon, if it already was polygon
+
         //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
-        let polygon = this._context.polygon.copy(object, points);
+        let polygon = this._context.polygonFactory.copy(object, points);
         polygon.type = "polygon";
 
         //TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'
@@ -257,7 +239,7 @@ FreeFormTool.prototype = {
                 }
                 secondary = ress.concat(secondary); //reverse order for different union call in the next loop
             }
-            if (j == primary.length - 1) secondary.push(primary[j]);
+            if (j === primary.length - 1) secondary.push(primary[j]);
             primary = secondary;
             secondary = [];
         }
@@ -275,6 +257,10 @@ FreeFormTool.prototype = {
             minY = Math.min(minY, points[i].y);
         }
         return { diffX: maxX - minX, diffY: maxY - minY };
+    },
+
+    toDistancePointsAsObjects: function (pointA, pointB) {
+        return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
     },
 
     //create approximated polygon of drawing tool

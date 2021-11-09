@@ -30,7 +30,7 @@
     padding: 3px 5px 15px 9px;
     position: relative;
     /*margin-bottom: 12px;*/
-    background-color: var(--color-bg-primary);
+    /*background-color: var(--color-bg-primary);*/
 }
 
 .inner-panel .inner-panel-content {
