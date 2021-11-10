@@ -888,9 +888,11 @@ class Polygon extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         let result = this._auto.floodFill(point);
-        this._context.addAnnotation(
-            this.create(result, this._presets.getAnnotationOptions(isLeftClick))
-        );
+        if (result && result.length > 2) {
+            this._context.addAnnotation(
+                this.create(result, this._presets.getAnnotationOptions(isLeftClick))
+            );
+        }
     }
 
     isValidShortCreationClick() {
@@ -1234,7 +1236,7 @@ class AutoObjectCreationStrategy {
         let origPixel = this.getPixelData(point);
         if (!this.comparator(origPixel)) {
             PLUGINS.dialog.show("Outside a region - decrease sensitivity to select.", 2000, PLUGINS.dialog.MSG_INFO);
-            return
+            return undefined;
         }
 
         //speed based on ZOOM level (detailed tiles can go with rougher step)
@@ -1263,7 +1265,7 @@ class AutoObjectCreationStrategy {
 
         if (maxX < 10 || maxY < 10) {
             PLUGINS.dialog.show("Failed to create region.", 3000, PLUGINS.dialog.MSG_WARN);
-            return;
+            return undefined;
         }
 
         points = hull(points, 2 * speed);
