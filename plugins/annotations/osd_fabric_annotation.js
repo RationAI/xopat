@@ -746,6 +746,8 @@ OSDAnnotations.prototype = {
  
 	 *****************************************************************************************************************/
 
+	//todo move all canvas operations here (from other files)
+
 	getAnnotationObjectFactory: function(objectType) {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
@@ -762,6 +764,10 @@ OSDAnnotations.prototype = {
 		this.overlay.fabricCanvas().add(annotation);
 	},
 
+	deleteHelperAnnotation: function(annotation) {
+		this.overlay.fabricCanvas().remove(annotation);
+	},
+
 	promoteHelperAnnotation: function(annotation) {
 		this.history.push(annotation);
 		this.overlay.fabricCanvas().setActiveObject(annotation);
@@ -773,9 +779,10 @@ OSDAnnotations.prototype = {
 		this.promoteHelperAnnotation(annotation);
 	},
 
-	replaceAnnotation: function(previous, next) {
+	replaceAnnotation: function(previous, next, updateHistory=false) {
 		this.overlay.fabricCanvas().remove(previous);
 		this.overlay.fabricCanvas().add(next);
+		if (updateHistory) this.history.push(next, previous);
 		this.overlay.fabricCanvas().renderAll();
     },
 
@@ -785,6 +792,10 @@ OSDAnnotations.prototype = {
 
 	canvas: function() {
 		return this.overlay.fabricCanvas();
+	},
+
+	canvasObjects: function() {
+		return this.overlay.fabricCanvas().getObjects();
 	},
 
 	deselectFabricObjects: function () {
@@ -933,18 +944,14 @@ OSDAnnotations.prototype = {
 
 	//cursor management (TODO move here other stuff involving cursor too)
 	// updater: function(mousePosition: OSD Point instance, cursorObject: object that is being shown underneath cursor)
-	//todo not working
 	cursor: {
 		_visible: false,
 		_updater: null,
 		_node: null,
 		_toolRadius: 0,
 
-			/* Mouse touch related data */
-		//TODO move to cursor class object
 		mouseTime: 0, //OSD handler click timer
 		isDown: false,  //FABRIC handler click down recognition
-		//isOverObject: false,
 
 		init: function () {
 			this._node = document.getElementById("annotation-cursor");
@@ -960,7 +967,6 @@ OSDAnnotations.prototype = {
 
 		show: function () {
 			if (this._listener) return;
-			//this._node.css({display: "block", width: this._toolRadius+"px", height: this._toolRadius+"px"});
 			this._node.style.display = "block";
 			this.updateRadius();
 			this._node.style.width = (this._toolRadius * 2) + "px";

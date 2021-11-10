@@ -12,7 +12,6 @@ History = function (selfName, context, presetManager) {
 
 History.prototype = {
 
-    //TODO history: populate BOARD when annotation file is loaded (some for object loop)
     init: function (historySize = 30) {
         PLUGINS.appendToMainMenu("Board", `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
 		<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
@@ -31,16 +30,14 @@ History.prototype = {
 
         this.BUFFER_LENGTH = historySize;
 
-        this._context.overlay.fabricCanvas().getObjects().forEach(object => {
-            if (object.isType('polygon') || object.isType('rect') || object.isType('ellipse')) { // object is a shape
-                this._addToBoard(object);
-            }
+        this._context.canvasObjects().forEach(object => {
+            this._addToBoard(object);
         });
     },
 
     back: function () {
         if (this.buffer[this._buffidx]) {
-            this._performSwap(this._context.overlay.fabricCanvas(),
+            this._performSwap(this._context.canvas(),
                 this.buffer[this._buffidx].back, this.buffer[this._buffidx].forward)
 
             //this.bufferLastRemoved = this.buffer[this._buffidx];
@@ -70,7 +67,7 @@ History.prototype = {
         if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
-            this._performSwap(this._context.overlay.fabricCanvas(),
+            this._performSwap(this._context.canvas(),
                 this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back);
 
             if (this.redoBtn) {
@@ -84,7 +81,7 @@ History.prototype = {
     refresh: function() {
         this.board.html("");
         let _this = this;
-        this._context.overlay.fabricCanvas()._objects.some(o => {
+        this._context.canvasObjects().some(o => {
             if (!isNaN(o.incrementId)) {
                 _this._addToBoard(o);
             }
@@ -96,7 +93,7 @@ History.prototype = {
         if (!confirm("This will overwrite all properties of all existing annotations - even those manually modified. Do you want to proceed?")) return;
         this.board.html("");
         let _this = this;
-        this._context.overlay.fabricCanvas()._objects.some(o => {
+        this._context.canvasObjects().some(o => {
             if (!isNaN(o.incrementId) && o.presetID) {
                 let preset = this._presets.getPreset(o.presetID);
                 if (preset) {
@@ -107,7 +104,8 @@ History.prototype = {
             }
             return false;
         });
-        this._context.overlay.fabricCanvas().renderAll();
+        //todo change in color not propagated, set dirty?
+        this._context.canvas().renderAll();
     },
 
     push: function (newObject, previous = null) {
@@ -147,7 +145,7 @@ History.prototype = {
         if (objectId !== null) {
             let targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
-                this._context.overlay.fabricCanvas().setActiveObject(targetObj);
+                this._context.canvas().setActiveObject(targetObj);
             }
         }
         PLUGINS.osd.viewport.panTo(target);
@@ -165,7 +163,7 @@ History.prototype = {
     },
 
     _addToBoard: function (object) {
-        let desc = "", icon = "";
+        let desc, icon;
         if (!object.comment) {
             desc = this._getObjectDefaultDescription(object);
             icon = this._getObjectDefaultIcon(object);
@@ -257,7 +255,7 @@ History.prototype = {
 
             if (toAdd) {
                 canvas.add(toAdd);
-                this._context.overlay.fabricCanvas().setActiveObject(toAdd);
+                this._context.canvas().setActiveObject(toAdd);
                 this._addToBoard(toAdd);
             }
             canvas.renderAll();
@@ -267,22 +265,16 @@ History.prototype = {
             this._focus(center.x, center.y);
             await sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
-            this._context.overlay.fabricCanvas().setActiveObject(toAdd);
+            this._context.canvas().setActiveObject(toAdd);
             canvas.renderAll();
             this._addToBoard(toAdd);
         }
     },
 
     _findObjectOnCanvasById: function (id) {
-        // console.log(this.overlay.fabricCanvas()._objects);
-        // console.log(coords);
-        // console.log(this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords));
-
-        // return this.overlay.fabricCanvas()._searchPossibleTargets(this.overlay.fabricCanvas()._objects, coords);
-
         //todo fabric.js should have some way how to avoid linear iteration over all objects...
         let target = null;
-        this._context.overlay.fabricCanvas()._objects.some(o => {
+        this._context.canvasObjects().some(o => {
             if (o.incrementId === id) {
                 target = o;
                 return true;

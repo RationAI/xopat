@@ -68,9 +68,6 @@
         });
 
 
-
-
-
         this._viewer.addHandler('update-viewport', function() {
             self.resize();
             self.resizecanvas();

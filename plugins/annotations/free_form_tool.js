@@ -58,12 +58,9 @@ FreeFormTool.prototype = {
 
             //result must exist and new no. of points must be at least 10% of the previous
             if (result && this.polygon.points.length * 0.1 <= result.points.length) {
-                this._context.overlay.fabricCanvas().remove(this.polygon);
-
+                this._context.replaceAnnotation(this.polygon, result, false);
                 this.polygon = result;
-                
-                this._context.overlay.fabricCanvas().add(result);
-                this._context.overlay.fabricCanvas().renderAll();
+
             }
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
@@ -168,7 +165,8 @@ FreeFormTool.prototype = {
                     //this.polygon.comment = this.initial.comment; //for some reason not preserved
                     delete this.initial.moveCursor;
                     delete this.polygon.moveCursor;
-                    this._context.overlay.fabricCanvas().remove(this.polygon);
+                    //todo avoid touching history/overlay
+                    this._context.deleteHelperAnnotation(this.polygon);
                     this._context.history.push(null, this.initial);
 
                     this.polygon = null;
@@ -210,12 +208,7 @@ FreeFormTool.prototype = {
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.type = "polygon";
 
-        //TODO also remove from (rather replace in)  history, or maybe use straightforward 'delete' from API, will be able to convert back 'rasterization'
-        this._context.overlay.fabricCanvas().remove(object);
-
-        this._context.overlay.fabricCanvas().add(polygon);
-        this._context.history.push(polygon, object);
-
+        this._context.replaceAnnotation(object, polygon, true);
         this._setupPolygon(polygon);
     },
 
