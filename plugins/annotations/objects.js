@@ -838,14 +838,9 @@ class Polygon extends AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
-        this.polygonBeingCreated = false; // is polygon being drawn/edited
-        this.pointArray = null;
-        this.lineArray = null;
-        this.activeLine = null;
+        this._polygonBeingCreated = false; // is polygon being drawn/edited
+        this._pointArray = null;
         this._current = null;
-        this.currentlyEddited = null;
-        this.originallyEddited = null;
-        this.input_attributes = {};
     }
 
     getIcon() {
@@ -906,112 +901,65 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
-        if (!this.polygonBeingCreated) {
+        if (!this._polygonBeingCreated) {
             this._initialize();
         }
         this.isLeftClick = isLeftClick;
 
-        // get name of point
-        // var random = Math.floor(Math.random() * (this.max - this.min + 1)) + this.min;
-        // var id = new Date().getTime() + random;
-        // calcute size of the point(1000px - 20px) based on zoom (0-1.1)
-        var zoom = this._context.canvas().getZoom();
-        var circle_size = 0;
-        if (zoom < 0.01) { circle_size = 1000 }
-        else if (zoom < 0.03) { circle_size = 500 }
-        else if (zoom < 0.1) { circle_size = 100 }
-        else if (zoom < 0.3) { circle_size = 50 }
-        else { circle_size = 20 }
+        let commonProperties = {
+            selectable: false,
+            hasBorders: false,
+            hasControls: false,
+            evented: false,
+            objectCaching: false,
+        };
+
         //create circle representation of the point
-        var circle = new fabric.Circle({
-            radius: circle_size,
+        let circle = new fabric.Circle($.extend(commonProperties, {
+            radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
             fill: '#F58B8B',
             stroke: '#333333',
             strokeWidth: 0.5,
             left: x,
             top: y,
-            selectable: false,
-            hasBorders: false,
-            hasControls: false,
             originX: 'center',
             originY: 'center',
-            //id: id,
-            objectCaching: false,
-            type: "_polygon.controls.circle"
-        });
-        if (this.pointArray.length === 0) {
-            circle.set({
-                fill: 'red'
-            })
-        }
-        circle.lockMovementX = circle.lockMovementY = true;
+            type: "_polygon.controls.circle",
+            lockMovementX: true,
+            lockMovementY: true
+        }));
+        if (this._pointArray.length === 0) circle.set({fill: 'red', strokeWidth: 0.7});
+        this._pointArray.push(circle);
+        this._context.addHelperAnnotation(circle);
 
-        var points = [x, y, x, y],
-            line = new fabric.Line(points, {
-                strokeWidth: 4,
-                fill: '#red',
-                stroke: '#999999',
-                class: 'line',
-                originX: 'center',
-                originY: 'center',
-                selectable: false,
-                hasBorders: false,
-                hasControls: false,
-                evented: false,
-                objectCaching: false
-            });
-
+        let polygon;
         if (this._current) {
-            points = this._current.get("points");
+            let points = this._current.get("points");
             points.push({
                 x: x,
                 y: y
             });
-            let polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick))
-            polygon.selectable = false;
-            polygon.hasBorders = false;
-            polygon.hasControls = false;
-            polygon.evented = false;
-            polygon.objectCaching = false;
+            polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick))
 
             this._context.replaceAnnotation(this._current, polygon);
-            this._current = polygon;
-        }
-        else {
-            var polyPoint = [{ x: x, y: y }];
-            let polygon = this.create(polyPoint, this._presets.getAnnotationOptions(isLeftClick));
-            polygon.selectable = false;
-            polygon.hasBorders = false;
-            polygon.hasControls = false;
-            polygon.evented = false;
-            polygon.objectCaching = false;
-            this._current = polygon;
+        }  else {
+            polygon = this.create([{ x: x, y: y }],
+                $.extend(commonProperties, this._presets.getAnnotationOptions(isLeftClick))
+            );
             this._context.addHelperAnnotation(polygon);
         }
-        this.activeLine = line;
-
-        this.pointArray.push(circle);
-        this.lineArray.push(line);
-
-        this._context.addHelperAnnotation(line);
-        this._context.addHelperAnnotation(circle);
+        this._current = polygon;
         this._context.clearAnnotationSelection();
     }
 
     updateCreate(x, y) {
-        if (!this.polygonBeingCreated) return;
+        if (!this._polygonBeingCreated) return;
 
-        let last = this.pointArray[this.pointArray.length - 1],
+        let last = this._pointArray[this._pointArray.length - 1],
             dy = last.top - y,
             dx = last.left - x;
 
-        var zoom = this._context.canvas().getZoom();
-        var powRad = 20;
-        if (zoom < 0.01) { powRad = 50 * powRad; }
-        else if (zoom < 0.03) { powRad = 20 * powRad; }
-        else if (zoom < 0.1) { powRad = 5 * powRad; }
-        else if (zoom < 0.3) { powRad = 2.5 * powRad; }
-        powRad = powRad * powRad;
+        let powRad = this.getRelativePixelDiffDistSquared(15);
         if (dx * dx + dy * dy > powRad) {
             this.initCreate(x, y, this.isLeftClick);
         }
@@ -1023,57 +971,31 @@ class Polygon extends AnnotationObjectFactory {
 
     // generate finished polygon
     finishIndirect() {
-        if (!this._current && !this.currentlyEddited) return;
+        if (!this._current) return;
 
-        var points = [], _this = this;
-        $.each(this.pointArray, function (index, point) {
+        let points = [], _this = this;
+        $.each(this._pointArray, function (index, point) {
             points.push({
                 x: point.left,
                 y: point.top
             });
-            _this._context.overlay.fabricCanvas().remove(point);
+            _this._context.canvas().remove(point);
         });
 
-        let left = true;
+        _this._context.deleteHelperAnnotation(this._current);
 
-        if (!this.currentlyEddited) {
-            $.each(this.lineArray, function (index, line) {
-                _this._context.overlay.fabricCanvas().remove(line);
-            });
-            this._context.overlay.fabricCanvas().remove(this._current).remove(this.activeLine);
-            left = this._current.isLeftClick;
-        } else {
-            this._context.overlay.fabricCanvas().remove(this.currentlyEddited);
-            left = this.originallyEddited.isLeftClick;
-        }
-
-        if (this.pointArray.length < 3) {
+        if (this._pointArray.length < 3) {
             this._initialize(false); //clear
             return;
         }
 
         points = this.simplify(points);
 
-        this._current = this.create(points, this._presets.getAnnotationOptions(left));
-        //todo callback with deletion completion of active polygon/currently modified one? need to delete also all the circles!!
-        //if polygon is being drawn, delete it
-        // if (this._context.polygon.polygonBeingCreated == true) {
-        // 	this._context.polygon._current.remove();
-        // 	this._context.polygon.pointArray.forEach(function (point) {
-        // 		this._context.overlay.fabricCanvas().remove(point)
-        // 	});
-        // 	this._context.polygon.lineArray.forEach(function (line) {
-        // 		this._context.overlay.fabricCanvas().remove(line)
-        // 	});
-        // 	this._context.polygon.polygonBeingCreated = false;}
-
-
-
-        // add polygon to canvas, switxh to edit mode, select it, set input form and show the input form
-        this._context.overlay.fabricCanvas().add(this._current);
-        this._context.overlay.fabricCanvas().setActiveObject(this._current);
-        //originallyEdited is null if new polygon, else history can redo
-        this._context.history.push(this._current, this.originallyEddited);
+        this._current = this.create(points, this._presets.getAnnotationOptions(this._current.isLeftClick));
+        //todo somehow rewrite to delegate this to context
+        this._context.canvas().add(this._current);
+        this._context.canvas().setActiveObject(this._current);
+        this._context.history.push(this._current, null);
 
         this._initialize(false); //clear
     }
@@ -1088,35 +1010,29 @@ class Polygon extends AnnotationObjectFactory {
     toPointArray(obj, converter, quality=1) {
 
         let points = obj.get("points");
-        let result = [...points]; //clone
-        if (quality < 1) result = this.simplifyQuality(result, quality);
+        if (quality < 1) points = this.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary
         if (converter !== AnnotationObjectFactory.withObjectPoint) {
             let output = Array(result.length);
-            result.forEach(p => {
+            points.forEach(p => {
                 output.push(converter(p.x, p.y))
             });
             return output;
         }
-        return result;
+        return points;
     }
+
 
     getASAP_XMLTypeName() {
         return "Polygon";
     }
 
     _initialize(isNew = true) {
-        this.polygonBeingCreated = isNew;
-        this.pointArray = [];
-        this.lineArray = [];
-        this.activeLine = null;
+        this._polygonBeingCreated = isNew;
+        this._pointArray = [];
         this._current = null;
-        this.currentlyEddited = null;
-        this.input_attributes = {};
-        this.originallyEddited = null;
     }
-
 
     /**
      * THE FOLOWING CODE HAS BEEN COPIED OUT FROM A LIBRARY
