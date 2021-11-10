@@ -1,6 +1,7 @@
 //tool for object modification: draw on canvas to add (add=true) or remove (add=false) parts of fabric.js object
 //any object is first converted to polygon
-FreeFormTool = function (context) {
+FreeFormTool = function (selfName, context) {
+    this._globalSelf = `${context.id}['${selfName}']`;
     this.polygon = null;
     this.radius = 15;
     this.mousePos = null;
@@ -37,7 +38,11 @@ FreeFormTool.prototype = {
     brushSizeControls: function() {
         return `<span class="d-inline-block" style="width:46%" title="Size of a brush used to modify annotations areas.">Free form tool size:</span>
         <input style="width:50%" class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="1" max="100" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.radius}" 
-        onchange="openseadragon_image_annotations.modifyTool.setRadius(this.value);" style="height: 22px;">`;
+        onchange="${this._globalSelf}.setRadius(this.value);" style="height: 22px;">`;
+    },
+
+    updateRadius: function () {
+        this.setRadius(parseFloat($("#fft-size").val()));
     },
 
     setRadius: function (radius) {

@@ -144,7 +144,7 @@ class PresetManager {
         let toDelete = this._presets[id];
         if (!toDelete) return false;
 
-        if (this._context.canvasObjects().some(o => {
+        if (this._context.overlay.fabricCanvas()._objects.some(o => {
             return o.presetID === id;
         })) {
             PLUGINS.dialog.show("This preset belongs to existing annotations: it cannot be removed.", 8000, PLUGINS.dialog.MSG_WARN);
@@ -176,7 +176,7 @@ class PresetManager {
 
         if (!needsRefresh) return;
         this.updatePresetsHTML();
-        var objects = this._context.canvasObjects();
+        var objects = this._context.overlay.fabricCanvas().getObjects();
         // if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
 
         // var objectsLength = objects.length
@@ -221,7 +221,9 @@ class PresetManager {
         if (presets && presets.length > 10) {
             presets = JSON.parse(presets);
             for (let i = 0; i < presets.length; i++) {
-                let p = new Preset().fromJSONFriendlyObject(presets[i]);
+                let p = new Preset().fromJSONFriendlyObject(
+                    presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
+                );
                 this._presets[p.presetID] = p;
 
                 if (!first) first = p;
@@ -301,7 +303,7 @@ class PresetManager {
         Object.values(this._context.objectFactories).forEach(factory => {
             if (factory.type !== preset.objectFactory.type) {
                 changeHtml += `<div onclick="
-${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: ${this._context.id}.getAnnotationObjectFactory('${factory.type}')}); 
+${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: openseadragon_image_annotations.getAnnotationObjectFactory('${factory.type}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;
 "><span class="material-icons" style="color: ${preset.fill};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
             }
@@ -836,9 +838,14 @@ class Polygon extends AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
-        this._polygonBeingCreated = false; // is polygon being drawn/edited
-        this._pointArray = null;
+        this.polygonBeingCreated = false; // is polygon being drawn/edited
+        this.pointArray = null;
+        this.lineArray = null;
+        this.activeLine = null;
         this._current = null;
+        this.currentlyEddited = null;
+        this.originallyEddited = null;
+        this.input_attributes = {};
     }
 
     getIcon() {
@@ -850,7 +857,7 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return this._current;
+        return (this._current || this.currentlyEddited);
     }
 
     /**
@@ -865,6 +872,7 @@ class Polygon extends AnnotationObjectFactory {
     /**
      * @param {Array} parameters array of objects with {x, y} properties (points)
      */
+    //todo unify parameters - where is evented?
     copy(ofObject, parameters) {
         return new fabric.Polygon(parameters, {
             hasRotatingPoint: ofObject.hasRotatingPoint,
@@ -888,11 +896,9 @@ class Polygon extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         let result = this._auto.floodFill(point);
-        if (result && result.length > 2) {
-            this._context.addAnnotation(
-                this.create(result, this._presets.getAnnotationOptions(isLeftClick))
-            );
-        }
+        this._context.addAnnotation(
+            this.create(result, this._presets.getAnnotationOptions(isLeftClick))
+        );
     }
 
     isValidShortCreationClick() {
@@ -900,65 +906,112 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
-        if (!this._polygonBeingCreated) {
+        if (!this.polygonBeingCreated) {
             this._initialize();
         }
         this.isLeftClick = isLeftClick;
 
-        let commonProperties = {
-            selectable: false,
-            hasBorders: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-        };
-
+        // get name of point
+        // var random = Math.floor(Math.random() * (this.max - this.min + 1)) + this.min;
+        // var id = new Date().getTime() + random;
+        // calcute size of the point(1000px - 20px) based on zoom (0-1.1)
+        var zoom = this._context.canvas().getZoom();
+        var circle_size = 0;
+        if (zoom < 0.01) { circle_size = 1000 }
+        else if (zoom < 0.03) { circle_size = 500 }
+        else if (zoom < 0.1) { circle_size = 100 }
+        else if (zoom < 0.3) { circle_size = 50 }
+        else { circle_size = 20 }
         //create circle representation of the point
-        let circle = new fabric.Circle($.extend(commonProperties, {
-            radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
+        var circle = new fabric.Circle({
+            radius: circle_size,
             fill: '#F58B8B',
             stroke: '#333333',
             strokeWidth: 0.5,
             left: x,
             top: y,
+            selectable: false,
+            hasBorders: false,
+            hasControls: false,
             originX: 'center',
             originY: 'center',
-            type: "_polygon.controls.circle",
-            lockMovementX: true,
-            lockMovementY: true
-        }));
-        if (this._pointArray.length === 0) circle.set({fill: 'red', strokeWidth: 0.7});
-        this._pointArray.push(circle);
-        this._context.addHelperAnnotation(circle);
+            //id: id,
+            objectCaching: false,
+            type: "_polygon.controls.circle"
+        });
+        if (this.pointArray.length === 0) {
+            circle.set({
+                fill: 'red'
+            })
+        }
+        circle.lockMovementX = circle.lockMovementY = true;
 
-        let polygon;
+        var points = [x, y, x, y],
+            line = new fabric.Line(points, {
+                strokeWidth: 4,
+                fill: '#red',
+                stroke: '#999999',
+                class: 'line',
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                hasBorders: false,
+                hasControls: false,
+                evented: false,
+                objectCaching: false
+            });
+
         if (this._current) {
-            let points = this._current.get("points");
+            points = this._current.get("points");
             points.push({
                 x: x,
                 y: y
             });
-            polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick))
+            let polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick))
+            polygon.selectable = false;
+            polygon.hasBorders = false;
+            polygon.hasControls = false;
+            polygon.evented = false;
+            polygon.objectCaching = false;
 
             this._context.replaceAnnotation(this._current, polygon);
-        }  else {
-            polygon = this.create([{ x: x, y: y }],
-                $.extend(commonProperties, this._presets.getAnnotationOptions(isLeftClick))
-            );
+            this._current = polygon;
+        }
+        else {
+            var polyPoint = [{ x: x, y: y }];
+            let polygon = this.create(polyPoint, this._presets.getAnnotationOptions(isLeftClick));
+            polygon.selectable = false;
+            polygon.hasBorders = false;
+            polygon.hasControls = false;
+            polygon.evented = false;
+            polygon.objectCaching = false;
+            this._current = polygon;
             this._context.addHelperAnnotation(polygon);
         }
-        this._current = polygon;
+        this.activeLine = line;
+
+        this.pointArray.push(circle);
+        this.lineArray.push(line);
+
+        this._context.addHelperAnnotation(line);
+        this._context.addHelperAnnotation(circle);
         this._context.clearAnnotationSelection();
     }
 
     updateCreate(x, y) {
-        if (!this._polygonBeingCreated) return;
+        if (!this.polygonBeingCreated) return;
 
-        let last = this._pointArray[this._pointArray.length - 1],
+        let last = this.pointArray[this.pointArray.length - 1],
             dy = last.top - y,
             dx = last.left - x;
 
-        let powRad = this.getRelativePixelDiffDistSquared(15);
+        var zoom = this._context.canvas().getZoom();
+        var powRad = 20;
+        if (zoom < 0.01) { powRad = 50 * powRad; }
+        else if (zoom < 0.03) { powRad = 20 * powRad; }
+        else if (zoom < 0.1) { powRad = 5 * powRad; }
+        else if (zoom < 0.3) { powRad = 2.5 * powRad; }
+        powRad = powRad * powRad;
         if (dx * dx + dy * dy > powRad) {
             this.initCreate(x, y, this.isLeftClick);
         }
@@ -970,31 +1023,57 @@ class Polygon extends AnnotationObjectFactory {
 
     // generate finished polygon
     finishIndirect() {
-        if (!this._current) return;
+        if (!this._current && !this.currentlyEddited) return;
 
-        let points = [], _this = this;
-        $.each(this._pointArray, function (index, point) {
+        var points = [], _this = this;
+        $.each(this.pointArray, function (index, point) {
             points.push({
                 x: point.left,
                 y: point.top
             });
-            _this._context.canvas().remove(point);
+            _this._context.overlay.fabricCanvas().remove(point);
         });
 
-        _this._context.deleteHelperAnnotation(this._current);
+        let left = true;
 
-        if (this._pointArray.length < 3) {
+        if (!this.currentlyEddited) {
+            $.each(this.lineArray, function (index, line) {
+                _this._context.overlay.fabricCanvas().remove(line);
+            });
+            this._context.overlay.fabricCanvas().remove(this._current).remove(this.activeLine);
+            left = this._current.isLeftClick;
+        } else {
+            this._context.overlay.fabricCanvas().remove(this.currentlyEddited);
+            left = this.originallyEddited.isLeftClick;
+        }
+
+        if (this.pointArray.length < 3) {
             this._initialize(false); //clear
             return;
         }
 
         points = this.simplify(points);
 
-        this._current = this.create(points, this._presets.getAnnotationOptions(this._current.isLeftClick));
-        //todo somehow rewrite to delegate this to context
-        this._context.canvas().add(this._current);
-        this._context.canvas().setActiveObject(this._current);
-        this._context.history.push(this._current, null);
+        this._current = this.create(points, this._presets.getAnnotationOptions(left));
+        //todo callback with deletion completion of active polygon/currently modified one? need to delete also all the circles!!
+        //if polygon is being drawn, delete it
+        // if (this._context.polygon.polygonBeingCreated == true) {
+        // 	this._context.polygon._current.remove();
+        // 	this._context.polygon.pointArray.forEach(function (point) {
+        // 		this._context.overlay.fabricCanvas().remove(point)
+        // 	});
+        // 	this._context.polygon.lineArray.forEach(function (line) {
+        // 		this._context.overlay.fabricCanvas().remove(line)
+        // 	});
+        // 	this._context.polygon.polygonBeingCreated = false;}
+
+
+
+        // add polygon to canvas, switxh to edit mode, select it, set input form and show the input form
+        this._context.overlay.fabricCanvas().add(this._current);
+        this._context.overlay.fabricCanvas().setActiveObject(this._current);
+        //originallyEdited is null if new polygon, else history can redo
+        this._context.history.push(this._current, this.originallyEddited);
 
         this._initialize(false); //clear
     }
@@ -1009,17 +1088,18 @@ class Polygon extends AnnotationObjectFactory {
     toPointArray(obj, converter, quality=1) {
 
         let points = obj.get("points");
-        if (quality < 1) points = this.simplifyQuality(points, quality);
+        let result = [...points]; //clone
+        if (quality < 1) result = this.simplifyQuality(result, quality);
 
         //we already have object points, convert only if necessary
         if (converter !== AnnotationObjectFactory.withObjectPoint) {
             let output = Array(result.length);
-            points.forEach(p => {
+            result.forEach(p => {
                 output.push(converter(p.x, p.y))
             });
             return output;
         }
-        return points;
+        return result;
     }
 
     getASAP_XMLTypeName() {
@@ -1027,9 +1107,14 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     _initialize(isNew = true) {
-        this._polygonBeingCreated = isNew;
-        this._pointArray = [];
+        this.polygonBeingCreated = isNew;
+        this.pointArray = [];
+        this.lineArray = [];
+        this.activeLine = null;
         this._current = null;
+        this.currentlyEddited = null;
+        this.input_attributes = {};
+        this.originallyEddited = null;
     }
 
 
@@ -1236,7 +1321,7 @@ class AutoObjectCreationStrategy {
         let origPixel = this.getPixelData(point);
         if (!this.comparator(origPixel)) {
             PLUGINS.dialog.show("Outside a region - decrease sensitivity to select.", 2000, PLUGINS.dialog.MSG_INFO);
-            return undefined;
+            return
         }
 
         //speed based on ZOOM level (detailed tiles can go with rougher step)
@@ -1265,7 +1350,7 @@ class AutoObjectCreationStrategy {
 
         if (maxX < 10 || maxY < 10) {
             PLUGINS.dialog.show("Failed to create region.", 3000, PLUGINS.dialog.MSG_WARN);
-            return undefined;
+            return;
         }
 
         points = hull(points, 2 * speed);
@@ -1316,7 +1401,7 @@ class AutoObjectCreationStrategy {
 		var first_point = new OpenSeadragon.Point(x, y);
 
 		//indexing instead of switch
-        const _this = this;
+        //todo fix openseadragon_image_annotations reference
 		var handlers = [
 			// 0 - all neighbours outside, invalid
 			function () { console.error("Fell out of region.") },
@@ -1328,7 +1413,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "UP";
 				} else { console.log("INVALID DIRECTION 1)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 2 - only BottomLeft pixel inside
@@ -1338,7 +1423,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "DOWN";
 				} else { console.log("INVALID DIRECTION 2)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 3 - TopLeft & BottomLeft pixel inside
@@ -1353,7 +1438,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "LEFT") {
 					direction = "DOWN";
 				} else { console.log("INVALID DIRECTION 4)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 5 - TopLeft & BottomRight pixel inside, one of them does not belong to the area
@@ -1365,7 +1450,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "UP";
 				} else { direction = "LEFT"; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
@@ -1383,7 +1468,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "LEFT") {
 					direction = "UP";
 				} else { console.log("INVALID DIRECTION 8)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 9 - TopLeft & TopRight 
@@ -1400,7 +1485,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "DOWN";
 				} else { direction = "RIGHT"; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
+				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 11 - BottomLeft & TopRight & TopLeft --> case 4)
@@ -1425,16 +1510,16 @@ class AutoObjectCreationStrategy {
 			for (var i = 1; i <= maxDist; i++) {
 				//$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
 				//$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
 				//$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
 				//$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
+				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
 
 			}
 			return null;

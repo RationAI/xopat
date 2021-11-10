@@ -729,9 +729,21 @@ if($errorSource) {
 
         var form = document.getElementById("redirect");
         var node;`;
+<?php
+foreach ($PLUGINS as $_ => $plugin) {
+    if ($plugin->loaded) {
+        echo <<<EOF
+form += `node = document.createElement("input");
+node.setAttribute("type", "hidden");
+node.setAttribute("name", '$plugin->flag');
+node.setAttribute("value", '1');
+form.appendChild(node);`;
+EOF;
+    }
+}
+?>
 
-      //todo add all flags, but only if present in POST.... can be done via PHP
-      for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
+        for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
         let toExport = PLUGINS._exportHandlers[i];
         if (toExport) {
           let value = toExport.call();
@@ -748,7 +760,6 @@ if($errorSource) {
     }
 
     function copyHashUrlToClipboard() {
-
       var url = "<?php 
         echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); 
       ?>/redirect.php?image=<?php 

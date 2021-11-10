@@ -20,9 +20,9 @@ OSDAnnotations = function (incoming) {
 	}
 
 	this.Modes = Object.freeze({
-		AUTO: 0,
-		CUSTOM: 1,
-		FREE_FORM_TOOL: 3,
+		AUTO: new StateAuto(this),
+		CUSTOM: new StateCustomCreate(this),
+		FREE_FORM_TOOL: new StateFreeFormTool(this),
 	});
 	this.mode = this.Modes.AUTO;
 
@@ -30,6 +30,7 @@ OSDAnnotations = function (incoming) {
 	AnnotationObjectFactory.register(Rect, Ellipse, Polygon);
 };
 
+//TODO performance check where i use Object.keys() or Object.values() whether it does not copy objects deeply
 OSDAnnotations.prototype = {
 
 	/*
@@ -40,7 +41,7 @@ OSDAnnotations.prototype = {
 		// Classes defined in other local JS files
 		this.presets = new PresetManager("presets", this);
 		this.history = new History("history", this, this.presets);
-		this.modifyTool = new FreeFormTool(this);
+		this.modifyTool = new FreeFormTool("modifyTool", this);
 		this._automaticCreationStrategy = new AutoObjectCreationStrategy("_automaticCreationStrategy", this);
 
 		// Annotation Objects
@@ -60,7 +61,6 @@ OSDAnnotations.prototype = {
 				this.objectFactories);
 			return;
 		}
-
 
 		/* OSD values used by annotations */
 		this.overlay = PLUGINS.osd.fabricjsOverlay(options);
@@ -91,181 +91,58 @@ OSDAnnotations.prototype = {
 
 		this.cursor.init();
 		this.opacity = $("#annotations-opacity");
-		this.toolRadius = $("#fft-size");
 
 		//Window switch alt+tab makes the mode stuck
-		window.addEventListener("focus", function(event) 
-		  { 
+		window.addEventListener("focus", function(event) {
 			openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO);
-
-		  }, false);
+		}, false);
 
 		/****************************************************************************************************************
 	
-									Annotations MODES implementation
+									Click Handlers
 	
 		*****************************************************************************************************************/
 
-		function initCreateAutoAnnotation(pointer, event, isLeftClick, updater) {
-			//if clicked on object, highlight it
-			let active = openseadragon_image_annotations.overlay.fabricCanvas().findTarget(event);
-			if (active) {
-				openseadragon_image_annotations.overlay.fabricCanvas().setActiveObject(active);
-				openseadragon_image_annotations.cursor.mouseTime = 0;
-			}
-		}
-
-		function finishCreateAutoAnnotation(point, event, isLeftClick, updater) {
-			let delta = Date.now() - openseadragon_image_annotations.cursor.mouseTime;
-			if (delta > 100 || !updater) return; // just navigate if click longer than 100ms
-			updater.instantCreate(point, isLeftClick);
-		}
-		
-		function initCreateCustomAnnotation(point, event, isLeftClick, updater) {
-			if (!updater) return;
-			let pointer = openseadragon_image_annotations.toGlobalPointXY(point.x, point.y);
-			updater.initCreate(pointer.x, pointer.y, isLeftClick);
-		}
-
-		function finishCreateCustomAnnotation(point, event, isLeftClick, updater) {
-			if (!updater) return;
-			let _this = openseadragon_image_annotations;
-			let delta = Date.now() - _this.cursor.mouseTime;
-
-			// if click too short, user probably did not want to create such object, discard
-			if (delta < 100) { 
-				if (!updater.isValidShortCreationClick()) {
-					_this.overlay.fabricCanvas().remove(updater.getCurrentObject());
-					return;
-				}
-			}
-			updater.finishDirect();
-		}
-
-		function initFreeFormTool(point, event, isLeftClick) {
-			let _this = openseadragon_image_annotations;
-			let currentObject = _this.overlay.fabricCanvas().getActiveObject();
-
-			let pointer = _this.toGlobalPointXY(point.x, point.y);
-			if (!currentObject) {
-				if (_this.modifyTool._cachedSelection) {
-					console.log("READ cache");
-					//cached selection from shift press event, because sometimes the click event deselected active object
-					currentObject = _this.modifyTool._cachedSelection;
-					_this.modifyTool._cachedSelection = null;
-				} else {
-					currentObject = _this.polygonFactory.create(
-						_this.modifyTool.getCircleShape(pointer), _this.presets.getAnnotationOptions(isLeftClick)
-					);
-					_this.addAnnotation(currentObject);
-				}
-			}
-
-			_this.modifyTool.init(currentObject, point, isLeftClick);
-			_this.modifyTool.update(pointer);
-		}
-
-		function finishFreeFormTool(point, event, isLeftClick) {
-			let _this = openseadragon_image_annotations;
-			let result = _this.modifyTool.finish();
-			if (result) _this.overlay.fabricCanvas().setActiveObject(result);
-		}
-
-		//TODO state pattern!!!
 		function handleRightClickUp(o, point) {
 			let _this = openseadragon_image_annotations;
 			//no preset valid for free form tool... TODO move condition inside switch? 
-			if (!_this.cursor.isDown || (!_this.presets.right && _this.mode !== _this.Modes.FREE_FORM_TOOL)) return;
-			switch (_this.mode) {
-				case _this.Modes.AUTO:
-					finishCreateAutoAnnotation(point, o, false, _this.presets.right.objectFactory);
-					break;
-				case _this.Modes.CUSTOM:
-					finishCreateCustomAnnotation(point, o, false, _this.presets.right.objectFactory);
-					break;
-				case _this.Modes.FREE_FORM_TOOL:
-					finishFreeFormTool(point, o, false);
-					break;
-				default: 
-					console.error("Invalid action!");
-					return;
-			}
-			_this.cursor.isDown = false;
-		}
+			if (!_this.cursor.isDown) return;
 
-		function handleLeftClickUp(o, point) {
-			// if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-			// 	handleFabricKeyUpInOSDMode(o);
-			// } else {
-			// 	handleFabricKeyUpInEditMode(o);
-			// }
-			let _this = openseadragon_image_annotations;
-			if (!_this.cursor.isDown || !_this.presets.left) return;
-			switch (_this.mode) {
-				case _this.Modes.AUTO:
-					finishCreateAutoAnnotation(point, o, true, _this.presets.left.objectFactory);
-					break;
-				case _this.Modes.CUSTOM:
-					finishCreateCustomAnnotation(point, o, true, _this.presets.left.objectFactory);
-					break;
-				case _this.Modes.FREE_FORM_TOOL:
-					finishFreeFormTool(point, o, true);
-					break;
-				default: 
-					console.error("Invalid action!");
-					return;
-			}
+			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
+			_this.mode.handleClickUp(o, point, false, factory);
+
 			_this.cursor.isDown = false;
 		}
 
 		function handleRightClickDown(o, point) {
 			let _this = openseadragon_image_annotations;
+			if (_this.cursor.isDown) return;
 
-			//no preset valid for free form tool... TODO move condition inside switch?
-			if (_this.cursor.isDown || (!_this.presets.right && _this.mode !== _this.Modes.FREE_FORM_TOOL)) return;
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
-			switch (_this.mode) {
-				case _this.Modes.AUTO:
-					initCreateAutoAnnotation(point, o, false, _this.presets.right.objectFactory);
-					break;
-				case _this.Modes.CUSTOM:
-					initCreateCustomAnnotation(point, o, false, _this.presets.right.objectFactory);
-					break;
-				case _this.Modes.FREE_FORM_TOOL:
-					initFreeFormTool(point, o, false);
-					break;
-				default: 
-					console.error("Invalid action!");
-					return;
-			}
+
+			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
+			_this.mode.handleClickDown(o, point, false, factory);
+		}
+
+		function handleLeftClickUp(o, point) {
+			let _this = openseadragon_image_annotations;
+			if (!_this.cursor.isDown) return;
+
+			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
+			_this.mode.handleClickUp(o, point, true, factory);
+			_this.cursor.isDown = false;
 		}
 
 		function handleLeftClickDown(o, point) {
-			// if (openseadragon_image_annotations.isMouseOSDInteractive()) {
-			// 	handleFabricKeyDownInOSDMode(o, true);
-			// } else {
-			// 	handleFabricKeyDownInEditMode(o);
-			// }
-
 			let _this = openseadragon_image_annotations;
 			if (_this.cursor.isDown || !_this.presets.left) return;
+
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
-			switch (_this.mode) {
-				case _this.Modes.AUTO:
-					initCreateAutoAnnotation(point, o, true, _this.presets.left.objectFactory);
-					break;
-				case _this.Modes.CUSTOM:
-					initCreateCustomAnnotation(point, o, true, _this.presets.left.objectFactory);
-					break;
-				case _this.Modes.FREE_FORM_TOOL:
-					initFreeFormTool(point, o, true);
-					break;
-				default: 
-					console.error("Invalid action!");
-					return;
-			}
+
+			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
+			_this.mode.handleClickDown(o, point, true, factory);
 		}
 
 		/****************************************************************************************************************
@@ -273,7 +150,6 @@ OSDAnnotations.prototype = {
 												 E V E N T  L I S T E N E R S: FABRIC
 	
 		*****************************************************************************************************************/
-
 
 		$('.upper-canvas').mousedown(function (event) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
@@ -289,32 +165,16 @@ OSDAnnotations.prototype = {
 			else if (event.which === 3) handleRightClickUp(event, {x: event.pageX, y: event.pageY});
 		});
 
-	
-		/*
-			Update object when user hodls ALT and moving with mouse (openseadragon_image_annotations.isMouseOSDInteractive() == true)
-		*/
+		//Update object when user hodls ALT and moving with mouse (openseadragon_image_annotations.isMouseOSDInteractive() == true)
 		this.overlay.fabricCanvas().on('mouse:move', function (o) {
 			let _this = openseadragon_image_annotations;
 			if (!_this.showAnnotations || !_this.cursor.isDown) return;
-
-			var pointer = _this.overlay.fabricCanvas().getPointer(o.e);
-
-			if (_this.mode === _this.Modes.CUSTOM) {
-				if (_this.isMouseOSDInteractive()) {
-					if (_this.presets.left) _this.presets.left.objectFactory.updateCreate(pointer.x, pointer.y);
-					if (_this.presets.right) _this.presets.right.objectFactory.updateCreate(pointer.x, pointer.y);
-
-					_this.overlay.fabricCanvas().renderAll();
-				}
-			} else if (_this.mode === _this.Modes.FREE_FORM_TOOL) {
-				_this.modifyTool.update(pointer);
-			} 
+			_this.mode.handleMouseMove(_this.overlay.fabricCanvas().getPointer(o.e));
 		});
 
-
+		//TODO remove? is it necessary?
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
-				//todo remove?
 				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
 				openseadragon_image_annotations.history.highlight(e.target);
 				e.target.hasControls = !openseadragon_image_annotations.isMouseOSDInteractive();
@@ -331,7 +191,6 @@ OSDAnnotations.prototype = {
 
 		PLUGINS.osd.addHandler("canvas-press", function (e) {
 			if (!openseadragon_image_annotations.showAnnotations) return;
-			//todo not unified e.position (here in screen cords, fabric uses image coords)
 			handleLeftClickDown(e.originalEvent, e.position);
 		});
 
@@ -365,14 +224,12 @@ OSDAnnotations.prototype = {
 
 			// switching mode only when no mode AUTO and mouse is up
 			if (!_this.showAnnotations || _this.cursor.isDown) return;
-			
-			if (e.code === "AltLeft") {
-				_this.setMode(_this.Modes.CUSTOM);
+
+			let modeFromCode = _this.getModeByKeyCode(e.code);
+			if (modeFromCode) {
+				_this.setMode(modeFromCode);
 				e.preventDefault();
-			} else if (e.code === "ShiftLeft") {
-				_this.setMode(_this.Modes.FREE_FORM_TOOL);
-				e.preventDefault();
-			} 
+			}
 		});
 
 		document.addEventListener('keyup', (e) => {
@@ -390,9 +247,7 @@ OSDAnnotations.prototype = {
 				return;
 			}
 
-			if ((e.code === "AltLeft" && _this.mode === _this.Modes.CUSTOM) 
-				|| (e.code === "ShiftLeft" && _this.mode === _this.Modes.FREE_FORM_TOOL)) {
-
+			if (_this.mode.hasKeyCode(e.code)) {
 				_this.setMode(this.Modes.AUTO);	
 				e.preventDefault();		
 			}	
@@ -483,7 +338,6 @@ OSDAnnotations.prototype = {
 
 	*****************************************************************************************************************/
 
-
 	initHTML: function() {
 		PLUGINS.appendToMainMenuExtended("Annotations", `
 		<span class="material-icons" onclick="openseadragon_image_annotations.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
@@ -514,13 +368,14 @@ OSDAnnotations.prototype = {
 					</div>`, 
 					"annotations-panel");
 
+		let modeOptions = "";
+		Object.values(this.Modes).forEach(mode => {
+			let selected = mode.default() ? "selected" : "";
+			modeOptions += `<option value="${mode.getId()}" ${selected}>${mode.getBanner()}</option>`;
+		});
 		//form for object property modification
 		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-		<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="openseadragon_image_annotations.setMode($(this).val(), true);return false;">
-		<option value="${this.Modes.AUTO}" selected>automatic shape & navigation</option>
-		<option value="${this.Modes.CUSTOM}">🖌 custom shape (⌨ Left Alt)</option>
-		<option value="${this.Modes.FREE_FORM_TOOL}">&#9733; free form tool (⌨ Left Shift)</option>
-		</select>`);		
+<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="openseadragon_image_annotations.setModeById($(this).val());return false;">${modeOptions}</select>`);
 	},
 
 	showHelp: function() {
@@ -875,22 +730,34 @@ OSDAnnotations.prototype = {
 		this.overlay.fabricCanvas().renderAll();
 	},
 
-	//todo remove?
-	toGlobalPointXY: function(x, y) {
-		return PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+	getModeByKeyCode: function(keyCode) {
+		let result = undefined;
+		Object.values(this.Modes).some(mode => {
+			let found = mode.hasKeyCode(keyCode);
+			if (found) result = mode;
+			return found;
+		});
+		return result;
+	},
+
+	setModeById: function(id) {
+		let _this = this;
+		Object.values(this.Modes).some(mode => {
+			let found = mode.getId() === id;
+			if (found) {
+				_this.setMode(mode);
+			}
+			return found;
+		});
 	},
 
 	setMode: function(mode) {
-		if (typeof(mode) !== "number") {
-			mode = Number.parseInt(mode);
-		}
-
 		if (mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
 		} else if (mode !== this.Modes.AUTO) {
-			this._setModeToAuto();	
+			this._setModeToAuto();
 			this._setModeFromAuto(mode);
 		} else {
 			this._setModeToAuto();
@@ -898,52 +765,25 @@ OSDAnnotations.prototype = {
 	},
 
 	_setModeFromAuto: function(mode) {
-		switch(mode) {
-			case this.Modes.CUSTOM:
-				PLUGINS.osd.setMouseNavEnabled(false);
-				this.overlay.fabricCanvas().discardActiveObject(); //deselect active if present
-				break;
-			case this.Modes.FREE_FORM_TOOL:
-				//dirty but when a mouse is clicked, for some reason active object is deselected
-				this.modifyTool._cachedSelection = this.overlay.fabricCanvas().getActiveObject();
-				PLUGINS.osd.setMouseNavEnabled(false);
-				this.overlay.fabricCanvas().hoverCursor = "crosshair";
-				//todo value of radius from user
-				this.modifyTool.setRadius(parseFloat(this.toolRadius.val())); //so that cursor radius that is being taken from here will be correct before midify tool init
-				this.cursor.show();
-				break;	
-			default:
-				console.warn("Invalid mode:", mode);
-				return;
-		}
+		mode.setFromAuto();
 		this.mode = mode;
-		this._modesJqNode.val(mode);
+		//todo handle the node
+		this._modesJqNode.val(mode.getId());
 	},
 
 	_setModeToAuto: function() {
 		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
-		switch(this.mode) {
-			case this.Modes.CUSTOM:
-				PLUGINS.osd.setMouseNavEnabled(true);
-				break;
-			case this.Modes.FREE_FORM_TOOL:
-				this.overlay.fabricCanvas().hoverCursor = "pointer";
-				this.cursor.hide();
-				PLUGINS.osd.setMouseNavEnabled(true);
-				this.overlay.fabricCanvas().renderAll();
-				break;	
-			default:
-				console.warn("Invalid mode:", mode);
-				return;
-		}
+		this.mode.setToAuto();
 		this.mode = this.Modes.AUTO;
-		this._modesJqNode.val(this.Modes.AUTO);
+		//todo handle the node
+		this._modesJqNode.val(this.Modes.AUTO.getId());
 	},
 
-	//cursor management (TODO move here other stuff involving cursor too)
-	// updater: function(mousePosition: OSD Point instance, cursorObject: object that is being shown underneath cursor)
+	/**
+	 * Cursor object that
+	 */
 	cursor: {
 		_visible: false,
 		_updater: null,
@@ -993,6 +833,207 @@ OSDAnnotations.prototype = {
 		},
 	}
 } // end of main namespace
+
+class AnnotationState {
+	constructor(id, banner, context) {
+		this._id = id;
+		this.banner = banner;
+		this.context = context;
+	}
+
+	getBanner() {
+		return this.banner;
+	}
+
+	getId() {
+		return this._id;
+	}
+
+	abortClick() {
+		this.context.cursor.mouseTime = 0;
+		this.context.cursor.isDown = false;
+	}
+
+	_toGlobalPointXY(x, y) {
+		return PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+	}
+
+	default() {
+		return this._id === "auto";
+	}
+}
+
+class StateAuto extends  AnnotationState {
+	constructor(context) {
+		super("auto", "automatic shape & navigation", context);
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) return;
+		this._finish(point, isLeftClick, objectFactory);
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) this.abortClick();
+		this._init(o);
+	}
+
+	handleMouseMove(point) {
+		//do nothing
+	}
+
+	_init(event) {
+		//if clicked on object, highlight it
+		let active = this.context.canvas().findTarget(event);
+		if (active) {
+			this.context.canvas().setActiveObject(active);
+			this.context.cursor.mouseTime = 0;
+		}
+	}
+
+	_finish(point, isLeftClick, updater) {
+		let delta = Date.now() - this.context.cursor.mouseTime;
+		if (delta > 100 || !updater) return; // just navigate if click longer than 100ms
+		updater.instantCreate(point, isLeftClick);
+	}
+
+	setFromAuto() {
+		//do nothing, we are in AUTO
+	}
+
+	setToAuto() {
+		//do nothing, we are in AUTO
+	}
+
+	hasKeyCode(code) {
+		return false;
+	}
+}
+
+class StateFreeFormTool extends AnnotationState {
+	constructor(context) {
+		super("fft", "&#9733; free form tool (⌨ Left Shift)", context);
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		this._finish();
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		this._init(point, isLeftClick);
+	}
+
+	handleMouseMove(point) {
+		this.context.modifyTool.update(point);
+	}
+
+	_init(point, isLeftClick) {
+		let currentObject = this.context.overlay.fabricCanvas().getActiveObject();
+
+		let pointer = this._toGlobalPointXY(point.x, point.y);
+		if (!currentObject) {
+			if (this.context.modifyTool._cachedSelection) {
+				console.log("READ cache");
+				//cached selection from shift press event, because sometimes the click event deselected active object
+				currentObject = this.context.modifyTool._cachedSelection;
+				this.context.modifyTool._cachedSelection = null;
+			} else {
+				currentObject = this.context.polygonFactory.create(
+					this.context.modifyTool.getCircleShape(pointer), this.context.presets.getAnnotationOptions(isLeftClick)
+				);
+				this.context.addAnnotation(currentObject);
+			}
+		}
+
+		this.context.modifyTool.init(currentObject, point, isLeftClick);
+		this.context.modifyTool.update(pointer);
+	}
+
+	_finish() {
+		let result = this.context.modifyTool.finish();
+		if (result) this.context.canvas().setActiveObject(result);
+	}
+
+	setFromAuto() {
+		//dirty but when a mouse is clicked, for some reason active object is deselected
+		this.context.modifyTool._cachedSelection = this.context.canvas().getActiveObject();
+		PLUGINS.osd.setMouseNavEnabled(false);
+		this.context.canvas().hoverCursor = "crosshair";
+		//todo value of radius from user
+		this.context.modifyTool.updateRadius();
+		this.context.cursor.show();
+	}
+
+	setToAuto() {
+		this.context.canvas().hoverCursor = "pointer";
+		this.context.cursor.hide();
+		PLUGINS.osd.setMouseNavEnabled(true);
+		this.context.canvas().renderAll();
+	}
+
+	hasKeyCode(code) {
+		return code === "ShiftLeft";
+	}
+}
+
+class StateCustomCreate extends AnnotationState {
+	constructor(context) {
+		super("custom", "🖌 custom shape (⌨ Left Alt)", context);
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) return;
+		this._finish(objectFactory);
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) this.abortClick();
+		this._init(point, isLeftClick, objectFactory);
+	}
+
+	handleMouseMove(point) {
+		//todo experiment with this condition, also is it necessary for fft?
+		if (this.context.isMouseOSDInteractive()) {
+			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);
+			if (this.context.presets.right) this.context.presets.right.objectFactory.updateCreate(point.x, point.y);
+			this.context.canvas().renderAll();
+		}
+	}
+
+	_init(point, isLeftClick, updater) {
+		if (!updater) return;
+		let pointer = this._toGlobalPointXY(point.x, point.y);
+		updater.initCreate(pointer.x, pointer.y, isLeftClick);
+	}
+
+	_finish(updater) {
+		if (!updater) return;
+		let delta = Date.now() - this.context.cursor.mouseTime;
+
+		// if click too short, user probably did not want to create such object, discard
+		if (delta < 100) {
+			if (!updater.isValidShortCreationClick()) {
+				this.context.canvas().remove(updater.getCurrentObject());
+				return;
+			}
+		}
+		updater.finishDirect();
+	}
+
+	setFromAuto(mode) {
+		PLUGINS.osd.setMouseNavEnabled(false);
+		//deselect active if present
+		this.context.canvas().discardActiveObject();
+	}
+
+	setToAuto() {
+		PLUGINS.osd.setMouseNavEnabled(true);
+	}
+
+	hasKeyCode(code) {
+		return code === "AltLeft";
+	}
+}
 
 
 /*------------ Initialization of OSD Annotations ------------*/
