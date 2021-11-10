@@ -673,10 +673,10 @@ class Rect extends AnnotationObjectFactory {
     toPointArray(obj, converter, quality=1) {
         let w = obj.width, h = obj.height;
         return [
-            converter(object.left, object.top),
-            converter(object.left + w, object.top),
-            converter(object.left + w, object.top + h),
-            converter(object.left, object.top + h)
+            converter(obj.left, obj.top),
+            converter(obj.left + w, obj.top),
+            converter(obj.left + w, obj.top + h),
+            converter(obj.left, obj.top + h)
         ];
     }
 

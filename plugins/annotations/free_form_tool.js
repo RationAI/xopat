@@ -17,7 +17,7 @@ FreeFormTool.prototype = {
 
         let objectFactory = this._context.getAnnotationObjectFactory(object.type);
         if (objectFactory !== undefined) {
-            if (objectFactory.isImplicit()) {
+            if (!objectFactory.isImplicit()) {
                 //object can be used immedietaly
                 this._setupPolygon(object);
             } else {
@@ -195,7 +195,6 @@ FreeFormTool.prototype = {
                 PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
             );
     },
-
 
     //initialize object so that it is ready to be modified
     _setupPolygon: function (polyObject) {
