@@ -67,7 +67,7 @@ OpenSeadragonGL.prototype = {
 
     /**
      * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLWrapper.shaderGenerator
-     * @param {array} order array of strings that refer to ID's in the visualisation data
+     * @param {array} order array of strings that refer to ID's in the visualisation data (pyramidal tiff paths in our case)
      */
     reorder: function(order = null) {
         if (!Array.isArray(order)) {
@@ -96,6 +96,14 @@ OpenSeadragonGL.prototype = {
 
         world.draw();
         this.openSD.navigator.world.draw();
+    },
+
+    /**
+     * TODO docstring
+     * @return {*}
+     */
+    dataImageSources: function() {
+        return this.webGLWrapper.getSources();
     },
 
     /**

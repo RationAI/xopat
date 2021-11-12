@@ -11,36 +11,36 @@ the parametrization might be lengthy. Required parameters are attributes of the 
 [{    
       "name": "A visualisation setup 1",
       "params": {}, 
-      "shaders": [
-             {
-                 "name": "Probability layer",
-                 "data": "data_identifier",
-                 "type:": "color", 
-                 "visible": "1", 
-                 "params": { 
-                    "color": "#fa0058"
-                 }
-             }
-      ]
- 
- }]
+      "data": "path/to/tissue/scan.tif",
+      "shaders": {
+            "path/to/probability/layer.tif": {
+                   "name": "Probability layer",
+                   "type": "color", 
+                   "visible": "1", 
+                   "params": { 
+                      "color": "#fa0058"
+                   }
+            }
+      }
+}]
 ````
 The builder is given a single visualisation description:
 `$_POST["params"] = --params stringified from the above--` and `$_POST["shaders"] = --shaders stringified from the above--`.
 Parameter requirements are the same as with `index.php`.
 
 The output is a JSON-encoded object where keys are `data` items from `shaders`, each inner object contains output
-of certain shader-part script (described below). The only additional field is `order` having an integer from `1` that
-tells in which order was certain object processed (the order in which `shaders` array was passed in `POST`).
-
+of certain shader-part script (described below). The only additional fields are 
+ - `order` having an integer from `1` that tells in which order was certain object processed (the order in which `shaders` array was passed in `POST`).
+ - `url` describing where the shader has been fetched
+ 
 ### `defined.php`
 Contains definitions of shader names, filenames, parameter names, parameters-to-HTML-input mapping and short descriptions.
 
 ### `[shader_part].php`
 Required parameter (`GET` or `POST`) is `index`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
-that can be passed from outer `params` field.
+that can be passed from outer `params` field. All parameters must use the same protocol transfer as the parameter `id`.
 
-_Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/colors.php?index=1&color=#9900fa
+_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/colors.php?index=1&color=#9900fa
 
 Each shader type has a shader part script that generates following JSON-encoded object output with following fields:
 - `definition` - define global variables or custom functions in the resulting shader

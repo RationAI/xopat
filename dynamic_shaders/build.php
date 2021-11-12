@@ -55,7 +55,6 @@ set_exception_handler(function($exception) {
 
  $i = 0;
  foreach ($input as $key=>$object) {
-
     //try to get the url of shader part
     $url = "";
     if (!isset($object->type) && isset($object->source)) {
@@ -72,18 +71,18 @@ set_exception_handler(function($exception) {
             $url = "$fullurl/{$shaders[$object->type]}.php?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
             $i++;
         } else {
-            $visualisation[$object->data] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist."); 
+            $visualisation[$key] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist.");
             continue;
         } 
     } else if ($object->type == "none") {
         //shader typs is 'none'
         $args = to_params($object->params);
-        $visualisation[$object->data] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args"); 
+        $visualisation[$key] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args");
         $i++;
         continue;   
     } else {
         //invalid shader type
-        $visualisation[$object->data] = (object)array("error" => "Requested visualisation '$object->type' does not exist.", "desc" => "Undefined shader: $object->type."); 
+        $visualisation[$key] = (object)array("error" => "Requested visualisation '$object->type' does not exist.", "desc" => "Undefined shader: $object->type.");
         continue;
     } 
     
@@ -91,21 +90,19 @@ set_exception_handler(function($exception) {
     try {
         $data = json_decode(file_get_contents($url));
         $data->order = $i;
-        $data->visible = $object->visible;
         $data->url = $url;
-        $data->type = $object->type;
         if (isset($data->error) && $data->error) {
-            $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc); 
+            $visualisation[$key] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc);
         } else if (strlen($data->execution) < 5 || strlen($data->definition) < 5) {
             $data->error = "The requested visualisation type '$object->type' does not work properly.";
             $data->desc = "One of the compulsory parts is empty or missing: definition/execution/sampler2D member variables. Status from $url request: " . $http_response_header[0];
-            $visualisation[$object->data] = $data;
+            $visualisation[$key] = $data;
         } else {
-            $visualisation[$object->data] = $data; 
+            $visualisation[$key] = $data;
         }
     } catch (\Exception $e) {
         $msg = $e->getMessage();
-        $visualisation[$object->data] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg"); 
+        $visualisation[$key] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg");
     } 
  }
 

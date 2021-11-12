@@ -86,8 +86,6 @@ class WebGL10 {
             },
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-   
-
                 //TODO EXTRACT FROM THE IMAGE REQUIRED LAYERS
                 let _this = this,
                     index = 0;
@@ -96,11 +94,12 @@ class WebGL10 {
                 this.canvas.height = image.height;
                 this.canvasReader.drawImage(image, 0, 0);
 
-                Object.values(visualisation.responseData).forEach(visSetup => {
-                    if (!visSetup.rendering) return;
+                for (let key in visualisation.shaders) {
+                    let layer = visualisation.shaders[key];
+                    if (!layer.rendering) return;
 
                     if (index >= NUM_IMAGES) {
-                        console.warn("The visualisation contains less data than layers. Skipping layer ", visSetup);
+                        console.warn("The visualisation contains less data than layers. Skipping layer ", layer);
                         return;
                     }
 
@@ -133,7 +132,7 @@ class WebGL10 {
                     //TODO why not simultaneously in tutorial?
 
                     // Bind texture unit
-                    let location = gl.getUniformLocation(program, `vis_data_sampler_${visSetup.order}`);
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${layer.order}`);
                     gl.uniform1i(location, index);
                     //gl.activeTexture(gl[_this._units[i].bindConstant]); //TEXTURE[i]
                     gl.activeTexture(gl[bindConst]);
@@ -141,7 +140,7 @@ class WebGL10 {
                     gl.bindTexture(gl.TEXTURE_2D, bindPtr); //why twice?
 
                     index++;
-                });
+                }
             },
 
             freeTextures: function (gl) {
@@ -157,44 +156,46 @@ class WebGL10 {
         return false;
     }
 
-    generateVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
+    generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
         var definition = "", execution = "", samplers = "", html = "", js = "", glload = "", gldraw = "", 
-            _this = this, usableShaders = 0, simultaneouslyVisible = 0;
+            _this = this, usableShaders = 0, simultaneouslyVisible = 0, dataUrls = [], dataTempUrls = [];
 
         order.forEach(dataId => {
-            visSetup[dataId].rendering = false;
-            if (visSetup[dataId].type == "none") {
+            let layer = visualisation.shaders[dataId];
+            layer.rendering = false;
+            if (layer.type == "none") {
                 //this data is meant for other shader to use, skip
-                return;
-            } else if (visSetup[dataId].error) {
+                dataTempUrls.push(dataId);
+            } else if (layer.error) {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
-                console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
+                html = _this.context.htmlShaderPartHeader(layer["name"], layer["error"], dataId,false, false) + html;
+                console.warn(layer["error"], layer["desc"]);
 
-            } else if (visSetup[dataId].definition && visSetup[dataId].execution) {
+            } else if (layer.definition && layer.execution) {
                 let visible = false;
                 usableShaders++;
 
                 //make visible textures if 'visible' flag set and if GPU has enough texture units
                 //todo test amst textures
-                if (visSetup[dataId].visible == 1 && simultaneouslyVisible < _this.max_textures) {
-                    definition += visSetup[dataId]["definition"];
-                    execution += visSetup[dataId]["execution"];
-                    glload += visSetup[dataId]["glLoaded"];
-                    gldraw += visSetup[dataId]["glDrawing"];
-                    samplers += `uniform sampler2D vis_data_sampler_${visSetup[dataId]["order"]};`;
+                if (layer.visible == 1 && simultaneouslyVisible < _this.max_textures) {
+                    definition += layer["definition"];
+                    execution += layer["execution"];
+                    glload += layer["glLoaded"];
+                    gldraw += layer["glDrawing"];
+                    samplers += `uniform sampler2D vis_data_sampler_${layer["order"]};`;
                     visible = true;
-                    visSetup[dataId].rendering = true;
+                    layer.rendering = true;
                     simultaneouslyVisible++;
+                    dataUrls.push(dataId);
                 }
 
                 //reverse order append to show first the last drawn element (top)
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["html"], visible, true) + html;
-                js += visSetup[dataId]["js"];
+                html = _this.context.htmlShaderPartHeader(layer["name"], layer["html"], dataId, visible, true) + html;
+                js += layer["js"];
             } else {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], `The requested visualisation type does not work properly.`, false, false) + html;
-                console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
+                html = _this.context.htmlShaderPartHeader(layer["name"], `The requested visualisation type does not work properly.`, dataId, false, false) + html;
+                console.warn("Invalid shader part.", "Missing one of the required elements.", layer);
             }
         });
 
@@ -232,7 +233,8 @@ try {
     //todo try if error outside functions
 }`,
             html: html,
-            usableShaders: usableShaders
+            usableShaders: usableShaders,
+            dataUrls: dataUrls
         };
     }
 
@@ -423,39 +425,42 @@ class WebGL20 {
         return true;
     }
 
-    generateVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
+    generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
         var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", 
-            _this = this, usableShaders = 0;
+            _this = this, usableShaders = 0, dataUrls = [];
 
         order.forEach(dataId => {
-            if (visSetup[dataId].type == "none") {
+            let layer = visualisation.shaders[dataId];
+            if (layer.type == "none") {
                 //this data is meant for other shader to use, skip
                 return;
-            } else if (visSetup[dataId].error) {
+            }
+            if (layer.error) {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["error"], false, false) + html;
-                console.warn(visSetup[dataId]["error"], visSetup[dataId]["desc"]);
+                html = _this.context.htmlShaderPartHeader(layer["name"], layer["error"], dataId, false, false) + html;
+                console.warn(layer["error"], layer["desc"]);
 
-            } else if (visSetup[dataId].definition && visSetup[dataId].execution) {
+            } else if (layer.definition && layer.execution) {
                 let visible = false;
                 usableShaders++;
 
                 //make visible textures if 'visible' flag set
-                if (visSetup[dataId].visible == 1) {
-                    definition += visSetup[dataId]["definition"];
-                    execution += visSetup[dataId]["execution"];
-                    glload += visSetup[dataId]["glLoaded"];
-                    gldraw += visSetup[dataId]["glDrawing"];
+                if (layer.visible == 1) {
+                    definition += layer["definition"];
+                    execution += layer["execution"];
+                    glload += layer["glLoaded"];
+                    gldraw += layer["glDrawing"];
+                    dataUrls.push(dataId);
                     visible = true;
                 }
 
                 //reverse order append to show first the last drawn element (top)
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], visSetup[dataId]["html"], visible, true) + html;
-                js += visSetup[dataId]["js"];
+                html = _this.context.htmlShaderPartHeader(layer["name"], layer["html"], dataId, visible, true) + html;
+                js += layer["js"];
             } else {
                 //todo attach warn icon
-                html = _this.context.htmlShaderPartHeader(visSetup[dataId]["name"], `The requested visualisation type does not work properly.`, false, false) + html;
-                console.warn("Invalid shader part.", "Missing one of the required elements.", visSetup[dataId]);
+                html = _this.context.htmlShaderPartHeader(layer["name"], `The requested visualisation type does not work properly.`, dataId, false, false) + html;
+                console.warn("Invalid shader part.", "Missing one of the required elements.", layer);
             }
         });
 
@@ -493,7 +498,8 @@ try {
     //todo try if error outside functions
 }`,
             html: html,
-            usableShaders: usableShaders
+            usableShaders: usableShaders,
+            dataUrls: dataUrls
         };
     }
  

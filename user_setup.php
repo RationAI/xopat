@@ -107,9 +107,7 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         name: "Custom Visualisation",
         params: {},
         data: '<?php echo $image; ?>',
-        shaders: [
-
-        ]
+        shaders: {}
     };
     var SHADERS = <?php echo $shaders_json; ?>;
     var PARAMS = <?php echo $inputs_json; ?>;
@@ -135,23 +133,18 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
             child.classList.remove("color-border-warning");
         });
 
-        shaderObject = user_settings.shaders.find(obj => obj.data === dataID);
-
-        if (!shaderObject) {
+        if (!user_settings.shaders[dataID]) {
             shaderObject = {
-                data: dataID,
                 type: name,
                 visible: "1",
                 params: {}
             };
-            user_settings.shaders.push(shaderObject);
+            user_settings.shaders[dataID] = shaderObject;
         } else {
+            shaderObject = user_settings.shaders[dataID];
             shaderObject.type = name;
             shaderObject.params = {};
         }
-
-        console.log(user_settings.shaders);
-
 
         setShader = name;
         if (Object.keys(PARAMS[name]).length < 1) {

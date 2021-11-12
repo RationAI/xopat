@@ -13,7 +13,7 @@ class WebGLWrapper {
         this.onFatalError = function (vis) {
             console.error(vis["error"], vis["desc"]);
         }
-        this.htmlShaderPartHeader = function (title, html, isVisible, isControllable = true) {
+        this.htmlShaderPartHeader = function (title, html, dataId, isVisible, isControllable = true) {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         }
         this.ready = function () { };
@@ -62,6 +62,11 @@ class WebGLWrapper {
      * @param {object} visualisation visualisation setup
      */
     setVisualisation(visualisation) {
+        if (!this.shaderGenerator) {
+            console.error("No shader source generator defined. Missing `shaderGenerator` property in the instance creation.");
+            return;
+        }
+
         if (this._prepared) {
             console.error("New visualisation cannot be introduced after the visualiser was prepared.");
             return;
@@ -136,6 +141,13 @@ class WebGLWrapper {
         this.gl.canvas.width = width;
         this.gl.canvas.height = height;
         this.gl.viewport(0, 0, width, height);
+    }
+
+    /**
+     * Get a list of image pyramids used to compose the current visualisation goal
+     */
+    getSources() {
+        return this._visualisations[this._program].dziExtendedUrl;
     }
 
     /////////////////////////////////////////////////////////////////////////////////////
@@ -213,11 +225,6 @@ class WebGLWrapper {
         if (this._visualisations.length < 1) {
             //todo show GUI error instead
             console.error("No visualisation specified!");
-            return;
-        }
-
-        if (!this.shaderGenerator) {
-            console.error("No shader source generator defined.");
             return;
         }
 
@@ -324,13 +331,16 @@ class WebGLWrapper {
         }
     }
 
-    _buildVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall) {
+    _buildVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
         try {
-            let data = this.webGLImplementation.generateVisualisation(order, visSetup, visualisation, glLoadCall, glDrawingCall);
+            let data = this.webGLImplementation.generateVisualisation(order, visualisation, glLoadCall, glDrawingCall);
             if (data.usableShaders < 1) {
-                throw `Empty visualisation: no valid visualisation has been specified.<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visSetup)}</code><br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`;
+                //todo visualisation.data is the url to tissue...? wut
+                //todo avoid throw
+                throw `Empty visualisation: no valid visualisation has been specified.<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation)}</code><br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`;
             }
 
+            visualisation.dziExtendedUrl = data.dataUrls.join(",");
             visualisation.vertex_shader = data.vertex_shader;
             visualisation.fragment_shader = data.fragment_shader;
             visualisation.js = data.js;
@@ -366,7 +376,6 @@ class WebGLWrapper {
             }
 
             let vis = this._visualisations[i];
-            vis.responseData = responseData;
 
             if (responseData.hasOwnProperty("error")) {
                 //load default JS to not to cause errors
@@ -375,13 +384,25 @@ class WebGLWrapper {
                 vis.error = responseData.error;
                 vis.desc = responseData.desc;
                 this._programs.push(null); //no program
-                if (i == this._program) this._program++;
+                if (i === this._program) this._program++;
                 continue;
+            }
+
+            //Deep merge
+            for (let key in this._visualisations[i].shaders) {
+                if (!responseData.hasOwnProperty(key)) {
+                    console.warn(`Visualisation ${this._visualisations[i].name} is missing the visualisation data for layer ${key}.`);
+                    responseData[key] = {
+                        error: "Unable to show this layer.",
+                        desc: "Data ID not found in the output of shaderGenerator."
+                    };
+                }
+                Object.assign(this._visualisations[i].shaders[key], responseData[key]);
             }
 
             let program = this.gl.createProgram();
             this._programs.push(program); //preventive
-            vis.order = Object.keys(vis.responseData);
+            vis.order = Object.keys(vis.shaders);
             this._visualisationToProgram(vis, program, i);
         }
         //if all invalid go back  
@@ -411,7 +432,7 @@ class WebGLWrapper {
                 vis.desc = description;
             };
 
-        this._buildVisualisation(vis.order, vis.responseData, vis, this.jsGlLoadedCall, this.jsGlDrawingCall);
+        this._buildVisualisation(vis.order, vis, this.jsGlLoadedCall, this.jsGlDrawingCall);
 
         if (vis.hasOwnProperty("error")) return;
 
@@ -429,7 +450,7 @@ class WebGLWrapper {
             err("Unable to use this visualisation.", "Compilation of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
             console.warn("VERTEX SHADER", vis["vertex_shader"]);
             console.warn("FRAGMENT SHADER", vis["fragment_shader"]);
-            if (idx == this._program) this._program++;
+            if (idx === this._program) this._program++;
         } else {
             gl.linkProgram(program);
             console.log("FRAGMENT SHADER", vis["fragment_shader"]);

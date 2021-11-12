@@ -79,10 +79,7 @@ foreach ($parsedParams as $visualisationTarget) {
     propertyExists($visualisationTarget, "shaders", "No data available.",
         "JSON parametrization of the visualiser requires <i>shaders</i> array: a list of data and its interpretation. This field is missing.",
         print_r($visualisation, true));
-    foreach ($visualisationTarget->shaders as $layer) {
-        propertyExists($layer, "data", "No data available.",
-            "JSON parametrization of the visualiser requires <i>data</i> for each data layer. This field is missing.",
-            print_r($visualisationTarget, true));
+    foreach ($visualisationTarget->shaders as $data=>$layer) {
         if (!isset($layer->name)) {
             //todo three dots prefix if too long
             $layer->name = "Source: $layer->data";
@@ -363,13 +360,13 @@ if($errorSource) {
       },
 
       //called to get custom HTML header for each shader part
-      htmlShaderPartHeader: function(title, html, isVisible, isControllable=true) {
+      htmlShaderPartHeader: function(title, html, dataId, isVisible, isControllable=true) {
         let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
         let checked = isVisible ? 'checked' : '';
         let disabled = isControllable ? '' : 'disabled';
-        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${title}" ${style}>
+        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
             <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${title}" onchange="shaderPartToogleOnOff(this);">
+              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
               &emsp;${title}<span class="material-icons position-absolute right-1" style="width: 10%;">swap_vert</span>
             </div>
             <div class="non-draggable">${html}</div>
@@ -391,25 +388,7 @@ if($errorSource) {
    /*------------ Initialization of OpenSeadragon ------------*/
    /*---------------------------------------------------------*/
 
-   //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
-   //todo try catch to fail nicely
-   var defViz = setup[0];
-   var urlImage = defViz.data;
-   var urlLayer;
-   if (defViz.shaders.length < 1) {
-       urlLayer = undefined;
-   } else {
-       urlLayer = defViz.shaders[0].data;
-       for (let i = 1; i < defViz.shaders.length; i++) {
-           urlLayer += `,${defViz.shaders[i].data}`;
-       }
-   }
 
-   const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
-   const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
-
-    let baseIDX = 0;
-    let layerIDX = 1;
 
     // Initialize viewer - OpenSeadragon
     var viewer = OpenSeadragon({
@@ -673,10 +652,10 @@ if($errorSource) {
     function shaderPartToogleOnOff(self) {
         //todo test if working, otherwise:  if (self.checked == true) {
       if (self.checked) {
-        seaGL.currentVisualisation().responseData[self.dataset.id].visible = 1;
+        seaGL.currentVisualisation().shaders[self.dataset.id].visible = 1;
         self.parentNode.parentNode.classList.remove("shader-part-error");
       } else {
-        seaGL.currentVisualisation().responseData[self.dataset.id].visible = 0;
+        seaGL.currentVisualisation().shaders[self.dataset.id].visible = 0;
         self.parentNode.parentNode.classList.add("shader-part-error");
       }
       seaGL.reorder();
@@ -902,6 +881,16 @@ ${constructExportVisualisationForm()}
       _exportHandlers: []
     };
 
+   //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
+   //todo try catch to fail nicely
+   var defViz = setup[0];
+   var urlImage = defViz.data;
+
+   let baseIDX = 0;
+   let layerIDX = 1;
+   const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
+   const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
+
     viewer.addHandler('open', function() {
       PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
       if (losslessImageLayer && PLUGINS.imageLayer) {
@@ -963,7 +952,7 @@ foreach ($PLUGINS as $_ => $plugin) {
     //let data = '/iipsrv/iipsrv.fcgi?Deepzoom='; //old IIPSERVER
     let data = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
     seaGL.loadShaders(function() {
-      viewer.open([data + urlImage + ".dzi", data + urlLayer + ".dzi"]);
+      viewer.open([data + urlImage + ".dzi", data + seaGL.dataImageSources() + ".dzi"]);
     });
     seaGL.init(viewer);
 

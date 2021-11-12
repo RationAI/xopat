@@ -72,7 +72,7 @@ session_destroy();
         }
     }
 
-    DisplayError.show('<?php echo $title; ?>', '<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>');
+    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>`);
 </script>
 </body>
 </html>

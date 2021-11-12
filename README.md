@@ -50,29 +50,27 @@ Then, based on the presence of `visualisation` the user is
 [{    
       "name": "A visualisation setup 1",
       "params": {
-            "uniqueId": "network",
+            "uniqueId": "myPlugin",
             "losslessImageLayer": false,
             "losslessDataLayer": true
       }, 
-      "shaders": [
-             {
-                 "data": "data_identifier",
-                 "name": "Annotation layer",
-                 "type:": "identity", 
-                 "visible": "1", 
-                 "params": { 
-                 }
-             }, {
-                 "data": "data_identifier",
-                 "name": "Probability layer",
-                 "type": "edge", 
-                 "visible": "1", 
-                 "params": { 
-                    "color": "#fa0058"
-                 }
-             }
-      ]
- 
+      "data": "path/to/tissue/scan.tif",
+      "shaders": {
+            "path/to/annotation/layer.tif": { 
+                   "name": "Annotation layer",
+                   "type:": "identity", 
+                   "visible": "1", 
+                   "params": { }
+            },
+            "path/to/probability/layer.tif": {
+                   "name": "Probability layer",
+                   "type": "edge", 
+                   "visible": "1", 
+                   "params": { 
+                      "color": "#fa0058"
+                   }
+            }
+      }
  },
 ... //multiple visualisation presets allowed
 ]
@@ -84,9 +82,9 @@ All items are required except for items inside `params` field and the exception 
     - `losslessImageLayer` - optional, whether the first layer (tissue) should use lossless data transfer, default `false`
     - `losslessDataLayer` - optional, whether the second layer (data) should use lossless data transfer, default `true`
 - `data` - defines the data (path to the pyramidal tif such that that server can understand it) for the first layer (tissue scan), can be omitted (see below)
-- `shaders` - a list of data instances tied to a certain visualisation style, the second layer is composed of this list
+- `shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
+the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - `name` - name of the layer: displayed to the user
-    - `data` - defines the data (path to the pyramidal tif such that that server can understand it)
     - one of the following two:
         - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be missing if `source` is defined
         - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined
