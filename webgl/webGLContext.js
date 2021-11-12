@@ -394,12 +394,14 @@ class WebGL20 {
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
             gl.texImage3D(
                 gl.TEXTURE_2D_ARRAY,
                 0,
                 gl.RGBA,
-                image.width,
-                image.height,
+                tileBounds.width,
+                tileBounds.height,
                 NUM_IMAGES,
                 0,
                 gl.RGBA,

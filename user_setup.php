@@ -26,6 +26,29 @@
 
 include_once("dynamic_shaders/defined.php");
 
+function hasKey($array, $key) {
+  return isset($array[$key]) && $array[$key];
+}
+function throwFatalError($title, $description, $details) {
+    session_start();
+    $_SESSION['title'] = $title;
+    $_SESSION['description'] = $description;
+    $_SESSION['details'] = $details;
+    header('Location:./error.php');
+    exit;
+}
+$image = hasKey($_GET, "image") ? $_GET["image"] : (hasKey($_POST, "image") ? $_POST["image"] : false);
+if (!$image) {
+    throwFatalError("Unable to setup: no image defined.",
+    "Visualisation was not defined and custom image source is missing. See POST data:",
+    print_r($_POST, true));
+}
+$layer = hasKey($_GET, "layer") ? $_GET["layer"] : (hasKey($_POST, "layer") ? $_POST["layer"] : false);
+if (!$layer) {
+    throwFatalError("Unable to setup: no data defined.",
+    "Visualisation was not defined and custom data sources are missing. See POST data:",
+    print_r($_POST, true));
+}
 $shader_selections = array();
 $inputs = array();
 
@@ -49,117 +72,117 @@ foreach ($shaders as $name=>$filename) {
 //javascript will handle the parameter selection
 $inputs_json = json_encode((object)$inputs);
 $shaders_json = json_encode((object)$shader_selections);
+$layer = explode(",", $layer);
 
-  $i = 0;
- // foreach(?? as $_ => $source) {
-   $source = $_GET['layer'];
-
+$i = 0;
+foreach($layer as $data) {
     $progress = $i == 0 ? "in-progress" : "";
-    echo "<section class='border m-2 px-2 pb-3 active $progress'> <header class='position-sticky top-0 color-bg-secondary f2-light p-responsive px-1 mt-2 d-inline-block'>Data <code class='h3'>$source</code></header>";
+    echo "<section class='position-relative border m-2 px-2 pb-3 active $progress' data-count='1'> 
+    <header class='position-sticky top-0 color-bg-secondary f2-light p-responsive px-1 mt-2 d-block'>Data <code class='h3'>$data</code></header>";
 
-    echo "<button class='btn float-right mt-2' onclick=\"addShader(this.parentNode, '$source');\">Add visualisation</button>";
+    echo "<button class='btn float-right mt-2 position-absolute top-0 right-2' onclick=\"addShader(this.parentNode, '$data');\">Add data interpretation</button>";
     echo "</section>";
- // }
+    $i++;
+}
 
 $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 ?>
 
 <br>
-<form method="POST" action="<?php echo $path; ?>/index.php?image=<?php echo $_GET['image']?>&layer=<?php echo $_GET['layer']?>"  id="request">
+<form method="POST" action="<?php echo $path; ?>/index.php"  id="request">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
    <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp; 
    
 </form>
-<button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</span>
+<button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</button>
 <a style="display:none;" id="export-visualisation"></a>
 
   </div>
 </div>
 
 
+<script type="text/javascript">
 
-
-
-  <script type="text/javascript">
-
-  var user_settings = {
+    var user_settings = {
         name: "Custom Visualisation",
         params: {},
+        data: '<?php echo $image; ?>',
         shaders: [
 
         ]
-      };
-  var SHADERS = <?php echo $shaders_json; ?>;
-  var PARAMS = <?php echo $inputs_json; ?>;
-  var shaderObject = null;
-  var setShader = null;
+    };
+    var SHADERS = <?php echo $shaders_json; ?>;
+    var PARAMS = <?php echo $inputs_json; ?>;
+    var shaderObject = null;
+    var setShader = null;
 
-  var shadersNo = 1;
-
-  function addShader(self, dataId) {
-    var html = `<div><p class='f3-light text-center mt-4'>visualisation no. ${shadersNo}<div>`;
-    Object.entries(SHADERS).forEach(element => {
-      const [k, v] = element;
-      html += `${v[0]}${dataId} (${shadersNo}.)${v[1]}`;
-    });
-    shadersNo++;
-    $(self).append(html + "</div><div class='shader-part-advanced mt-3'></div></div>");
-  }
-
-  function selectShaderPart(self, name, filename, dataID) {
-    let node = self.parentNode.parentNode.lastChild;
-    self.parentNode.childNodes.forEach(child => {
-      child.classList.remove("color-border-warning");
-    });
-
-    shaderObject = user_settings.shaders.find(obj => obj.data === dataID);
-
-    if (!shaderObject) {
-      shaderObject = {
-          data: dataID,
-          type: name,
-          visible: "1",
-          params: {}
-        };
-       user_settings.shaders.push(shaderObject);
-    } else {
-      shaderObject.type = name;
-      shaderObject.params = {};
+    var shadersNo = 1;
+    function addShader(self, dataId) {
+        var shadersNo = parseInt(self.dataset.count);
+        var html = `<div><p class='f3-light text-center mt-4'>interpretation no. ${shadersNo}<div>`;
+        Object.entries(SHADERS).forEach(element => {
+            const [k, v] = element;
+            html += `${v[0]}${dataId}${v[1]}`;
+        });
+        shadersNo++;
+        self.dataset.count = shadersNo.toString();
+        $(self).append(html + "</div><div class='shader-part-advanced mt-3'></div></div>");
     }
 
-    console.log(user_settings.shaders);
-  
+    function selectShaderPart(self, name, filename, dataID) {
+        let node = self.parentNode.parentNode.lastChild;
+        self.parentNode.childNodes.forEach(child => {
+            child.classList.remove("color-border-warning");
+        });
 
-    setShader = name;
-    if (Object.keys(PARAMS[name]).length < 1) {
-      //TODO
-      node.innerHTML = "";
-    } else {
-      node.innerHTML = "<p class='f3-light mt-2 mb-1'>" + name + " shader - Advanced Options</p>";
-    
-      for (let [key, value] of Object.entries(PARAMS[name])) {
-        node.innerHTML += value;
-      }
+        shaderObject = user_settings.shaders.find(obj => obj.data === dataID);
+
+        if (!shaderObject) {
+            shaderObject = {
+                data: dataID,
+                type: name,
+                visible: "1",
+                params: {}
+            };
+            user_settings.shaders.push(shaderObject);
+        } else {
+            shaderObject.type = name;
+            shaderObject.params = {};
+        }
+
+        console.log(user_settings.shaders);
+
+
+        setShader = name;
+        if (Object.keys(PARAMS[name]).length < 1) {
+            //TODO
+            node.innerHTML = "";
+        } else {
+            node.innerHTML = "<p class='f3-light mt-2 mb-1'>" + name + " shader - Advanced Options</p>";
+
+            for (let [key, value] of Object.entries(PARAMS[name])) {
+                node.innerHTML += value;
+            }
+        }
+        self.classList.add("color-border-warning");
+
+
     }
-    self.classList.add("color-border-warning");
 
-
-  }
-  
-  function setValue(self, option, type) {
-    console.log(type);
-    if (type === "bool" || type === "neg_bool") {
-      shaderObject.params[option] = (self.checked == true); //type coercion
-    } else {
-      shaderObject.params[option] = self.value;
+    function setValue(self, option, type) {
+        console.log(type);
+        if (type === "bool" || type === "neg_bool") {
+            shaderObject.params[option] = (self.checked == true); //type coercion
+        } else {
+            shaderObject.params[option] = self.value;
+        }
+        console.log(shaderObject);
     }
-    console.log(shaderObject);
-  }
 
-  function exportVisualisation(self) {
-      var action = $("#request").attr('action');
-      var visSetup = JSON.stringify([user_settings]);
-      var doc = `<!DOCTYPE html>
+    function exportVisualisation(self) {
+        var action = $("#request").attr('action');
+        var visSetup = JSON.stringify([user_settings]);
+        var doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
@@ -176,65 +199,65 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     <\/script>
 </body>
 </html>`;
-			var output = new Blob([doc], { type: 'text/html' });
-			var downloadURL = window.URL.createObjectURL(output);
-      var downloader = document.getElementById("export-visualisation");
-			downloader.href = downloadURL;
-      downloader.download = "visualisation.html";
-      downloader.click();
+        var output = new Blob([doc], { type: 'text/html' });
+        var downloadURL = window.URL.createObjectURL(output);
+        var downloader = document.getElementById("export-visualisation");
+        downloader.href = downloadURL;
+        downloader.download = "visualisation.html";
+        downloader.click();
     }
-  
-  $(document).off('submit');
 
-  // new form handling
-  $('#request').submit(function(evt) {
-    
-    
-    
-    // var data1 = {
-    //     data: "Probability layer",
-    //     type: "color",
-    //     visible: "1",
-    //     params: {
-    //         color: $("#data1color").val()
-    //     }
-    // }
-    
-    // var data2 = {
-    //     data: "Annotation layer",
-    //     type: "edge",
-    //     visible: "0",
-    //     params: {
-    //         color: $("#data2color").val(),
-    //         ctrlThreshold: false
-    //     }
-    // }
+    $(document).off('submit');
 
-    // var data3 = {
-    //     data: "Identity shader",
-    //     type: "identity",
-    //     visible: "1",
-    //     params: {
-    //     }
-    // }
-    
-    // user_settings.shaders.push(data3);
+    // new form handling
+    $('#request').submit(function(evt) {
 
-    // if ($("#first").val() === 1) {
-    //     user_settings.shaders.push(data2);
-    //     user_settings.shaders.push(data1);
-    // } else {
-    //     user_settings.shaders.push(data1);
-    //     user_settings.shaders.push(data2);
-    // }
 
-    //only one visualisation possible for now
-      document.getElementById("visualisation").value = JSON.stringify([user_settings]);
-    //evt.preventDefault(); we want to do this
-  });
-  
-  
-  </script>
+
+        // var data1 = {
+        //     data: "Probability layer",
+        //     type: "color",
+        //     visible: "1",
+        //     params: {
+        //         color: $("#data1color").val()
+        //     }
+        // }
+
+        // var data2 = {
+        //     data: "Annotation layer",
+        //     type: "edge",
+        //     visible: "0",
+        //     params: {
+        //         color: $("#data2color").val(),
+        //         ctrlThreshold: false
+        //     }
+        // }
+
+        // var data3 = {
+        //     data: "Identity shader",
+        //     type: "identity",
+        //     visible: "1",
+        //     params: {
+        //     }
+        // }
+
+        // user_settings.shaders.push(data3);
+
+        // if ($("#first").val() === 1) {
+        //     user_settings.shaders.push(data2);
+        //     user_settings.shaders.push(data1);
+        // } else {
+        //     user_settings.shaders.push(data1);
+        //     user_settings.shaders.push(data2);
+        // }
+
+        //only one visualisation possible for now
+        document.getElementById("visualisation").value = JSON.stringify([user_settings]);
+        //evt.preventDefault(); we want to do this
+    });
+
+
+</script>
 </body>
 
 </html>

@@ -16,14 +16,26 @@ In each folder you will find a `README` document that describes the given compon
 Root folder contains two basic styles `github.css` (bootstrap _Primer CSS_, [documentation available here](https://primer.style/css)) and `style.css` (custom style) and `index.php` - files 
 that are the skeleton of the visualizer. 
 
-Supported arguments for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests:
-- `image` - argument that defines //TODO STILL IN DEVELOPMENT
-- `layer` - will be removed in future, defines the (only supported for now) data pyramidal tiff
-- `visualisation` - a `JSON` structure describing the visualisation setup, **only allowed in `POST`**
-- `new` - switch that tells the visualisation to request user to setup visualisation if not defined
-- inherited switches and other **POST-only** parameters from plugins used (e.g. `dev` - switch that enables direct rendering of network output) 
+The visualizer consists of two layers. The first, **image layer**, is rendered AS-IS. It is meant for tissue scan
+to be shown. The second, **data layer** is rendered using our WebGL extension from an arbitrary number of image sources
+ and uses the JSON parametrization described below.
 
-_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif&new=1
+Supported arguments for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests:
+- `visualisation` - a `JSON` structure describing the visualisation setup, **only allowed in `POST`**
+- `image` - data for the image layer, ignored if `visualisation` set, both `POST` or `GET`
+    - example: `"test/experiments/TP-2019_7207-03-1-vis.tif"` path
+- `layer` - data list for the data layer, ignored if `visualisation` set, both `POST` or `GET`
+    - example: `"path/to/img1.tif,path/to/img2.tif,different/path/img3.tif"` a list of paths
+- inherited **GET-only** switches and other **POST-only** parameters from plugins used
+- `cache` - internal object passed to the visualiser if opened from exported file, stores modifications performed by the user, 
+ignored if the `visualisation` was not set
+
+The behaviour is that either the visualisation is defined by the `JSON` parameter, or `image` and `layer` values
+are used to redirect the user to a custom user setup page.
+
+TODO fix
+_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif
+
 
 
 The visualisation always needs `image` and `layer` data so that it knows what to render (will be changed in near future).
@@ -38,7 +50,9 @@ Then, based on the presence of `visualisation` the user is
 [{    
       "name": "A visualisation setup 1",
       "params": {
-             "uniqueId": "network" 
+            "uniqueId": "network",
+            "losslessImageLayer": false,
+            "losslessDataLayer": true
       }, 
       "shaders": [
              {
@@ -66,18 +80,18 @@ Then, based on the presence of `visualisation` the user is
 All items are required except for items inside `params` field and the exception of `type`/`source`.
 - `name` - visualisation name
 - `params` - visualisation parameters, supported:
-    - `uniqueId` - necessary to set up in case mutiple instances of webGL framework are running
-- `shaders` - a list of data instances tied to a certain visualisation style
+    - `uniqueId` - necessary only to set up in case multiple instances of webGL framework are running
+    - `losslessImageLayer` - optional, whether the first layer (tissue) should use lossless data transfer, default `false`
+    - `losslessDataLayer` - optional, whether the second layer (data) should use lossless data transfer, default `true`
+- `data` - defines the data (path to the pyramidal tif such that that server can understand it) for the first layer (tissue scan), can be omitted (see below)
+- `shaders` - a list of data instances tied to a certain visualisation style, the second layer is composed of this list
     - `name` - name of the layer: displayed to the user
-    - `data` - defines the data (id=path to the pyramidal tif)
+    - `data` - defines the data (path to the pyramidal tif such that that server can understand it)
     - one of the following two:
         - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be missing if `source` is defined
         - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined
     - `visible` -  `1` or `0`, whether by default the data layer is visible
     - `params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
-
-The `user_setup.php` user setup is now only more like a demo, not yet properly implemented since there is no support
-for multiple data (in images) yet.
 
 ####  `plugins.php`
 The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow integrating functionality

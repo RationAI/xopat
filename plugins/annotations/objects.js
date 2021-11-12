@@ -979,7 +979,7 @@ class Polygon extends AnnotationObjectFactory {
                 x: point.left,
                 y: point.top
             });
-            _this._context.canvas().remove(point);
+            _this._context.deleteHelperAnnotation(point);
         });
 
         _this._context.deleteHelperAnnotation(this._current);
@@ -989,14 +989,8 @@ class Polygon extends AnnotationObjectFactory {
             return;
         }
 
-        points = this.simplify(points);
-
-        this._current = this.create(points, this._presets.getAnnotationOptions(this._current.isLeftClick));
-        //todo somehow rewrite to delegate this to context
-        this._context.canvas().add(this._current);
-        this._context.canvas().setActiveObject(this._current);
-        this._context.history.push(this._current, null);
-
+        this._current = this.create(this.simplify(points), this._presets.getAnnotationOptions(this._current.isLeftClick));
+        this._context.addAnnotation(this._current);
         this._initialize(false); //clear
     }
 

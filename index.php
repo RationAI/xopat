@@ -16,45 +16,98 @@ function letUserSetUp($image, $layer) {
   exit;
 }
 
-$errorSource = false;
+function throwFatalError($title, $description, $details) {
+    session_start();
+    $_SESSION['title'] = $title;
+    $_SESSION['description'] = $description;
+    $_SESSION['details'] = $details;
+    header('Location: error.php');
+    exit;
+}
 
-//can come both from POST and GET
-$dataSource = hasKey($_GET, "image") ? $_GET : (hasKey($_POST, "image") ? $_POST : false);
-//can come from POST
+function showError($title, $description, $details) {
+    //todo mild error
+}
+
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
 
-$requireNewSetup = hasKey($_GET, "new") || hasKey($_POST, "new") || hasKey($_COOKIE, "new");
-
-//if no request for new visualisationm try to use cookies
-if (!$visualisation && !$requireNewSetup && hasKey($_COOKIE, "visualisation")) {
-  $visualisation = $_COOKIE["visualisation"];
-  //if data not given in POST/GET, try cookies
-  if (!$dataSource) {
-    $errorSource = !hasKey($_COOKIE, "image") || !hasKey($_COOKIE, "layer");
-    if (!$errorSource) {
-      $dataSource = $_COOKIE;
+//TODO fix cookies USAGE
+if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
+    $image = hasKey($_GET, "image") ? $_GET["image"] : (hasKey($_POST, "image") ? $_POST["image"] : false);
+    if (!$image) {
+        throwFatalError("No visualisation defined.",
+            "Visualisation was not defined and custom image source is missing. See POST data:",
+            print_r($_POST, true));
     }
-  }
+    $layer = hasKey($_GET, "layer") ? $_GET["layer"] : (hasKey($_POST, "layer") ? $_POST["layer"] : false);
+    if (!$layer) {
+        throwFatalError("No visualisation defined.",
+            "Visualisation was not defined and custom data sources are missing. See POST data:",
+            print_r($_POST, true));
+    }
+    letUserSetUp($image, $layer);
+
+    //$visualisation = $_COOKIE["visualisation"];
+//    if (!$dataSource) {
+//        $errorSource = !hasKey($_COOKIE, "image") || !hasKey($_COOKIE, "layer");
+//        if (!$errorSource) {
+//            $dataSource = $_COOKIE;
+//        }
+//    }
+}
+
+
+$errorSource = false;
+
+function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
+    if (!isset($data->{$key})) {
+        throwFatalError($errTitle, $errDesc, $errDetails);
+    }
 }
 
 //TODO check structure of visualisation object and fail if invalid
+//todo test multiple visualisations with erroneous data fields
 
-if (!$dataSource) { //if missing data, error
-  $errorSource = true;
-} else { //else visualisation style required
-  if ($visualisation) {
-    //todo check also POST image and POST layer exist!!!!
-    setcookie( "visualisation", $visualisation, strtotime( '+30 days' ) );
-    //TODO move there arguments to remain in GET parameters to differentiate between visualisation sources
-    setcookie( "image", $dataSource["image"], strtotime( '+30 days' ) );
-    setcookie( "layer", $dataSource["layer"], strtotime( '+30 days' ) );
-  } else {
-    letUserSetUp($dataSource["image"], $dataSource["layer"]);
-  }
+$parsedParams = json_decode($visualisation);
+foreach ($parsedParams as $visualisationTarget) {
+    propertyExists($visualisationTarget, "data", "No data available.",
+        "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
+        print_r($visualisation, true));
+    if (!isset($visualisationTarget->name)) {
+        $visualisationTarget->name = "Custom Visualisation";
+    }
+    propertyExists($visualisationTarget, "shaders", "No data available.",
+        "JSON parametrization of the visualiser requires <i>shaders</i> array: a list of data and its interpretation. This field is missing.",
+        print_r($visualisation, true));
+    foreach ($visualisationTarget->shaders as $layer) {
+        propertyExists($layer, "data", "No data available.",
+            "JSON parametrization of the visualiser requires <i>data</i> for each data layer. This field is missing.",
+            print_r($visualisationTarget, true));
+        if (!isset($layer->name)) {
+            //todo three dots prefix if too long
+            $layer->name = "Source: $layer->data";
+        }
+        //TODO
+    }
 }
+$visualisation = json_encode($parsedParams);
+
+//if (!$dataSource) { //if missing data, error
+//  $errorSource = true;
+//} else { //else visualisation style required
+//  if ($visualisation) {
+//    //todo check also POST image and POST layer exist!!!!
+//    setcookie( "visualisation", $visualisation, strtotime( '+30 days' ) );
+//    //TODO move there arguments to remain in GET parameters to differentiate between visualisation sources
+//    setcookie( "image", $dataSource["image"], strtotime( '+30 days' ) );
+//    setcookie( "layer", $dataSource["layer"], strtotime( '+30 days' ) );
+//  } else {
+//    letUserSetUp($dataSource["image"], $dataSource["layer"]);
+//  }
+//}
 
 //possible cache
-$cached = hasKey($_POST, "cache") && !$requireNewSetup ? $_POST["cache"] : "{}";
+$cached = hasKey($_POST, "cache") ? $_POST["cache"] : "{}";
 
 foreach ($PLUGINS as $_ => $plugin) {
     $plugin->loaded = !isset($plugin->flag) || !$plugin->flag || isFlag($plugin->flag);
@@ -101,6 +154,7 @@ foreach ($PLUGINS as $_ => $plugin) {
   <script src="./osd_debug/src/displayrectangle.js"></script>
   <script src="./osd_debug/src/drawer.js"></script>
   <script src="./osd_debug/src/dzitilesource.js"></script>
+  <script src="./osd_debug/src/dziexttilesource.js"></script>
   <script src="./osd_debug/src/fullscreen.js"></script>
   <script src="./osd_debug/src/iiiftilesource.js"></script>
   <script src="./osd_debug/src/imageloader.js"></script>
@@ -244,9 +298,9 @@ foreach ($PLUGINS as $_ => $plugin) {
 <?php
 
 if($errorSource) {
-  //todo failure, no data source
+  //todo make this more sophisticated
   echo "$('#main-panel').addClass('d-none');";
-  $debugSource = print_r($dataSource, true);
+  $debugSource = ""; //print_r($dataSource, true);
   if (!$debugSource) $debugSource = "null";
   $postdata = print_r($_POST, true);
   echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', `ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$postdata</code>`);";
@@ -336,8 +390,23 @@ if($errorSource) {
    /*---------------------------------------------------------*/
    /*------------ Initialization of OpenSeadragon ------------*/
    /*---------------------------------------------------------*/
-    var urlImage = "<?php echo $dataSource["image"]; ?>";
-    var urlLayer = "<?php echo $dataSource["layer"]; ?>";
+
+   //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
+   //todo try catch to fail nicely
+   var defViz = setup[0];
+   var urlImage = defViz.data;
+   var urlLayer;
+   if (defViz.shaders.length < 1) {
+       urlLayer = undefined;
+   } else {
+       urlLayer = defViz.shaders[0].data;
+       for (let i = 1; i < defViz.shaders.length; i++) {
+           urlLayer += `,${defViz.shaders[i].data}`;
+       }
+   }
+
+   const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
+   const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
 
     let baseIDX = 0;
     let layerIDX = 1;
@@ -835,7 +904,13 @@ ${constructExportVisualisationForm()}
 
     viewer.addHandler('open', function() {
       PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
+      if (losslessImageLayer && PLUGINS.imageLayer) {
+            PLUGINS.dataLayer.source.fileFormat = "png";
+        }
       PLUGINS.dataLayer = viewer.world.getItemAt(layerIDX);
+      if (losslessDataLayer && PLUGINS.dataLayer) {
+          PLUGINS.dataLayer.source.fileFormat = "png";
+      }
     });
 
     function addPlugins() {
@@ -885,8 +960,10 @@ foreach ($PLUGINS as $_ => $plugin) {
     /*------------ Init                          --------------*/
     /*---------------------------------------------------------*/
 
+    //let data = '/iipsrv/iipsrv.fcgi?Deepzoom='; //old IIPSERVER
+    let data = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
     seaGL.loadShaders(function() {
-      viewer.open(["/iipsrv/iipsrv.fcgi?Deepzoom=" + urlImage + ".dzi", "/iipsrv/iipsrv.fcgi?Deepzoom=" + urlLayer + ".dzi"]);
+      viewer.open([data + urlImage + ".dzi", data + urlLayer + ".dzi"]);
     });
     seaGL.init(viewer);
 

@@ -60,26 +60,26 @@ set_exception_handler(function($exception) {
     $url = "";
     if (!isset($object->type) && isset($object->source)) {
         //shader type not set and custom source defined
-        $i++;
         $args = to_params($object->params);
         $url = "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
+        $i++;
     } else if (isset($object->type) && isset($shaders[$object->type])) {
         //shader type set and existing 
         if (file_exists("{$shaders[$object->type]}.php")) {
-            $i++;
             $args = to_params($object->params);
             $dir = dirname($_SERVER['SCRIPT_NAME']);
             $fullurl="http://".$_SERVER['HTTP_HOST'].$dir;
             $url = "$fullurl/{$shaders[$object->type]}.php?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
+            $i++;
         } else {
             $visualisation[$object->data] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist."); 
             continue;
         } 
     } else if ($object->type == "none") {
         //shader typs is 'none'
-        $i++;
         $args = to_params($object->params);
         $visualisation[$object->data] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args"); 
+        $i++;
         continue;   
     } else {
         //invalid shader type

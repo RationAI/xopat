@@ -19,6 +19,6 @@ EOF;
 //all other properties are not used
 
 //print output: shader first and second part, the name of the image (required because OSD will program this variable for you)
-send($definition, $samplerName, $execution);
+send($definition, $execution);
 
 ?>						

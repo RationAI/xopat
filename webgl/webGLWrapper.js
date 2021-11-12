@@ -51,11 +51,8 @@ class WebGLWrapper {
         // Private shader management
         this._visualisations = [];
 
-        this._textures = [];
         this._programs = [];
         this._program = -1;
-        //todo handle textures based on gl version used
-        this._texture_names = [];
         this._initialized = false;
         this._cache = [];
     }
@@ -98,7 +95,7 @@ class WebGLWrapper {
      * @param {integer} i program index
      */
     switchVisualisation(i) {
-        if (this._program == i) return;
+        if (this._program === i) return;
         this.forceSwitchShader(i, true);
     }
 
