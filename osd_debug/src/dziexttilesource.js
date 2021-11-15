@@ -51,27 +51,10 @@
  * @property {String} fileFormat
  * @property {OpenSeadragon.DisplayRect[]} displayRects
  */
-$.ExtendedDziTileSource = function( width, height, tileSize, tileOverlap, tilesUrl, fileFormat, displayRects, minLevel, maxLevel ) {
+$.ExtendedDziTileSource = function( options ) {
     var i,
         rect,
-        level,
-        options;
-
-    if( $.isPlainObject( width ) ){
-        options = width;
-    }else{
-        options = {
-            width: arguments[ 0 ],
-            height: arguments[ 1 ],
-            tileSize: arguments[ 2 ],
-            tileOverlap: arguments[ 3 ],
-            tilesUrl: arguments[ 4 ],
-            fileFormat: arguments[ 5 ],
-            displayRects: arguments[ 6 ],
-            minLevel: arguments[ 7 ],
-            maxLevel: arguments[ 8 ]
-        };
-    }
+        level;
 
     this._levelRects  = {};
     this.tilesUrl     = options.tilesUrl;
@@ -108,20 +91,12 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         if ( data.Image ) {
             ns = data.Image.xmlns;
         } else if ( data.documentElement) {
-            if ("Images" == data.documentElement.localName || "Images" == data.documentElement.tagName) {
-                //todo this namespaceURI is present in data.documentElement.childNodes[:] so move it level up? or leave it in them?
-                return true; //just accept for now
-                // ns = data.documentElement.namespaceURI;
+            if ("ImageArray" == data.documentElement.localName || "ImageArray" == data.documentElement.tagName) {
+                ns = data.documentElement.namespaceURI;
             }
         }
-        return false;
 
-
-        //TODO name our protocol and check its compatibility here
-        // ns = (ns || '').toLowerCase();
-        //
-        // return (ns.indexOf('schemas.microsoft.com/deepzoom/2008') !== -1 ||
-        //     ns.indexOf('schemas.microsoft.com/deepzoom/2009') !== -1);
+        return ns.indexOf('rationai.fi.muni.cz/deepzoom/images') !== -1;
     },
 
     /**
@@ -129,26 +104,22 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @function
      * @param {Object|XMLDocument} data - the raw configuration
      * @param {String} url - the url the data was retrieved from if any.
+     * @param {String} postData - data for the post request or null
      * @return {Object} options - A dictionary of keyword arguments sufficient
      *      to configure this tile sources constructor.
      */
-    configure: function( data, url ){
+    configure: function( data, url, postData ){
 
-        var options;
-
-        if( !$.isPlainObject(data) ){
-
-            options = configureFromXML( this, data );
-
-        }else{
-
-            options = configureFromObject( this, data );
+        var options = $.isPlainObject(data) ? configureFromObject(this, data) : configureFromXML(this, data);
+        if (postData) {
+            options.postData = postData.replace(/([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/');
+        } else if (url) {
+            url = url.replace(
+                /([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/');
         }
 
         if (url && !options.tilesUrl) {
-            options.tilesUrl = url.replace(
-                    /([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/');
-
+            options.tilesUrl = url;
             if (url.search(/\.(dzi|xml|js)\?/) != -1) {
                 options.queryParams = url.match(/\?.*/);
             }else{
@@ -159,7 +130,6 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         return options;
     },
 
-
     /**
      * @function
      * @param {Number} level
@@ -167,7 +137,38 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} y
      */
     getTileUrl: function( level, x, y ) {
-        return [ this.tilesUrl, level, '/', x, '_', y, '.', this.fileFormat, this.queryParams ].join( '' );
+        return this.postData ? `${this.tilesUrl}${this.queryParams}` : `${this.tilesUrl}${level}/${x}_${y}.${this.fileFormat}${this.queryParams}`;
+    },
+
+    /**
+     * Responsible for retrieving the headers which will be attached to the image request for the
+     * region specified by the given x, y, and level components.
+     * This option is only relevant if {@link OpenSeadragon.Options}.loadTilesWithAjax is set to true.
+     * The headers returned here will override headers specified at the Viewer or TiledImage level.
+     * Specifying a falsy value for a header will clear its existing value set at the Viewer or
+     * TiledImage level (if any).
+     * @function
+     * @param {Number} level
+     * @param {Number} x
+     * @param {Number} y
+     * @returns {Object}
+     */
+    getTileAjaxHeaders: function( level, x, y ) {
+        return {'Content-type': 'application/x-www-form-urlencoded'};
+    },
+
+    /**
+     * Must use AJAX in order to work, i.e. loadTilesWithAjax : true is set.
+     * It should return url-encoded string with the following structure:
+     *   key=value&key2=value2...
+     * or null in case GET is used instead.
+     * @param level
+     * @param x
+     * @param y
+     * @return {string || null} post data to send with tile configuration request
+     */
+    getTilePostData: function(level, x, y) {
+        return this.postData ? `${this.postData}${level}/${x}_${y}.${this.fileFormat}` : null;
     },
 
 
@@ -249,37 +250,52 @@ function configureFromXML( tileSource, xmlDoc ){
     //TODO add translation support?
     if (imagesArray.childNodes.length < 1) throw new Error( "No images defined. There are zero images to display." );
 
-    if ( rootName == "Images" ) {
+    if ( rootName == "ImageArray" ) {
 
         try {
-            //Parse first node
-            root = imagesArray.childNodes[0];
+            let selectedNode = 0,
+                maxWidth = Infinity,
+                maxHeight = Infinity;
 
-            sizeNode = root.getElementsByTagName("Size" )[ 0 ];
-            if (sizeNode === undefined) {
-                sizeNode = root.getElementsByTagNameNS(ns, "Size" )[ 0 ];
+            for (let child = 0; child < imagesArray.childNodes.length; child++) {
+                root = imagesArray.childNodes[child];
+
+                sizeNode = root.getElementsByTagName("Size" )[ 0 ];
+                if (sizeNode === undefined) {
+                    sizeNode = root.getElementsByTagNameNS(ns, "Size" )[ 0 ];
+                }
+
+                let width = parseInt( sizeNode.getAttribute( "Width" ), 10 );
+                let height = parseInt( sizeNode.getAttribute( "Height" ), 10 );
+                if (width < maxWidth || height < maxHeight) {
+                    selectedNode = child;
+                    maxWidth = width;
+                    maxHeight = height;
+                }
+
+                if ( !$.imageFormatSupported( root.getAttribute( "Format" ) ) ) {
+                    throw new Error(
+                        $.getString( "Errors.ImageFormat", root.getAttribute( "Format" ).toUpperCase() )
+                    );
+                }
             }
+
+            root = imagesArray.childNodes[selectedNode];
 
             configuration = {
                 Image: {
-                    xmlns:       "http://schemas.microsoft.com/deepzoom/2008",
+                    xmlns:       "http://rationai.fi.muni.cz/deepzoom/images",
                     Url:         root.getAttribute( "Url" ),
                     Format:      root.getAttribute( "Format" ),
                     DisplayRect: null,
                     Overlap:     parseInt( root.getAttribute( "Overlap" ), 10 ),
                     TileSize:    parseInt( root.getAttribute( "TileSize" ), 10 ),
                     Size: {
-                        Height: parseInt( sizeNode.getAttribute( "Height" ), 10 ),
-                        Width:  parseInt( sizeNode.getAttribute( "Width" ), 10 )
+                        Height: maxHeight,
+                        Width:  maxWidth
                     }
                 }
             };
-
-            if ( !$.imageFormatSupported( configuration.Image.Format ) ) {
-                throw new Error(
-                    $.getString( "Errors.ImageFormat", configuration.Image.Format.toUpperCase() )
-                );
-            }
 
             dispRectNodes = root.getElementsByTagName("DisplayRect" );
             if (dispRectNodes === undefined) {

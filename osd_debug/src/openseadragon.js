@@ -2217,8 +2217,8 @@ function OpenSeadragon( options ){
                 withCredentials = url.withCredentials;
                 headers = url.headers;
                 responseType = url.responseType || null;
-                url = url.url;
                 postData = url.postData || null;
+                url = url.url;
             }
 
             var protocol = $.getUrlProtocol( url );
@@ -2237,8 +2237,8 @@ function OpenSeadragon( options ){
                     // the 200's on Firefox and 0 on other browsers
                     if ( (request.status >= 200 && request.status < 300) ||
                         ( request.status === 0 &&
-                          protocol !== "http:" &&
-                          protocol !== "https:" )) {
+                            protocol !== "http:" &&
+                            protocol !== "https:" )) {
                         onSuccess( request );
                     } else {
                         $.console.log( "AJAX request returned %d: %s", request.status, url );
@@ -2316,8 +2316,8 @@ function OpenSeadragon( options ){
                             }
                         };
                         try {
-                            xdr.open('GET', url);
-                            xdr.send();
+                            xdr.open(method, url);
+                            xdr.send(postData);
                         } catch (e2) {
                             if ( $.isFunction( onError ) ) {
                                 onError( request, e );
