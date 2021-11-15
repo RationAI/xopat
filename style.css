@@ -34,7 +34,6 @@
 }
 
 .inner-panel .inner-panel-content {
-    overflow-y: scroll;
     overflow-x: hidden;
     min-height: 50px;
 }
@@ -271,7 +270,7 @@ STYLING OF SCROLL BAR
     background-clip: padding-box;
     -webkit-border-radius: 7px;
     background-color: rgba(255, 255, 255, 0.3);
-    -webkit-box-shadow: inset -1px -1px 0px rgba(0, 0, 0, 0.05), inset 1px 1px 0px rgba(0, 0, 0, 0.05);
+    -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);
 }
 
 ::-webkit-scrollbar-button {

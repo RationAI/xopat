@@ -114,9 +114,10 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     var shaderObject = null;
     var setShader = null;
 
-    var shadersNo = 1;
     function addShader(self, dataId) {
         var shadersNo = parseInt(self.dataset.count);
+        //TODO multiple intepretations not allowed for now, enable?
+        if (shadersNo > 1) return;
         var html = `<div><p class='f3-light text-center mt-4'>interpretation no. ${shadersNo}<div>`;
         Object.entries(SHADERS).forEach(element => {
             const [k, v] = element;
@@ -175,6 +176,8 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     function exportVisualisation(self) {
         var action = $("#request").attr('action');
         var visSetup = JSON.stringify([user_settings]);
+
+        //todo missing plugins? etc. use only one JS file with form creation to unify export
         var doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>

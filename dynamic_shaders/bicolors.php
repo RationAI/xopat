@@ -57,35 +57,35 @@ EOF;
 
 //execution part
 if ($logScale) {
-  $compareAgainst = "float normalized_{$uniqueId} = (log2($logScaleMax + value_{$uniqueId}) - log2($logScaleMax))/(log2($logScaleMax+1.0)-log2($logScaleMax));";
-  $comparison = "normalized_{$uniqueId} > threshold_{$uniqueId}";
-  $alpha = "normalized_{$uniqueId} * threshold_opacity_{$uniqueId}";
+    $compareAgainst = "float normalized_{$uniqueId} = (log2($logScaleMax + value_{$uniqueId}) - log2($logScaleMax))/(log2($logScaleMax+1.0)-log2($logScaleMax));";
+    $comparison = "normalized_{$uniqueId} > threshold_{$uniqueId}";
+    $alpha = "normalized_{$uniqueId} * threshold_opacity_{$uniqueId}";
 } else {
-  $compareAgainst = "";
-  $comparison = "value_{$uniqueId} > threshold_{$uniqueId}";
-  $alpha = "value_{$uniqueId} * threshold_opacity_{$uniqueId}";
+    $compareAgainst = "";
+    $comparison = "value_{$uniqueId} > threshold_{$uniqueId}";
+    $alpha = "value_{$uniqueId} * threshold_opacity_{$uniqueId}";
 }
 $compConst = $invertOpacity ? "< 0.98" : " > 0.02";
 $defaultThresholdValue = $invertOpacity ? "100" : "1";
 
 $execution = <<<EOF
 
-  vec4 data_{$uniqueId} = {$texture('v_tile_pos')};
-  if (!close(data_{$uniqueId}.b, .5)) {
-    if (data_{$uniqueId}.b < .5) { //g2 color for small values
-      float value_{$uniqueId} = 1.0 - data_{$uniqueId}.b * 2.0;
-      $compareAgainst
-      if ($comparison) {
-         show(vec4( colorLow_{$uniqueId} , $alpha));
-      }
-    } else {  //r2 color for large values
-      float value_{$uniqueId} = (data_{$uniqueId}.b - 0.5) * 2.0;
-      $compareAgainst
-      if ($comparison) {
-         show(vec4( colorHigh_{$uniqueId} , $alpha));
-      } 
-    }  
-  }
+    vec4 data_{$uniqueId} = {$texture('v_tile_pos')};
+    if (!close(data_{$uniqueId}.b, .5)) {
+        if (data_{$uniqueId}.b < .5) { //g2 color for small values
+            float value_{$uniqueId} = 1.0 - data_{$uniqueId}.b * 2.0;
+            $compareAgainst
+            if ($comparison) {
+                show(vec4( colorLow_{$uniqueId} , $alpha));
+            }
+        } else {  //r2 color for large values
+            float value_{$uniqueId} = (data_{$uniqueId}.b - 0.5) * 2.0;
+            $compareAgainst
+            if ($comparison) {
+                show(vec4( colorHigh_{$uniqueId} , $alpha));
+            } 
+        }  
+    }
 
 EOF;
 
@@ -112,24 +112,24 @@ EOF;
 $html = "";
 if ($allowColorChange) {
   $html .= <<<EOF
-  <span> High values:</span><input type="color" id="color-high-{$uniqueId}" class="form-control input-sm"  onchange="colorHighChange_{$uniqueId}(this)"><br>
-  <span> Low values:</span><input type="color" id="color-low-{$uniqueId}" class="form-control input-sm"  onchange="colorLowChange_{$uniqueId}(this)"><br>
-  EOF;
+<span> High values:</span><input type="color" id="color-high-{$uniqueId}" class="form-control input-sm"  onchange="colorHighChange_{$uniqueId}(this)"><br>
+<span> Low values:</span><input type="color" id="color-low-{$uniqueId}" class="form-control input-sm"  onchange="colorLowChange_{$uniqueId}(this)"><br>
+EOF;
 }
 
 if ($allowOpacityChange) {
   $html .= <<<EOF
-  <span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
-  EOF;
+<span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
+EOF;
 }
 
 if ($allowThresholdChange) {
   $directionRange = $invertOpacity ? 'style="direction: rtl"' : "";
   $logname = $logScale ? " (log scale)" : "";
   $html .= <<<EOF
-  <span> Threshold$logname:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" $directionRange value="1" step="1">
-  <input class="form-control input-sm" style="max-width:60px;" type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
-  EOF;
+<span> Threshold$logname:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" $directionRange value="1" step="1">
+<input class="form-control input-sm" style="max-width:60px;" type="number" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
+EOF;
 }
 
 
@@ -144,15 +144,15 @@ $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
 
 //updater
 function thresholdChange_{$uniqueId}(self) {
-   threshold_{$uniqueId} = $(self).val();
-   if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
-   else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
-   $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
-   $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
-   saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+    threshold_{$uniqueId} = $(self).val();
+    if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
+    else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
+    $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
+    $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
+    saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
 
-   //global function, part of API
-   redraw();
+    //global function, part of API
+    redraw();
 }
 
 var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
@@ -160,9 +160,9 @@ var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
 $("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
 
 function opacityChange_{$uniqueId}(self) {
-   thresholdopacity_{$uniqueId} = $(self).val();
-   saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
-   redraw();
+    thresholdopacity_{$uniqueId} = $(self).val();
+    saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
+    redraw();
 }
 
 var colorHigh_{$uniqueId} = loadCache("colorHigh_{$uniqueId}", [$rH, $gH, $bH]);

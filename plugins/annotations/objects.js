@@ -381,7 +381,7 @@ event.stopPropagation(); window.event.cancelBubble = true;
             counter++;
         });
 
-        html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
+        html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block ${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
 		let id = ${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, $(this).index())); "><span class="material-icons">add</span> New</div>`;
 
         let title = isLeftClick ? "for left click" : "for right click";
@@ -890,7 +890,10 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     instantCreate(point, isLeftClick = true) {
-        let result = this._auto.floodFill(point);
+        let result = this._auto.createOutline(point);
+
+        if (!result) return;
+
         this._context.addAnnotation(
             this.create(result, this._presets.getAnnotationOptions(isLeftClick))
         );
@@ -1112,8 +1115,8 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     getRelativePixelDiffDistSquared(relativeDiff) {
-        let pointA = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
+        let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
         return Math.pow(pointB.x - pointA.x, 2) + Math.pow(pointB.y - pointA.y, 2);
     }
 
@@ -1160,12 +1163,17 @@ class AutoObjectCreationStrategy {
         this.alphaSensitivity = alphaSensitivity;
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
+        this._readingIndex = 1;
     }
 
     sensitivityControls() {
         return `<span class="d-inline-block" style="width:46%" title="More sensitivity means less area selected when single-clicking">Automatic shape sensitivity:</span>
         <input style="width:50%" title="The higher the sensitivity, the smaller automatic shape (selects only higher opacity regions)." type="range" id="sensitivity_auto_outline" min="0" max="100" 
-        value="${this.alphaSensitivity}" step="1" onchange="${this._globalSelf}.setAutoOutlineSensitivity($(this).val());">`;
+        value="${this.alphaSensitivity}" step="1" onchange="${this._globalSelf}.setAutoOutlineSensitivity($(this).val());">
+         <span class="d-inline-block" style="width:46%" title="">Automatic tool target:</span>
+        <input style="width:50%" title="What layer is selected for the data." type="number" id="sensitivity_auto_outline" min="0" max="100" class="form-control"
+        value="${this._readingIndex}" step="1" onchange="${this._globalSelf}._readingIndex = parseInt($(this).val());">
+`;
     }
 
     	// 0 --> no sensitivity  100 --> most sensitive
@@ -1178,9 +1186,7 @@ class AutoObjectCreationStrategy {
 
     approximateBounds(point) {
         //TODO move this beginning logic to handler
-
 		this.changeTile(point);
-
 
 		//var originPoint = getOriginPoint(point);
 		let origPixel = this.getPixelData(point);
@@ -1231,11 +1237,11 @@ class AutoObjectCreationStrategy {
         let origPixel = this.getPixelData(point);
         if (!this.comparator(origPixel)) {
             PLUGINS.dialog.show("Outside a region - decrease sensitivity to select.", 2000, PLUGINS.dialog.MSG_INFO);
-            return
+            return null;
         }
 
         //speed based on ZOOM level (detailed tiles can go with rougher step)
-        let maxLevel = PLUGINS.dataLayer.source.maxLevel;
+        let maxLevel = PLUGINS.imageLayer.source.maxLevel;
         let level = this._currentTile.level;
         let maxSpeed = 24;
         let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
@@ -1260,7 +1266,7 @@ class AutoObjectCreationStrategy {
 
         if (maxX < 10 || maxY < 10) {
             PLUGINS.dialog.show("Failed to create region.", 3000, PLUGINS.dialog.MSG_WARN);
-            return;
+            return null;
         }
 
         points = hull(points, 2 * speed);
@@ -1282,12 +1288,13 @@ class AutoObjectCreationStrategy {
         return result;
     }
 
-    async createOutline(eventPosition) {
+    createOutline(eventPosition) {
 		console.log("called outline");
 
 		this.changeTile(eventPosition);
 
 		let points = new Set();
+        const _this = this;
 		
 		var x = eventPosition.x;  // current x position
 		var y = eventPosition.y;  // current y position
@@ -1295,7 +1302,7 @@ class AutoObjectCreationStrategy {
 
 		let origPixel = this.getPixelData(eventPosition);
 		if (!this.comparator(origPixel)) {
-			PLUGINS.dialog.show("Outside a region - decrease the sensitivity.", PLUGINS.dialog.MSG_INFO);
+			PLUGINS.dialog.show("Outside a region - decrease the sensitivity.", 5000, PLUGINS.dialog.MSG_INFO);
 			return
 		}
 
@@ -1306,7 +1313,7 @@ class AutoObjectCreationStrategy {
 		}
 		x -= 2;
 
-		$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+        //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
 		var first_point = new OpenSeadragon.Point(x, y);
 
@@ -1323,7 +1330,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "UP";
 				} else { console.log("INVALID DIRECTION 1)"); return; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 2 - only BottomLeft pixel inside
@@ -1333,7 +1340,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "DOWN";
 				} else { console.log("INVALID DIRECTION 2)"); return; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 3 - TopLeft & BottomLeft pixel inside
@@ -1348,7 +1355,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "LEFT") {
 					direction = "DOWN";
 				} else { console.log("INVALID DIRECTION 4)"); return; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 5 - TopLeft & BottomRight pixel inside, one of them does not belong to the area
@@ -1360,7 +1367,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "UP";
 				} else { direction = "LEFT"; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
@@ -1378,7 +1385,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "LEFT") {
 					direction = "UP";
 				} else { console.log("INVALID DIRECTION 8)"); return; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 9 - TopLeft & TopRight 
@@ -1395,7 +1402,7 @@ class AutoObjectCreationStrategy {
 				} else if (direction === "RIGHT") {
 					direction = "DOWN";
 				} else { direction = "RIGHT"; }
-				points.add(openseadragon_image_annotations.toGlobalPointXY(x, y)); //changed direction
+				points.add(_this.toGlobalPointXY(x, y)); //changed direction
 			},
 
 			// 11 - BottomLeft & TopRight & TopLeft --> case 4)
@@ -1420,28 +1427,28 @@ class AutoObjectCreationStrategy {
 			for (var i = 1; i <= maxDist; i++) {
 				//$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
-				//$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (_this.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
+                //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
-				//$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
+                //$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
-				//$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+				if (_this.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
+                //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (openseadragon_image_annotations.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
+				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
 
 			}
 			return null;
 		};
 
-		let maxLevel = PLUGINS.dataLayer.source.maxLevel;
+		let maxLevel = PLUGINS.imageLayer.source.maxLevel;
 		let level = this._currentTile.level;
 		let maxSpeed = 24;
 		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
 
 		let counter = 0;
-		while ((Math.abs(first_point.x - x) > 2 || Math.abs(first_point.y - y) > 2) || counter < 20) {
+		while ((Math.abs(first_point.x - x) > 2*speed || Math.abs(first_point.y - y) > 2*speed) || counter < 20) {
 			let mark = this.getAreaStamp(x, y);
 			if (mark === 0 || mark === 15) {
 				let findClosest = surroundingInspector(x, y, 2 * speed);
@@ -1449,7 +1456,7 @@ class AutoObjectCreationStrategy {
 				if (findClosest) {
 					x = findClosest[0];
 					y = findClosest[1];
-					//points.add(this.toGlobalPointXY(x, y));
+					points.add(this.toGlobalPointXY(x, y));
 					console.log("continue");
 					continue;
 				} else {
@@ -1470,7 +1477,7 @@ class AutoObjectCreationStrategy {
 			}
 			counter++;
 
-			//$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
 			if (counter > 5000) {
 				PLUGINS.dialog.show("Failed to create outline", 1500, PLUGINS.dialog.MSG_ERR);
@@ -1479,7 +1486,7 @@ class AutoObjectCreationStrategy {
 				return;
 			}
 
-			if (counter % 100 === 0) { await sleep(200); }
+			//if (counter % 100 === 0) { await sleep(200); }
 		}
         return Array.from(points);
 	}
@@ -1591,11 +1598,11 @@ class AutoObjectCreationStrategy {
 	}
 
 	toGlobalPointXY (x, y) {
-		return PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	toGlobalPoint (point) {
-		return PLUGINS.dataLayer.windowToImageCoordinates(point);
+		return PLUGINS.imageLayer.windowToImageCoordinates(point);
 	}
 
 	/**
@@ -1630,6 +1637,9 @@ class AutoObjectCreationStrategy {
 		// get position on DZI tile (usually 257*257)
 		var relative_x = Math.round((x / this._currentTile.size.x) * this._currentTile.context2D.canvas.width);
 		var relative_y = Math.round((y / this._currentTile.size.y) * this._currentTile.context2D.canvas.height);
+
+		//Images are stacked atop, get desired image by offsetting y
+		relative_y += this._readingIndex * this._currentTile.context2D.canvas.height;
 
 		this._pixelReader.drawImage(this._currentTile.origData, relative_x, relative_y, 1, 1, 0, 0, 1, 1);
 		return this._pixelReader.getImageData(0, 0, 1, 1).data;

@@ -154,6 +154,8 @@ Saving and retriving data is important for between-visualisation switching. When
 executed. That means the user would lose all presets from the visualisation use history. Here you can nicely cache your variable values so that all changes will be preserved.
 Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
 
+> Note: `context::` prefix is used internally in JavaScript: do not use it.
+
 ### Example of sending user input values to the GPU
 We will define an input for user to be able to control a shader uniform variable.
 ```HTML
@@ -198,24 +200,26 @@ We recommend to extend each custom variable and function name with `$uniqueId`, 
 
 ### More advanced stuff: using multiple data sources at once
 One might want to combine multiple data into one visualisation (shader) part. To do so:
-- Check the shader source code what indices the shader accessess
-    - in case you are wriging the shader yourself: use `$texture($texCoordsString, $dataIndex)` `PHP` function to access arbitrary data, e.g. use `$dataIndex=$index+$i` where `$i` is offset, `$index` is current index: this way we can say 'use data of the following layers'
-- Construct the visualisation so that the order of rendering is such that the additional data is at the index position where the shader part accesses it, following the example above:
-    ```json
-    "shaders": [
-        {
-            "name": "Shader that uses multiple data",
-            "data": "data_source_main",
-            "type:": "color", 
-            "visible": "1", 
-            "params": { 
-                "color": "#fa0058"
-            }
-        }, 
-        {
-            "data": "data_source_additional_1", //to access this data, use `$texture($texCoordsString, $index+1)` in the shader above
-            "type:": "none" //tell the visualisation not to touch this data
-            //as an exception, you can ommit other parameters here
-        }
-    ]
-    ```
+- Check the shader source code what indices the shader accesses (the shader might read at index+1 or index-1 or any other value, dependes on the developer!)
+    - in case you are wriging the shader yourself: use `$texture($texCoordsString, $dataIndex)` `PHP` function to access arbitrary data, e.g. use `$dataIndex=$index+$i` where `$i` is offset, `$index` is current index: this way we can say 'use data of the following layers: although object, the `shaders` field will keep the order of definition, see the example below'
+- Construct the visualisation so that the order of rendering is such that the additional data is at the index position where the shader part accesses it
+    - `type` should be `"none"` because we won't render this data, of course you can use any other type to render it as well (e.g. use it twice)
+    - `target` must refer to any other `shaders` child that does not have its type `"none"`
+Following the example above:
+```json
+     "shaders": {
+         "data_source_main": {
+             "name": "Shader that uses multiple data",
+             "source": "http://mySophisticatedShaderUrl.com", 
+             "visible": "1", 
+             "params": { 
+                  //your params
+             }
+         },
+         "data_source_additional_1": {
+             "type": "none", //tell the visualisation not to touch this data
+             "target": "data_source_main" //bind this to the 'data_source_main' visualisation style
+             //as an exception, you can ommit other parameters here
+         }
+     }
+```

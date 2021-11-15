@@ -1,10 +1,9 @@
 Network = function () {
     //comply to the documentation:
 	this.id = "network_dev";
-	PLUGINS.each[this.id].instance = this;
 
     //controlPanelId is incomming parameter, defines where to add HTML
-    PLUGINS.appendToMainMenu("Network control panel", "<!--nothing in title html-->", `HERE I CAN ADD CUSTOM CONTROLS, HTML CONTENT etc...`, "idOfTheOuterDivContainer");
+    PLUGINS.appendToMainMenu("Network control panel", "<!--nothing in title html-->", `HERE I CAN ADD CUSTOM CONTROLS, HTML CONTENT etc...`, "idOfTheOuterDivContainer", this.id);
 
     //it is also possible to add elements to body:
     //$("body").append("<!--some html-->");
@@ -18,7 +17,7 @@ Network = function () {
 Network.prototype = {
 
     //delayed after OSD initialization is finished...
-    init: function () {
+    openSeadragonReady: function () {
         //this in callback != this here
         var _this = this;
 
@@ -151,7 +150,4 @@ Network.prototype = {
     }
 }
 
-//comply to documentation
-var network_dev = new Network();
-//init after data ready
-PLUGINS.osd.addHandler('open', network_dev.init);
+registerPlugin(Network);

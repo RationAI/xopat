@@ -4,6 +4,9 @@
 *
 * Based on OpenSeadragonGL plugin
 * https://github.com/thejohnhoffer/viaWebGL
+*
+* TODO: merge this class into webglWrapper
+*
 */
 
 
@@ -79,11 +82,19 @@ OpenSeadragonGL.prototype = {
     },
 
     /**
+     * TODO bad design
      * Redraw the scene using cached images.
      * @param {World} world - openSeadragon world instance
+     * @param idx index that is being redrawn
      */
     redraw: function(world, idx) {
         var imageTile = world.getItemAt(idx);
+
+        if (!imageTile) {
+            alert("The layer data is not available. This error user notification will be implemented later.");
+            return;
+            //todo somehow notify the user that the data is missing...
+        }
 
         // Raise tstamp to force redraw
         this.upToDateTStamp = Date.now();
@@ -99,11 +110,15 @@ OpenSeadragonGL.prototype = {
     },
 
     /**
-     * TODO docstring
-     * @return {*}
+     * Get IDS of data sources to be fetched from the server at the time
+     * @return {Array} array of keys from 'shaders' parameter of the current visualisation goal
      */
     dataImageSources: function() {
         return this.webGLWrapper.getSources();
+    },
+
+    activeShaderIndex: function() {
+        return this.webGLWrapper._program;
     },
 
     /**

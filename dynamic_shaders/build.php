@@ -1,60 +1,38 @@
 <?php
- //requires input data in the following form (order is the order of rendering, first=bottom, last=top):
- // [
- //   {
- //      "data": --data identifier--
- //      "name": --data layer name--
- //      "shader": --name of the shader--
- //      "params": {--shader--param--: --value--, ...}
- //      "webgl2": --optional flag--
- //   },                
- //   ...
- //]
- //outputs
- // {
- //   --data identifier-- : {
- //         ...SHADER DATA...
- //   },
- //   ...
- // }
- //
- //
-
-
 //default handle for errors
 set_exception_handler(function($exception) {
     $msg = $exception->getMessage();
     echo json_encode((object)array("error" => "Unknown error. Please, re-open the application.", "desc" => "<code>$msg</code>"));
 });
- 
- include_once("defined.php");
 
- $input = json_decode($_POST["shaders"]); //the data
- if (!$input) {
+include_once("defined.php");
+
+$input = json_decode($_POST["shaders"]); //the data
+if (!$input) {
     //todo error
     $post = print_r($_POST, true);
-    echo json_encode((object)array("error" => "Unable to start the visualizer. Please, re-open the application.", 
+    echo json_encode((object)array("error" => "Unable to start the visualizer. Please, re-open the application.",
         "desc" => "Invalid input for shader builder: exitting.<br><code>POST data: $post</code>"));
     die();
- }
+}
 
- $uniqueId = "";
- try {
-   $params = json_decode($_POST["params"]); //the params
-   $uniqueId = "&uniqueId=$params->unique_id";
- } catch (\Exception $e) {
-   //do nothing, use default values as set above
- }
+$uniqueId = "";
+try {
+    $params = json_decode($_POST["params"]); //the params
+    $uniqueId = "&uniqueId=$params->unique_id";
+} catch (\Exception $e) {
+    //do nothing, use default values as set above
+}
 
- if (!isset($_POST["webgl2"])) {
+if (!isset($_POST["webgl2"])) {
     //default ON
     $_POST["webgl2"] = "true";
- }
- 
- $visualisation=array();
+}
 
- $i = 0;
- foreach ($input as $key=>$object) {
+$visualisation=array();
+
+$i = 0;
+foreach ($input as $key=>$object) {
     //try to get the url of shader part
     $url = "";
     if (!isset($object->type) && isset($object->source)) {
@@ -63,7 +41,7 @@ set_exception_handler(function($exception) {
         $url = "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
         $i++;
     } else if (isset($object->type) && isset($shaders[$object->type])) {
-        //shader type set and existing 
+        //shader type set and existing
         if (file_exists("{$shaders[$object->type]}.php")) {
             $args = to_params($object->params);
             $dir = dirname($_SERVER['SCRIPT_NAME']);
@@ -73,23 +51,23 @@ set_exception_handler(function($exception) {
         } else {
             $visualisation[$key] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist.");
             continue;
-        } 
+        }
     } else if ($object->type == "none") {
         //shader typs is 'none'
         $args = to_params($object->params);
         $visualisation[$key] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args");
         $i++;
-        continue;   
+        continue;
     } else {
         //invalid shader type
         $visualisation[$key] = (object)array("error" => "Requested visualisation '$object->type' does not exist.", "desc" => "Undefined shader: $object->type.");
         continue;
-    } 
-    
+    }
+
     //try to GET the shader from URL
     try {
         $data = json_decode(file_get_contents($url));
-        $data->order = $i;
+        $data->order = $i-1; //we increased it already
         $data->url = $url;
         if (isset($data->error) && $data->error) {
             $visualisation[$key] = (object)array("error" => "Failed to obtain '$object->type' visualisation. $data->error", "desc" => $data->desc);
@@ -103,15 +81,15 @@ set_exception_handler(function($exception) {
     } catch (\Exception $e) {
         $msg = $e->getMessage();
         $visualisation[$key] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg");
-    } 
- }
+    }
+}
 
- /**
-  * Convert array of key=>value pairs into URL GET parameter list
-  * 
-  * $array {array} parameters names mapped to data
-  */
- function to_params($array) {
+/**
+ * Convert array of key=>value pairs into URL GET parameter list
+ *
+ * $array {array} parameters names mapped to data
+ */
+function to_params($array) {
     // if (!is_array($array) || !is_object($array)) {
     //     return "";
     // }
@@ -122,9 +100,7 @@ set_exception_handler(function($exception) {
         $out .= "&$name=$encoded";
     }
     return $out;
- }
+}
 
- //send data
+//send data
 echo json_encode((object)($visualisation));
-
-?>

@@ -4,7 +4,6 @@ sleep = function (ms) {
 
 OSDAnnotations = function (incoming) {
 	this.id = "openseadragon_image_annotations";
-	PLUGINS.each[this.id].instance = this;
 
 	this.overlay = null;
 
@@ -36,7 +35,9 @@ OSDAnnotations.prototype = {
 	/*
 	Initialize member variables
 	*/
-	initialize: function (options) {
+	openSeadragonReady: function () {
+
+
 
 		// Classes defined in other local JS files
 		this.presets = new PresetManager("presets", this);
@@ -63,19 +64,22 @@ OSDAnnotations.prototype = {
 		}
 
 		/* OSD values used by annotations */
-		this.overlay = PLUGINS.osd.fabricjsOverlay(options);
+		this.overlay = PLUGINS.osd.fabricjsOverlay({
+			scale: PLUGINS.imageLayer.source.Image.Size.Width,
+			fireRightClick: true
+		});
 
 		// draw annotation from json file
 		//todo try catch error MSG if fail
 		// todo allow user to load his own annotations (probably to a separate layer)
-		PLUGINS.addPostExport("annotations", this.getJSONContent.bind(this));
-		let imageJson = PLUGINS.postData.annotations;
+		PLUGINS.addPostExport("annotation-list", this.getJSONContent.bind(this), this.id);
+		let imageJson = PLUGINS.postData["annotation-list"];
 		if (imageJson) {
 			this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
 		}
 
 		//restore presents if any
-		PLUGINS.addPostExport("annotation_presets", this.presets.export.bind(this.presets));
+		PLUGINS.addPostExport("annotation_presets", this.presets.export.bind(this.presets), this.id);
 		let presets = PLUGINS.postData.annotation_presets;
 		this.presets.import(presets);
 
@@ -366,7 +370,7 @@ OSDAnnotations.prototype = {
 					<br>
 					${this.modifyTool.brushSizeControls()}				
 					</div>`, 
-					"annotations-panel");
+					"annotations-panel", this.id);
 
 		let modeOptions = "";
 		Object.values(this.Modes).forEach(mode => {
@@ -374,13 +378,13 @@ OSDAnnotations.prototype = {
 			modeOptions += `<option value="${mode.getId()}" ${selected}>${mode.getBanner()}</option>`;
 		});
 		//form for object property modification
-		$("body").append(`<div id="annotation-cursor" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-<select id="annotation-mode" class="form-control position-fixed top-2 left-2" onchange="openseadragon_image_annotations.setModeById($(this).val());return false;">${modeOptions}</select>`);
+		$("body").append(`<div id="annotation-cursor" class="${this.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
+<select id="annotation-mode" class="form-control position-fixed top-2 left-2 ${this.id}-plugin-root" onchange="openseadragon_image_annotations.setModeById($(this).val());return false;">${modeOptions}</select>`);
 	},
 
 	showHelp: function() {
 		$("body").append(`
-		<div class="position-fixed" style="z-index:99999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+		<div class="position-fixed ${this.id}-plugin-root" style="z-index:99999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
 		<details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:80vw; max-height: 80vh;">
 			<div class="Box-header">
 			  <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
@@ -809,8 +813,8 @@ OSDAnnotations.prototype = {
 			if (this._listener) return;
 			this._node.style.display = "block";
 			this.updateRadius();
-			this._node.style.width = (this._toolRadius * 2) + "px";
-			this._node.style.height = (this._toolRadius * 2) + "px";
+			this._node.style.width = (this._toolRadius) + "px";
+			this._node.style.height = (this._toolRadius) + "px";
 			this._node.style.top = "0px";
 			this._node.style.left = "0px";
 
@@ -855,7 +859,7 @@ class AnnotationState {
 	}
 
 	_toGlobalPointXY(x, y) {
-		return PLUGINS.dataLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	default() {
@@ -1037,14 +1041,4 @@ class StateCustomCreate extends AnnotationState {
 
 
 /*------------ Initialization of OSD Annotations ------------*/
-var openseadragon_image_annotations = new OSDAnnotations();
-  
-  
-PLUGINS.osd.addHandler('open', function() {
-	openseadragon_image_annotations.initialize({
-		scale: PLUGINS.imageLayer.source.Image.Size.Width,
-		fireRightClick: true
-	});
-});
-  
-  
+registerPlugin(OSDAnnotations);

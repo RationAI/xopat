@@ -3,7 +3,7 @@
 FreeFormTool = function (selfName, context) {
     this._globalSelf = `${context.id}['${selfName}']`;
     this.polygon = null;
-    this.radius = 15;
+    this.radius = 20;
     this.mousePos = null;
     this.SQRT2DIV2 = 0.707106781187;
     this._context = context;

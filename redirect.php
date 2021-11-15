@@ -16,13 +16,13 @@
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
 
-<form method="POST" action="<?php echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php?image=<?php echo $_GET['image']?>&layer=<?php echo $_GET['layer']?>"  id="redirect">
+<form method="POST" action="<?php echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php>"  id="redirect">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
    <input type="hidden" name="cache" id="cache" value=''>
 
 
 </form>
-<button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</span>
+<button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</button>
 <a style="display:none;" id="export-visualisation"></a>
 
   </div>

@@ -83,13 +83,11 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
   <script type="text/javascript">
 
 
-// http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD2/test.php?image=test/srcimg/TP-2019_7207-03-1.tif
-
+// http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD2/test.php?image=test/srcimg/TP-2019_7207-06-1.tif&layer=test/annotation/TP-2019_7207-06-1-annot.tif
   let dataSources = [
-    // "test/annotation/TP-2019_7207-06-1-annot.tif",
-    // "test/experiments/VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69/TP-2019_7207-06-1-vis.tif",
-    // "explainability/VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69/occlusion/TP-2019_7207-06-1.tif"¨
-    "test/experiments/VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69/TP-2019_7207-03-1-vis.tif"
+    "test/annotation/TP-2019_7207-06-1-annot.tif",
+    "test/experiments/VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69/TP-2019_7207-06-1-vis.tif",
+    "explainability/VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69/occlusion/TP-2019_7207-06-1.tif"
   ];
 
   var user_settings = {
@@ -108,13 +106,13 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
   var setShader = null;
 
   var shadersNo = 1;
-      var html = "";
+
   function addShader(self, dataId) {
     if (shadersNo-1 >= dataSources.length) return;
 
+    var html = `<div><p class='f3-light text-center mt-4'>visualisation no. ${shadersNo}<div>`;
     Object.entries(SHADERS).forEach(element => {
       const [k, v] = element;
-      html += `<div><p class='f3-light text-center mt-4'>visualisation no. ${shadersNo} data ${dataSources[shadersNo-1]}<div>`;
       html += `${v[0]}${dataSources[shadersNo-1]}${v[1]}`;
     });
     shadersNo++;

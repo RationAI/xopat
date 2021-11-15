@@ -22,7 +22,7 @@ History.prototype = {
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
 			</div>
-		</div>`, 'annotation-board');
+		</div>`, 'annotation-board', this._context.id);
 
         this.board = $("#annotation-logs");
         this.undoBtn = $("#history-undo");
@@ -141,7 +141,7 @@ History.prototype = {
     },
 
     _focus: function (cx, cy, objectId = null) {
-        let target = PLUGINS.dataLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+        let target = PLUGINS.imageLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
         if (objectId !== null) {
             let targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {

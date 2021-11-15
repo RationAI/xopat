@@ -54,7 +54,7 @@ class WebGLWrapper {
         this._programs = [];
         this._program = -1;
         this._initialized = false;
-        this._cache = [];
+        this._cache = {};
     }
 
     /**
@@ -115,19 +115,22 @@ class WebGLWrapper {
 
         if (i >= this._programs.length) {
             console.error("Invalid shader index.");
+            return;
         } else if (this._visualisations[i].hasOwnProperty("error") || !this._programs[i]) {
             this._loadHtml(i, this._program, preserveJS);
             this._loadScript(i, this._program, preserveJS);
-            this._program = i;
             this.onFatalError(this._visualisations[i]);
             this.running = false;
         } else {
             this.running = true;
             this._loadHtml(i, this._program, preserveJS);
             this._loadScript(i, this._program, preserveJS);
-            this._program = i;
             this.toBuffers(this._programs[i]);
         }
+        //TODO reset sources for the current visualisation
+        //TODO probably p
+        VISUALISATION_SHADER_CACHE["context::defaultProgram"] = i;
+        this._program = i;
     }
 
     /**
@@ -187,7 +190,7 @@ class WebGLWrapper {
 
     /**
      * Set the cache data, not valid to call after initialization
-     * @param {*} cache object that contains the visualisation cache data
+     * @param {Object} cache object that contains the visualisation cache data
      */
     setCache(cache) {
         if (typeof cache !== "object" || this._prepared) {
@@ -195,6 +198,7 @@ class WebGLWrapper {
             return;
         }
         this._cache = cache;
+        this._program = cache.hasOwnProperty("context::defaultProgram") ? cache["context::defaultProgram"] : 0;
     }
 
     /**
@@ -203,7 +207,7 @@ class WebGLWrapper {
      */
     getCache() {
         //global maintained by this script
-        return VISUALISAITION_SHADER_CACHE;
+        return VISUALISATION_SHADER_CACHE;
     }
 
     /**
@@ -235,8 +239,9 @@ class WebGLWrapper {
         }
 
         //cache setup (GLOBAL because of its use in dynamic shader scripts)
-        window.VISUALISAITION_SHADER_CACHE = this._cache;
-        delete this._cache;
+        if (this.hasOwnProperty("_cache") && this._cache)
+        window.VISUALISATION_SHADER_CACHE = this._cache;
+        this._cache = undefined;
 
         // Load the shaders when ready and return the promise
         return Promise.all(
@@ -349,6 +354,7 @@ class WebGLWrapper {
             delete visualisation.error;
             delete visualisation.desc;
         } catch (error) {
+            console.error(error);
             if (!visualisation.html) visualisation.html = "";
             visualisation.vertex_shader = "";
             visualisation.fragment_shader = "";
@@ -360,8 +366,7 @@ class WebGLWrapper {
 
     // Link shaders from strings
     _toProgram(responses) {
-
-        this._program = 0; //default program
+        if (this._program < 0) this._program = 0;
 
         // Load multiple shaders - visalisations
         for (let i = 0; i < responses.length; i++) {
@@ -408,7 +413,7 @@ class WebGLWrapper {
         //if all invalid go back  
         if (this._program >= this._programs.length) this._program = 0;
 
-        return this._programs[0];
+        return this._programs[this._program];
     }
 
     _detachShader(program, type) {

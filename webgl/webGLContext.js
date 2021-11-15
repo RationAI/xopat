@@ -9,12 +9,14 @@ class GlContextFactory {
      */
     init(wrapper) {
         const canvas = document.createElement('canvas');
-        wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        if (wrapper.gl) {
-            //WebGL 2.0
-            wrapper.webGLImplementation = this.getContext(true, wrapper, wrapper.gl);
-            return;
-        }
+
+        // wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        // if (wrapper.gl) {
+        //     //WebGL 2.0
+        //     wrapper.webGLImplementation = this.getContext(true, wrapper, wrapper.gl);
+        //     return;
+        // }
+
         //WebGL 1.0
         wrapper.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                         || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
@@ -89,7 +91,7 @@ class WebGL10 {
                 //TODO EXTRACT FROM THE IMAGE REQUIRED LAYERS
                 let _this = this,
                     index = 0;
-                const NUM_IMAGES = 1; //Math.round(image.height / tileBounds.height); //todo enable after protocol is working
+                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
                 this.canvas.width = image.width;
                 this.canvas.height = image.height;
                 this.canvasReader.drawImage(image, 0, 0);
@@ -158,11 +160,12 @@ class WebGL10 {
 
     generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
         var definition = "", execution = "", samplers = "", html = "", js = "", glload = "", gldraw = "", 
-            _this = this, usableShaders = 0, simultaneouslyVisible = 0, dataUrls = [], dataTempUrls = [];
+            _this = this, usableShaders = 0, simultaneouslyVisible = 0;
 
         order.forEach(dataId => {
             let layer = visualisation.shaders[dataId];
             layer.rendering = false;
+
             if (layer.type == "none") {
                 //this data is meant for other shader to use, skip
                 dataTempUrls.push(dataId);
@@ -186,7 +189,6 @@ class WebGL10 {
                     visible = true;
                     layer.rendering = true;
                     simultaneouslyVisible++;
-                    dataUrls.push(dataId);
                 }
 
                 //reverse order append to show first the last drawn element (top)
@@ -199,22 +201,38 @@ class WebGL10 {
             }
         });
 
+        //must preserve the definition order
+        let urls = [];
+        for (let key in visualisation.shaders) {
+            let layer = visualisation.shaders[key];
+            //none shader can be ommited in the above cycle
+            if (layer.hasOwnProperty("target")) {
+                if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+                    console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
+                } else if (visualisation.shaders[target].rendering) {
+                    urls.push(key);
+                }
+            } else if (layer.rendering) {
+                urls.push(key);
+            }
+        }
+
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(samplers, definition, execution),
             js: `
 function saveCache(key, value) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
-        VISUALISAITION_SHADER_CACHE["${visualisation.name}"] = {};
+    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
+        VISUALISATION_SHADER_CACHE["${visualisation.name}"] = {};
     }
-    VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key] = value;
+    VISUALISATION_SHADER_CACHE["${visualisation.name}"][key] = value;
 }
 function loadCache(key, defaultValue) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
-        !VISUALISAITION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
+    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
+        !VISUALISATION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
         return defaultValue;
     }
-    return VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key];
+    return VISUALISATION_SHADER_CACHE["${visualisation.name}"][key];
 }
             
 //user input might do wild things, use try-catch
@@ -234,7 +252,7 @@ try {
 }`,
             html: html,
             usableShaders: usableShaders,
-            dataUrls: dataUrls
+            dataUrls: urls
         };
     }
 
@@ -427,15 +445,15 @@ class WebGL20 {
 
     generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
         var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", 
-            _this = this, usableShaders = 0, dataUrls = [];
+            _this = this, usableShaders = 0;
 
         order.forEach(dataId => {
             let layer = visualisation.shaders[dataId];
+            layer.inUse = false;
+
             if (layer.type == "none") {
-                //this data is meant for other shader to use, skip
-                return;
-            }
-            if (layer.error) {
+                //do nothing
+            } else if (layer.error) {
                 //todo attach warn icon
                 html = _this.context.htmlShaderPartHeader(layer["name"], layer["error"], dataId, false, false) + html;
                 console.warn(layer["error"], layer["desc"]);
@@ -450,7 +468,7 @@ class WebGL20 {
                     execution += layer["execution"];
                     glload += layer["glLoaded"];
                     gldraw += layer["glDrawing"];
-                    dataUrls.push(dataId);
+                    layer.inUse = true;
                     visible = true;
                 }
 
@@ -464,22 +482,38 @@ class WebGL20 {
             }
         });
 
+        //must preserve the definition order
+        let urls = [];
+        for (let key in visualisation.shaders) {
+            let layer = visualisation.shaders[key];
+            //none shader can be ommited in the above cycle
+            if (layer.hasOwnProperty("target")) {
+                if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+                    console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
+                } else if (visualisation.shaders[target].inUse) {
+                    urls.push(key);
+                }
+            } else if (layer.inUse) {
+                urls.push(key);
+            }
+        }
+
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(definition, execution),
             js: `
 function saveCache(key, value) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
-        VISUALISAITION_SHADER_CACHE["${visualisation.name}"] = {};
+    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
+        VISUALISATION_SHADER_CACHE["${visualisation.name}"] = {};
     }
-    VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key] = value;
+    VISUALISATION_SHADER_CACHE["${visualisation.name}"][key] = value;
 }
 function loadCache(key, defaultValue) {
-    if (!VISUALISAITION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
-        !VISUALISAITION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
+    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
+        !VISUALISATION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
         return defaultValue;
     }
-    return VISUALISAITION_SHADER_CACHE["${visualisation.name}"][key];
+    return VISUALISATION_SHADER_CACHE["${visualisation.name}"][key];
 }
             
 //user input might do wild things, use try-catch
@@ -499,7 +533,7 @@ try {
 }`,
             html: html,
             usableShaders: usableShaders,
-            dataUrls: dataUrls
+            dataUrls: urls
         };
     }
  
@@ -567,7 +601,7 @@ void main() {
 
         // Get uniform term
         var tile_size = gl.getUniformLocation(program, this.tile_size);
-        gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
+        gl.uniform2f(tile_size, gl.canvas.width, gl.canvas.height);
 
         // Get attribute terms
         this._att = [gl.getAttribLocation(program, this.pos), 2, gl.FLOAT, 0, 0, 0];

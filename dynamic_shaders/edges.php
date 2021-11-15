@@ -71,9 +71,9 @@ vec4 getBorder_{$uniqueId}(float mid, float u, float b, float l, float r, float 
                 clipToThresholdi_{$uniqueId}(r);
     
     if(counter == 2 || counter == 3) {  //two or three points hit the region
-       return vec4(color_{$uniqueId}, 1.0); //border
+        return vec4(color_{$uniqueId}, 1.0); //border
     } else if ((dx < -0.5 || dy < -0.5)) {
-       return vec4(color_{$uniqueId} * 0.7, .7); //inner border
+        return vec4(color_{$uniqueId} * 0.7, .7); //inner border
     } 
     return vec4(.0, .0, .0, .0);
 }
@@ -124,22 +124,22 @@ EOF;
 //html part: controls rendered under shader settings, allows user to change shader uniform values
 $html = "";
 if ($allowColorChange) {
-  $html .= <<<EOF
-  <span> Color:</span><input type="color" class="form-control input-sm" id="color-{$uniqueId}" onchange="colorChange_{$uniqueId}(this)"><br>
-  EOF;
+    $html .= <<<EOF
+<span> Color:</span><input type="color" class="form-control input-sm" id="color-{$uniqueId}" onchange="colorChange_{$uniqueId}(this)"><br>
+EOF;
 }
 
 if ($allowOpacityChange) {
-  $html .= <<<EOF
-  <span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
-  EOF;
+    $html .= <<<EOF
+<span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
+EOF;
 }
 
 if ($allowThresholdChange) {
-  $html .= <<<EOF
-  <span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="1" step="1">
-  <input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
-  EOF;
+    $html .= <<<EOF
+<span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="1" step="1">
+<input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
+EOF;
 }
 
 //js part: controls action: update controls if necessary and invoke `redraw();`
@@ -154,15 +154,15 @@ $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
 
 //updater
 function thresholdChange_{$uniqueId}(self) {
-   threshold_{$uniqueId} = $(self).val();
-   if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
-   else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
-   $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
-   $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
-   saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+    threshold_{$uniqueId} = $(self).val();
+    if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
+    else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
+    $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
+    $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
+    saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
    
-   //global function, part of API
-   redraw();
+    //global function, part of API
+    redraw();
 }
 
 var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
@@ -170,9 +170,9 @@ var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
 $("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
 
 function opacityChange_{$uniqueId}(self) {
-   thresholdopacity_{$uniqueId} = $(self).val();
-   saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
-   redraw();
+    thresholdopacity_{$uniqueId} = $(self).val();
+    saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
+    redraw();
 }
 
 var color_{$uniqueId} = loadCache("color_{$uniqueId}", [$r, $g, $b]);

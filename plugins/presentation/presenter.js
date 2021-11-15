@@ -5,7 +5,6 @@ Presenter = function () {
     this._maxIdx = 0;
     this._steps = [];
     this._currentStep = null;
-	PLUGINS.each[this.id].instance = this;
 
     //controlPanelId is incomming parameter, defines where to add HTML
     PLUGINS.appendToMainMenuExtended("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
@@ -18,7 +17,7 @@ Presenter = function () {
 <button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
 <button class='btn' onclick="automatic_presentation.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
-<br><br>`, `<div class='' id='playback-timeline'></div>`, "auto-recorder");
+<br><br>`, `<div class='' id='playback-timeline'></div>`, "auto-recorder", this.id);
 
     $("body").append(`
     <div id="presenter-help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
@@ -272,5 +271,4 @@ Presenter.prototype = {
     }
 }
 
-//comply to documentation
-var automatic_presentation = new Presenter();
+registerPlugin(Presenter);
