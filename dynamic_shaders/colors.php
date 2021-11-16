@@ -56,7 +56,7 @@ $samplerName = "tile_data_{$uniqueId}";
 $definition = <<<EOF
 
 uniform float threshold_{$uniqueId};
-uniform float threshold_opacity_{$uniqueId};
+uniform float opacity_{$uniqueId};
 uniform vec3 color_{$uniqueId};
 
 EOF;
@@ -66,11 +66,11 @@ $comparison = $invertOpacity ? "<" : ">";
 if ($logScale) {
     $compareAgainst = "float normalized_{$uniqueId} = (log2($logScaleMax + data{$uniqueId}.r) - log2($logScaleMax))/(log2($logScaleMax+1.0)-log2($logScaleMax));";
     $comparison = "normalized_{$uniqueId} $comparison threshold_{$uniqueId}";
-    $alpha = ($invertOpacity ? "(1.0 - normalized_{$uniqueId})" : "normalized_{$uniqueId}") . " * threshold_opacity_{$uniqueId}";
+    $alpha = ($invertOpacity ? "(1.0 - normalized_{$uniqueId})" : "normalized_{$uniqueId}") . " * opacity_{$uniqueId}";
 } else {
     $compareAgainst = "";
     $comparison = "data{$uniqueId}.r $comparison threshold_{$uniqueId}";
-    $alpha = ($invertOpacity ? "(1.0 - data{$uniqueId}.r)" : "data{$uniqueId}.r") . " * threshold_opacity_{$uniqueId}";
+    $alpha = ($invertOpacity ? "(1.0 - data{$uniqueId}.r)" : "data{$uniqueId}.r") . " * opacity_{$uniqueId}";
 }
 $compConst = $invertOpacity ? "< 0.98" : " > 0.02";
 $defaultThresholdValue = $invertOpacity ? "100" : "1";
@@ -89,7 +89,7 @@ EOF;
 $glload = <<<EOF
 
 threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
-opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_opacity_{$uniqueId}');
+opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'opacity_{$uniqueId}');
 color_gl_{$uniqueId} = gl.getUniformLocation(program, 'color_{$uniqueId}');
 
 EOF;
@@ -98,7 +98,7 @@ EOF;
 $gldraw = <<<EOF
 
 gl.uniform1f(threshold_gl_{$uniqueId}, threshold_{$uniqueId} / 100.0);
-gl.uniform1f(opacity_gl_{$uniqueId}, thresholdopacity_{$uniqueId});
+gl.uniform1f(opacity_gl_{$uniqueId}, opacity_{$uniqueId});
 gl.uniform3fv(color_gl_{$uniqueId}, color_{$uniqueId});
 
 EOF;
@@ -129,8 +129,7 @@ EOF;
 $js = <<<EOF
 var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, color_gl_{$uniqueId};
 
-var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", $defaultThresholdValue);
-
+let threshold_{$uniqueId} = {$getJSProperty('threshold', $defaultThresholdValue)}
 //initial values
 $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
 $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
@@ -138,35 +137,33 @@ $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
 //updater
 function thresholdChange_{$uniqueId}(self) {
     threshold_{$uniqueId} = $(self).val();
-    if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
-    else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
+    threshold_{$uniqueId} = Math.max(Math.min(threshold_{$uniqueId}, 100), 1);
     $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
     $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
-    saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+    {$setJSProperty('threshold', "threshold_{$uniqueId}")};
 
     //global function, part of API
     redraw();
 }
 
-var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
-
-$("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
+let opacity_{$uniqueId} = {$getJSProperty('opacity', 1)};
+$("#opacity-{$uniqueId}").val(opacity_{$uniqueId});
 
 function opacityChange_{$uniqueId}(self) {
-    thresholdopacity_{$uniqueId} = $(self).val();
-    saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
+    opacity_{$uniqueId} = $(self).val();
+    {$setJSProperty('opacity', "opacity_{$uniqueId}")};
     redraw();
 }
 
-var color_{$uniqueId} = loadCache("color_{$uniqueId}", [$r, $g, $b]);
-$("#color-{$uniqueId}").val("#" + Math.round(color_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
+var color_{$uniqueId} = {$getJSProperty('color', "[$r, $g, $b]")};
+$("#color-{$uniqueId}").val("#" + Math.round(color_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") + Math.round(color_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
 
 function colorChange_{$uniqueId}(self) {
     let col = $(self).val();
     color_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
     color_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
     color_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
-    saveCache("color_{$uniqueId}", color_{$uniqueId});
+    {$setJSProperty('color', "color_{$uniqueId}")};
 
     redraw();
 }

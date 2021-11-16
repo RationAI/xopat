@@ -41,7 +41,7 @@ $b = $b / 255;
 $definition = <<<EOF
 
 uniform float threshold_{$uniqueId};
-uniform float threshold_opacity_{$uniqueId};
+uniform float opacity_{$uniqueId};
 uniform float zoom_{$uniqueId};
 uniform vec3 color_{$uniqueId};
 
@@ -102,20 +102,20 @@ $execution = <<<EOF
                                                                
     //we don't know the ZOOM max level, opacity created empirically
     //float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
-    show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * threshold_opacity_{$uniqueId}));
+    show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * opacity_{$uniqueId}));
     
 EOF;
 
 $glload = <<<EOF
 threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
-opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_opacity_{$uniqueId}');
+opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'opacity_{$uniqueId}');
 zoom_gl_{$uniqueId} = gl.getUniformLocation(program, 'zoom_{$uniqueId}');
 color_gl_{$uniqueId} = gl.getUniformLocation(program, 'color_{$uniqueId}');
 EOF;
 
 $gldraw = <<<EOF
 gl.uniform1f(threshold_gl_{$uniqueId}, threshold_{$uniqueId} / 100.0);
-gl.uniform1f(opacity_gl_{$uniqueId}, thresholdopacity_{$uniqueId});
+gl.uniform1f(opacity_gl_{$uniqueId}, opacity_{$uniqueId});
 gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); //todo dirty touching of global variable
 gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); 
 gl.uniform3fv(color_gl_{$uniqueId}, color_{$uniqueId});
@@ -146,36 +146,33 @@ EOF;
 $js = <<<EOF
 var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, zoom_gl_{$uniqueId}, color_gl_{$uniqueId};
 
-var threshold_{$uniqueId} = loadCache("threshold_{$uniqueId}", 1);
-
 //initial values
+let threshold_{$uniqueId} = {$getJSProperty('threshold', 1)}
 $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
 $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
 
 //updater
 function thresholdChange_{$uniqueId}(self) {
     threshold_{$uniqueId} = $(self).val();
-    if (threshold_{$uniqueId} < 1) { threshold_{$uniqueId} = 1; }
-    else if (threshold_{$uniqueId} > 100) { threshold_{$uniqueId} = 100; }
+    threshold_{$uniqueId} = Math.max(Math.min(threshold_{$uniqueId}, 100), 1);
     $("#threshold-{$uniqueId}").val(threshold_{$uniqueId});
     $("#threshold-slider-{$uniqueId}").val(threshold_{$uniqueId});
-    saveCache("threshold_{$uniqueId}", threshold_{$uniqueId});
+    {$setJSProperty('threshold', "threshold_{$uniqueId}")};
    
     //global function, part of API
     redraw();
 }
 
-var thresholdopacity_{$uniqueId} = loadCache("thresholdopacity_{$uniqueId}", 1);
-
-$("#opacity-{$uniqueId}").val(thresholdopacity_{$uniqueId});
+let opacity_{$uniqueId} = {$getJSProperty('opacity', 1)};
+$("#opacity-{$uniqueId}").val(opacity_{$uniqueId});
 
 function opacityChange_{$uniqueId}(self) {
-    thresholdopacity_{$uniqueId} = $(self).val();
-    saveCache("thresholdopacity_{$uniqueId}", thresholdopacity_{$uniqueId});
+    opacity_{$uniqueId} = $(self).val();
+    {$setJSProperty('opacity', "opacity_{$uniqueId}")};
     redraw();
 }
 
-var color_{$uniqueId} = loadCache("color_{$uniqueId}", [$r, $g, $b]);
+let color_{$uniqueId} = {$getJSProperty('color', "[$r, $g, $b]")};
 $("#color-{$uniqueId}").val("#" + Math.round(color_{$uniqueId}[0] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[1] * 255).toString(16).padStart(2, "0") +  Math.round(color_{$uniqueId}[2] * 255).toString(16).padStart(2, "0"));
 
 function colorChange_{$uniqueId}(self) {
@@ -183,8 +180,8 @@ function colorChange_{$uniqueId}(self) {
     color_{$uniqueId}[0] = parseInt(col.substr(1,2),16) / 255;
     color_{$uniqueId}[1] = parseInt(col.substr(3,2),16) / 255;
     color_{$uniqueId}[2] = parseInt(col.substr(5,2),16) / 255;
-    saveCache("color_{$uniqueId}", color_{$uniqueId});
-
+    {$setJSProperty('color', "color_{$uniqueId}")};
+        
     redraw();
 }
 

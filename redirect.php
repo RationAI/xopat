@@ -16,17 +16,11 @@
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
 
-<form method="POST" action="<?php echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php>"  id="redirect">
+<form method="POST" action="<?php echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php" id="redirect">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
-   <input type="hidden" name="cache" id="cache" value=''>
-
-
 </form>
 <button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</button>
 <a style="display:none;" id="export-visualisation"></a>
-
-  </div>
-</div>
 
   <script type="text/javascript">
 
@@ -39,7 +33,6 @@
   var form = document.getElementById("redirect");
   let params = url.hash.split("|");
   document.getElementById("visualisation").value = decodeURIComponent(params[0]).substring(1);
-  document.getElementById("cache").value = decodeURIComponent(params[1]);
 
   //turn on plugins
   for (let i = 2; i < params.length; i++) {

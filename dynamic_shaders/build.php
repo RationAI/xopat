@@ -19,7 +19,7 @@ if (!$input) {
 $uniqueId = "";
 try {
     $params = json_decode($_POST["params"]); //the params
-    $uniqueId = "&uniqueId=$params->unique_id";
+    $uniqueId = isset($params->unique_id) ? "&uniqueId=$params->unique_id" : "";
 } catch (\Exception $e) {
     //do nothing, use default values as set above
 }
@@ -38,7 +38,7 @@ foreach ($input as $key=>$object) {
     if (!isset($object->type) && isset($object->source)) {
         //shader type not set and custom source defined
         $args = to_params($object->params);
-        $url = "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
+        $url = "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args&dataId=$key";
         $i++;
     } else if (isset($object->type) && isset($shaders[$object->type])) {
         //shader type set and existing
@@ -46,7 +46,7 @@ foreach ($input as $key=>$object) {
             $args = to_params($object->params);
             $dir = dirname($_SERVER['SCRIPT_NAME']);
             $fullurl="http://".$_SERVER['HTTP_HOST'].$dir;
-            $url = "$fullurl/{$shaders[$object->type]}.php?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args";
+            $url = "$fullurl/{$shaders[$object->type]}.php?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args&dataId=$key";
             $i++;
         } else {
             $visualisation[$key] = (object)array("error" => "ERROR: Requested visualisation '$object->type' implementation is missing.", "desc" => "File ./{$shaders[$object->type]}.php does not exist.");
@@ -55,7 +55,7 @@ foreach ($input as $key=>$object) {
     } else if ($object->type == "none") {
         //shader typs is 'none'
         $args = to_params($object->params);
-        $visualisation[$key] = (object)array("type" => "none", "visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args");
+        $visualisation[$key] = (object)array("visible" => false, "url" => "$object->source?index=$i&webgl2={$_POST["webgl2"]}$uniqueId$args&dataId=$key");
         $i++;
         continue;
     } else {

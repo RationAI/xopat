@@ -15,19 +15,39 @@ if (isset($_GET["index"])) {
     die("Missing index. The shader part could not be generated.");
 }
 
+if (!isset($data["dataId"])) {
+    die("Missing data ID. The shader part could not be generated.");
+}
+
 //index of the data
 $index = $data["index"];
+$dataId = $data["dataId"];
+//WebGL2 (OpenGL ES 3) default ON
+$webGL2 = true;
+if (isset($data["webgl2"])) {
+    $webGL2 = json_decode($data["webgl2"]);
+}
+
 //unique identifier to distringuish variables 
 $uniqueId = isset($data["uniqueId"]) ? $data["uniqueId"] : "";
 $uniqueId .= $index;
 //texture naming convention
 $texture_name = getTextureId($index);
 
-//WebGL2 (OpenGL ES 3) default ON
-$webGL2 = true;
-if (isset($data["webgl2"])) {
-    $webGL2 = json_decode($data["webgl2"]);
-}
+
+
+$setJSProperty = function($variableName, $variableValue) {
+    global $dataId;
+    return "currentVisualisation().shaders['$dataId'].cache['$variableName'] = $variableValue";
+};
+
+$getJSProperty = function($variableName, $defaultValue) {
+    global $dataId;
+    return <<<EOF
+currentVisualisation().shaders['$dataId'].cache.hasOwnProperty('$variableName') ? 
+  currentVisualisation().shaders['$dataId'].cache['$variableName'] : $defaultValue
+EOF;
+};
 
 /**
  * Returns appropriate texture sampling call

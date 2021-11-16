@@ -1,6 +1,6 @@
 History = function (selfName, context, presetManager) {
     this._globalSelf = `${context.id}['${selfName}']`;
-    this.buffer = [];
+    this._buffer = [];
     this._buffidx = 0;
     this.BUFFER_LENGTH = null;
     this._lastValidIndex = -1;
@@ -13,16 +13,21 @@ History = function (selfName, context, presetManager) {
 History.prototype = {
 
     init: function (historySize = 30) {
-        PLUGINS.appendToMainMenu("Board", `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
-		<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
-        <span id="history-refresh" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.refresh()" id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-        <span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
-
-		<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" autocomplete="off" id="deleteAll">Delete All</button>`,
+        PLUGINS.appendToMainMenu("Board",
+            `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
+onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
+<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
+onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
+<span id="history-refresh" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.refresh()" 
+id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
+<span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" 
+id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
+<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" 
+onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-			<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div>
-			</div>
-		</div>`, 'annotation-board', this._context.id);
+<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div></div></div>`,
+            'annotation-board',
+            this._context.id);
 
         this.board = $("#annotation-logs");
         this.undoBtn = $("#history-undo");
@@ -36,19 +41,19 @@ History.prototype = {
     },
 
     back: function () {
-        if (this.buffer[this._buffidx]) {
+        if (this._buffer[this._buffidx]) {
             this._performSwap(this._context.canvas(),
-                this.buffer[this._buffidx].back, this.buffer[this._buffidx].forward)
+                this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward)
 
-            //this.bufferLastRemoved = this.buffer[this._buffidx];
-            //this.buffer[this._buffidx] = null;
+            //this._bufferLastRemoved = this._buffer[this._buffidx];
+            //this._buffer[this._buffidx] = null;
 
             this._buffidx--;
             if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
             //if we went around and finished where we once were, stop
             if (this._lastValidIndex === this._buffidx) {
                 //lose one object to prevent from cycling
-                this.buffer[this._lastValidIndex] = null;
+                this._buffer[this._lastValidIndex] = null;
 
                 this._lastValidIndex--;
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
@@ -58,7 +63,7 @@ History.prototype = {
         }
 
         if (this.undoBtn) {
-            let color = this.buffer[this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
+            let color = this._buffer[this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
             this.undoBtn.css("color", color);
         }
     },
@@ -68,10 +73,11 @@ History.prototype = {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
             this._performSwap(this._context.canvas(),
-                this.buffer[this._buffidx].forward, this.buffer[this._buffidx].back);
+                this._buffer[this._buffidx].forward, this._buffer[this._buffidx].back);
 
             if (this.redoBtn) {
-                let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
+                let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
+                    "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
                 this.redoBtn.css("color", color);
             }
             if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
@@ -90,7 +96,8 @@ History.prototype = {
     },
 
     sync: function() {
-        if (!confirm("This will overwrite all properties of all existing annotations - even those manually modified. Do you want to proceed?")) return;
+        if (!confirm("This will overwrite all properties of all existing annotations - " +
+            "even those manually modified. Do you want to proceed?")) return;
         this.board.html("");
         let _this = this;
         this._context.canvasObjects().some(o => {
@@ -121,7 +128,7 @@ History.prototype = {
         console.log("PREV", previous, "NEXT", newObject);
 
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-        this.buffer[this._buffidx] = { forward: newObject, back: previous };
+        this._buffer[this._buffidx] = { forward: newObject, back: previous };
         this._lastValidIndex = this._buffidx; //new object creation overiddes history
 
         if (this.undoBtn && this.redoBtn) {
@@ -182,18 +189,14 @@ History.prototype = {
         }
 
         let center = object.getCenterPoint();
-        //todo relying on a dirty global
-        this.board.prepend(`<div id="log-object-${object.incrementId}" onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
-			    <span class="material-icons" style="color: ${object.fill}">${icon}</span> 
-				<input type="text" class="form-control border-0" disabled="true" class="desc" style="width: calc(100% - 80px); background:transparent;" value="${desc}">
-				<span class="material-icons" onclick="
-				 let self = $(this);
-				 if (self.html() === 'edit') {
-					${this._globalSelf}._boardItemEdit(self, ${object.incrementId});
-				 } else {
-					${this._globalSelf}._boardItemSave();
-				 }">edit</span> 
-			</div>`);
+        this.board.prepend(`<div id="log-object-${object.incrementId}" 
+onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
+<span class="material-icons" style="color: ${object.fill}">${icon}</span> 
+<input type="text" class="form-control border-0" disabled="true" class="desc" 
+style="width: calc(100% - 80px); background:transparent;" value="${desc}">
+<span class="material-icons" onclick="let self = $(this); if (self.html() === 'edit') {
+${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">
+edit</span></div>`);
     },
 
     _boardItemEdit(self, objectId) {

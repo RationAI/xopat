@@ -38,7 +38,7 @@ Network.prototype = {
             jsGlLoadedCall: "glNetworkLoaded",
             jsGlDrawingCall: "glNetworkDrawing",
             //where are shaders fetched
-            shaderGenerator: "/iipmooviewer-jiri/OSD/dynamic_shaders/build.php",
+            shaderGenerator: "/visualization/client/dynamic_shaders/build.php",
             //some callbacks
             visualisationReady: function (i, visualisation) {
 
@@ -104,7 +104,7 @@ Network.prototype = {
                 var pointRightBottom = PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x + imageBounds.width, imageBounds.y + imageBounds.height));
 
                 //make ajax call to server for data (demo image here)
-                const url = "/iipmooviewer-jiri/OSD/plugins/network/eowyn.jpg";
+                const url = "/visualization/client/plugins/network/eowyn.jpg";
                 fetch(url).then(
                     response => response.blob()
                 ).then(

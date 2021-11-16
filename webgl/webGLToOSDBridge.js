@@ -39,14 +39,50 @@ OpenSeadragonGL.prototype = {
     /**
      * Set program shaders. Just forwards the call to webGLWrapper, for easier access.
      * @param {string} visualisation program fragment shaders components
+     * @return {boolean} true if loaded successfully
      */
     setVisualisation: function(visualisation) {
         if (this._shadersLoaded) {
-            console.warn("Invalid action: visualisation has been already loaded.")
-            return;
+            console.warn("Invalid action: visualisations have been already loaded.")
+            return false;
         }
+        return this.webGLWrapper.setVisualisation(visualisation);
+    },
 
-        this.webGLWrapper.setVisualisation(visualisation);
+    /**
+     * Import JSON encoded visualisation parameter, as described in the documentation
+     * @param json
+     * @return {boolean} true if loaded successfully
+     */
+    importSettings(json) {
+        try {
+            let result = true;
+            let setup = JSON.parse(json);
+            if (Array.isArray(setup)) {
+                for (let idx in setup) {
+                    result &= this.setVisualisation(setup[i]);
+                }
+            } else {
+                console.warn("Invalid input: parameter visualisation must be an array of objects.");
+                return false;
+            }
+            return result;
+        } catch (e) {
+            console.warn("Invalid input for visualisation settings.", e);
+            return false;
+        }
+    },
+
+    /**
+     * Export JSON-encoded visualisation with all changes
+     * that has been made, the visualiser can be initialized
+     * with
+     * @return JSON-encoded string
+     */
+    exportSettings() {
+        //export all except eventSource: automatically attached by OpenSeadragon event engine
+        return JSON.stringify(this.webGLWrapper._visualisations,
+            (key, value) => key==="eventSource" ? undefined : value);
     },
 
     /**
@@ -100,7 +136,6 @@ OpenSeadragonGL.prototype = {
         this.upToDateTStamp = Date.now();
 
         imageTile._drawer.context.clearRect(0, 0, imageTile._drawer.context.canvas.width, imageTile._drawer.context.canvas.height);
-        console.log(this.openSD.navigator);
 
         var imageTileNav = this.openSD.navigator.world.getItemAt(idx);
         imageTileNav._drawer.context.clearRect(0, 0, imageTileNav._drawer.context.canvas.width, imageTileNav._drawer.context.canvas.height);

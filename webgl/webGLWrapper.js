@@ -54,25 +54,29 @@ class WebGLWrapper {
         this._programs = [];
         this._program = -1;
         this._initialized = false;
-        this._cache = {};
     }
 
     /**
      * Set program shaders. Vertex shader is set by default a square.
      * @param {object} visualisation visualisation setup
+     * @return {boolean} true if loaded successfully
      */
     setVisualisation(visualisation) {
         if (!this.shaderGenerator) {
             console.error("No shader source generator defined. Missing `shaderGenerator` property in the instance creation.");
-            return;
+            return false;
         }
 
         if (this._prepared) {
             console.error("New visualisation cannot be introduced after the visualiser was prepared.");
-            return;
+            return false;
         }
         visualisation.url = this.shaderGenerator;
+        if (!visualisation.hasOwnProperty("params")) {
+            visualisation.params = {};
+        }
         this._visualisations.push(visualisation);
+        return true;
     }
 
     /**
@@ -127,9 +131,6 @@ class WebGLWrapper {
             this._loadScript(i, this._program, preserveJS);
             this.toBuffers(this._programs[i]);
         }
-        //TODO reset sources for the current visualisation
-        //TODO probably p
-        VISUALISATION_SHADER_CACHE["context::defaultProgram"] = i;
         this._program = i;
     }
 
@@ -189,28 +190,6 @@ class WebGLWrapper {
     }
 
     /**
-     * Set the cache data, not valid to call after initialization
-     * @param {Object} cache object that contains the visualisation cache data
-     */
-    setCache(cache) {
-        if (typeof cache !== "object" || this._prepared) {
-            console.error("Invalid call of loadCache!");
-            return;
-        }
-        this._cache = cache;
-        this._program = cache.hasOwnProperty("context::defaultProgram") ? cache["context::defaultProgram"] : 0;
-    }
-
-    /**
-     * Get the cache data
-     * @returns object storing visualisation cache 
-     */
-    getCache() {
-        //global maintained by this script
-        return VISUALISATION_SHADER_CACHE;
-    }
-
-    /**
      * Prepares the WebGL wrapper for being initialized. More concretely,
      * each visualisation is prepared by downloading all necessary files (e.g. shaders),
      * shaders are compiled and other WebGL structures initialized. It is separated from 
@@ -237,11 +216,6 @@ class WebGLWrapper {
         if (this.hasOwnProperty('container') && this.hasOwnProperty('onclick')) {
             this.container.onclick = this[this.onclick].bind(this);
         }
-
-        //cache setup (GLOBAL because of its use in dynamic shader scripts)
-        if (this.hasOwnProperty("_cache") && this._cache)
-        window.VISUALISATION_SHADER_CACHE = this._cache;
-        this._cache = undefined;
 
         // Load the shaders when ready and return the promise
         return Promise.all(
@@ -395,6 +369,7 @@ class WebGLWrapper {
 
             //Deep merge
             for (let key in this._visualisations[i].shaders) {
+                let layer = this._visualisations[i].shaders[key];
                 if (!responseData.hasOwnProperty(key)) {
                     console.warn(`Visualisation ${this._visualisations[i].name} is missing the visualisation data for layer ${key}.`);
                     responseData[key] = {
@@ -402,12 +377,17 @@ class WebGLWrapper {
                         desc: "Data ID not found in the output of shaderGenerator."
                     };
                 }
-                Object.assign(this._visualisations[i].shaders[key], responseData[key]);
+                Object.assign(layer, responseData[key]);
+                if (!layer.hasOwnProperty("cache")) {
+                    layer.cache = {};
+                }
             }
 
             let program = this.gl.createProgram();
             this._programs.push(program); //preventive
-            vis.order = Object.keys(vis.shaders);
+            if (!vis.hasOwnProperty("order")) {
+                vis.order = Object.keys(vis.shaders);
+            }
             this._visualisationToProgram(vis, program, i);
         }
         //if all invalid go back  

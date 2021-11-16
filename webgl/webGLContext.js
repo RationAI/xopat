@@ -10,12 +10,12 @@ class GlContextFactory {
     init(wrapper) {
         const canvas = document.createElement('canvas');
 
-        // wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
-        // if (wrapper.gl) {
-        //     //WebGL 2.0
-        //     wrapper.webGLImplementation = this.getContext(true, wrapper, wrapper.gl);
-        //     return;
-        // }
+        wrapper.gl = canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
+        if (wrapper.gl) {
+            //WebGL 2.0
+            wrapper.webGLImplementation = this.getContext(true, wrapper, wrapper.gl);
+            return;
+        }
 
         //WebGL 1.0
         wrapper.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
@@ -88,7 +88,6 @@ class WebGL10 {
             },
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-                //TODO EXTRACT FROM THE IMAGE REQUIRED LAYERS
                 let _this = this,
                     index = 0;
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
@@ -98,7 +97,10 @@ class WebGL10 {
 
                 for (let key in visualisation.shaders) {
                     let layer = visualisation.shaders[key];
-                    if (!layer.rendering) return;
+                    if (!layer.rendering) {
+                        index++;
+                        continue;
+                    }
 
                     if (index >= NUM_IMAGES) {
                         console.warn("The visualisation contains less data than layers. Skipping layer ", layer);
@@ -220,21 +222,7 @@ class WebGL10 {
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(samplers, definition, execution),
-            js: `
-function saveCache(key, value) {
-    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
-        VISUALISATION_SHADER_CACHE["${visualisation.name}"] = {};
-    }
-    VISUALISATION_SHADER_CACHE["${visualisation.name}"][key] = value;
-}
-function loadCache(key, defaultValue) {
-    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
-        !VISUALISATION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
-        return defaultValue;
-    }
-    return VISUALISATION_SHADER_CACHE["${visualisation.name}"][key];
-}
-            
+            js: `            
 //user input might do wild things, use try-catch
 try {
     ${js}
@@ -501,21 +489,7 @@ class WebGL20 {
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(definition, execution),
-            js: `
-function saveCache(key, value) {
-    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}")) {
-        VISUALISATION_SHADER_CACHE["${visualisation.name}"] = {};
-    }
-    VISUALISATION_SHADER_CACHE["${visualisation.name}"][key] = value;
-}
-function loadCache(key, defaultValue) {
-    if (!VISUALISATION_SHADER_CACHE.hasOwnProperty("${visualisation.name}") ||
-        !VISUALISATION_SHADER_CACHE["${visualisation.name}"].hasOwnProperty(key)) {
-        return defaultValue;
-    }
-    return VISUALISATION_SHADER_CACHE["${visualisation.name}"][key];
-}
-            
+            js: `   
 //user input might do wild things, use try-catch
 try {
     ${js}

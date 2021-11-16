@@ -21,7 +21,12 @@ class Preset {
         return this;
     }
     toJSONFriendlyObject() {
-        return { comment: this.comment, fill: this.fill, objectType: this.objectFactory.type, presetID: this.presetID };
+        return {
+            comment: this.comment,
+            fill: this.fill,
+            objectType: this.objectFactory.type,
+            presetID: this.presetID
+        };
     }
 } // end of namespace Preset
 
@@ -67,7 +72,8 @@ class PresetManager {
     /**
      * Get data to set as annotation properties (look, metadata...)
      * @param {boolean} isLeftClick true if the data should be with preset data bound to the left mouse button
-     * @returns {Object} data to populate fabric object with (parameter 'options' in AnnotationObjectFactory::create(..))
+     * @returns {Object} data to populate fabric object with (parameter 'options'
+     * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
         return $.extend(PresetManager._commonProperty,
@@ -84,7 +90,9 @@ class PresetManager {
      * @returns {string} HTML
      */
     presetControls() {
-        return `<span id="annotations-left-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
+        return `<span id="annotations-left-click" class="d-inline-block position-relative" 
+style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
+class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
     }
 
     /**
@@ -93,8 +101,12 @@ class PresetManager {
      */
     presetHiddenControls() {
         return `<span class="d-inline-block" style="width:46%" title="Importing and exporting presets">Preset control:</span>
-		<button class="btn px-1" onclick="${this._globalSelf}.exportToFile();" id="presets-download" title="Download presets" style="height:30px;width:23%;"><span class="material-icons px-0">file_download</span>Export</button><a style="display:none;" id="presets-export"></a>
-		<button class="btn px-1" style="height:30px;width:23%;" id="presets-upload" onclick="this.nextSibling.click();" title="Import presets"><span class="material-icons px-0">file_upload</span>Import</button><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
+<button class="btn px-1" onclick="${this._globalSelf}.exportToFile();" id="presets-download" 
+title="Download presets" style="height:30px;width:23%;"><span class="material-icons px-0">file_download</span>
+Export</button><a style="display:none;" id="presets-export"></a><button class="btn px-1" style="height:30px;width:23%;"
+id="presets-upload" onclick="this.nextSibling.click();" title="Import presets"><span class="material-icons px-0">
+file_upload</span>Import</button><input type='file' style="visibility:hidden; width: 0; height: 0;" 
+onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
     /**
@@ -122,7 +134,9 @@ class PresetManager {
             case 4: r = f; g = 0; b = 1; break;
             case 5: r = 1; g = 0; b = q; break;
         }
-        var c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2) + ("00" + (~ ~(g * 255)).toString(16)).slice(-2) + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
+        var c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
+                        + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
+                        + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
         return (c);
     }
 
@@ -147,7 +161,8 @@ class PresetManager {
         if (this._context.overlay.fabricCanvas()._objects.some(o => {
             return o.presetID === id;
         })) {
-            PLUGINS.dialog.show("This preset belongs to existing annotations: it cannot be removed.", 8000, PLUGINS.dialog.MSG_WARN);
+            PLUGINS.dialog.show("This preset belongs to existing annotations: it cannot be removed.",
+                8000, PLUGINS.dialog.MSG_WARN);
             return false;
         }
 
@@ -176,7 +191,7 @@ class PresetManager {
 
         if (!needsRefresh) return;
         this.updatePresetsHTML();
-        var objects = this._context.overlay.fabricCanvas().getObjects();
+        //var objects = this._context.overlay.fabricCanvas().getObjects();
         // if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
 
         // var objectsLength = objects.length
@@ -286,7 +301,8 @@ class PresetManager {
      * @returns {string} HTML
      */
     getMissingPresetHTML(isLeftClick) {
-        return `<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
+        return `<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" 
+onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
     }
 
     /**
@@ -302,16 +318,17 @@ class PresetManager {
         let changeHtml = "";
         Object.values(this._context.objectFactories).forEach(factory => {
             if (factory.type !== preset.objectFactory.type) {
-                changeHtml += `<div onclick="
-${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: openseadragon_image_annotations.getAnnotationObjectFactory('${factory.type}')}); 
-event.stopPropagation(); window.event.cancelBubble = true;
-"><span class="material-icons" style="color: ${preset.fill};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
+                changeHtml += `<div onclick="${this._globalSelf}.updatePreset(${preset.presetID}, 
+{objectFactory: openseadragon_image_annotations.getAnnotationObjectFactory('${factory.type}')}); 
+event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
+style="color: ${preset.fill};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
             }
         });
 
-        return `<div class="position-relative border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" onclick="${this._globalSelf}.showPresets(${isLeftClick});">
-            <span class="material-icons" style="color: ${preset.fill};">${icon}</span>  ${comment}
-            <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
+        return `<div class="position-relative border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" 
+onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons" 
+style="color: ${preset.fill};">${icon}</span>  ${comment}
+<div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
     }
 
     /**
@@ -356,12 +373,17 @@ event.stopPropagation(); window.event.cancelBubble = true;
         } else {
             html += `"`;
         }
-        return `${html} style="cursor:pointer; margin: 5px;" onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');${this._globalSelf}._selection = ${preset.presetID};">
-			<span class="material-icons position-absolute top-0 right-0 px-0" onclick="if (${this._globalSelf}.removePreset(${preset.presetID})) {$(this).parent().remove();}">delete</span>
-			<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: ${this._context.id}.getAnnotationObjectFactory(this.value)});">${select}</select></div>
-			<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {fill: this.value});" value="${preset.fill}"></div><br>
-			Comment<br><input class="form-control" type="text" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {comment: this.value});" value="${preset.comment}"><br>
-		</div>`;
+        return `${html} style="cursor:pointer; margin: 5px;" 
+onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
+${this._globalSelf}._selection = ${preset.presetID};"><span class="material-icons position-absolute top-0 right-0 px-0" 
+onclick="if (${this._globalSelf}.removePreset(${preset.presetID})) {$(this).parent().remove();}">delete</span>
+<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="
+${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: 
+${this._context.id}.getAnnotationObjectFactory(this.value)});">${select}</select></div>
+<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" 
+onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {fill: this.value});" value="${preset.fill}"></div>
+<br>Comment<br><input class="form-control" type="text" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, 
+{comment: this.value});" value="${preset.comment}"><br></div>`;
     }
 
     /**
@@ -381,16 +403,21 @@ event.stopPropagation(); window.event.cancelBubble = true;
             counter++;
         });
 
-        html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block ${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
-		let id = ${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, $(this).index())); "><span class="material-icons">add</span> New</div>`;
+        html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
+${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;" onclick="let id = 
+${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, 
+$(this).index())); "><span class="material-icons">add</span> New</div>`;
 
         let title = isLeftClick ? "for left click" : "for right click";
 
-        PLUGINS.dialog.showCustom("preset-modify-dialog", `Annotations presets <b>${title}</b>`, html, `<button id="select-annotation-preset" onclick="
-	    if (${this._globalSelf}._selection === undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); return false;}
-		setTimeout(function(){
-			$('#preset-modify-dialog').remove(); ${this._globalSelf}.selectPreset(${isLeftClick}); 
-		}, 150);" class="btn position-absolute bottom-2 right-4">Select</button>`);
+        PLUGINS.dialog.showCustom("preset-modify-dialog",
+            `Annotations presets <b>${title}</b>`,
+            html,
+            `<button id="select-annotation-preset" onclick="if (${this._globalSelf}._selection === 
+undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); 
+return false;} setTimeout(function(){ $('#preset-modify-dialog').remove(); 
+${this._globalSelf}.selectPreset(${isLeftClick}); }, 150);" class="btn position-absolute bottom-2 right-4">Select
+</button>`);
     }
 }
 
@@ -476,8 +503,10 @@ class AnnotationObjectFactory {
      * Create an object at given point with a given strategy (TODO use strategy pattern)
      * @param {OpenSeadragon.Point} point origin of the object
      * @param {boolean} isLeftClick true if the object was created using left mouse button
+     * @return {boolean} true if creation succeeded
      */
     instantCreate(point, isLeftClick) {
+        return false;
     }
 
     /**
@@ -623,12 +652,16 @@ class Rect extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(point);
-        this._context.addAnnotation(this.create({
-            left: bounds.left.x,
-            top: bounds.top.y,
-            width: bounds.right.x - bounds.left.x,
-            height: bounds.bottom.y - bounds.top.y
-        }, this._presets.getAnnotationOptions(isLeftClick)));
+        if (bounds) {
+            this._context.addAnnotation(this.create({
+                left: bounds.left.x,
+                top: bounds.top.y,
+                width: bounds.right.x - bounds.left.x,
+                height: bounds.bottom.y - bounds.top.y
+            }, this._presets.getAnnotationOptions(isLeftClick)));
+            return true;
+        }
+        return false;
     }
 
     initCreate(x, y, isLeftClick) {
@@ -753,12 +786,16 @@ class Ellipse extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(point);
-        this._context.addAnnotation(this.create({
-            left: bounds.left.x,
-            top: bounds.top.y,
-            rx: (bounds.right.x - bounds.left.x) / 2,
-            ry: (bounds.bottom.y - bounds.top.y) / 2
-        }, this._presets.getAnnotationOptions(isLeftClick)));
+        if (bounds) {
+            this._context.addAnnotation(this.create({
+                left: bounds.left.x,
+                top: bounds.top.y,
+                rx: (bounds.right.x - bounds.left.x) / 2,
+                ry: (bounds.bottom.y - bounds.top.y) / 2
+            }, this._presets.getAnnotationOptions(isLeftClick)));
+            return true;
+        }
+        return false;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -890,13 +927,18 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     instantCreate(point, isLeftClick = true) {
-        let result = this._auto.createOutline(point);
+        const _this = this;
+        (async function _() {
+            //todo disable user interaction while computing
+            //todo delete polygon if not big enough
+            let result = await _this._auto.createOutline(point);
 
-        if (!result) return;
+            if (!result) return;
 
-        this._context.addAnnotation(
-            this.create(result, this._presets.getAnnotationOptions(isLeftClick))
-        );
+            _this._context.addAnnotation(
+                _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
+            );
+        })();
     }
 
     isValidShortCreationClick() {
@@ -992,7 +1034,8 @@ class Polygon extends AnnotationObjectFactory {
             return;
         }
 
-        this._current = this.create(this.simplify(points), this._presets.getAnnotationOptions(this._current.isLeftClick));
+        this._current = this.create(this.simplify(points),
+            this._presets.getAnnotationOptions(this._current.isLeftClick));
         this._context.addAnnotation(this._current);
         this._initialize(false); //clear
     }
@@ -1150,454 +1193,332 @@ class Polygon extends AnnotationObjectFactory {
  */
 class AutoObjectCreationStrategy {
 
-    constructor(selfName, context, alphaSensitivity=60) {
+    constructor(selfName, context) {
         this._currentTile = null;
         this._pixelReader = document.createElement('canvas');
         this._pixelReader.width = 1;
         this._pixelReader.height = 1;
         this._pixelReader = this._pixelReader.getContext('2d');
+        this.alphaSensitivity = 1;
         this.comparator = function(pix) {
             //we read grayscale images
             return pix[0] > this.alphaSensitivity;
         }
-        this.alphaSensitivity = alphaSensitivity;
+
+
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
-        this._readingIndex = 1;
+        this._readingIndex = 0;
+
+        const _this = this;
+        PLUGINS.osd.addHandler('visualisation-used', function (visualisation) {
+            let html = "";
+
+            let index = -1;
+            let layer = null;
+            for (let key in visualisation.shaders) {
+                layer = visualisation.shaders[key];
+                if (layer.order === _this._readingIndex) {
+                    index = layer.order;
+                    html += `<option value='${key} selected'>${layer.name}</option>`;
+                } else {
+                    html += `<option value='${key}'>${layer.name}</option>`;
+                }
+            }
+
+            if (index < 0) {
+                _this._readingIndex = layer.order;
+                html = "<option selected " + html.substr(8);
+                _this.alphaSensitivity = layer.cache.hasOwnProperty('threshold') ?
+                    layer.cache.threshold * 256 / 100 : 1;
+            }
+            $("#sensitivity-auto-outline").html(html);
+        });
     }
 
     sensitivityControls() {
-        return `<span class="d-inline-block" style="width:46%" title="More sensitivity means less area selected when single-clicking">Automatic shape sensitivity:</span>
-        <input style="width:50%" title="The higher the sensitivity, the smaller automatic shape (selects only higher opacity regions)." type="range" id="sensitivity_auto_outline" min="0" max="100" 
-        value="${this.alphaSensitivity}" step="1" onchange="${this._globalSelf}.setAutoOutlineSensitivity($(this).val());">
-         <span class="d-inline-block" style="width:46%" title="">Automatic tool target:</span>
-        <input style="width:50%" title="What layer is selected for the data." type="number" id="sensitivity_auto_outline" min="0" max="100" class="form-control"
-        value="${this._readingIndex}" step="1" onchange="${this._globalSelf}._readingIndex = parseInt($(this).val());">
-`;
+        return `<span class="d-inline-block" style="width:46%" title="What layer is used to create automatic 
+annotations.">Target data layer:</span><select style="width:50%" title="What layer is selected for the data." 
+type="number" id="sensitivity-auto-outline" class="form-control" onchange="
+let layer = PLUGINS.seaGL.currentVisualisation().shaders[$(this).val()];
+${this._globalSelf}._readingIndex = layer.order; ${this._globalSelf}.alphaSensitivity = 
+layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1; "></select>
+<br><button onclick="$('.to-delete').remove();"></button>`;
     }
 
-    	// 0 --> no sensitivity  100 --> most sensitive
-	setAutoOutlineSensitivity (sensitivity) {
-		//we map to alpha interval 20 (below no visible) to 200 (only the most opaque elements) --> interval of 180 length
-		this.alphaSensitivity = Math.round(180 * (sensitivity / 100) + 20);
-	}
-
-    //TODO show also layer selection controls
-
     approximateBounds(point) {
-        //TODO move this beginning logic to handler
-		this.changeTile(point);
+		if (!this.changeTile(point)) {
+		    return null;
+        }
+        let dimensionSize = Math.max(screen.width, screen.height);
 
-		//var originPoint = getOriginPoint(point);
 		let origPixel = this.getPixelData(point);
-		var x = point.x;  // current x position
-		var y = point.y;  // current y position
+		var x = point.x;
+		var y = point.y;
 
 		if (!this.comparator(origPixel)) {
 			//default object of width 40
-			return { top: this.toGlobalPointXY(x, y - 20), left: this.toGlobalPointXY(x - 20, y), bottom: this.toGlobalPointXY(x, y + 20), right: this.toGlobalPointXY(x + 20, y) }
+			return { top: this.toGlobalPointXY(x, y - 20), left: this.toGlobalPointXY(x - 20, y),
+                bottom: this.toGlobalPointXY(x, y + 20), right: this.toGlobalPointXY(x + 20, y) }
 		}
 
-		while (this.getAreaStamp(x, y) === 15) {
+        let counter = 0;
+		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
 			x += 2;
+			counter++;
 		}
+		if (counter >= dimensionSize) return null;
+		counter = 0;
 		var right = this.toGlobalPointXY(x, y);
 		x = point.x;
 
-		while (this.getAreaStamp(x, y) === 15) {
+		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
 			x -= 2;
+            counter++;
 		}
+        if (counter >= dimensionSize) return null;
+        counter = 0;
 		var left = this.toGlobalPointXY(x, y);
 		x = point.x;
 
-		while (this.getAreaStamp(x, y) === 15) {
+		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
 			y += 2;
+            counter++;
 		}
+        if (counter >= dimensionSize) return null;
+        counter = 0;
 		var bottom = this.toGlobalPointXY(x, y);
 
 		y = point.y;
-		while (this.getAreaStamp(x, y) === 15) {
+		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
 			y -= 2;
+            counter++;
 		}
+        if (counter >= dimensionSize) return null;
 		var top = this.toGlobalPointXY(x, y);
 
+		//if too small, discard
+		if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;
         return { top: top, left: left, bottom: bottom, right: right };
     }
 
-    floodFill(point) {
-        var viewportPos = PLUGINS.osd.viewport.pointFromPixel(point);
-        this.changeTile(viewportPos);
+    async createOutline(eventPosition) {
+        if (!this.changeTile(eventPosition)) {
+            return null;
+        }
+        let dimensionSize = Math.max(screen.width, screen.height);
 
         let points = [];
-
-
-        var x = point.x;
-        var y = point.y;
-
-        let origPixel = this.getPixelData(point);
-        if (!this.comparator(origPixel)) {
-            PLUGINS.dialog.show("Outside a region - decrease sensitivity to select.", 2000, PLUGINS.dialog.MSG_INFO);
-            return null;
-        }
-
-        //speed based on ZOOM level (detailed tiles can go with rougher step)
-        let maxLevel = PLUGINS.imageLayer.source.maxLevel;
-        let level = this._currentTile.level;
-        let maxSpeed = 24;
-        let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
-
-        //	After each step approximate max distance and abort if too small
-
-        //todo same points evaluated multiple times seems to be more stable, BUT ON LARGE CANVAS!!!...
-
-        var maxX = 0, maxY = 0;
-        this._growRegionInDirections(x - 1, y, [-1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-        maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-        maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-        this._growRegionInDirections(x + 1, y, [1, 0], [[0, -1], [0, 1]], points, speed, this.isValidPixel.bind(this));
-        maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-        maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-        this._growRegionInDirections(x, y + 1, [0, -1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
-        maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-        maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-        this._growRegionInDirections(x, y - 1, [0, 1], [[-1, 0], [1, 0]], points, speed, this.isValidPixel.bind(this));
-        maxX = Math.max(maxX, Math.abs(x - points[points.length - 1].x));
-        maxY = Math.max(maxY, Math.abs(y - points[points.length - 1].y));
-
-        if (maxX < 10 || maxY < 10) {
-            PLUGINS.dialog.show("Failed to create region.", 3000, PLUGINS.dialog.MSG_WARN);
-            return null;
-        }
-
-        points = hull(points, 2 * speed);
-        let p1 = points[0], p2 = points[1];
-        let result = [this.toGlobalPointXY(p1[0], p1[1])];
-
-        for (var i = 2; i < points.length; i++) {
-            //three consecutive points on a line, discard
-            if ((Math.abs(p1[0] - p2[0]) < 2 && Math.abs(points[i][0] - p2[0]) < 2)
-                || (Math.abs(p1[1] - p2[1]) < 2 && Math.abs(points[i][1] - p2[1]) < 2)) {
-                p2 = points[i];
-                continue;
-            }
-
-            p1 = p2;
-            p2 = points[i];
-            result.push(this.toGlobalPointXY(p1[0], p1[1]));
-        }
-        return result;
-    }
-
-    createOutline(eventPosition) {
-		console.log("called outline");
-
-		this.changeTile(eventPosition);
-
-		let points = new Set();
         const _this = this;
-		
-		var x = eventPosition.x;  // current x position
-		var y = eventPosition.y;  // current y position
-		var direction = "UP"; // current direction of outline
 
-		let origPixel = this.getPixelData(eventPosition);
-		if (!this.comparator(origPixel)) {
-			PLUGINS.dialog.show("Outside a region - decrease the sensitivity.", 5000, PLUGINS.dialog.MSG_INFO);
-			return
-		}
+        var x = eventPosition.x;  // current x position
+        var y = eventPosition.y;  // current y position
+        var direction = "UP"; // current direction of outline
 
-		//$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+        let origPixel = this.getPixelData(eventPosition);
+        if (!this.comparator(origPixel)) {
+            console.warn("Outline algorithm exited: outside region.")
+            return
+        }
 
-		while (this.getAreaStamp(x, y) === 15) {
-			x += 2; //all neightbours inside, skip by two
-		}
-		x -= 2;
+        let counter = 0;
+        while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
+            x += 2; //all neightbours inside, skip by two
+            counter++;
+        }
+        if (counter >= dimensionSize) {
+            return null;
+        }
+        x -= 2;
 
-        //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+        $("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
-		var first_point = new OpenSeadragon.Point(x, y);
-
-		//indexing instead of switch
+        //indexing instead of switch
         //todo fix openseadragon_image_annotations reference
-		var handlers = [
-			// 0 - all neighbours outside, invalid
-			function () { console.error("Fell out of region.") },
+        var handlers = [
+            // 0 - all neighbours outside, invalid
+            function () { console.error("Fell out of region.") },
 
-			// 1 - only TopLeft pixel inside
-			function () {
-				if (direction === "DOWN") {
-					direction = "LEFT";
-				} else if (direction === "RIGHT") {
-					direction = "UP";
-				} else { console.log("INVALID DIRECTION 1)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 1 - only TopLeft pixel inside
+            function () {
+                if (direction === "DOWN") {
+                    direction = "LEFT";
+                } else if (direction === "RIGHT") {
+                    direction = "UP";
+                } else { console.log("INVALID DIRECTION 1)"); return; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 2 - only BottomLeft pixel inside
-			function () {
-				if (direction === "UP") {
-					direction = "LEFT";
-				} else if (direction === "RIGHT") {
-					direction = "DOWN";
-				} else { console.log("INVALID DIRECTION 2)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 2 - only BottomLeft pixel inside
+            function () {
+                if (direction === "UP") {
+                    direction = "LEFT";
+                } else if (direction === "RIGHT") {
+                    direction = "DOWN";
+                } else { console.log("INVALID DIRECTION 2)"); return; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 3 - TopLeft & BottomLeft pixel inside
-			function () {
-				if (direction !== "UP" && direction !== "DOWN") { console.log("INVALID DIRECTION 3)"); }
-			},
+            // 3 - TopLeft & BottomLeft pixel inside
+            function () {
+                if (direction !== "UP" && direction !== "DOWN") { console.log("INVALID DIRECTION 3)"); }
+            },
 
-			// 4 - only BottomRight pixel inside
-			function () {
-				if (direction === "UP") {
-					direction = "RIGHT";
-				} else if (direction === "LEFT") {
-					direction = "DOWN";
-				} else { console.log("INVALID DIRECTION 4)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 4 - only BottomRight pixel inside
+            function () {
+                if (direction === "UP") {
+                    direction = "RIGHT";
+                } else if (direction === "LEFT") {
+                    direction = "DOWN";
+                } else { console.log("INVALID DIRECTION 4)"); return; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 5 - TopLeft & BottomRight pixel inside, one of them does not belong to the area
-			function () {
-				if (direction === "UP") {
-					direction = "RIGHT";
-				} else if (direction === "LEFT") {
-					direction = "DOWN";
-				} else if (direction === "RIGHT") {
-					direction = "UP";
-				} else { direction = "LEFT"; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 5 - TopLeft & BottomRight pixel inside, one of them does not belong to the area
+            function () {
+                if (direction === "UP") {
+                    direction = "RIGHT";
+                } else if (direction === "LEFT") {
+                    direction = "DOWN";
+                } else if (direction === "RIGHT") {
+                    direction = "UP";
+                } else { direction = "LEFT"; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
-			function () {
-				if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
-			},
+            // 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
+            function () {
+                if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
+            },
 
-			// 7 - TopLeft & BottomLeft & BottomRight  pixel inside, same case as TopRight only
-			() => handlers[8](),
+            // 7 - TopLeft & BottomLeft & BottomRight  pixel inside, same case as TopRight only
+            () => handlers[8](),
 
-			// 8 - TopRight only
-			function () {
-				if (direction === "DOWN") {
-					direction = "RIGHT";
-				} else if (direction === "LEFT") {
-					direction = "UP";
-				} else { console.log("INVALID DIRECTION 8)"); return; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 8 - TopRight only
+            function () {
+                if (direction === "DOWN") {
+                    direction = "RIGHT";
+                } else if (direction === "LEFT") {
+                    direction = "UP";
+                } else { console.log("INVALID DIRECTION 8)"); return; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 9 - TopLeft & TopRight 
-			function () {
-				if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
-			},
+            // 9 - TopLeft & TopRight
+            function () {
+                if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
+            },
 
-			// 10 - BottomLeft & TopRight 
-			function () {
-				if (direction === "UP") {
-					direction = "LEFT";
-				} else if (direction === "LEFT") {
-					direction = "UP";
-				} else if (direction === "RIGHT") {
-					direction = "DOWN";
-				} else { direction = "RIGHT"; }
-				points.add(_this.toGlobalPointXY(x, y)); //changed direction
-			},
+            // 10 - BottomLeft & TopRight
+            function () {
+                if (direction === "UP") {
+                    direction = "LEFT";
+                } else if (direction === "LEFT") {
+                    direction = "UP";
+                } else if (direction === "RIGHT") {
+                    direction = "DOWN";
+                } else { direction = "RIGHT"; }
+                points.push(_this.toGlobalPointXY(x, y)); //changed direction
+            },
 
-			// 11 - BottomLeft & TopRight & TopLeft --> case 4)
-			() => handlers[4](),
+            // 11 - BottomLeft & TopRight & TopLeft --> case 4)
+            () => handlers[4](),
 
-			// 12 - TopRight & BottomRight 
-			function () {
-				if (direction !== "TOP" && direction !== "DOWN") { console.log("INVALID DIRECTION 12)"); }
-			},
+            // 12 - TopRight & BottomRight
+            function () {
+                if (direction !== "TOP" && direction !== "DOWN") { console.log("INVALID DIRECTION 12)"); }
+            },
 
-			// 13 - TopRight & BottomRight & TopLeft
-			() => handlers[2](),
+            // 13 - TopRight & BottomRight & TopLeft
+            () => handlers[2](),
 
-			// 14 - TopRight & BottomRight & BottomLeft
-			() => handlers[1](),
+            // 14 - TopRight & BottomRight & BottomLeft
+            () => handlers[1](),
 
-			// 15 - ALL inside
-			function () { console.error("Fell out of region."); }
-		];
+            // 15 - ALL inside
+            function () { console.error("Fell out of region."); }
+        ];
 
-		let surroundingInspector = function (x, y, maxDist) {
-			for (var i = 1; i <= maxDist; i++) {
-				//$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
+        let surroundingInspector = function (x, y, maxDist) {
+            for (var i = 1; i <= maxDist; i++) {
+                //$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
+                if (_this.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
                 //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
+                if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
                 //$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
+                if (_this.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
                 //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
 
-				if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
+                if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
 
-			}
-			return null;
-		};
+            }
+            return null;
+        };
 
-		let maxLevel = PLUGINS.imageLayer.source.maxLevel;
-		let level = this._currentTile.level;
-		let maxSpeed = 24;
-		let speed = Math.round(maxSpeed / Math.max(1, 2 * (maxLevel - level)));
+        const first_point = new OpenSeadragon.Point(x, y);
+        let level = this._currentTile.level;
+        const maxSpeed = 24;
+        //todo speed based on pixel size instead?
+        const speed = Math.round(maxSpeed / Math.max(1, 2 * (PLUGINS.imageLayer.source.maxLevel - level)));
+        counter = 0;
+        while ((Math.abs(first_point.x - x) > 2*speed || Math.abs(first_point.y - y) > 2*speed || counter < 20)
+                && counter <= dimensionSize*8){
+            let mark = this.getAreaStamp(x, y);
+            if (mark === 0 || mark === 15) {
+                let findClosest = surroundingInspector(x, y, 2 * speed);
+                console.log("CLOSEST", findClosest);
+                if (findClosest) {
+                    x = findClosest[0];
+                    y = findClosest[1];
+                    points.push(this.toGlobalPointXY(x, y));
+                    console.log("continue");
+                    continue;
+                } else {
+                    console.warn("Outline algorithm exited: could not find close point on the outline.");
+                    return;
+                }
+            }
 
-		let counter = 0;
-		while ((Math.abs(first_point.x - x) > 2*speed || Math.abs(first_point.y - y) > 2*speed) || counter < 20) {
-			let mark = this.getAreaStamp(x, y);
-			if (mark === 0 || mark === 15) {
-				let findClosest = surroundingInspector(x, y, 2 * speed);
-				console.log("CLOSEST", findClosest);
-				if (findClosest) {
-					x = findClosest[0];
-					y = findClosest[1];
-					points.add(this.toGlobalPointXY(x, y));
-					console.log("continue");
-					continue;
-				} else {
-					PLUGINS.dialog.show("Failed to create outline - no close point.", 2000, PLUGINS.dialog.MSG_ERR);
-					return;
-				}
-			}
+            handlers[mark]();
 
-			handlers[mark]();
+            //todo instead of UP/LEFT etc. set directly
+            switch (direction) {
+                case 'UP': y--; break;
+                case 'LEFT': x--; break;
+                case 'RIGHT': x++; break;
+                case 'DOWN': y++; break;
+                default: console.error("Invalid direction");
+            }
+            counter++;
 
-			//todo instead of UP/LEFT etc. set directly
-			switch (direction) {
-				case 'UP': y--; break;
-				case 'LEFT': x--; break;
-				case 'RIGHT': x++; break;
-				case 'DOWN': y++; break;
-				default: console.error("Invalid direction");
-			}
-			counter++;
+            $("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
-            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+            if (counter > 5000) {
+                console.warn("Outline algorithm exited: iteration steps exceeded.");
+                return;
+            }
 
-			if (counter > 5000) {
-				PLUGINS.dialog.show("Failed to create outline", 1500, PLUGINS.dialog.MSG_ERR);
-				$(".to-delete").remove();
-
-				return;
-			}
-
-			//if (counter % 100 === 0) { await sleep(200); }
-		}
-        return Array.from(points);
-	}
-
-    //if first direction cannot be persued, other take over for some time
-	// primaryDirection - where pixel is tested, directions - where the recursion is branching, resultingPoints - to push border points(result),
-	// speed - how many pixels skip, evaluator - function that takes a position and returns bool - True if valid pixel
-	_growRegion(x, y, bitsX, bitsY, bitsmap, resultingPoints, speed, evaluator) {
-
-		if (bitsX < 0 || bitsX >= bitsmap.dimension || bitsY < 0 || bitsY >= bitsmap.dimension) {
-			//todo stop here, add the point or believe it was being taken care of before??
-			resultingPoints.push([x, y]);
-			return;
-		}
-
-		let newP = new OpenSeadragon.Point(x, y);
-		//console.log(`${bitsX}, ${bitsY}:: ${x}, ${y}`)
-		if (evaluator(newP)) {
-			resultingPoints.push([newP.x, newP.y]);
-
-			if (!bitsmap.isFlag(bitsX + 1, bitsY)) {
-				bitsmap.setFlag(bitsX + 1, bitsY);
-				this._growRegion(x + speed, y, bitsX + 1, bitsY, bitsmap, resultingPoints, speed, evaluator);
-			}
-			if (!bitsmap.isFlag(bitsX - 1, bitsY)) {
-				bitsmap.setFlag(bitsX - 1, bitsY);
-				this._growRegion(x - speed, y, bitsX - 1, bitsY, bitsmap, resultingPoints, speed, evaluator);
-			}
-			if (!bitsmap.isFlag(bitsX, bitsY + 1)) {
-				bitsmap.setFlag(bitsX, bitsY + 1);
-				this._growRegion(x, y + speed, bitsX, bitsY + 1, bitsmap, resultingPoints, speed, evaluator);
-			}
-			if (!bitsmap.isFlag(bitsX, bitsY - 1)) {
-				bitsmap.setFlag(bitsX, bitsY - 1);
-				this._growRegion(x, y - speed, bitsX, bitsY - 1, bitsmap, resultingPoints, speed, evaluator);
-			}
-		}
-		//else: try to go pixel by pixel back to find the boundary
-	}
-
-	//if first direction cannot be persued, other take over for some time
-	// primaryDirection - where pixel is tested, directions - where the recursion is branching, resultingPoints - to push border points(result),
-	// speed - how many pixels skip, evaluator - function that takes a position and returns bool - True if valid pixel
-	_growRegionInDirections (x, y, primaryDirection, directions, resultingPoints, speed, evaluator, maxDist = -1, _primarySubstitued = false) {
-		let newP = new OpenSeadragon.Point(x + primaryDirection[0] * speed, y + primaryDirection[1] * speed)
-
-		if (maxDist === 0) {
-			resultingPoints.push([x, y]);
-			return;
-		}
-
-		var valid = true;
-		if (evaluator(newP)) {
-
-			//TODO PUT SOME INSIDE POINTS AS WELL, OTHERWISE CONVEX HULL FAILS TO COMPUTE COREECT OUTLINE
-
-			//if (Math.random() > 0.8) {
-			resultingPoints.push([newP.x, newP.y]);
-			//if (maxDist > 0) $("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-
-			//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-			//}
-
-			if (_primarySubstitued && directions[0]) {
-				valid &= this._growRegionInDirections(newP.x, newP.y, directions[0], [primaryDirection], resultingPoints, speed, evaluator, maxDist--, false);
-			}
-
-			if (valid) {
-				this._growRegionInDirections(newP.x, newP.y, primaryDirection, directions, resultingPoints, speed, evaluator, maxDist--, _primarySubstitued);
-
-				for (let i = 0; i < directions.length; i++) {
-					this._growRegionInDirections(newP.x, newP.y, directions[i], [], resultingPoints, speed, evaluator, maxDist--, _primarySubstitued);
-				}
-			}
-
-			return valid;
-		} else {
-
-			if (!_primarySubstitued) {
-				//TODO due to speed probably imprecise, try to find exact border by going forward by 1?
-
-				// let point = this.toGlobalPoint(new OpenSeadragon.Point(Math.round(x), Math.round(y)));
-				// resultingPoints.push(point); //border point
-
-				// resultingPoints.push([point.x, point.y]); //border point
-				let cc = 0;
-
-				if (maxDist < 0) {
-					do {
-						newP.x -= primaryDirection[0];
-						newP.y -= primaryDirection[1];
-						cc++;
-					} while (!evaluator(newP) && cc < 500);
-					
-				}
-				if (cc < 500) {
-					resultingPoints.push([newP.x, newP.y]);
-					//$("#osd").append(`<span style="position:absolute; top:${newP.y}px; left:${newP.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-
-				}
+            if (counter % 100 === 0) { await sleep(200); }
+        }
+        if (points.length < 3) return null;
+        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
+        for (let i = 1; i < points.length; i++) {
+            maxX = Math.max(maxX, points[i].x);
+            maxY = Math.max(maxY, points[i].y);
+            minX = Math.min(minX, points[i].x);
+            minY = Math.min(minY, points[i].y);
+        }
+        //todo not constant, multiply by pixel ratio from zoom!!!
+        if (maxX - minX < 15 && maxY - minY < 15) return null;
+        return points;
+    }
 
 
-				for (let i = 0; i < directions.length; i++) {
-					this._growRegionInDirections(x + directions[i][0] * speed, y + directions[i][1] * speed, directions[i], [primaryDirection], resultingPoints, speed, evaluator, maxDist--, true);
-				}
-			}
-			return false;
-		}
-	}
 
-	toGlobalPointXY (x, y) {
+    toGlobalPointXY (x, y) {
 		return PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
@@ -1615,9 +1536,10 @@ class AutoObjectCreationStrategy {
 		for (let i = 0; i < tiles.length; i++) {
 			if (tiles[i].bounds.containsPoint(viewportPos)) {
 				this._currentTile = tiles[i];
-				return;
+				return true;
 			}	
 		}
+		return false;
 	}
 
 	isValidPixel(eventPosition) {

@@ -43,6 +43,9 @@ session_destroy();
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+
+    <button onclick="window.location='../list-experiments.php'" class="btn" type="button">Back to experiments</button>
+
 </div>
 
 

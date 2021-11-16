@@ -37,10 +37,10 @@ of certain shader-part script (described below). The only additional fields are
 Contains definitions of shader names, filenames, parameter names, parameters-to-HTML-input mapping and short descriptions.
 
 ### `[shader_part].php`
-Required parameter (`GET` or `POST`) is `index`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
-that can be passed from outer `params` field. All parameters must use the same protocol transfer as the parameter `id`.
+Required parameters (`GET` or `POST`) are `index` and `dataId`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
+that can be passed from outer `params` field. All parameters must use the same protocol transfer type as the parameter `id`.
 
-_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/dynamic_shaders/colors.php?index=1&color=#9900fa
+_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/visualization/release/client/dynamic_shaders/colors.php?index=1&color=#9900fa&dataId=my_data_identifier
 
 Each shader type has a shader part script that generates following JSON-encoded object output with following fields:
 - `definition` - define global variables or custom functions in the resulting shader
@@ -145,16 +145,23 @@ provide you with two local variables:
  
 
 #### Global functions and variables - JavaScript
-For javascript, you can use
-- `redraw();` - will trigger update to the whole canvas, WebGL will be used to update it
-- `loadCache( key, defaultValue )` - will load saved data
-- `saveCache( key, value )` - will save data
+For javascript, you can use `redraw();` - will trigger update to the whole canvas, WebGL will be used to update it.
 
-Saving and retriving data is important for between-visualisation switching. When your visualisation is loaded (not necessarily for the first time), all your `js` code is
+What you __should__ use is variables caching. This is done by touching the internals of the parameter `visualisation`
+which is used to set up the whole app. If you use PHP, include `init.php`, otherwise have a look how this is implemented. In PHP,
+you can use two functions that will take care of this:
+- `$getJSProperty($name, $defaultValue)` will return javascript code (without ending semicolon), where `$name` will be used to search for the variable in the cache, and `$defaultValue` will be returned if no data is found
+    - e.g.`<<<EOF let opacity_{$uniqueId} = {$getJSProperty('opacity', 1)}; EOF;` we initialize on global scope variable, so we use `$uniqueId`, 
+    and we set its value from the cache (or 1 if not present), note that `opacity` is simple without any uniqueness
+- `$setJSProperty($name, $value)` will return javascript code (without ending semicolon), where `$name` will be used to name
+the variable in the cache, and `$value` will be stored
+    - e.g. `<<<EOF {$setJSProperty('text', '"Some Sentence"')}; EOF;`, where we set `cache.text = "Some Sentence"`, note that
+    the value must be enclosed as string, since it is not a variable, this is equivalent to `<<<EOF let text = "Some Sentence"; {$setJSProperty('text', 'text')}; EOF;`, 
+    you must undestand that the first colon `'` is for PHP, and the internal value is in fact the JS value.
+    
+In both cases, this PHP sniplet will return JavaScript code that will correctly work with the cache. Saving and retriving data is important for between-visualisation switching. When your visualisation is loaded (not necessarily for the first time), all your `js` code is
 executed. That means the user would lose all presets from the visualisation use history. Here you can nicely cache your variable values so that all changes will be preserved.
 Also, you will want to probably propagate these values to various `HTML` input elements you've defined in `$html` part.
-
-> Note: `context::` prefix is used internally in JavaScript: do not use it.
 
 ### Example of sending user input values to the GPU
 We will define an input for user to be able to control a shader uniform variable.

@@ -33,17 +33,17 @@ ignored if the `visualisation` was not set
 The behaviour is that either the visualisation is defined by the `JSON` parameter, or `image` and `layer` values
 are used to redirect the user to a custom user setup page.
 
-TODO fix
-_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/iipmooviewer-jiri/OSD/index.php?image=horak/512.tif&layer=horak/3chan.tif
+
+_Example URL_: Direct URL's are not supported, except for those generated within the application.
 
 
-
-The visualisation always needs `image` and `layer` data so that it knows what to render (will be changed in near future).
+The visualisation always needs `visualisation` data parameter so that it knows what to render.
 Then, based on the presence of `visualisation` the user is
 - shown the visualisation if present
-- shown the visualisation if missing but a cached version is available and `new` is not set
-- redirected to `user_setup.php` if missing, where a cached version is available and `new=1` is set
-- redirected to `user_setup.php` if both the aforementioned parameter and cached version are missing
+- redirected to `user_setup.php` if missing, and `image` and `layer` parameters are set
+    - `image` is a single path to the tissue scan
+    - `layer` is a comma-separated path list to the data
+- shown error otherwise
 
 #### ``visualisation`` parameter example
 ````JSON
@@ -75,7 +75,9 @@ Then, based on the presence of `visualisation` the user is
 ... //multiple visualisation presets allowed
 ]
 ````
-All items are required except for items inside `params` field and the exception of `type`/`source`.
+**External parameters** &emsp;
+All items are required except for items inside `params` field and the exception of `type`/`source`. 
+In fact, some (such as `params` or `name` are somehow derived if missing).
 - `name` - visualisation name
 - `params` - visualisation parameters, supported:
     - `uniqueId` - necessary only to set up in case multiple instances of webGL framework are running
@@ -90,6 +92,14 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
         - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined
     - `visible` -  `1` or `0`, whether by default the data layer is visible
     - `params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
+
+**Internal parameters** &emsp;
+The visualisation can internally support more parameters, these are set when the application is running and then used to
+support various caching. Worth noting are
+- `order` parameter for each visualisation goal, which can be an array of shader ID's - this order define the order of rendering, note that all data that is being
+rendered must be present (e.g. all data where in the data settings `visible=1` is set)
+- `cache` object inside each shader definition, contains cached values from the shader usage, its properties are dependent on the
+shader type, so always check whether a desired property exists or not
 
 ####  `plugins.php`
 The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow integrating functionality

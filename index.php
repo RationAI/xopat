@@ -105,9 +105,6 @@ $visualisation = json_encode($parsedParams);
 //  }
 //}
 
-//possible cache
-$cached = hasKey($_POST, "cache") ? $_POST["cache"] : "{}";
-
 $pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
 foreach ($PLUGINS as $_ => $plugin) {
     $plugin->loaded = !isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies);
@@ -332,7 +329,7 @@ foreach ($PLUGINS as $_ => $plugin) {
     /*---------------------------------------------------------*/
 
     var setup = <?php echo $visualisation ?>;
-    var activeShader = 0; //todo active shader from cache
+    var activeShader = 0; //todo active shader from settings
     var activeData = "";
     const iipSrvUrlPOST = '/iipsrv-martin/iipsrv.fcgi?#DeepZoomExt=';
     const iipSrvUrlGET = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
@@ -346,7 +343,7 @@ foreach ($PLUGINS as $_ => $plugin) {
         jsGlLoadedCall: "glLoaded",
         jsGlDrawingCall: "glDrawing",
         //todo create relative path, for some reason this does not work well inside release/ folder probably shader generator issue
-        shaderGenerator: "/iipmooviewer-jiri/OSD/dynamic_shaders/build.php",
+        shaderGenerator: "/visualization/client/dynamic_shaders/build.php",
 
         //called once fully initialized
         ready: function() {
@@ -389,6 +386,8 @@ foreach ($PLUGINS as $_ => $plugin) {
             //         });
             //     }
             // }
+
+            viewer.raiseEvent('visualisation-used', visualisation);
         },
 
         //called when visualisation is unable to run
@@ -422,10 +421,6 @@ foreach ($PLUGINS as $_ => $plugin) {
         seaGL.setVisualisation(visualisationDef);
     });
 
-    //Set cache
-    seaGL.webGLWrapper.setCache(<?php echo $cached; ?>);
-
-
 
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
@@ -434,6 +429,10 @@ foreach ($PLUGINS as $_ => $plugin) {
     //must be defined
     function redraw() {
         seaGL.redraw(viewer.world, layerIDX);
+    }
+
+    function currentVisualisation() {
+        return seaGL.currentVisualisation();
     }
 
     // Tutorial functionality
@@ -783,18 +782,15 @@ foreach ($PLUGINS as $_ => $plugin) {
     /*---------------------------------------------------------*/
 
     function constructExportVisualisationForm(customAttributes="", includeCurrentPlugins=true) {
-        let visCache = JSON.stringify(seaGL.webGLWrapper.getCache());
         let form = `
       <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
-        <input type="hidden" id="cache" name="cache">
         ${customAttributes}
         <input type="submit" value="">
       </form>
       <script type="text/javascript">
         //safely set values (JSON)
-        document.getElementById("visualisation").value = '<?php echo $visualisation ?>';
-        document.getElementById("cache").value = '${visCache}';
+        document.getElementById("visualisation").value = seaGL.exportSettings();
 
         var form = document.getElementById("redirect");
         var node;`;
@@ -835,8 +831,7 @@ form.submit();<\/script>`;
             echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']);
             ?>/redirect.php#";
 
-        url += encodeURIComponent('<?php echo $visualisation ?>') + "|";
-        url += encodeURIComponent(JSON.stringify(seaGL.webGLWrapper.getCache())) + "|";
+        url += encodeURIComponent(seaGL.exportSettings()) + "|";
         Object.values(PLUGINS.each).forEach(plugin => {
             if (plugin.loaded) {
                 url += encodeURIComponent(plugin.flag) + "|";

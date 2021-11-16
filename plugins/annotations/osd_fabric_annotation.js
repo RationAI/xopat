@@ -36,9 +36,6 @@ OSDAnnotations.prototype = {
 	Initialize member variables
 	*/
 	openSeadragonReady: function () {
-
-
-
 		// Classes defined in other local JS files
 		this.presets = new PresetManager("presets", this);
 		this.history = new History("history", this, this.presets);
@@ -69,19 +66,26 @@ OSDAnnotations.prototype = {
 			fireRightClick: true
 		});
 
-		// draw annotation from json file
-		//todo try catch error MSG if fail
+		//restore annotations if any
 		// todo allow user to load his own annotations (probably to a separate layer)
 		PLUGINS.addPostExport("annotation-list", this.getJSONContent.bind(this), this.id);
-		let imageJson = PLUGINS.postData["annotation-list"];
-		if (imageJson) {
-			this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
+		try {
+			let imageJson = PLUGINS.postData["annotation-list"];
+			if (imageJson) {
+				this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
+			}
+		} catch (e) {
+			PLUGINS.dialog.show("Could not load annotations. Please, let us know about this issue and provide means how the visualisation was loaded.", 20000, PLUGINS.dialog.MSG_ERR);
 		}
 
 		//restore presents if any
 		PLUGINS.addPostExport("annotation_presets", this.presets.export.bind(this.presets), this.id);
-		let presets = PLUGINS.postData.annotation_presets;
-		this.presets.import(presets);
+		if (PLUGINS.postData.hasOwnProperty("annotation_presets")) {
+			this.presets.import(PLUGINS.postData["annotation_presets"]);
+		} else {
+			this.presets.left = this.presets.addPreset();
+			this.presets.updatePresetsHTML();
+		}
 
 		this.initHTML();
 		//init history after my own HTML to occur below
@@ -95,58 +99,65 @@ OSDAnnotations.prototype = {
 
 		this.cursor.init();
 		this.opacity = $("#annotations-opacity");
+		this.osdLayer = PLUGINS.imageLayer;
+
+		const _this = this;
 
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", function(event) {
-			openseadragon_image_annotations.setMode(openseadragon_image_annotations.Modes.AUTO);
+			_this.setMode(_this.Modes.AUTO);
 		}, false);
 
 		/****************************************************************************************************************
 	
 									Click Handlers
-	
+		 Input must be always the event invoked by the user input and point in the image coordinates (absolute pixel
+		 position in the scan)
 		*****************************************************************************************************************/
 
-		function handleRightClickUp(o, point) {
-			let _this = openseadragon_image_annotations;
-			//no preset valid for free form tool... TODO move condition inside switch? 
+		let screenToPixelCoords = function(x, y) {
+			return this.osdLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		}.bind(this);
+
+		function handleRightClickUp(event) {
 			if (!_this.cursor.isDown) return;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
-			_this.mode.handleClickUp(o, point, false, factory);
+			let point = screenToPixelCoords(event.x, event.y)
+			_this.mode.handleClickUp(event, point, false, factory);
 
 			_this.cursor.isDown = false;
 		}
 
-		function handleRightClickDown(o, point) {
-			let _this = openseadragon_image_annotations;
+		function handleRightClickDown(event) {
 			if (_this.cursor.isDown) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
-			_this.mode.handleClickDown(o, point, false, factory);
+			let point = screenToPixelCoords(event.x, event.y)
+			_this.mode.handleClickDown(event, point, false, factory);
 		}
 
-		function handleLeftClickUp(o, point) {
-			let _this = openseadragon_image_annotations;
+		function handleLeftClickUp(event) {
 			if (!_this.cursor.isDown) return;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
-			_this.mode.handleClickUp(o, point, true, factory);
+			let point = screenToPixelCoords(event.x, event.y)
+			_this.mode.handleClickUp(event, point, true, factory);
 			_this.cursor.isDown = false;
 		}
 
-		function handleLeftClickDown(o, point) {
-			let _this = openseadragon_image_annotations;
+		function handleLeftClickDown(event) {
 			if (_this.cursor.isDown || !_this.presets.left) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
-			_this.mode.handleClickDown(o, point, true, factory);
+			let point = screenToPixelCoords(event.x, event.y)
+			_this.mode.handleClickDown(event, point, true, factory);
 		}
 
 		/****************************************************************************************************************
@@ -155,23 +166,25 @@ OSDAnnotations.prototype = {
 	
 		*****************************************************************************************************************/
 
-		$('.upper-canvas').mousedown(function (event) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
+		let annotationCanvas = this.overlay.fabricCanvas().upperCanvasEl;
+		annotationCanvas.addEventListener('mousedown', function (event) {
+			if (!_this.showAnnotations) return;
 
-			if (event.which === 1) handleLeftClickDown(event, {x: event.pageX, y: event.pageY});
-			else if (event.which === 3) handleRightClickDown(event, {x: event.pageX, y: event.pageY});
+			if (event.which === 1) handleLeftClickDown(event);
+			else if (event.which === 3) handleRightClickDown(event);
 		});
 
-		$('.upper-canvas').mouseup(function (event) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
+		annotationCanvas.addEventListener('mouseup', function (event) {
+		if (!_this.showAnnotations) return;
 
-			if (event.which === 1) handleLeftClickUp(event, {x: event.pageX, y: event.pageY});
-			else if (event.which === 3) handleRightClickUp(event, {x: event.pageX, y: event.pageY});
+			if (event.which === 1) handleLeftClickUp(event);
+			else if (event.which === 3) handleRightClickUp(event);
 		});
 
-		//Update object when user hodls ALT and moving with mouse (openseadragon_image_annotations.isMouseOSDInteractive() == true)
+		//These functions already pass pointer in image coordinates
+
+		//Update object when user hodls ALT and moving with mouse (_this.isMouseOSDInteractive() == true)
 		this.overlay.fabricCanvas().on('mouse:move', function (o) {
-			let _this = openseadragon_image_annotations;
 			if (!_this.showAnnotations || !_this.cursor.isDown) return;
 			_this.mode.handleMouseMove(_this.overlay.fabricCanvas().getPointer(o.e));
 		});
@@ -180,8 +193,8 @@ OSDAnnotations.prototype = {
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
 				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
-				openseadragon_image_annotations.history.highlight(e.target);
-				e.target.hasControls = !openseadragon_image_annotations.isMouseOSDInteractive();
+				_this.history.highlight(e.target);
+				e.target.hasControls = !_this.isMouseOSDInteractive();
 			}
 		});
 
@@ -194,23 +207,23 @@ OSDAnnotations.prototype = {
 		*****************************************************************************************************************/
 
 		PLUGINS.osd.addHandler("canvas-press", function (e) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
-			handleLeftClickDown(e.originalEvent, e.position);
+			if (!_this.showAnnotations) return;
+			handleLeftClickDown(e.originalEvent);
 		});
 
 		PLUGINS.osd.addHandler("canvas-release", function (e) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
-			handleLeftClickUp(e.originalEvent, e.position);
+			if (!_this.showAnnotations) return;
+			handleLeftClickUp(e.originalEvent);
 		});
 
 		PLUGINS.osd.addHandler("canvas-nonprimary-press", function (e) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
-			handleRightClickDown(e.originalEvent, e.position);
+			if (!_this.showAnnotations) return;
+			handleRightClickDown(e.originalEvent);
 		});
 
 		PLUGINS.osd.addHandler("canvas-nonprimary-release", function (e) {
-			if (!openseadragon_image_annotations.showAnnotations) return;
-			handleRightClickUp(e.originalEvent, e.position);
+			if (!_this.showAnnotations) return;
+			handleRightClickUp(e.originalEvent);
 		});
 
 		$(PLUGINS.osd.element).on('contextmenu', function (event) {
@@ -224,8 +237,6 @@ OSDAnnotations.prototype = {
 		*****************************************************************************************************************/
 
 		document.addEventListener('keydown', (e) => {
-			let _this = openseadragon_image_annotations;
-
 			// switching mode only when no mode AUTO and mouse is up
 			if (!_this.showAnnotations || _this.cursor.isDown) return;
 
@@ -237,7 +248,6 @@ OSDAnnotations.prototype = {
 		});
 
 		document.addEventListener('keyup', (e) => {
-			let _this = openseadragon_image_annotations;
 			if (!_this.showAnnotations) return;
 
 			if (e.code === "Delete") {
@@ -257,36 +267,35 @@ OSDAnnotations.prototype = {
 			}	
 		});
 
-
+		// TODO re-implement?
 		// listen for annotation send button
-		$('#sendAnnotation').click(function (event) {
+		//$('#sendAnnotation').click(function (event) {
 			//generate ASAPXML annotations
-			var doc = generate_ASAPxml(openseadragon_image_annotations.overlay.fabricCanvas()._objects);
-			var xml_text = new XMLSerializer().serializeToString(doc);
-
-			// get file name from probabilities layer (axperiment:slide)
-			var probabs_url_array = PLUGINS.osd.tileSources[2].split("=")[1].split("/");
-			var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
-			var experiment = probabs_url_array.pop();
-			var file_name = [experiment, slide].join(":");
-
-			//prepare data to be send, (file_name and xml with annotations)
-			var send_data = { "name": file_name, "xml": xml_text };
-
-			$.ajaxSetup({
-				headers: {
-					'Content-Type': 'application/json',
-					'Accept': 'application/json'
-				}
-			});
-			//send data to url
-			$.post('http://ip-78-128-251-178.flt.cloud.muni.cz:5050/occlusion',  // url
-				JSON.stringify(send_data), // data to be submit
-				function (data, status, xhr) {   // success callback function
-					PLUGINS.dialog.show('status: ' + status + ', data: ' + data.responseData, 8000, PLUGINS.dialog.MSG_INFO);
-				});
-		});
-
+			// var doc = generate_ASAPxml(_this.overlay.fabricCanvas()._objects);
+			// var xml_text = new XMLSerializer().serializeToString(doc);
+			//
+			// // get file name from probabilities layer (axperiment:slide)
+			// var probabs_url_array = PLUGINS.osd.tileSources[2].split("=")[1].split("/");
+			// var slide = probabs_url_array.pop().split(".")[0].slice(0, -4);
+			// var experiment = probabs_url_array.pop();
+			// var file_name = [experiment, slide].join(":");
+			//
+			// //prepare data to be send, (file_name and xml with annotations)
+			// var send_data = { "name": file_name, "xml": xml_text };
+			//
+			// $.ajaxSetup({
+			// 	headers: {
+			// 		'Content-Type': 'application/json',
+			// 		'Accept': 'application/json'
+			// 	}
+			// });
+			// //send data to url
+			// $.post('http://ip-78-128-251-178.flt.cloud.muni.cz:5050/occlusion',  // url
+			// 	JSON.stringify(send_data), // data to be submit
+			// 	function (data, status, xhr) {   // success callback function
+			// 		PLUGINS.dialog.show('status: ' + status + ', data: ' + data.responseData, 8000, PLUGINS.dialog.MSG_INFO);
+			// 	});
+		//});
 
 		//todo decide what format to use, discard the other one
 		// download annotation as default json file and generated ASAP xml file
@@ -297,42 +306,35 @@ OSDAnnotations.prototype = {
 				document.getElementById(id).click();
 			}
 			//TODO add other attributes for export to preserve funkcionality (border width, etc)
-			download(openseadragon_image_annotations.getJSONContent());
+			download(_this.getJSONContent());
 			//asap xml
-			download(openseadragon_image_annotations.getXMLStringContent());
+			download(_this.getXMLStringContent());
 		});
-
 
 		// listen for changes in opacity slider and change opacity for each annotation
 		this.opacity.on("input", function () {
 			//todo what about setting opacity globaly to the whole canvas?
 			var opacity = $(this).val();
-			openseadragon_image_annotations.overlay.fabricCanvas().forEachObject(function (obj) {
+			_this.overlay.fabricCanvas().forEachObject(function (obj) {
 				obj.opacity = opacity;
 			});
 
-			openseadragon_image_annotations.overlay.fabricCanvas().renderAll();
+			_this.overlay.fabricCanvas().renderAll();
 		});
 
 		// TODO delete?    update annotation group (from input form)
 		$("#annotation_group").on("change", function () {
-			var annotation = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
+			var annotation = _this.overlay.fabricCanvas().getActiveObject();
 			annotation.set({ a_group: $(this).val() });
 		});
 
 		// TODO delete?   update annotation comment (from input form)
 		$("#annotation_comment").on("input", function () {
-			var annotation = openseadragon_image_annotations.overlay.fabricCanvas().getActiveObject();
+			var annotation = _this.overlay.fabricCanvas().getActiveObject();
 			if (annotation) {
 				annotation.set({ comment: $(this).val() })
 			}
-			openseadragon_image_annotations.history._updateBoardText(annotation, annotation.comment);
-		});
-
-		// delete all annotations
-		$('#deleteAll').click(function () {
-			Object.values(openseadragon_image_annotations.objectFactories).forEach(value => value.finishIndirect());
-			openseadragon_image_annotations.deleteAllAnnotations();
+			_this.history._updateBoardText(annotation, annotation.comment);
 		});
 	}, // end of initialize
 
@@ -344,17 +346,17 @@ OSDAnnotations.prototype = {
 
 	initHTML: function() {
 		PLUGINS.appendToMainMenuExtended("Annotations", `
-		<span class="material-icons" onclick="openseadragon_image_annotations.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
+		<span class="material-icons" onclick="${this.id}.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
 		<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
 		<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
 		
 		<span class="material-icons" id="enable-disable-annotations" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
 		if ($(this).attr('data-ref') === 'on'){
-			openseadragon_image_annotations.turnAnnotationsOnOff(false);
+			${this.id}.turnAnnotationsOnOff(false);
 			$(this).html('visibility_off');
 			$(this).attr('data-ref', 'off');
 		} else {
-			openseadragon_image_annotations.turnAnnotationsOnOff(true);
+			${this.id}.turnAnnotationsOnOff(true);
 			$(this).html('visibility');
 			$(this).attr('data-ref', 'on');
 		}"> visibility</span>`,
@@ -379,7 +381,7 @@ OSDAnnotations.prototype = {
 		});
 		//form for object property modification
 		$("body").append(`<div id="annotation-cursor" class="${this.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-<select id="annotation-mode" class="form-control position-fixed top-2 left-2 ${this.id}-plugin-root" onchange="openseadragon_image_annotations.setModeById($(this).val());return false;">${modeOptions}</select>`);
+<select id="annotation-mode" class="form-control position-fixed top-2 left-2 ${this.id}-plugin-root" onchange="${this.id}.setModeById($(this).val());return false;">${modeOptions}</select>`);
 	},
 
 	showHelp: function() {
@@ -527,7 +529,7 @@ OSDAnnotations.prototype = {
 			let coordinates=[];
 
 			xml_annotation.setAttribute("Name", "Annotation " + i);
-			let factory = openseadragon_image_annotations.getAnnotationObjectFactory(obj.type);
+			let factory = this.getAnnotationObjectFactory(obj.type);
 			if (factory) {
 				xml_annotation.setAttribute("Type", "Rectangle");
 				coordinates = factory.toPointArray(obj, AnnotationObjectFactory.withArrayPoint);
@@ -678,7 +680,9 @@ OSDAnnotations.prototype = {
 
 	// Get all objects from canvas
 	deleteAllAnnotations: function () {
-		let objects = openseadragon_image_annotations.overlay.fabricCanvas().getObjects();
+		Object.values(this.objectFactories).forEach(value => value.finishIndirect());
+
+		let objects = this.overlay.fabricCanvas().getObjects();
 		/* if objects is null, catch */
 		if (objects.length === 0 || !confirm("Do you really want to delete all annotations?")) return;
 
@@ -858,10 +862,6 @@ class AnnotationState {
 		this.context.cursor.isDown = false;
 	}
 
-	_toGlobalPointXY(x, y) {
-		return PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
-	}
-
 	default() {
 		return this._id === "auto";
 	}
@@ -874,7 +874,7 @@ class StateAuto extends  AnnotationState {
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) return;
-		this._finish(point, isLeftClick, objectFactory);
+		this._finish(o, isLeftClick, objectFactory);
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
@@ -891,14 +891,18 @@ class StateAuto extends  AnnotationState {
 		let active = this.context.canvas().findTarget(event);
 		if (active) {
 			this.context.canvas().setActiveObject(active);
-			this.context.cursor.mouseTime = 0;
+			this.abortClick();
 		}
 	}
 
-	_finish(point, isLeftClick, updater) {
+	_finish(event, isLeftClick, updater) {
 		let delta = Date.now() - this.context.cursor.mouseTime;
 		if (delta > 100 || !updater) return; // just navigate if click longer than 100ms
-		updater.instantCreate(point, isLeftClick);
+
+		//instant create wants screen pixels as we approximate based on zoom level
+		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
+			PLUGINS.dialog.show("Could not create automatic annotation.", 5000, PLUGINS.dialog.MSG_WARN);
+		}
 	}
 
 	setFromAuto() {
@@ -933,8 +937,6 @@ class StateFreeFormTool extends AnnotationState {
 
 	_init(point, isLeftClick) {
 		let currentObject = this.context.overlay.fabricCanvas().getActiveObject();
-
-		let pointer = this._toGlobalPointXY(point.x, point.y);
 		if (!currentObject) {
 			if (this.context.modifyTool._cachedSelection) {
 				console.log("READ cache");
@@ -943,14 +945,14 @@ class StateFreeFormTool extends AnnotationState {
 				this.context.modifyTool._cachedSelection = null;
 			} else {
 				currentObject = this.context.polygonFactory.create(
-					this.context.modifyTool.getCircleShape(pointer), this.context.presets.getAnnotationOptions(isLeftClick)
+					this.context.modifyTool.getCircleShape(point), this.context.presets.getAnnotationOptions(isLeftClick)
 				);
 				this.context.addAnnotation(currentObject);
 			}
 		}
 
 		this.context.modifyTool.init(currentObject, point, isLeftClick);
-		this.context.modifyTool.update(pointer);
+		this.context.modifyTool.update(point);
 	}
 
 	_finish() {
@@ -1006,8 +1008,7 @@ class StateCustomCreate extends AnnotationState {
 
 	_init(point, isLeftClick, updater) {
 		if (!updater) return;
-		let pointer = this._toGlobalPointXY(point.x, point.y);
-		updater.initCreate(pointer.x, pointer.y, isLeftClick);
+		updater.initCreate(point.x, point.y, isLeftClick);
 	}
 
 	_finish(updater) {
