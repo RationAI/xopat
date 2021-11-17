@@ -446,7 +446,7 @@ OSDAnnotations.prototype = {
 
 	setupTutorials: function() {
 		PLUGINS.addTutorial(
-			"Annotations Plugin", "learn to use annotations (note: the tutorial is not well tested and will be split to multiple smaller ones later)", "draw", [ 
+			this.id, "Annotations Plugin Overview", "get familiar with the annotations plugin", "draw", [
 			{
 				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
 			}, {
@@ -458,7 +458,7 @@ OSDAnnotations.prototype = {
 			},{
 				"next #downloadAnnotation": "Here you can download <b>just</b> your annotations.<br>This is included automatically when using global `Export` option."
 			},{
-				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!"
+				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by hovering mouse."
 			},{
 				"click #annotations-right-click": "Click here to specify an annotation<br>for your right mouse button."
 			},{
@@ -468,38 +468,93 @@ OSDAnnotations.prototype = {
 			},{
 				"click #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
 			},{
-				"next #preset-no-1": "Adjust the new annotation preset:<br>choose a <b>polygon</b> as type,<br>and set any color and comment you like."
-			},{
 				"click #select-annotation-preset": "Click <b>Select</b> to assign it to the right mouse button."
 			},{
 				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 			},{
-				"next #viewer-container": "Try now to right-click somewhere on a canvas:<br>either you click on a data that will be<br>automatically outlined, or outside:<br>the visualisation will tell you so.<br>By simple click on a canvas, you can create automatically annotations.<br>But dragging will let you navigate."
-			},{
-				"next #sensitivity_auto_outline": "The automated annotation creation is controlled by this slider.<br>Increase the slider value to choose more opaque areas only - and vice versa."
-			},{
-				"next #annotation-mode": "Apart from the default, navigation mode, you can switch to different annotation modes here."
-			},{
-				"next #viewer-container": "Select 'custom shape' mode to drag-create annotations (or click for points adding in case of polygon).<br> You can do the selection temporarily by holding <br>Left Alt</b> key.<br> Note: polygon will be created from its custom points<br>only after you switch to a different mode.<br> Releasing left Alt will thus finish the polygon creation easily."
-			},{
-				"next #viewer-container": "Select 'free form tool' mode to adjust annotations.<br> You can do the selection temporarily by holding <br>Left Shift</b> key."
-			},{
-				"next #viewer-container": "While holding a left shift key, you can draw custom shapes,<br>or adjust existing annotations. Select any and use left mouse button to add mass,<br>right mouse button to remove mass from it.<br>Do these modifications on an edge of the selected annotation. Try it all now."
-			},{
-				"next #fft-size": "You can control the size of the free-form tool here."
-			},{
-				"next #annotation-board": "The board should now also contain new object(s).<br>You can edit the comment or click to focus the annotation easily."
-			},{
-				"click #history-undo": "A history cache will allow you to undo few last modifications.<br>Click here to undo the last step."
-			},{
-				"click #history-redo": "Click on 'redo' to return the last change.<br><b>Caveat</b>: redo history is erased on manual history change."
-			},{
-				"next #history-refresh": "Refreshing the board might come useful in case<br>some unexpected error caused the board miss an annotation."
-			},{
-				"next #history-sync": "You can update all objects to reflect the most recent changes on presets. <br><b>Caveat</b>: this will undo any custom modifications made to annotations (comment/color)."
-			},{
-				"next #annotation-board": "Hotkeys: 'undo' can be performed by Ctrl+Z, 'redo' by Ctrl+Shift+Z.<br>'Delete' key will remove highlighted annotation<br>-simply click on the board on an annotation and hit 'delete' key."
+				"next #annotation-mode": "Apart from the default, navigation mode, you can switch to different annotation modes here. Modes are closely described in other tutorials."
 			}]
+		);
+
+		let pluginOpener = (function() {$(`#${this.id}-pin`).trigger()}).bind(this);
+		PLUGINS.addTutorial(
+			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
+				{
+					"next #sensitivity-auto-outline": "You have to select what data you want to annotate."
+				},
+				{
+					"next #annotations-left-click": "If you use POLYGON and click on empty space, the plugin will tell you.<br>Creation migh also fail - you can try adjusting ZOOM level or clicking on a different spot."
+				},
+				{
+					"next #annotations-left-click": "Rectangle and ellipse will try to fit the data in layer you selected, <br> but if you click somewhere without data, instead of failure a default-size object<br> will be created."
+				},
+				{
+					"next #inner-panel-content-1": "It is a good idea to limit threshold values: selected regions will be smaller with higher thresholds."
+				},
+				{
+					"next #viewer-container": "Now you can try it out."
+				}
+			], pluginOpener
+		);
+
+		PLUGINS.addTutorial(
+			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
+				{
+					"next #annotation-mode": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
+				},
+				{
+					"next #annotations-left-click": "If you use POLYGON you can click or drag mouse to create its vertices.<br> For now, polygon will be finished if you change mode, so releasing Alt key is a good way to go."
+				},
+				{
+					"next #annotations-left-click": "Rectangle and ellipse will be created by click-drag movement."
+				},
+				{
+					"next #viewer-container": "Now you can try it out."
+				}
+			], pluginOpener
+		);
+
+		PLUGINS.addTutorial(
+			this.id, "Free form tool", "painting with your mouse", "gesture", [
+				{
+					"next #annotation-mode": "You need to be in free form tool. We recommend using 'Left Shift' key <br> instead of setting this manually."
+				},
+				{
+					"next #annotation-board": "First highlight any object on board (or on the canvas)."
+				},
+				{
+					"next #viewer-container": "Selected object can be appended to (LEFT mouse button) or removed from (RIGHT mouse button)."
+				},
+				{
+					"next #fft-size": "You can control the size of the free-form tool here."
+				},
+				{
+					"next #viewer-container": "Now you can try it out."
+				}
+			], pluginOpener
+		);
+
+		PLUGINS.addTutorial(
+			this.id, "Annotations Board", "annotations management", "dashboard_customize", [
+				{
+					"next #viewer-container": "First, make sure you have some annotation created. If not, make one now."
+				},
+				{
+					"click #history-undo": "A history cache will allow you to undo few last modifications.<br>Click here to undo the last step. Shortcut is Ctrl+Z."
+				},
+				{
+					"click #history-redo": "Click on 'redo' to return the last change.<br><b>Caveat</b>: redo history is erased on manual history change. Shortcut is Ctrl+Shift+Z."
+				},
+				{
+					"next #history-refresh": "Refreshing the board might come useful in case<br>some unexpected error caused the board miss an annotation."
+				},
+				{
+					"next #history-sync": "You can update all objects to reflect the most recent changes on presets. <br><b>Caveat</b>: this will overwrite any custom modifications made to annotations (comment/color)."
+				},
+				{
+					"next #annotation-board": "If you want to modify some object, click on the pencil icon.<br> The board will turn red to notify you navigation is disabled."
+				}
+			], pluginOpener
 		);
 	},
 

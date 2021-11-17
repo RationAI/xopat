@@ -483,8 +483,8 @@ foreach ($PLUGINS as $_ => $plugin) {
             if (!icon) icon = "school";
             plugidId = plugidId ? `${plugidId}-plugin-root` : "";
             this.tutorials.append(`
-          <div class='d-inline-block mx-1 px-2 py-2 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="Tutorials.run(${this.steps.length});">
-          <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p style='max-width: 150px;'>${description}</div>`);
+          <div class='d-inline-block px-2 py-2 m-1 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="Tutorials.run(${this.steps.length});">
+          <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
             this.steps.push(steps);
             this.prerequisites.push(prerequisites);
         },
@@ -511,7 +511,7 @@ foreach ($PLUGINS as $_ => $plugin) {
         }
     }
 
-    Tutorials.add("Basic functionality", "learn how the visualiser works", "foundation", [ {
+    Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
         'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
     },{
         'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
