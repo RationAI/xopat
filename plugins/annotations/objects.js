@@ -1245,8 +1245,7 @@ annotations.">Target data layer:</span><select style="width:50%" title="What lay
 type="number" id="sensitivity-auto-outline" class="form-control" onchange="
 let layer = PLUGINS.seaGL.currentVisualisation().shaders[$(this).val()];
 ${this._globalSelf}._readingIndex = layer.order;
-${this._globalSelf}._readingKey = $(this).val();"></select>
-<br><button onclick="$('.to-delete').remove();"></button>`;
+${this._globalSelf}._readingKey = $(this).val();"></select>`;
     }
 
 

@@ -66,6 +66,10 @@ function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
 }
 
 $parsedParams = json_decode($visualisation);
+if (!$parsedParams) {
+    throwFatalError("Invalid link.",
+        "The visualisation setup is not parse-able.", $visualisation);
+}
 foreach ($parsedParams as $visualisationTarget) {
     propertyExists($visualisationTarget, "data", "No image data available.",
         "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
