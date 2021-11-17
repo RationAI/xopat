@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8">
-  <title>Visualisation</title>
+  <title>Visualisation User Setup</title>
 
   <link rel="stylesheet" href="./external/primer_css.css">
   
@@ -58,7 +58,7 @@ foreach ($shaders as $name=>$filename) {
   //html parts inner part must be an argument: data ID
   $shader_selections[$name] = [
     "<div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'  onclick=\"selectShaderPart(this, '$name', '$filename', '",
-    "');\"><img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='dynamic_shaders/$filename.png'><p class='f3-light mb-0'>$name</p><p style='max-width: 150px;'>{$descriptions[$name]}</div>"
+    "');\"><img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='dynamic_shaders/$filename.png'><p class='f3-light mb-0'>$name</p><p style='max-width: 150px;'>{$descriptions[$name]}</p></div>"
   ];
 
   $params = array();

@@ -928,17 +928,18 @@ class Polygon extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         const _this = this;
-        (async function _() {
+        //(async function _() {
             //todo disable user interaction while computing
             //todo delete polygon if not big enough
-            let result = await _this._auto.createOutline(point);
+            let result = /*await*/ _this._auto.createOutline(point);
 
-            if (!result) return;
-
+            if (!result || result.length < 3) return false;
+            result = _this.simplify(result);
             _this._context.addAnnotation(
                 _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
             );
-        })();
+            return true;
+        //})();
     }
 
     isValidShortCreationClick() {
@@ -1200,15 +1201,11 @@ class AutoObjectCreationStrategy {
         this._pixelReader.height = 1;
         this._pixelReader = this._pixelReader.getContext('2d');
         this.alphaSensitivity = 1;
-        this.comparator = function(pix) {
-            //we read grayscale images
-            return pix[0] > this.alphaSensitivity;
-        }
-
 
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
         this._readingIndex = 0;
+        this._readingKey = "";
 
         const _this = this;
         PLUGINS.osd.addHandler('visualisation-used', function (visualisation) {
@@ -1216,10 +1213,12 @@ class AutoObjectCreationStrategy {
 
             let index = -1;
             let layer = null;
-            for (let key in visualisation.shaders) {
+            let key = "";
+            for (key in visualisation.shaders) {
                 layer = visualisation.shaders[key];
                 if (layer.order === _this._readingIndex) {
                     index = layer.order;
+                    _this._readingKey = key;
                     html += `<option value='${key} selected'>${layer.name}</option>`;
                 } else {
                     html += `<option value='${key}'>${layer.name}</option>`;
@@ -1228,9 +1227,8 @@ class AutoObjectCreationStrategy {
 
             if (index < 0) {
                 _this._readingIndex = layer.order;
+                _this._readingKey = key;
                 html = "<option selected " + html.substr(8);
-                _this.alphaSensitivity = layer.cache.hasOwnProperty('threshold') ?
-                    layer.cache.threshold * 256 / 100 : 1;
             }
             $("#sensitivity-auto-outline").html(html);
         });
@@ -1241,18 +1239,49 @@ class AutoObjectCreationStrategy {
 annotations.">Target data layer:</span><select style="width:50%" title="What layer is selected for the data." 
 type="number" id="sensitivity-auto-outline" class="form-control" onchange="
 let layer = PLUGINS.seaGL.currentVisualisation().shaders[$(this).val()];
-${this._globalSelf}._readingIndex = layer.order; ${this._globalSelf}.alphaSensitivity = 
-layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1; "></select>
+${this._globalSelf}._readingIndex = layer.order;
+${this._globalSelf}._readingKey = $(this).val();"></select>
 <br><button onclick="$('.to-delete').remove();"></button>`;
+    }
+
+
+    updateAutoSensitivity() {
+        let layer = PLUGINS.seaGL.currentVisualisation().shaders[this._readingKey];
+        if (layer) {
+            // 128 empirically set
+            this.alphaSensitivity = Math.max(layer.cache.hasOwnProperty('threshold') ?
+                layer.cache.threshold * 128 / 100 : 1, 20);
+
+            this.comparator = layer.type === "dual-color" ?
+                function(pix) {
+                    //we read grayscale images
+                    return Math.abs(pix[0] - 128) > this.alphaSensitivity;
+                }
+                :
+                function(pix) {
+                    //we read grayscale images
+                    return pix[0] > this.alphaSensitivity;
+                };
+
+        } else {
+            this.comparator = function(pix) {
+                //we read grayscale images
+                return pix[0] > this.alphaSensitivity;
+            }
+        }
+
+
     }
 
     approximateBounds(point) {
 		if (!this.changeTile(point)) {
 		    return null;
         }
+        this.updateAutoSensitivity();
+
+        let origPixel = this.getPixelData(eventPosition);
         let dimensionSize = Math.max(screen.width, screen.height);
 
-		let origPixel = this.getPixelData(point);
 		var x = point.x;
 		var y = point.y;
 
@@ -1302,10 +1331,20 @@ layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1;
         return { top: top, left: left, bottom: bottom, right: right };
     }
 
-    async createOutline(eventPosition) {
+
+    pixelSize() {
+        let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(1, 0));
+        return Math.round(Math.abs(pointB.x - pointA.x));
+    }
+
+    /*async*/ createOutline(eventPosition) {
         if (!this.changeTile(eventPosition)) {
             return null;
         }
+        this.updateAutoSensitivity();
+
+        let origPixel = this.getPixelData(eventPosition);
         let dimensionSize = Math.max(screen.width, screen.height);
 
         let points = [];
@@ -1315,7 +1354,6 @@ layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1;
         var y = eventPosition.y;  // current y position
         var direction = "UP"; // current direction of outline
 
-        let origPixel = this.getPixelData(eventPosition);
         if (!this.comparator(origPixel)) {
             console.warn("Outline algorithm exited: outside region.")
             return
@@ -1331,7 +1369,7 @@ layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1;
         }
         x -= 2;
 
-        $("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+        //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
         //indexing instead of switch
         //todo fix openseadragon_image_annotations reference
@@ -1460,12 +1498,12 @@ layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1;
 
         const first_point = new OpenSeadragon.Point(x, y);
         let level = this._currentTile.level;
-        const maxSpeed = 24;
         //todo speed based on pixel size instead?
-        const speed = Math.round(maxSpeed / Math.max(1, 2 * (PLUGINS.imageLayer.source.maxLevel - level)));
+        const speed = 1; //Math.round(Math.max(this.pixelSize()/2, 1));
+        //const maxSpeed = 24;
+        //const speed = Math.round(maxSpeed / Math.max(1, 2 * (PLUGINS.imageLayer.source.maxLevel - level)));
         counter = 0;
-        while ((Math.abs(first_point.x - x) > 2*speed || Math.abs(first_point.y - y) > 2*speed || counter < 20)
-                && counter <= dimensionSize*8){
+        while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 20) {
             let mark = this.getAreaStamp(x, y);
             if (mark === 0 || mark === 15) {
                 let findClosest = surroundingInspector(x, y, 2 * speed);
@@ -1494,14 +1532,14 @@ layer.cache.hasOwnProperty('threshold') ? layer.cache.threshold * 256 / 100 : 1;
             }
             counter++;
 
-            $("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
-            if (counter > 5000) {
+            if (counter > dimensionSize*8) {
                 console.warn("Outline algorithm exited: iteration steps exceeded.");
                 return;
             }
 
-            if (counter % 100 === 0) { await sleep(200); }
+            //if (counter % 100 === 0) { await sleep(200); }
         }
         if (points.length < 3) return null;
         let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;

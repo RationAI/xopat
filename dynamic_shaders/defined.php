@@ -53,15 +53,15 @@
 
  //params short description
  $paramDescriptions = array(
-    "color"=>"default color",
-    "ctrlColor"=>"allow to change color",
-    "ctrlThreshold"=>"allow to control threshold",
-    "ctrlOpacity"=>"allow to control opacity",
-    "inverse"=>"treat low values as high values and vice versa",
-    "logScale"=>"use logarithmic scale instead of linear",
-    "logScaleMax"=>"max value in logarithmic normalisation, used with logarithmic scale",
-    "colorHigh"=>"color for values closer to MAX (255)",
-    "colorLow"=>"color for values closer to MIN (0)"
+    "color"=>"color of the layer, default #d2eb00",
+    "ctrlColor"=>"allow user to change color if set to 1",
+    "ctrlThreshold"=>"allow user to control threshold if set to 1",
+    "ctrlOpacity"=>"allow user to control opacity if set to 1",
+    "inverse"=>"treat low values as high values and vice versa if set to 1",
+    "logScale"=>"use logarithmic scale instead of linear if set to 1",
+    "logScaleMax"=>"max value in logarithmic normalisation, used with logarithmic scale, this value is compared against pixel values (range from 0 to 1)",
+    "colorHigh"=>"color for values closer to MAX (255), default #ff0000",
+    "colorLow"=>"color for values closer to MIN (0), default #7cfc00"
  );
 
  //how a param type is mapped to HTML input type

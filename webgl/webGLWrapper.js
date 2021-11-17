@@ -29,12 +29,14 @@ class WebGLWrapper {
 
         this.gl_drawing = function (gl, tile, e) {
             //use shaders only for certain tile source
-            //todo make this more elegant (move decision into osdGL script)
-            if (e.tiledImage.source.tilesUrl.indexOf(urlImage) !== -1) return false; //use webGL if not urlImage source
-            
-            //otherwise setup shader uniforms...
-            this._callString(this.jsGlDrawingCall, gl, e);
-            return true; //use webGL if not urlImage source
+            //todo DIRTY make this more elegant (move decision into osdGL script)
+            if (e.tiledImage.source.postData) {
+                this._callString(this.jsGlDrawingCall, gl, e);
+                return true; //use webGL if not urlImage source
+            } else {
+                //otherwise no POST data was used, so no advanced protocol draw normally
+                return false;
+            }
         };
 
         // Assign from incoming terms
@@ -94,44 +96,20 @@ class WebGLWrapper {
         this._detachShader(program, "VERTEX_SHADER");
         this._detachShader(program, "FRAGMENT_SHADER");
         this._visualisationToProgram(vis, program, this._program);
-        this.forceSwitchShader(null, true);
+        this._forceSwitchShader(null);
     }
 
     /**
      * Switch to program at index: this is the index (order) in which
      * setShaders(...) was called. If you want to switch to shader that
      * has been set with second setShaders(...) call, pass i=1.
-     * @param {integer} i program index
+     * @param {Number} i program index or null if you wish to re-initialize the current one
      */
     switchVisualisation(i) {
         if (this._program === i) return;
-        this.forceSwitchShader(i, true);
-    }
-
-    /**
-     * Force switch shader (program), will reset even if the specified
-     * program is currently active, good if you need 'gl-loaded' to be
-     * invoked (e.g. some uniform variables changed)
-     * @param {integer} i program index
-     */
-    forceSwitchShader(i, preserveJS = false) {
-        if (!i) i = this._program;
-
-        if (i >= this._programs.length) {
-            console.error("Invalid shader index.");
-            return;
-        } else if (this._visualisations[i].hasOwnProperty("error") || !this._programs[i]) {
-            this._loadHtml(i, this._program, preserveJS);
-            this._loadScript(i, this._program, preserveJS);
-            this.onFatalError(this._visualisations[i]);
-            this.running = false;
-        } else {
-            this.running = true;
-            this._loadHtml(i, this._program, preserveJS);
-            this._loadScript(i, this._program, preserveJS);
-            this.toBuffers(this._programs[i]);
-        }
-        this._program = i;
+        //todo remove this, only temporary solution
+        this.visualisationChanged(this._visualisations[this._program], this._visualisations[i]);
+        this._forceSwitchShader(i);
     }
 
     /**
@@ -187,6 +165,15 @@ class WebGLWrapper {
     willUseWebGL(imageElement, e) {
         //todo dirty do it differently
         return this['gl_drawing'].call(this, this.gl, imageElement, e);
+    }
+
+    exportSettings() {
+        //export all except eventSource: automatically attached by OpenSeadragon event engine; or generated data
+
+        //todo move all these properties to 'unexportable'
+        let forbidden = ["eventSource", "vertex_shader", "fragment_shader", "js", "html", "definition", "execution", "glLoaded", "glDrawing"];
+        return JSON.stringify(this._visualisations,
+            (key, value) => forbidden.includes(key) ? undefined : value);
     }
 
     /**
@@ -246,7 +233,7 @@ class WebGLWrapper {
         this.setDimensions(width, height);
         this.running = true;
 
-        this.forceSwitchShader(null, false);
+        this._forceSwitchShader(null);
         this.ready();
     }
 
@@ -283,13 +270,40 @@ class WebGLWrapper {
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
 
+    /**
+     * @private
+     * Force switch shader (program), will reset even if the specified
+     * program is currently active, good if you need 'gl-loaded' to be
+     * invoked (e.g. some uniform variables changed)
+     * @param {Number} i program index or null if you wish to re-initialize the current one
+     */
+    _forceSwitchShader(i) {
+        if (!i) i = this._program;
 
-    _loadHtml(visId, prevVisId, preserveJS) {
+        if (i >= this._programs.length) {
+            console.error("Invalid shader index.");
+        } else if (this._visualisations[i].hasOwnProperty("error") || !this._programs[i]) {
+            this._program = i;
+            this._loadHtml(i, this._program);
+            this._loadScript(i, this._program);
+            this.onFatalError(this._visualisations[i]);
+            this.running = false;
+        } else {
+            this._program = i; //must set first, so that current visualisation points to the new one (_loadScript uses it)
+            this.running = true;
+            this._loadHtml(i, this._program);
+            this._loadScript(i, this._program);
+            this.toBuffers(this._programs[i]);
+        }
+    }
+
+
+    _loadHtml(visId, prevVisId) {
         var htmlControls = document.getElementById(this.htmlControlsId);
         htmlControls.innerHTML = this._visualisations[visId]["html"];
     }
 
-    _loadScript(visId, prevVisId, preserveJS) {
+    _loadScript(visId, prevVisId) {
         var forScript = document.getElementById(this.scriptId);
         forScript.innerHTML = "";
         var script = document.createElement("script");

@@ -98,10 +98,10 @@ Network.prototype = {
                 var clipBounds = PLUGINS.osd.viewport.getConstrainedBounds(false);
                 //go from viewport to image so that we can tell the network which pixels are to be processed....
                 // https://openseadragon.github.io/docs/OpenSeadragon.TiledImage.html#viewportToImageCoordinates
-                var imageBounds = PLUGINS.dataLayer.viewportToImageRectangle(clipBounds.x, clipBounds.y, clipBounds.width, clipBounds.height, true); //send these coords to network
+                var imageBounds = PLUGINS.imageLayer.viewportToImageRectangle(clipBounds.x, clipBounds.y, clipBounds.width, clipBounds.height, true); //send these coords to network
                 //go from image to screen so that canvas can be properly placed:
-                var pointLeftTop = PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x, imageBounds.y));
-                var pointRightBottom = PLUGINS.dataLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x + imageBounds.width, imageBounds.y + imageBounds.height));
+                var pointLeftTop = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x, imageBounds.y));
+                var pointRightBottom = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x + imageBounds.width, imageBounds.y + imageBounds.height));
 
                 //make ajax call to server for data (demo image here)
                 const url = "/visualization/client/plugins/network/eowyn.jpg";

@@ -806,7 +806,7 @@ OSDAnnotations.prototype = {
 		},
 
 		updateRadius: function () {
-			this._toolRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius();
+			this._toolRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius() * 2;
 		},
 
 		getHTMLNode: function () {

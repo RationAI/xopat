@@ -67,7 +67,7 @@ function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
 
 $parsedParams = json_decode($visualisation);
 foreach ($parsedParams as $visualisationTarget) {
-    propertyExists($visualisationTarget, "data", "No data available.",
+    propertyExists($visualisationTarget, "data", "No image data available.",
         "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
         print_r($visualisation, true));
     if (!isset($visualisationTarget->name)) {
@@ -84,7 +84,7 @@ foreach ($parsedParams as $visualisationTarget) {
         }
 
         if (!isset($layer->type) && !isset($layer->source)) {
-            throwFatalError("No visualisation style defined for " . $data,
+            throwFatalError("No visualisation style defined for " . $layer->name,
                 "You must specify one of <br>layer</b> or <b>source</b> parameters.", print_r($layer, true));
         }
     }
@@ -227,7 +227,7 @@ foreach ($PLUGINS as $_ => $plugin) {
             <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 200px;">&emsp;
             <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
             <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
-                   onchange="viewer.world.getItemAt(baseIDX).setOpacity(this.checked ? 1 : 0);">
+                   onchange="viewer.world.getItemAt(imageIDX).setOpacity(this.checked ? 1 : 0);">
         </div> <!--Height of navigator = margn top of this div + padding-->
         <div id="panel-shaders" class="inner-panel" >
 
@@ -379,7 +379,7 @@ foreach ($PLUGINS as $_ => $plugin) {
             //     //todo dirty?
             //     if (PLUGINS.dataLayer) {
             //         viewer.addTiledImage({
-            //             tileSource : iipSrvUrl + seaGL.dataImageSources() + ".dzi",
+            //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
             //             index: layerIDX,
             //             opacity: $("#global-opacity").val(),
             //             replace: true
@@ -388,6 +388,32 @@ foreach ($PLUGINS as $_ => $plugin) {
             // }
 
             viewer.raiseEvent('visualisation-used', visualisation);
+        },
+
+
+        //todo remove this, only temporary solution
+        visualisationChanged: function(oldVis, newVis) {
+            //todo problems when switching - show 'loading' and prevent user from interaction until ready again!!!
+            if (oldVis.data !== newVis.data) {
+                viewer.addTiledImage({
+                    tileSource : iipSrvUrlGET + newVis.data + ".dzi",
+                    index: imageIDX,
+                    opacity: 1,
+                    replace: true
+                });
+            }
+
+            let newVisData = Object.keys(newVis.shaders).join(",");
+            if (newVisData !== Object.keys(oldVis.shaders).join(",")) {
+                if (PLUGINS.dataLayer) {
+                    viewer.addTiledImage({
+                        tileSource : iipSrvUrlPOST + newVisData + ".dzi",
+                        index: layerIDX,
+                        opacity: $("#global-opacity").val(),
+                        replace: true
+                    });
+                }
+            }
         },
 
         //called when visualisation is unable to run
@@ -741,7 +767,6 @@ foreach ($PLUGINS as $_ => $plugin) {
         },
 
         hide: function (_autoCalled = true) {
-            console.log("remove", this._body)
             this._body.removeClass("popUpEnter");
             this._body.addClass("popUpHide");
 
@@ -790,7 +815,7 @@ foreach ($PLUGINS as $_ => $plugin) {
       </form>
       <script type="text/javascript">
         //safely set values (JSON)
-        document.getElementById("visualisation").value = seaGL.exportSettings();
+        document.getElementById("visualisation").value = \`${seaGL.exportSettings()}\`;
 
         var form = document.getElementById("redirect");
         var node;`;
@@ -929,15 +954,14 @@ ${constructExportVisualisationForm()}
     //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
     //todo try catch to fail nicely
     var defViz = setup[0];
-    var urlImage = defViz.data;
 
-    let baseIDX = 0;
+    let imageIDX = 0;
     let layerIDX = 1;
     const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
     const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
 
     viewer.addHandler('open', function() {
-        PLUGINS.imageLayer = viewer.world.getItemAt(baseIDX);
+        PLUGINS.imageLayer = viewer.world.getItemAt(imageIDX);
         if (losslessImageLayer && PLUGINS.imageLayer) {
             PLUGINS.dataLayer.source.fileFormat = "png";
         }
@@ -1031,7 +1055,7 @@ foreach ($PLUGINS as $_ => $plugin) {
 
         //todo does not support webgl1
         activeData = Object.keys(seaGL.currentVisualisation().shaders).join(',');
-        viewer.open([iipSrvUrlGET + urlImage + ".dzi", iipSrvUrlPOST + activeData + ".dzi"]);
+        viewer.open([iipSrvUrlGET + defViz.data + ".dzi", iipSrvUrlPOST + activeData + ".dzi"]);
     });
     seaGL.init(viewer);
 

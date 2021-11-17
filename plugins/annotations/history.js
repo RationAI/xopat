@@ -125,7 +125,7 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
             this._removeFromBoard(previous);
         }
 
-        console.log("PREV", previous, "NEXT", newObject);
+        //console.log("PREV", previous, "NEXT", newObject);
 
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
         this._buffer[this._buffidx] = { forward: newObject, back: previous };
@@ -160,7 +160,7 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     _updateBoardText: function (object, text) {
-        console.log(text);
+        //console.log(text);
         if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
         this.board.find(`#log-object-${object.incrementId} span.desc`).html(text);
     },

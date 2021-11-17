@@ -80,9 +80,7 @@ OpenSeadragonGL.prototype = {
      * @return JSON-encoded string
      */
     exportSettings() {
-        //export all except eventSource: automatically attached by OpenSeadragon event engine
-        return JSON.stringify(this.webGLWrapper._visualisations,
-            (key, value) => key==="eventSource" ? undefined : value);
+        return this.webGLWrapper.exportSettings();
     },
 
     /**

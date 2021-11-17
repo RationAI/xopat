@@ -58,7 +58,7 @@ Then, based on the presence of `visualisation` the user is
       "shaders": {
             "path/to/annotation/layer.tif": { 
                    "name": "Annotation layer",
-                   "type:": "identity", 
+                   "type": "identity", 
                    "visible": "1", 
                    "params": { }
             },
