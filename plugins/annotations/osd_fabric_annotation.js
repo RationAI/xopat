@@ -189,12 +189,16 @@ OSDAnnotations.prototype = {
 			_this.mode.handleMouseMove(_this.overlay.fabricCanvas().getPointer(o.e));
 		});
 
-		//TODO remove? is it necessary?
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
-				//e.target.set('shadow', { blur: 30, offsetX: 0, offsetY: 0});
+				//todo try to fix board if not on board..?
+				let isInEditMode = _this.history.isOngoingEdit(e.target);
 				_this.history.highlight(e.target);
-				e.target.hasControls = !_this.isMouseOSDInteractive();
+				e.target.set({
+					hasControls: !_this.isMouseOSDInteractive() && isInEditMode,
+					lockMovementX: !isInEditMode,
+					lockMovementY: !isInEditMode
+				});
 			}
 		});
 
@@ -700,14 +704,11 @@ OSDAnnotations.prototype = {
 			//set all objects as visible and unlock
 			for (let i = 0; i < objects.length; i++) {
 				objects[i].visible = true;
-				objects[i].lockMovementX = false;
-				objects[i].lockMovementY = false;
+
 				objects[i].lockRotation = false;
 				objects[i].lockScalingFlip = false;
 				objects[i].lockScalingX = false;
 				objects[i].lockScalingY = false;
-				objects[i].lockSkewingX = false;
-				objects[i].lockSkewingY = false;
 				objects[i].lockUniScaling = false;
 			}
 			if (this.cachedTargetCanvasSelection) {

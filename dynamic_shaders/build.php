@@ -9,7 +9,6 @@ include_once("defined.php");
 
 $input = json_decode($_POST["shaders"]); //the data
 if (!$input) {
-    //todo error
     $post = print_r($_POST, true);
     echo json_encode((object)array("error" => "Unable to start the visualizer. Please, re-open the application.",
         "desc" => "Invalid input for shader builder: exitting.<br><code>POST data: $post</code>"));
@@ -20,7 +19,7 @@ $uniqueId = "";
 try {
     $params = json_decode($_POST["params"]); //the params
     $uniqueId = isset($params->unique_id) ? "&uniqueId=$params->unique_id" : "";
-} catch (\Exception $e) {
+} catch (Exception $e) {
     //do nothing, use default values as set above
 }
 
@@ -78,7 +77,7 @@ foreach ($input as $key=>$object) {
         } else {
             $visualisation[$key] = $data;
         }
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         $msg = $e->getMessage();
         $visualisation[$key] = (object)array("error" => "Failed to obtain '$object->type' visualisation.", "desc" => "Failure sending GET request for '$object->type' shader. Parameters sent: <br>$object->params<br><br>$msg");
     }

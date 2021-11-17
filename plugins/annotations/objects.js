@@ -608,6 +608,7 @@ class Rect extends AnnotationObjectFactory {
      *              - top: offset in the image dimension
      *              - rx: major axis radius
      *              - ry: minor axis radius
+     * @param {Object} options see parent class
      */
     create(parameters, options) {
         return new fabric.Rect($.extend({
@@ -618,6 +619,7 @@ class Rect extends AnnotationObjectFactory {
     }
 
     /**
+     * @param {Object} ofObject fabricjs.Rect object that is being copied
      * @param {Object} parameters object of the following properties:
      *              - left: offset in the image dimension
      *              - top: offset in the image dimension
@@ -698,7 +700,7 @@ class Rect extends AnnotationObjectFactory {
 
     /**
      * Create array of points - approximation of the object shape
-     * @param {fabricjs.Rect} obj object that is being approximated
+     * @param {Object} obj fabricJS.Rect obj object that is being approximated
      * @param {function} converter take two elements and convert and return item
      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
@@ -739,11 +741,13 @@ class Ellipse extends AnnotationObjectFactory {
     }
 
     /**
+     *
      * @param {Object} parameters object of the following properties:
      *              - left: offset in the image dimension
      *              - top: offset in the image dimension
      *              - rx: major axis radius
      *              - ry: minor axis radius
+     * @param {Object} options see parent class
      */
     create(parameters, options) {
         return new fabric.Ellipse($.extend({
@@ -894,6 +898,7 @@ class Polygon extends AnnotationObjectFactory {
 
     /**
      * @param {Array} parameters array of objects with {x, y} properties (points)
+     * @param {Object} options see parent class
      */
     create(parameters, options) {
         return new fabric.Polygon(parameters, $.extend({
@@ -1043,7 +1048,7 @@ class Polygon extends AnnotationObjectFactory {
 
     /**
      * Create array of points - approximation of the object shape
-     * @param {fabricjs.Polygon} obj object that is being approximated
+     * @param {Object} obj fabricjs.Polygon object that is being approximated
      * @param {function} converter take two elements and convert and return item
      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
@@ -1279,7 +1284,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
         }
         this.updateAutoSensitivity();
 
-        let origPixel = this.getPixelData(eventPosition);
+        let origPixel = this.getPixelData(point);
         let dimensionSize = Math.max(screen.width, screen.height);
 
 		var x = point.x;
@@ -1375,7 +1380,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
         //todo fix openseadragon_image_annotations reference
         var handlers = [
             // 0 - all neighbours outside, invalid
-            function () { console.error("Fell out of region.") },
+            function () { console.error("Auto outline algorithm: Fell out of region.") },
 
             // 1 - only TopLeft pixel inside
             function () {
@@ -1383,7 +1388,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
                     direction = "LEFT";
                 } else if (direction === "RIGHT") {
                     direction = "UP";
-                } else { console.log("INVALID DIRECTION 1)"); return; }
+                } else { /*console.log("INVALID DIRECTION");*/ return; }
                 points.push(_this.toGlobalPointXY(x, y)); //changed direction
             },
 
@@ -1393,13 +1398,13 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
                     direction = "LEFT";
                 } else if (direction === "RIGHT") {
                     direction = "DOWN";
-                } else { console.log("INVALID DIRECTION 2)"); return; }
+                } else { /*console.log("INVALID DIRECTION");*/  return; }
                 points.push(_this.toGlobalPointXY(x, y)); //changed direction
             },
 
             // 3 - TopLeft & BottomLeft pixel inside
             function () {
-                if (direction !== "UP" && direction !== "DOWN") { console.log("INVALID DIRECTION 3)"); }
+                if (direction !== "UP" && direction !== "DOWN") { /*console.log("INVALID DIRECTION");*/  }
             },
 
             // 4 - only BottomRight pixel inside
@@ -1408,7 +1413,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
                     direction = "RIGHT";
                 } else if (direction === "LEFT") {
                     direction = "DOWN";
-                } else { console.log("INVALID DIRECTION 4)"); return; }
+                } else { /*console.log("INVALID DIRECTION");*/  return; }
                 points.push(_this.toGlobalPointXY(x, y)); //changed direction
             },
 
@@ -1426,7 +1431,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
 
             // 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
             function () {
-                if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
+                if (direction !== "LEFT" && direction !== "RIGHT") { /*console.log("INVALID DIRECTION");*/  }
             },
 
             // 7 - TopLeft & BottomLeft & BottomRight  pixel inside, same case as TopRight only
@@ -1438,13 +1443,13 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
                     direction = "RIGHT";
                 } else if (direction === "LEFT") {
                     direction = "UP";
-                } else { console.log("INVALID DIRECTION 8)"); return; }
+                } else { /*console.log("INVALID DIRECTION");*/  return; }
                 points.push(_this.toGlobalPointXY(x, y)); //changed direction
             },
 
             // 9 - TopLeft & TopRight
             function () {
-                if (direction !== "LEFT" && direction !== "RIGHT") { console.log("INVALID DIRECTION 6)"); }
+                if (direction !== "LEFT" && direction !== "RIGHT") { /*console.log("INVALID DIRECTION");*/  }
             },
 
             // 10 - BottomLeft & TopRight
@@ -1464,7 +1469,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
 
             // 12 - TopRight & BottomRight
             function () {
-                if (direction !== "TOP" && direction !== "DOWN") { console.log("INVALID DIRECTION 12)"); }
+                if (direction !== "TOP" && direction !== "DOWN") { /*console.log("INVALID DIRECTION");*/  }
             },
 
             // 13 - TopRight & BottomRight & TopLeft
@@ -1474,7 +1479,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
             () => handlers[1](),
 
             // 15 - ALL inside
-            function () { console.error("Fell out of region."); }
+            function () { console.error("Auto outline algorithm: Fell out of region."); }
         ];
 
         let surroundingInspector = function (x, y, maxDist) {
@@ -1497,11 +1502,9 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>
         };
 
         const first_point = new OpenSeadragon.Point(x, y);
-        let level = this._currentTile.level;
-        //todo speed based on pixel size instead?
-        const speed = 1; //Math.round(Math.max(this.pixelSize()/2, 1));
-        //const maxSpeed = 24;
-        //const speed = Math.round(maxSpeed / Math.max(1, 2 * (PLUGINS.imageLayer.source.maxLevel - level)));
+
+        //best speed is just pixel by pixel as we compute in screen coords
+        const speed = 1;
         counter = 0;
         while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 20) {
             let mark = this.getAreaStamp(x, y);

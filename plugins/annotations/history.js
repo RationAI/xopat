@@ -138,6 +138,8 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     highlight: function (object) {
+        if (!object.incrementId) return;
+
         if (this._boardSelected) {
             this.board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
@@ -145,6 +147,10 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
             this.board.find(`#log-object-${object.incrementId}`).css("background", "#ffffff1f");
         }
         this._boardSelected = object;
+    },
+
+    isOngoingEdit: function(ofObject) {
+        return this._editSelection && this._editSelection.incrementId === ofObject.incrementId;
     },
 
     _focus: function (cx, cy, objectId = null) {
@@ -195,8 +201,7 @@ onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.increment
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
 style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 <span class="material-icons" onclick="let self = $(this); if (self.html() === 'edit') {
-${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">
-edit</span></div>`);
+${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">edit</span></div>`);
     },
 
     _boardItemEdit(self, objectId) {
@@ -223,7 +228,7 @@ edit</span></div>`);
         self.html('edit');
         self.prev().prop('disabled', true);
         let obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
-        if (obj) obj.set({comment: self.prev().val()})
+        if (obj) obj.set({comment: self.prev().val()});
 
         if (!switches) {
             $('#annotation-board').css('background', 'none');
