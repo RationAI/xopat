@@ -95,7 +95,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                 ns = data.documentElement.namespaceURI;
             }
         }
-
+        ns = ns || "";
         return ns.indexOf('rationai.fi.muni.cz/deepzoom/images') !== -1;
     },
 
