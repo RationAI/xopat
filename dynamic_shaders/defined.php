@@ -31,7 +31,9 @@
        "color"=>["color", 'value="#d2eb00"'], 
        "ctrlThreshold"=>["bool", "checked"], 
        "ctrlOpacity"=>["bool", "checked"], 
-       "ctrlColor"=>["bool", "checked"]),
+       "ctrlColor"=>["bool", "checked"],
+       "edgeThickness"=>["float", 'value="1.0" step="0.1" min="0.5" max="3"'],
+       "ctrlEdgeThickness"=>["bool", "checked"]),
     $BICOLORS_NAME=>array(
        "colorHigh"=>["color", 'value="#ff0000"'], 
        "colorLow"=>["color", 'value="#7cfc00"'], 
@@ -61,7 +63,9 @@
     "logScale"=>"use logarithmic scale instead of linear if set to 1",
     "logScaleMax"=>"max value in logarithmic normalisation, used with logarithmic scale, this value is compared against pixel values (range from 0 to 1)",
     "colorHigh"=>"color for values closer to MAX (255), default #ff0000",
-    "colorLow"=>"color for values closer to MIN (0), default #7cfc00"
+    "colorLow"=>"color for values closer to MIN (0), default #7cfc00",
+    "edgeThickness"=>"edge thickness, default 1",
+    "ctrlEdgeThickness"=>"allow user to control edge thickness"
  );
 
  //how a param type is mapped to HTML input type

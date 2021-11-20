@@ -216,7 +216,8 @@ class WebGLWrapper {
 
     /**
      * Initialization. It is separated from preparation as this must be
-     * called after OSD is ready.
+     * called after OSD is ready. Must be performed after
+     * all the prepare() strategy finished: e.g. as onPrepared. Or use prepareAndInit();
      * @param {int} width width of the first tile going to be drawn
      * @param {int} height height of the first tile going to be drawn
      */
@@ -235,6 +236,13 @@ class WebGLWrapper {
 
         this._forceSwitchShader(null);
         this.ready();
+    }
+
+    prepareAndInit() {
+        let _this = this;
+        this.prepare(() => {
+            _this.init(1, 1);
+        });
     }
 
     /**

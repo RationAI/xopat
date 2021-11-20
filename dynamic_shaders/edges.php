@@ -9,7 +9,8 @@
  *  ctrlColor - whether to allow color modification, 1 or 0, default 1
  *  ctrlThreshold - whether to allow threshold modification, 1 or 0, default 1
  *  ctrlOpacity - whether to allow opacity modification, 1 or 0, default 1
- * 
+ *  edgeThickness
+ *  ctrlEdgeThickness
  */
 require_once("init.php");
 
@@ -32,6 +33,7 @@ if (isset($data["color"])) {
 $allowColorChange = (!isset($data["ctrlColor"]) || $data["ctrlColor"] == "1");
 $allowThresholdChange = (!isset($data["ctrlThreshold"]) || $data["ctrlThreshold"] == "1");
 $allowOpacityChange = (!isset($data["ctrlOpacity"]) || $data["ctrlOpacity"] == "1");
+$allowEdgeThicknessChange = (!isset($data["ctrlEdgeThickness"]) || $data["ctrlEdgeThickness"] == "1");
 
 $r = $r / 255;
 $g = $g / 255;
@@ -42,7 +44,7 @@ $definition = <<<EOF
 
 uniform float threshold_{$uniqueId};
 uniform float opacity_{$uniqueId};
-uniform float zoom_{$uniqueId};
+uniform float edge_thickness_{$uniqueId};
 uniform vec3 color_{$uniqueId};
 
 //todo try replace with step function
@@ -84,24 +86,22 @@ EOF;
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
 
-    float data_{$uniqueId} = {$texture('v_tile_pos')}.r;
-    float dist_{$uniqueId} = 0.005 * sqrt(sqrt(zoom_{$uniqueId}));
+    float data_{$uniqueId} = {$texture('tile_texture_coords')}.r;
+    float dist_{$uniqueId} = edge_thickness_{$uniqueId} * sqrt(zoom_level) * 0.005;
 
-    float up_{$uniqueId} = {$texture("vec2(v_tile_pos.x - dist_{$uniqueId}, v_tile_pos.y)")}.r;
-    float bottom_{$uniqueId} = {$texture("vec2(v_tile_pos.x + dist_{$uniqueId}, v_tile_pos.y)")}.r; 
-    float left_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y - dist_{$uniqueId})")}.r; 
-    float right_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y + dist_{$uniqueId})")}.r;
+    float up_{$uniqueId} = {$texture("vec2(tile_texture_coords.x - dist_{$uniqueId}, tile_texture_coords.y)")}.r;
+    float bottom_{$uniqueId} = {$texture("vec2(tile_texture_coords.x + dist_{$uniqueId}, tile_texture_coords.y)")}.r; 
+    float left_{$uniqueId} = {$texture("vec2(tile_texture_coords.x, tile_texture_coords.y - dist_{$uniqueId})")}.r; 
+    float right_{$uniqueId} = {$texture("vec2(tile_texture_coords.x, tile_texture_coords.y + dist_{$uniqueId})")}.r;
 
-    float up2_{$uniqueId} = {$texture("vec2(v_tile_pos.x - 3.0*dist_{$uniqueId}, v_tile_pos.y)")}.r;
-    float bottom2_{$uniqueId} = {$texture("vec2(v_tile_pos.x + 3.0*dist_{$uniqueId}, v_tile_pos.y)")}.r; 
-    float left2_{$uniqueId} = {$texture("vec2(v_tile_pos.x, v_tile_pos.y - 3.0*dist_{$uniqueId})")}.r; 
-    float right2_{$uniqueId} =  {$texture("vec2(v_tile_pos.x, v_tile_pos.y + 3.0*dist_{$uniqueId})")}.r;
+    float up2_{$uniqueId} = {$texture("vec2(tile_texture_coords.x - 3.0*dist_{$uniqueId}, tile_texture_coords.y)")}.r;
+    float bottom2_{$uniqueId} = {$texture("vec2(tile_texture_coords.x + 3.0*dist_{$uniqueId}, tile_texture_coords.y)")}.r; 
+    float left2_{$uniqueId} = {$texture("vec2(tile_texture_coords.x, tile_texture_coords.y - 3.0*dist_{$uniqueId})")}.r; 
+    float right2_{$uniqueId} =  {$texture("vec2(tile_texture_coords.x, tile_texture_coords.y + 3.0*dist_{$uniqueId})")}.r;
 
     vec4 border_{$uniqueId} = getBorder_{$uniqueId}(data_{$uniqueId}, up_{$uniqueId}, bottom_{$uniqueId}, left_{$uniqueId},
                                 right_{$uniqueId}, up2_{$uniqueId}, bottom2_{$uniqueId}, left2_{$uniqueId}, right2_{$uniqueId});
                                                                
-    //we don't know the ZOOM max level, opacity created empirically
-    //float borderOpacity_{$uniqueId} = min(max(0.0, (zoom_{$uniqueId}-1.0)) / 2.0, 1.0);
     show(vec4(border_{$uniqueId}.rgb, border_{$uniqueId}.a * opacity_{$uniqueId}));
     
 EOF;
@@ -109,16 +109,15 @@ EOF;
 $glload = <<<EOF
 threshold_gl_{$uniqueId} = gl.getUniformLocation(program, 'threshold_{$uniqueId}');
 opacity_gl_{$uniqueId} = gl.getUniformLocation(program, 'opacity_{$uniqueId}');
-zoom_gl_{$uniqueId} = gl.getUniformLocation(program, 'zoom_{$uniqueId}');
 color_gl_{$uniqueId} = gl.getUniformLocation(program, 'color_{$uniqueId}');
+thickness_gl_{$uniqueId} = gl.getUniformLocation(program, 'edge_thickness_{$uniqueId}');
 EOF;
 
 $gldraw = <<<EOF
 gl.uniform1f(threshold_gl_{$uniqueId}, threshold_{$uniqueId} / 100.0);
 gl.uniform1f(opacity_gl_{$uniqueId}, opacity_{$uniqueId});
-gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); //todo dirty touching of global variable
-gl.uniform1f(zoom_gl_{$uniqueId}, viewer.viewport.getZoom(true)); 
 gl.uniform3fv(color_gl_{$uniqueId}, color_{$uniqueId});
+gl.uniform1f(thickness_gl_{$uniqueId}, thickness_{$uniqueId});
 EOF;
 
 //html part: controls rendered under shader settings, allows user to change shader uniform values
@@ -129,22 +128,28 @@ if ($allowColorChange) {
 EOF;
 }
 
+if ($allowEdgeThicknessChange) {
+    $html .= <<<EOF
+<span> Edge Thickness:</span><input type="range" id="thickness-{$uniqueId}" onchange="thicknessChange_{$uniqueId}(this)" min="0.5" max="3" step="0.1"><br>
+EOF;
+}
+
 if ($allowOpacityChange) {
     $html .= <<<EOF
-<span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1" value="0" step="0.1"><br>
+<span> Opacity:</span><input type="range" id="opacity-{$uniqueId}" onchange="opacityChange_{$uniqueId}(this)" min="0" max="1"  step="0.1"><br>
 EOF;
 }
 
 if ($allowThresholdChange) {
     $html .= <<<EOF
-<span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" value="1" step="1">
-<input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}" value="1"><br>
+<span> Threshold:</span><input type="range" id="threshold-slider-{$uniqueId}" class="with-direct-input" onchange="thresholdChange_{$uniqueId}(this)" min="1" max="100" step="1">
+<input class="form-control input-sm" type="number" style="max-width:60px;" onchange="thresholdChange_{$uniqueId}(this)" id="threshold-{$uniqueId}"><br>
 EOF;
 }
 
 //js part: controls action: update controls if necessary and invoke `redraw();`
 $js = <<<EOF
-var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, zoom_gl_{$uniqueId}, color_gl_{$uniqueId};
+var threshold_gl_{$uniqueId}, opacity_gl_{$uniqueId}, color_gl_{$uniqueId}, thickness_gl_{$uniqueId};
 
 //initial values
 let threshold_{$uniqueId} = {$getJSProperty('threshold', 1)}
@@ -160,6 +165,15 @@ function thresholdChange_{$uniqueId}(self) {
     {$setJSProperty('threshold', "threshold_{$uniqueId}")};
    
     //global function, part of API
+    redraw();
+}
+
+let thickness_{$uniqueId} = {$getJSProperty('edgeThickness', 1)};
+$("#thickness-{$uniqueId}").val(thickness_{$uniqueId});
+
+function thicknessChange_{$uniqueId}(self) {
+    thickness_{$uniqueId} = $(self).val();
+    {$setJSProperty('edgeThickness', "thickness_{$uniqueId}")};
     redraw();
 }
 

@@ -920,6 +920,14 @@ ${constructExportVisualisationForm()}
         addPostExport: function(name, valueHandler, pluginId) {
             this._exportHandlers.push({name: name, call: valueHandler, pluginId: pluginId});
         },
+        addHtml: function(html, pluginId) {
+            let pluginRoot = $(`#${pluginId}-plugin-root`);
+            if (pluginRoot.length <= 0){
+                pluginRoot = $("body").append(`<div id="${pluginId}-plugin-root">${html}</div>`);
+            } else {
+                pluginRoot.append(html);
+            }
+        },
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,
         _exportHandlers: []
@@ -935,6 +943,9 @@ ${constructExportVisualisationForm()}
         try {
             var plugin = new PluginClass();
         } catch (e) {
+            //todo this is always true, somehow get the ID
+            if (!plugin || !plugin.id) return;
+
             //todo also we could find what has been attached to HTML by the plugin and remove it?
             console.warn(`Failed to create plugin ${PluginClass} which is probably broken.`, e);
             PLUGINS.each[plugin.id].loaded = false;
@@ -1003,6 +1014,8 @@ ${constructExportVisualisationForm()}
     });
 
     function showAvailablePlugins() {
+        //todo click enable aslo required plugin dependency!!!
+
         let content = "<input type='checkbox' class='form-control position-absolute top-1 right-0' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-4'  for='remember-plugin-selection'>remember selection</label><br>";
         Object.values(PLUGINS.each).forEach(plugin => {
             let checked = plugin.loaded ? "checked" : "";

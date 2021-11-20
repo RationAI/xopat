@@ -84,7 +84,7 @@ EOF;
 //second shader part, if sampled grayscale value is significant, and above threshold, 
 //output the color with threshold opacity decreased intentsity
 $execution = <<<EOF
-  show(texture2D($samplerName, v_tile_pos));
+  show(texture2D($samplerName, tile_texture_coords));
 EOF;
 
 //gl-loaded: what happens when gl program is loaded? define uniform variables
@@ -104,8 +104,10 @@ Shader in WebGL 2.0 is then composed in this manner: (you can see the **global**
 ````glsl
 #version 300 es
 precision mediump float;
-uniform vec2 u_tile_size;  //tile dimension
-in vec2 v_tile_pos;        //in-texture position
+uniform vec2 u_tile_size;                       //tile dimension
+uniform float pixel_size_in_fragments;          //how many fragments add up to one pixel on screen
+uniform float zoom_level;                       //zoom amount (see OpenSeadragon.Viewport::getZoom())
+in vec2 tile_texture_coords;                    //in-texture position
 uniform sampler2DArray vis_data_sampler_array;  //texture array with data
 
 out vec4 final_color;      //do not touch directly, fragment output, use show(...) instead

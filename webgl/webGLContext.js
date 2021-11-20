@@ -19,7 +19,7 @@ class GlContextFactory {
 
         //WebGL 1.0
         wrapper.gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
-                        || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });   
+            || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
         wrapper.webGLImplementation = this.getContext(false, wrapper, wrapper.gl);
     }
 
@@ -48,7 +48,7 @@ class DefaultGLContextFactory extends GlContextFactory {
 
 
 class WebGL10 {
-   constructor(context, gl) {
+    constructor(context, gl) {
         this.context = context;
         this.gl = gl;
         this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
@@ -59,8 +59,8 @@ class WebGL10 {
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
-       //TODO: fix how textures are allocated and freed, also limit it with 
-       this.texture = {
+        //TODO: fix how textures are allocated and freed, also limit it with
+        this.texture = {
             init: function (gl, maxTextureUnits) {
                 this.canvas = document.createElement('canvas');
                 this.canvasReader = this.canvas.getContext('2d');
@@ -154,14 +154,14 @@ class WebGL10 {
         }
         this.texture.init(gl, this.max_textures);
 
-   } 
+    }
 
     isWebGL2() {
         return false;
     }
 
     generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
-        var definition = "", execution = "", samplers = "", html = "", js = "", glload = "", gldraw = "", 
+        var definition = "", execution = "", samplers = "", html = "", js = "", glload = "", gldraw = "",
             _this = this, usableShaders = 0, simultaneouslyVisible = 0;
 
         order.forEach(dataId => {
@@ -244,11 +244,14 @@ try {
         };
     }
 
-   getFragmentShader(samplers, definition, execution,) {
-    return `
+    getFragmentShader(samplers, definition, execution,) {
+        return `
 precision mediump float;
+uniform float pixel_size_in_fragments;
+uniform float zoom_level;
 uniform vec2 u_tile_size;
-varying vec2 v_tile_pos;
+
+varying vec2 tile_texture_coords;
 
 ${samplers}
         
@@ -269,23 +272,23 @@ void main() {
     
     ${execution}
 }
-`; 
-   }
+`;
+    }
 
-   getVertexShader() {
-    return `
+    getVertexShader() {
+        return `
 attribute vec4 a_pos;
 attribute vec2 a_tile_pos;
-varying vec2 v_tile_pos;
+varying vec2 tile_texture_coords;
     
 void main() {
-    v_tile_pos = a_tile_pos;
+    tile_texture_coords = a_tile_pos;
     gl_Position = a_pos;
 }
 `;
-   }
+    }
 
-   toBuffers(program) {
+    toBuffers(program) {
         if (!this.context.running) return;
 
         let context = this.context,
@@ -303,8 +306,7 @@ void main() {
         var count = 4;
 
         // Get uniform term
-        var tile_size = gl.getUniformLocation(program, this.tile_size);
-        gl.uniform2f(tile_size, gl.canvas.height, gl.canvas.width);
+        gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.height, gl.canvas.width);
 
         // Get attribute terms
         this._att = [this.pos, this.tile_pos].map(function (name, number) {
@@ -330,7 +332,9 @@ void main() {
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
         let context = this.context,
-            gl = this.gl;
+            gl = this.gl,
+            program = context._programs[context._program];
+
 
         // TODO move this decision to tile-loaded to decide once!
         if (!context['gl_drawing'].call(context, gl, imageElement, e)) {
@@ -346,8 +350,14 @@ void main() {
             gl.vertexAttribPointer.apply(gl, x);
         });
 
+        //todo better access
+        let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
+            PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), dx);
+        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), PLUGINS.osd.viewport.getZoom());
+
         // Upload textures
-        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, context._programs[context._program], context.gl);
+        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, program, context.gl);
 
         // Draw everything needed to canvas
         gl.drawArrays.apply(gl, this._drawArrays);
@@ -372,67 +382,67 @@ class WebGL20 {
         this.wrap = gl.CLAMP_TO_EDGE;
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
- 
+
         this.texture = {
-             init: function (gl) {
+            init: function (gl) {
                 this.canvas = document.createElement('canvas');
                 this.canvasReader = this.canvas.getContext('2d');
                 this.textureId = gl.createTexture();
 
-             },
- 
-             toBuffers: function (gl, wrap, filter, visualisation) {
-                 
- 
-             },
- 
-             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
+            },
 
-            // use canvas to get the pixel data array of the image
-        
-            const NUM_IMAGES = Math.round(image.height / tileBounds.height);
-            this.canvas.width = image.width;
-            this.canvas.height = image.height;
-            this.canvasReader.drawImage(image, 0, 0);
-            let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
-            let pixels = new Uint8Array(imageData.data.buffer);
+            toBuffers: function (gl, wrap, filter, visualisation) {
 
-            // -- Init Texture
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
-            gl.texImage3D(
-                gl.TEXTURE_2D_ARRAY,
-                0,
-                gl.RGBA,
-                tileBounds.width,
-                tileBounds.height,
-                NUM_IMAGES,
-                0,
-                gl.RGBA,
-                gl.UNSIGNED_BYTE,
-                pixels
-            );
 
-                
-             },
- 
-             freeTextures: function (gl) {
-               gl.deleteTexture(this.textureId);
-             }
-         }
-         this.texture.init(gl);
-    } 
+            },
+
+            toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
+
+                // use canvas to get the pixel data array of the image
+
+                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
+                this.canvas.width = image.width;
+                this.canvas.height = image.height;
+                this.canvasReader.drawImage(image, 0, 0);
+                let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
+                let pixels = new Uint8Array(imageData.data.buffer);
+
+                // -- Init Texture
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+                gl.texImage3D(
+                    gl.TEXTURE_2D_ARRAY,
+                    0,
+                    gl.RGBA,
+                    tileBounds.width,
+                    tileBounds.height,
+                    NUM_IMAGES,
+                    0,
+                    gl.RGBA,
+                    gl.UNSIGNED_BYTE,
+                    pixels
+                );
+
+
+            },
+
+            freeTextures: function (gl) {
+                gl.deleteTexture(this.textureId);
+            }
+        }
+        this.texture.init(gl);
+    }
 
     isWebGL2() {
         return true;
     }
 
     generateVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
-        var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "", 
+        var definition = "", execution = "", html = "", js = "", glload = "", gldraw = "",
             _this = this, usableShaders = 0;
 
         order.forEach(dataId => {
@@ -510,14 +520,18 @@ try {
             dataUrls: urls
         };
     }
- 
+
     getFragmentShader(definition, execution) {
         return `#version 300 es
 precision mediump float;
 precision mediump sampler2DArray;
+
 uniform sampler2DArray vis_data_sampler_array;
+uniform float pixel_size_in_fragments;
+uniform float zoom_level;
 uniform vec2 u_tile_size;
-in vec2 v_tile_pos;
+
+in vec2 tile_texture_coords;
         
 out vec4 final_color;
         
@@ -537,23 +551,23 @@ void main() {
     final_color = vec4(1., 1., 1., 0.);
         
     ${execution}
-}`; 
+}`;
     }
- 
+
     getVertexShader() {
         //UNPACK_FLIP_Y_WEBGL not supported with 3D textures so sample bottom up
         return `#version 300 es
 in vec4 a_pos;
-out vec2 v_tile_pos;
+out vec2 tile_texture_coords;
             
 void main() {
     vec2 tex_coords = vec2(a_pos) / 2.0 + 0.5;
-    v_tile_pos = vec2(tex_coords.x, 1.0-tex_coords.y);
+    tile_texture_coords = vec2(tex_coords.x, 1.0-tex_coords.y);
     gl_Position = a_pos;
 }
 `;
     }
- 
+
     toBuffers(program) {
         if (!this.context.running) return;
 
@@ -574,8 +588,7 @@ void main() {
         var count = 4;
 
         // Get uniform term
-        var tile_size = gl.getUniformLocation(program, this.tile_size);
-        gl.uniform2f(tile_size, gl.canvas.width, gl.canvas.height);
+        gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.width, gl.canvas.height);
 
         // Get attribute terms
         this._att = [gl.getAttribLocation(program, this.pos), 2, gl.FLOAT, 0, 0, 0];
@@ -587,14 +600,15 @@ void main() {
         // Build the position and texture buffer
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
-     }
- 
-     toCanvas(imageElement, e) {
+    }
+
+    toCanvas(imageElement, e) {
         if (!this.context.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
         let context = this.context,
-            gl = this.gl;
+            gl = this.gl,
+            program = context._programs[context._program];
 
         // TODO move this decision to tile-loaded to decide once!
         if (!context['gl_drawing'].call(context, gl, imageElement, e)) {
@@ -608,8 +622,14 @@ void main() {
         gl.enableVertexAttribArray(this._att.slice(0, 1));
         gl.vertexAttribPointer.apply(gl, this._att);
 
+        //todo better access
+        let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
+            PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), dx);
+        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), PLUGINS.osd.viewport.getZoom());
+
         // Upload textures
-        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, context._programs[context._program], gl);
+        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, program, gl);
 
         // Draw everything needed to canvas
         gl.drawArrays.apply(gl, this._drawArrays);
@@ -621,6 +641,6 @@ void main() {
 
         //this.texture.freeTextures(gl);
         return gl.canvas;
-     }
- }
- 
+    }
+}
+

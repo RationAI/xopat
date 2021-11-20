@@ -1,10 +1,10 @@
 {
-    "id": "network_dev",
-    "name": "Neural network interactive development",
+    "id": "histoviso_explain",
+    "name": "Interactive explainability",
     "includes" : [
         "network.js"
     ],
-    "flag": "dev",
+    "flag": "histoviso_explain",
     "priority": 10,
     "requires": "openseadragon_image_annotations"
 }

@@ -70,7 +70,7 @@ $defaultThresholdValue = $invertOpacity ? "100" : "1";
 
 $execution = <<<EOF
 
-    vec4 data_{$uniqueId} = {$texture('v_tile_pos')};
+    vec4 data_{$uniqueId} = {$texture('tile_texture_coords')};
     if (!close(data_{$uniqueId}.b, .5)) {
         if (data_{$uniqueId}.b < .5) { //g2 color for small values
             float value_{$uniqueId} = 1.0 - data_{$uniqueId}.b * 2.0;
