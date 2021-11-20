@@ -111,6 +111,7 @@ class WebGL10 {
                     //gl.bindTexture(gl.TEXTURE_2D, _this._units[i].bindPointer);
                     let bindPtr = gl.createTexture();
                     //_this._units.push(bindPtr);
+
                     let bindConst = `TEXTURE${index}`;
                     gl.bindTexture(gl.TEXTURE_2D, bindPtr);
 
@@ -120,7 +121,9 @@ class WebGL10 {
                     });
                     gl.pixelStorei.apply(gl, _this.pixelStorei);
 
-                    let pixels = new Uint8Array(this.canvasReader.getImageData(0, index*tileBounds.height, tileBounds.width, tileBounds.height).data.buffer);
+                    let read = this.canvasReader.getImageData(0, 
+                        index*tileBounds.height, tileBounds.width, tileBounds.height);
+                    let pixels = new Uint8Array(read.data.buffer);
 
                     // Send the tile into the texture.
                     gl.texImage2D(gl.TEXTURE_2D,
