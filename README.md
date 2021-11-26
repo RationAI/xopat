@@ -22,27 +22,21 @@ to be shown. The second, **data layer** is rendered using our WebGL extension fr
 
 Supported arguments for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests:
 - `visualisation` - a `JSON` structure describing the visualisation setup, **only allowed in `POST`**
+- `ignoreCookiesCache` - whether user cookies cache should be considered
 - `image` - data for the image layer, ignored if `visualisation` set, both `POST` or `GET`
     - example: `"test/experiments/TP-2019_7207-03-1-vis.tif"` path
 - `layer` - data list for the data layer, ignored if `visualisation` set, both `POST` or `GET`
     - example: `"path/to/img1.tif,path/to/img2.tif,different/path/img3.tif"` a list of paths
 - inherited **GET-only** switches and other **POST-only** parameters from plugins used
-- `cache` - internal object passed to the visualiser if opened from exported file, stores modifications performed by the user, 
-ignored if the `visualisation` was not set
-
-The behaviour is that either the visualisation is defined by the `JSON` parameter, or `image` and `layer` values
-are used to redirect the user to a custom user setup page.
-
 
 _Example URL_: Direct URL's are not supported, except for those generated within the application.
+
 
 
 The visualisation always needs `visualisation` data parameter so that it knows what to render.
 Then, based on the presence of `visualisation` the user is
 - shown the visualisation if present
-- redirected to `user_setup.php` if missing, and `image` and `layer` parameters are set
-    - `image` is a single path to the tissue scan
-    - `layer` is a comma-separated path list to the data
+- redirected to `user_setup.php` if missing, and both `image` and `layer` parameters are set
 - shown error otherwise
 
 #### ``visualisation`` parameter example
@@ -100,20 +94,20 @@ support various caching. Worth noting are
 rendered must be present (e.g. all data where in the data settings `visible=1` is set)
 - `cache` object inside each shader definition, contains cached values from the shader usage, its properties are dependent on the
 shader type, so always check whether a desired property exists or not
+    - it is in fact equal to default values overriding
+    - it is data-type dependent, so if you enter different value than expected by the shader, you will break things
+    
 
-####  `plugins.php`
-The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow integrating functionality
-to the visualiser. See `./plugins/README.md`.
+####  `plugins.php` and `./plugins/`
+The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integrating 
+of functionality to the visualizer. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
 ### `./webgl/`
-Contains modified version of WebGl plugin for OpenSeadragon. Contains also a folder with used shaders (will be slowly moved to `./dynamic_shaders/`).
+Contains modified version of WebGl plugin for OpenSeadragon. It is an application capable of parsing the visualisation
+parameters, loading & compiling shaders and using them to draw on a canvas, passed to OpenSeadragon.
 
 ### `./dynamic_shaders/`
 `PHP` scripts that generate 'shader parts'. These scripts use `"shaders"` array to create a shader used for each visualisation.
 
 ### `./osd/` or `./osd_debug/`
-OpenSeadragon third-party javascript library. `debug` contains unminified version for debugging.
-
-### `./plugins/`
-Where folders with plugins are placed.
-
+OpenSeadragon third-party javascript library. `debug` contains unminified version for debugging & OSD modifications.

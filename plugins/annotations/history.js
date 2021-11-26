@@ -138,11 +138,12 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     highlight: function (object) {
-        if (!object.incrementId) return;
-
         if (this._boardSelected) {
             this.board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
+
+        if (!object || !object.incrementId) return;
+
         if (object) {
             this.board.find(`#log-object-${object.incrementId}`).css("background", "#ffffff1f");
         }

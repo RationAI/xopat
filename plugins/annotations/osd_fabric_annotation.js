@@ -768,7 +768,6 @@ OSDAnnotations.prototype = {
 			}
 			if (this.cachedTargetCanvasSelection) {
 				this.overlay.fabricCanvas().setActiveObject(this.cachedTargetCanvasSelection);
-
 			}
 		} else {
 			this.cachedTargetCanvasSelection = this.overlay.fabricCanvas().getActiveObject();
@@ -789,8 +788,8 @@ OSDAnnotations.prototype = {
 				objects[i].lockUniScaling = true;
 			}
 			this.overlay.fabricCanvas().deactivateAll().renderAll();
-			//$("#input_form").hide();
 		}
+		this._modesJqNode.attr('disabled', !on);
 		this.overlay.fabricCanvas().renderAll();
 	},
 

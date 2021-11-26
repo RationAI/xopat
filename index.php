@@ -70,7 +70,7 @@ if (!$parsedParams) {
     throwFatalError("Invalid link.",
         "The visualisation setup is not parse-able.", $visualisation);
 }
-$cookieCache = isset($_COOKIE["cache"]) ? json_decode($_COOKIE["cache"]) : (object)[];
+$cookieCache = isset($_COOKIE["cache"]) && !isFlagInProtocols("ignoreCookiesCache") ? json_decode($_COOKIE["cache"]) : (object)[];
 foreach ($parsedParams as $visualisationTarget) {
     propertyExists($visualisationTarget, "data", "No image data available.",
         "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
@@ -98,6 +98,7 @@ foreach ($parsedParams as $visualisationTarget) {
         }
     }
 }
+
 $visualisation = json_encode($parsedParams);
 $cookieCache = json_encode($cookieCache);
 
@@ -247,10 +248,10 @@ foreach ($PLUGINS as $_ => $plugin) {
                 <div>
 
                     <span id="shaders-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
-                    <select name="shaders" id="shaders" style="max-width: 88%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
+                    <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                         <!--populated with shaders from the list -->
                     </select>
-                    <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;" title="Remember shader settings" onclick="makeCacheSnapshot();">bookmarks</span>
+                    <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
                 </div>
 
                 <div id="shader-options" class="inner-panel-hidden">
@@ -478,6 +479,7 @@ foreach ($PLUGINS as $_ => $plugin) {
             shadersCache[shaderSettings.name] = shaderSettings.cache;
         }
         document.cookie = `cache=${JSON.stringify(shadersCache)}; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`;
+        Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
     }
 
     // Tutorial functionality

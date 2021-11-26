@@ -38,8 +38,7 @@ You can than find this data stored in `PLUGINS.each["plugin_id"]`.
     - e.g. `constructor() { this.id='myPluginId'; }'`
 - A plugin must register itself using the name of its parent class. For more information see below.
     - if the plugin is based on `MyAwesomePlugin` object, then call `registerPlugin(MyAwesomePlugin);` on a global level
-- Any attached HTML to the DOM must have at it's root DOM node class with value `<MY PLUGIN ID>-plugin-root` so that upon your plugin failure, we can remove any elements related to your plugin
-    - e.g. `$("body").append('<div class="myPluginId-plugin-root"> Some <div>nested</div> stuff. </div>');`
+- Any attached HTML to the DOM must be attached by the provided functionality (see `PLUGINS` variable)
 
 
 ### Global interface
@@ -53,14 +52,16 @@ This global variable contains a lot of useful references, functions require you 
 - `imageLayer` Instance of `TiledImage` - OSD Class, the tissue visualisation layer (0), use this layer for correct coordinates conversion (and other dimensionality-related tasks) if needed
 - `dataLayer` Instance of `TiledImage` - OSD Class, the data visualisation layer (1)
 - `addTutorial(pluginId, title, description, icon, steps)` - add tutorial series, icon is an identifier icon string from material design (google) icons, steps is an array of objects that define the tutorial, for more info see [how are steps defined](https://github.com/xbsoftware/enjoyhint).
-- `appendToMainMenu(title, titleHtml, html, id, pluginId)` - both this and functions below allow for insertion of `HTML` into the Main Panel
+- `appendToMainMenu(title, titleHtml, html, id, pluginId)` - both this and following two functions below allow for insertion of `HTML` into the Main Panel
+- `appendToMainMenuRaw(html, id, pluginId)` - if you need more freedom, we recommend using one of the other two functions
 - `appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId)`
     - `title`: plugin title to display
     - `titleHtml`: html to append after title
     - `html`: body of the plugin control panel, always visible
     - `hiddenHtml`: body of the plugin control panel, visible on hover onlyor when pinned
     - `id`: id that is given to the outer container, you can for example delete the panel later 
-- `appendToMainMenuRaw(html, id)` - if you need more freedom, we recommend to use functions above if possible
+    - `pluginId`: id of your plugin (i.e `this.id` variable within your plugin)
+- `addHtml(html, pluginId)` - append custom `html` to a global scope, providing an `pluginId` your plugin ID for safe removal
 - `postData` - JSON variant of `PHP`'s `$_POST` variable, data sent inside a `POST` request
 - `addPostExport(name, callback, pluginId)` - when the visualisation is being exported, append the output `string` value of `callback` (should not contain `'` character) into `POST` data with name `name` (should be unique)
     - e.g. if you want to find `myValue` in `postData`, register: `PLUGINS.addPostExport("myValue", this.valueCallback.bind(this));` where we bind this to the callback so that it can access our plugin instance using `this`

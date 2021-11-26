@@ -1224,7 +1224,7 @@ class AutoObjectCreationStrategy {
                 if (layer.order === _this._readingIndex) {
                     index = layer.order;
                     _this._readingKey = key;
-                    html += `<option value='${key} selected'>${layer.name}</option>`;
+                    html += `<option value='${key}' selected>${layer.name}</option>`;
                 } else {
                     html += `<option value='${key}'>${layer.name}</option>`;
                 }
