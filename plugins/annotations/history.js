@@ -23,7 +23,7 @@ id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 <span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" 
-onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
+onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 <div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div></div></div>`,
             'annotation-board',
@@ -41,6 +41,8 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     back: function () {
+        if (this._context.disabledInteraction) return;
+
         if (this._buffer[this._buffidx]) {
             this._performSwap(this._context.canvas(),
                 this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward)
@@ -69,6 +71,8 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     redo: function () {
+        if (this._context.disabledInteraction) return;
+
         if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
@@ -85,6 +89,8 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     refresh: function() {
+        if (this._context.disabledInteraction) return;
+
         this.board.html("");
         let _this = this;
         this._context.canvasObjects().some(o => {
@@ -96,6 +102,8 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
     },
 
     sync: function() {
+        if (this._context.disabledInteraction) return;
+
         if (!confirm("This will overwrite all properties of all existing annotations - " +
             "even those manually modified. Do you want to proceed?")) return;
         this.board.html("");
@@ -150,8 +158,12 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
         this._boardSelected = object;
     },
 
-    isOngoingEdit: function(ofObject) {
+    isOngoingEditOf: function(ofObject) {
         return this._editSelection && this._editSelection.incrementId === ofObject.incrementId;
+    },
+
+    setOnGoingEditObject: function(obj) {
+      this._editSelection.target = obj;
     },
 
     _focus: function (cx, cy, objectId = null) {
@@ -174,6 +186,20 @@ onclick="${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations"
 
     _removeFromBoard: function (object) {
         this.board.children(`#log-object-${object.incrementId}`).remove();
+    },
+
+    _setControlsVisuallyEnabled: function(enabled) {
+        if (enabled) {
+            [this.undoBtn, this.redoBtn, $("#history-refresh"),
+                $("#history-sync"), $("#delete-all-annotations")].map(e => {
+                    e.css({cursor: "default", filter: "brightness(0.5)"});
+            });
+        } else {
+            [this.undoBtn, this.redoBtn, $("#history-refresh"),
+                $("#history-sync"), $("#delete-all-annotations")].map(e => {
+                e.css({cursor: "pointer", filter: "none"});
+            });
+        }
     },
 
     _addToBoard: function (object) {
@@ -205,12 +231,14 @@ style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">edit</span></div>`);
     },
 
+
     _boardItemEdit(self, objectId) {
         if (this._editSelection) {
             this._boardItemSave(true);
         } else {
             $('#annotation-board').css('background', 'var(--color-merge-box-error-indicator-bg)');
             this._context.setMouseOSDInteractive(false);
+            this._context.enableInteraction(false);
         }
 
         self.prev().prop('disabled', false);
@@ -225,15 +253,32 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
 
     _boardItemSave(switches=false) {
         if (!this._editSelection) return;
+
+        let obj = this._editSelection.target;
+        if (obj) {
+            //if target was set, object could have been edited, update
+            let factory = this._context.getAnnotationObjectFactory(obj.type);
+            let newObject = factory.recalculate(obj);
+            if (newObject) {
+                this._context.replaceAnnotation(obj, newObject, true);
+                obj = newObject;
+            }
+
+            //self.target.initialize(obj);
+            //obj.polygon.initialize(object.polygon.points);
+        } else {
+            obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
+        }
         let self = this._editSelection.self;
+        if (obj) obj.set({comment: self.prev().val()});
+
         self.html('edit');
         self.prev().prop('disabled', true);
-        let obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
-        if (obj) obj.set({comment: self.prev().val()});
 
         if (!switches) {
             $('#annotation-board').css('background', 'none');
             this._context.setMouseOSDInteractive(true);
+            this._context.enableInteraction(true);
         }
         this._editSelection = undefined;
     } ,

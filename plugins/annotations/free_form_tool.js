@@ -207,11 +207,9 @@ FreeFormTool.prototype = {
 
     //create polygon from points and initialize so that it is ready to be modified
     _createPolygonAndSetupFrom: function (points, object) {
-        //TODO avoid re-creation of polygon, if it already was polygon
-
         //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
         let polygon = this._context.polygonFactory.copy(object, points);
-        polygon.type = "polygon";
+        polygon.type = this._context.polygonFactory.type;
 
         this._context.replaceAnnotation(object, polygon, true);
         this._setupPolygon(polygon);

@@ -499,6 +499,7 @@ class AnnotationObjectFactory {
         return null;
     }
 
+
     /**
      * Create an object at given point with a given strategy (TODO use strategy pattern)
      * @param {OpenSeadragon.Point} point origin of the object
@@ -533,6 +534,21 @@ class AnnotationObjectFactory {
      * @param {Number} y y-coordinate of the action origin, in image space
      */
     updateCreate(x, y) {
+    }
+
+
+    /**
+     * Update the object coordinates by user interaction
+     * @param theObject recalculate the object that has been modified
+     */
+    edit(theObject) {
+    }
+
+    /**
+     * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
+     * @param theObject recalculate the object that has been modified
+     */
+    recalculate(theObject) {
     }
 
     /**
@@ -650,6 +666,21 @@ class Rect extends AnnotationObjectFactory {
             comment: ofObject.comment,
             presetID: ofObject.presetID
         });
+    }
+
+    edit(theObject) {
+        theObject.set({
+            hasControls: true,
+            lockMovementX: false,
+            lockMovementY: false
+        });
+    }
+
+    recalculate(theObject) {
+        let height = theObject.getHeight();
+        let width = theObject.getWidth();
+        theObject.set({ width: width, height: height, scaleX: 1, scaleY: 1, });
+        theObject.calcCoords();
     }
 
     instantCreate(point, isLeftClick = true) {
@@ -788,6 +819,21 @@ class Ellipse extends AnnotationObjectFactory {
         });
     }
 
+    edit(theObject) {
+        theObject.set({
+            hasControls: true,
+            lockMovementX: false,
+            lockMovementY: false
+        });
+    }
+
+    recalculate(theObject) {
+        let rx = theObject.rx * theObject.scaleX;
+        let ry = theObject.ry * theObject.scaleY;
+        theObject.set({ rx: rx, ry: ry, scaleX: 1, scaleY: 1, });
+        theObject.calcCoords();
+    }
+
     instantCreate(point, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(point);
         if (bounds) {
@@ -879,9 +925,7 @@ class Polygon extends AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
-        this._polygonBeingCreated = false; // is polygon being drawn/edited
-        this._pointArray = null;
-        this._current = null;
+        this._initialize(false);
     }
 
     getIcon() {
@@ -893,7 +937,7 @@ class Polygon extends AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return (this._current || this.currentlyEddited);
+        return (this._current || this._edited);
     }
 
     /**
@@ -931,6 +975,63 @@ class Polygon extends AnnotationObjectFactory {
         });
     }
 
+    edit(theObject) {
+        //from the official example http://fabricjs.com/custom-controls-polygon
+        if (this._edited) {
+            this.recalculate(this._edited);
+        }
+
+        this._initialize(false);
+        let points = theObject.get("points");
+        const _this = this;
+        theObject.selectable = false;
+        theObject.hasControls = false;
+
+        points.forEach(function (point, index) {
+            let circle = _this._createControlPoint(point.x, point.y, {
+                name: index,
+                selectable: true,
+                hasBorders: false,
+                hasControls: false,
+                objectCaching: false,
+                evented: true
+            });
+            circle.on('moving', function () {
+                let curr = _this._edited;
+                curr.points[this.name] = { x: this.getCenterPoint().x, y: this.getCenterPoint().y };
+                //todo somehow try to avoid copy, but it creates artifacts otherwise :(
+                _this._edited = _this.copy(curr, curr.points);
+                _this._context.replaceAnnotation(curr, _this._edited, false);
+                _this._context.canvas().sendToBack(_this._edited);
+                _this._context.canvas().renderAll();
+            });
+            _this._pointArray.push(circle);
+            _this._context.addHelperAnnotation(circle);
+        });
+
+        this._originallyEddited = theObject;
+        this._edited = theObject;
+        this._context.canvas().deactivateAll();
+        this._context.canvas().sendToBack(theObject);
+        this._context.canvas().renderAll();
+    }
+
+    recalculate(theObject) {
+        let _this=this;
+        $.each(this._pointArray, function (index, point) {
+            _this._context.deleteHelperAnnotation(point);
+        });
+
+        if (this._edited !== this._originallyEddited) {
+            this._context.history.push(this._edited, this._originallyEddited);
+            this._edited.selectable = true;
+            this._context.overlay.fabricCanvas().setActiveObject(this._edited);
+        }
+        //clear
+        this._initialize(false);
+        this._edited = null;
+    }
+
     instantCreate(point, isLeftClick = true) {
         const _this = this;
         //(async function _() {
@@ -963,22 +1064,12 @@ class Polygon extends AnnotationObjectFactory {
             hasControls: false,
             evented: false,
             objectCaching: false,
+            lockMovementX: true,
+            lockMovementY: true
         };
 
         //create circle representation of the point
-        let circle = new fabric.Circle($.extend(commonProperties, {
-            radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
-            fill: '#F58B8B',
-            stroke: '#333333',
-            strokeWidth: 0.5,
-            left: x,
-            top: y,
-            originX: 'center',
-            originY: 'center',
-            type: "_polygon.controls.circle",
-            lockMovementX: true,
-            lockMovementY: true
-        }));
+        let circle = this._createControlPoint(x, y, commonProperties);
         if (this._pointArray.length === 0) circle.set({fill: 'red', strokeWidth: 0.7});
         this._pointArray.push(circle);
         this._context.addHelperAnnotation(circle);
@@ -1078,10 +1169,26 @@ class Polygon extends AnnotationObjectFactory {
         this._polygonBeingCreated = isNew;
         this._pointArray = [];
         this._current = null;
+        this._edited = null;
+    }
+
+    //todo replace with control point feature?
+    _createControlPoint(x, y, commonProperties) {
+        return new fabric.Circle($.extend(commonProperties, {
+            radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
+            fill: '#F58B8B',
+            stroke: '#333333',
+            strokeWidth: 0.5,
+            left: x,
+            top: y,
+            originX: 'center',
+            originY: 'center',
+            type: "__polygon.controls.circle",
+        }));
     }
 
     /**
-     * THE FOLOWING CODE HAS BEEN COPIED OUT FROM A LIBRARY
+     * THE FOLLOWING PRIVATE CODE: POLY SIMPLIFICATION CODE HAS BEEN COPIED OUT FROM A LIBRARY
      * (c) 2017, Vladimir Agafonkin
      * Simplify.js, a high-performance JS polyline simplification library
      * mourner.github.io/simplify-js
@@ -1162,6 +1269,10 @@ class Polygon extends AnnotationObjectFactory {
 
         return simplified;
     }
+
+    /**
+     * END
+     */
 
     getRelativePixelDiffDistSquared(relativeDiff) {
         let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));

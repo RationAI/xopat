@@ -24,6 +24,7 @@ OSDAnnotations = function (incoming) {
 		FREE_FORM_TOOL: new StateFreeFormTool(this),
 	});
 	this.mode = this.Modes.AUTO;
+	this.disabledInteraction = false;
 
 	//Register used annotation object factories
 	AnnotationObjectFactory.register(Rect, Ellipse, Polygon);
@@ -120,7 +121,7 @@ OSDAnnotations.prototype = {
 		}.bind(this);
 
 		function handleRightClickUp(event) {
-			if (!_this.cursor.isDown) return;
+			if (!_this.cursor.isDown || _this.disabledInteraction) return;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y)
@@ -130,7 +131,7 @@ OSDAnnotations.prototype = {
 		}
 
 		function handleRightClickDown(event) {
-			if (_this.cursor.isDown) return;
+			if (_this.cursor.isDown || _this.disabledInteraction) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
@@ -141,7 +142,7 @@ OSDAnnotations.prototype = {
 		}
 
 		function handleLeftClickUp(event) {
-			if (!_this.cursor.isDown) return;
+			if (!_this.cursor.isDown || _this.disabledInteraction) return;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y)
@@ -150,7 +151,7 @@ OSDAnnotations.prototype = {
 		}
 
 		function handleLeftClickDown(event) {
-			if (_this.cursor.isDown || !_this.presets.left) return;
+			if (_this.cursor.isDown || !_this.presets.left || _this.disabledInteraction) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
@@ -191,14 +192,25 @@ OSDAnnotations.prototype = {
 
 		this.overlay.fabricCanvas().on('object:selected', function (e) {
 			if (e && e.target) {
+
 				//todo try to fix board if not on board..?
-				let isInEditMode = _this.history.isOngoingEdit(e.target);
-				_this.history.highlight(e.target);
-				e.target.set({
-					hasControls: !_this.isMouseOSDInteractive() && isInEditMode,
-					lockMovementX: !isInEditMode,
-					lockMovementY: !isInEditMode
-				});
+				let isInEditMode = _this.history.isOngoingEditOf(e.target);
+				if (isInEditMode) {
+					_this.history.setOnGoingEditObject(e.target);
+					if (_this.isMouseOSDInteractive()) {
+						e.target.set({
+							hasControls: false,
+							lockMovementX: true,
+							lockMovementY: true
+						});
+					} else {
+
+						let factory = _this.getAnnotationObjectFactory(e.target.type);
+						if (factory) factory.edit(e.target);
+					}
+				}
+
+				_this.history.highlight(e.target); //todo remove?
 			}
 		});
 
@@ -242,7 +254,7 @@ OSDAnnotations.prototype = {
 
 		document.addEventListener('keydown', (e) => {
 			// switching mode only when no mode AUTO and mouse is up
-			if (!_this.showAnnotations || _this.cursor.isDown) return;
+			if (!_this.showAnnotations || _this.cursor.isDown || _this.disabledInteraction) return;
 
 			let modeFromCode = _this.getModeByKeyCode(e.code);
 			if (modeFromCode) {
@@ -252,7 +264,7 @@ OSDAnnotations.prototype = {
 		});
 
 		document.addEventListener('keyup', (e) => {
-			if (!_this.showAnnotations) return;
+			if (!_this.showAnnotations || _this.disabledInteraction) return;
 
 			if (e.code === "Delete") {
 				_this.removeActiveObject();
@@ -325,21 +337,6 @@ OSDAnnotations.prototype = {
 
 			_this.overlay.fabricCanvas().renderAll();
 		});
-
-		// TODO delete?    update annotation group (from input form)
-		$("#annotation_group").on("change", function () {
-			var annotation = _this.overlay.fabricCanvas().getActiveObject();
-			annotation.set({ a_group: $(this).val() });
-		});
-
-		// TODO delete?   update annotation comment (from input form)
-		$("#annotation_comment").on("input", function () {
-			var annotation = _this.overlay.fabricCanvas().getActiveObject();
-			if (annotation) {
-				annotation.set({ comment: $(this).val() })
-			}
-			_this.history._updateBoardText(annotation, annotation.comment);
-		});
 	}, // end of initialize
 
 	/****************************************************************************************************************
@@ -356,11 +353,11 @@ OSDAnnotations.prototype = {
 		
 		<span class="material-icons" id="enable-disable-annotations" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
 		if ($(this).attr('data-ref') === 'on'){
-			${this.id}.turnAnnotationsOnOff(false);
+			${this.id}.enableAnnotations(false);
 			$(this).html('visibility_off');
 			$(this).attr('data-ref', 'off');
 		} else {
-			${this.id}.turnAnnotationsOnOff(true);
+			${this.id}.enableAnnotations(true);
 			$(this).html('visibility');
 			$(this).attr('data-ref', 'on');
 		}"> visibility</span>`,
@@ -752,8 +749,10 @@ OSDAnnotations.prototype = {
 		}
 	},
 
-	turnAnnotationsOnOff: function (on) {
+	enableAnnotations: function (on) {
 		let objects = this.overlay.fabricCanvas().getObjects();
+		this.enableAnnotations(on);
+
 		if (on) {
 			this.showAnnotations = true;
 			//set all objects as visible and unlock
@@ -772,7 +771,6 @@ OSDAnnotations.prototype = {
 		} else {
 			this.cachedTargetCanvasSelection = this.overlay.fabricCanvas().getActiveObject();
 			this.history.highlight(null);
-
 			this.showAnnotations = false;
 			for (let i = 0; i < objects.length; i++) {
 				//set all objects as invisible and lock in position
@@ -787,10 +785,15 @@ OSDAnnotations.prototype = {
 				objects[i].lockSkewingY = true;
 				objects[i].lockUniScaling = true;
 			}
-			this.overlay.fabricCanvas().deactivateAll().renderAll();
+			this.overlay.fabricCanvas().deactivateAll();
 		}
-		this._modesJqNode.attr('disabled', !on);
 		this.overlay.fabricCanvas().renderAll();
+	},
+
+	enableInteraction: function(on) {
+		this.disabledInteraction = !on;
+		this._modesJqNode.attr('disabled', !on);
+		this.history._setControlsVisuallyEnabled(!on);
 	},
 
 	getModeByKeyCode: function(keyCode) {
