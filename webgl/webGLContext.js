@@ -54,7 +54,7 @@ class WebGL10 {
         this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
 
         this.tile_size = 'u_tile_size';
-        this.wrap = gl.CLAMP_TO_EDGE;
+        this.wrap = gl.MIRRORED_REPEAT;
         this.tile_pos = 'a_tile_pos';
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
@@ -283,7 +283,7 @@ void main() {
 `;
     }
 
-    toBuffers(program) {
+    toBuffers(program, currentVisualisation) {
         if (!this.context.running) return;
 
         let context = this.context,
@@ -291,7 +291,7 @@ void main() {
 
         // Allow for custom loading
         gl.useProgram(program);
-        context.visualisationInUse(context._visualisations[context._program]);
+        context.visualisationInUse(currentVisualisation);
         context['gl_loaded'].call(context, gl, program);
 
         // Unchangeable square array buffer fills viewport with texture
@@ -322,7 +322,7 @@ void main() {
         gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
     }
 
-    toCanvas(imageElement, e) {
+    toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation) {
         if (!this.context.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
@@ -330,11 +330,7 @@ void main() {
             gl = this.gl,
             program = context._programs[context._program];
 
-
-        // TODO move this decision to tile-loaded to decide once!
-        if (!context['gl_drawing'].call(context, gl, imageElement, e)) {
-            return null;
-        }
+        context['gl_drawing'].call(context, gl, imageElement, tileDimension);
 
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -345,22 +341,14 @@ void main() {
             gl.vertexAttribPointer.apply(gl, x);
         });
 
-        //todo better access
-        let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-            PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
-        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), dx);
-        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), PLUGINS.osd.viewport.getZoom());
+        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), pixelSize);
+        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
         // Upload textures
-        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, program, context.gl);
+        this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, context.gl);
 
         // Draw everything needed to canvas
         gl.drawArrays.apply(gl, this._drawArrays);
-
-        // Apply to container if needed
-        if (context.container) {
-            context.container.appendChild(gl.canvas);
-        }
 
         //this.texture.freeTextures(gl);
         return gl.canvas;
@@ -374,7 +362,7 @@ class WebGL20 {
         this.context = context;
         this.gl = gl;
         this.tile_size = 'u_tile_size';
-        this.wrap = gl.CLAMP_TO_EDGE;
+        this.wrap = gl.MIRRORED_REPEAT;
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
@@ -383,18 +371,17 @@ class WebGL20 {
                 this.canvas = document.createElement('canvas');
                 this.canvasReader = this.canvas.getContext('2d');
                 this.textureId = gl.createTexture();
-
             },
 
             toBuffers: function (gl, wrap, filter, visualisation) {
-
-
+                this.wrap = wrap;
+                this.filter = filter;
             },
+
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
 
                 // use canvas to get the pixel data array of the image
-
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
                 this.canvas.width = image.width;
                 this.canvas.height = image.height;
@@ -405,10 +392,10 @@ class WebGL20 {
                 // -- Init Texture
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, this.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, this.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, this.wrap);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, this.wrap);
                 gl.texImage3D(
                     gl.TEXTURE_2D_ARRAY,
                     0,
@@ -563,7 +550,7 @@ void main() {
 `;
     }
 
-    toBuffers(program) {
+    toBuffers(program, currentVisualisation) {
         if (!this.context.running) return;
 
         let context = this.context,
@@ -574,7 +561,7 @@ void main() {
 
         // Allow for custom loading
         gl.useProgram(program);
-        context.visualisationInUse(context._visualisations[context._program]);
+        context.visualisationInUse(currentVisualisation);
         context['gl_loaded'].call(context, gl, program);
 
         // Unchangeable square array buffer fills viewport with texture
@@ -597,7 +584,7 @@ void main() {
         gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
     }
 
-    toCanvas(imageElement, e) {
+    toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation) {
         if (!this.context.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
@@ -605,34 +592,21 @@ void main() {
             gl = this.gl,
             program = context._programs[context._program];
 
-        // TODO move this decision to tile-loaded to decide once!
-        if (!context['gl_drawing'].call(context, gl, imageElement, e)) {
-            return null;
-        }
-
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
+
+        context['gl_drawing'].call(context, gl, imageElement, tileDimension);
 
         // Set Attributes for GLSL
         gl.enableVertexAttribArray(this._att.slice(0, 1));
         gl.vertexAttribPointer.apply(gl, this._att);
-
-        //todo better access
-        let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-            PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
-        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), dx);
-        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), PLUGINS.osd.viewport.getZoom());
+        gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), pixelSize);
+        gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
         // Upload textures
-        this.texture.toCanvas(context, context._visualisations[context._program], imageElement, e.tile.sourceBounds, program, gl);
-
+        this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, gl);
         // Draw everything needed to canvas
         gl.drawArrays.apply(gl, this._drawArrays);
-
-        // Apply to container if needed
-        if (context.container) {
-            context.container.appendChild(gl.canvas);
-        }
 
         //this.texture.freeTextures(gl);
         return gl.canvas;

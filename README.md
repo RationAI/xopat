@@ -44,6 +44,7 @@ Then, based on the presence of `visualisation` the user is
 [{    
       "name": "A visualisation setup 1",
       "params": {
+            "experimentId": "ID_OF_THE_EXPERIMENT",
             "uniqueId": "myPlugin",
             "losslessImageLayer": false,
             "losslessDataLayer": true
@@ -74,6 +75,7 @@ All items are required except for items inside `params` field and the exception 
 In fact, some (such as `params` or `name` are somehow derived if missing).
 - `name` - visualisation name
 - `params` - visualisation parameters, supported:
+    - `experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
     - `uniqueId` - necessary only to set up in case multiple instances of webGL framework are running
     - `losslessImageLayer` - optional, whether the first layer (tissue) should use lossless data transfer, default `false`
     - `losslessDataLayer` - optional, whether the second layer (data) should use lossless data transfer, default `true`

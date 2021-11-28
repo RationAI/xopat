@@ -1,8 +1,9 @@
 {
     "id": "histoviso_explain",
-    "name": "Interactive explainability",
+    "name": "Neural Network Inspector",
     "includes" : [
-        "network.js"
+        "histoviso_explain.js",
+        "histoviso_explain_annotation_factory_extension.js"
     ],
     "flag": "histoviso_explain",
     "priority": 10,

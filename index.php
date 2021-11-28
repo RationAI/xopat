@@ -1,5 +1,6 @@
 <?php
 
+require_once("config.php");
 require_once("plugins.php");
 
 function hasKey($array, $key) {
@@ -46,14 +47,6 @@ if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
             print_r($_POST, true));
     }
     letUserSetUp($image, $layer);
-
-    //$visualisation = $_COOKIE["visualisation"];
-//    if (!$dataSource) {
-//        $errorSource = !hasKey($_COOKIE, "image") || !hasKey($_COOKIE, "layer");
-//        if (!$errorSource) {
-//            $dataSource = $_COOKIE;
-//        }
-//    }
 }
 
 
@@ -102,20 +95,6 @@ foreach ($parsedParams as $visualisationTarget) {
 $visualisation = json_encode($parsedParams);
 $cookieCache = json_encode($cookieCache);
 
-//if (!$dataSource) { //if missing data, error
-//  $errorSource = true;
-//} else { //else visualisation style required
-//  if ($visualisation) {
-//    //todo check also POST image and POST layer exist!!!!
-//    setcookie( "visualisation", $visualisation, strtotime( '+30 days' ) );
-//    //TODO move there arguments to remain in GET parameters to differentiate between visualisation sources
-//    setcookie( "image", $dataSource["image"], strtotime( '+30 days' ) );
-//    setcookie( "layer", $dataSource["layer"], strtotime( '+30 days' ) );
-//  } else {
-//    letUserSetUp($dataSource["image"], $dataSource["layer"]);
-//  }
-//}
-
 $pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
 foreach ($PLUGINS as $_ => $plugin) {
     $plugin->loaded = !isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies);
@@ -123,8 +102,8 @@ foreach ($PLUGINS as $_ => $plugin) {
 }
 
 
-?>
-
+$version = VERSION;
+echo <<<EOF
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 
@@ -147,14 +126,14 @@ foreach ($PLUGINS as $_ => $plugin) {
     <!-- OSD -->
     <!-- <script src="./osd/openseadragon.min.js"></script> -->
 
-    <script src="./osd_debug/src/openseadragon.js"></script>
+    <script src="./osd_debug/src/openseadragon.js?v=$version"></script>
 
     <script src="./osd_debug/src/eventsource.js"></script>
     <script src="./osd_debug/src/rectangle.js"></script>
-    <script src="./osd_debug/src/tile.js"></script>
-    <script src="./osd_debug/src/tilecache.js"></script>
-    <script src="./osd_debug/src/tiledimage.js"></script>
-    <script src="./osd_debug/src/tilesource.js"></script>
+    <script src="./osd_debug/src/tile.js?v=$version"></script>
+    <script src="./osd_debug/src/tilecache.js?v=$version"></script>
+    <script src="./osd_debug/src/tiledimage.js?v=$version"></script>
+    <script src="./osd_debug/src/tilesource.js?v=$version"></script>
     <script src="./osd_debug/src/button.js"></script>
     <script src="./osd_debug/src/buttongroup.js"></script>
     <script src="./osd_debug/src/control.js"></script>
@@ -162,7 +141,7 @@ foreach ($PLUGINS as $_ => $plugin) {
     <script src="./osd_debug/src/displayrectangle.js"></script>
     <script src="./osd_debug/src/drawer.js"></script>
     <script src="./osd_debug/src/dzitilesource.js"></script>
-    <script src="./osd_debug/src/dziexttilesource.js"></script>
+    <script src="./osd_debug/src/dziexttilesource.js?v=$version"></script>
     <script src="./osd_debug/src/fullscreen.js"></script>
     <script src="./osd_debug/src/iiiftilesource.js"></script>
     <script src="./osd_debug/src/imageloader.js"></script>
@@ -185,9 +164,9 @@ foreach ($PLUGINS as $_ => $plugin) {
     <script src="./osd_debug/src/world.js"></script>
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
-    <script src="./webgl/webGLContext.js"></script>
-    <script src="./webgl/webGLWrapper.js"></script>
-    <script src="./webgl/webGLToOSDBridge.js"></script>
+    <script src="./webgl/webGLContext.js?v=$version"></script>
+    <script src="./webgl/webGLWrapper.js?v=$version"></script>
+    <script src="./webgl/webGLToOSDBridge.js?v=$version"></script>
 
     <!--Tutorials-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
@@ -196,7 +175,8 @@ foreach ($PLUGINS as $_ => $plugin) {
     <script src="./external/enjoyhint.min.js"></script>
 
 </head>
-
+EOF;
+?>
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
@@ -356,6 +336,7 @@ foreach ($PLUGINS as $_ => $plugin) {
         jsGlDrawingCall: "glDrawing",
         //todo create relative path, for some reason this does not work well inside release/ folder probably shader generator issue
         shaderGenerator: "/visualization/client/dynamic_shaders/build.php",
+        authorization: "<?php echo AUTH_HEADERS ?>",
 
         //called once fully initialized
         ready: function() {
@@ -451,6 +432,9 @@ foreach ($PLUGINS as $_ => $plugin) {
             <div class="non-draggable">${html}</div>
             </div>`;
         }
+    },
+    function (e) {
+        return e.tiledImage.source.postData;
     });
 
     //Set visualisations
@@ -762,7 +746,7 @@ foreach ($PLUGINS as $_ => $plugin) {
 
         init: function() {
             $("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
-          <span class="Toast-icon"><svg width="12" height="16"v id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
+          <span class="Toast-icon"><svg width="12" height="16" id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
           <span id="annotation-messages" class="Toast-content v-align-middle"></span>
           <button class="Toast-dismissButton" onclick="Dialogs.hide(false);">
           <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
@@ -829,7 +813,7 @@ foreach ($PLUGINS as $_ => $plugin) {
 
     function constructExportVisualisationForm(customAttributes="", includeCurrentPlugins=true) {
         let form = `
-      <form method="POST" id="redirect" action="<?php echo "http://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"; ?>">
+      <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER[REQUEST_URI]; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
         ${customAttributes}
         <input type="submit" value="">
@@ -873,10 +857,7 @@ form.submit();<\/script>`;
     }
 
     function copyHashUrlToClipboard() {
-        var url = "<?php
-            echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']);
-            ?>/redirect.php#";
-
+        let url = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
         url += encodeURIComponent(seaGL.exportSettings()) + "|";
         Object.values(PLUGINS.each).forEach(plugin => {
             if (plugin.loaded) {
@@ -922,6 +903,10 @@ ${constructExportVisualisationForm()}
         appendToMainMenu: function(title, titleHtml, html, id, pluginId) {
             $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
         },
+        replaceInMainMenu: function(title, titleHtml, html, id, pluginId) {
+            $(`.${pluginId}-plugin-root`).remove();
+            this.appendToMainMenu(title, titleHtml, html, id, pluginId);
+        },
         appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
             $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
         <span class="material-icons inline-pin plugins-pin" id="${id}-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
@@ -930,6 +915,10 @@ ${constructExportVisualisationForm()}
         <div>
         ${html}
         </div><div class='inner-panel-hidden'>${hiddenHtml}</div></div>`);
+        },
+        replaceInMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
+            $(`.${pluginId}-plugin-root`).remove();
+            this.appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
         },
         appendToMainMenuRaw: function(html, id, pluginId) {
             $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root">${html}</div>`);
@@ -1035,10 +1024,15 @@ ${constructExportVisualisationForm()}
 
         let content = "<input type='checkbox' class='form-control position-absolute top-1 right-0' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-4'  for='remember-plugin-selection'>remember selection</label><br>";
         Object.values(PLUGINS.each).forEach(plugin => {
+            let dependency = "";
+            if (plugin.requires) {
+                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode) {otherNode.checked = this.checked; otherNode.disabled = this.checked;}"`;
+            }
+
             let checked = plugin.loaded ? "checked" : "";
             let disabled = plugin.permaLoaded ? "disabled" : "";
-            let problematic = plugin.error ? "<span class='material-icons pointer' style='font-size: initial; color: var( --color-icon-danger)' title='This plugin has been automatically removed: there was an error.'>warning</span>" : "";
-            content += `<input class="form-control" id="select-plugin-${plugin.flag}" type="checkbox" value="${plugin.flag}" ${checked} ${disabled}>&emsp;<label for="select-plugin-${plugin.flag}">${problematic}${plugin.name}</label><br>`;
+            let problematic = plugin.error ? `<span class='material-icons pointer' style='font-size: initial; color: var( --color-icon-danger)' title='This plugin has been automatically removed: there was an error. [${plugin.error}]'>warning</span>`: "";
+            content += `<input class="form-control" id="select-plugin-${plugin.id}" type="checkbox" ${dependency} value="${plugin.flag}" ${checked} ${disabled}>&emsp;<label for="select-plugin-${plugin.id}">${problematic}${plugin.name}</label><br>`;
         });
 
         Dialogs.showCustom("load-plugins", "Add plugins", content + "<br>",
@@ -1049,7 +1043,7 @@ ${constructExportVisualisationForm()}
         let formData = "",
             plugins = [];
         Object.values(PLUGINS.each).forEach(plugin => {
-            if (document.getElementById(`select-plugin-${plugin.flag}`).checked) {
+            if (document.getElementById(`select-plugin-${plugin.id}`).checked) {
                 formData += `<input type="hidden" name="${plugin.flag}" value="1">`;
                 plugins.push(plugin.flag);
             }
@@ -1072,7 +1066,7 @@ foreach ($PLUGINS as $_ => $plugin) {
         }
         //add plugin includes
         foreach ($plugin->includes as $__ => $file) {
-            echo "<script src=\"" . PLUGIN_FOLDER . $plugin->directory . "/$file\"></script>";
+            echo "<script src=\"" . PLUGIN_FOLDER . $plugin->directory . "/$file?v=$version\"></script>";
         }
     }
 }
@@ -1097,9 +1091,6 @@ foreach ($PLUGINS as $_ => $plugin) {
         //todo handle cases where image is not loaded properly
         alert("Open failed");
     });
-
-
-
 
 </script>
 </body>

@@ -4,7 +4,7 @@
 class Preset {
     constructor(id, objectFactory = null, comment = "", color = "") {
         this.comment = comment;
-        this.fill = color;
+        this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
     }
@@ -16,14 +16,14 @@ class Preset {
                 "No factory for such object available.");
         }
         this.comment = parsedObject.comment;
-        this.fill = parsedObject.fill;
+        this.color = parsedObject.color;
         this.presetID = parsedObject.presetID;
         return this;
     }
     toJSONFriendlyObject() {
         return {
             comment: this.comment,
-            fill: this.fill,
+            fill: this.color,
             objectType: this.objectFactory.type,
             presetID: this.presetID
         };
@@ -76,8 +76,12 @@ class PresetManager {
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
-        return $.extend(PresetManager._commonProperty,
-            isLeftClick ? this.left : this.right,
+        let preset = isLeftClick ? this.left : this.right;
+
+        //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
+        return $.extend({fill: preset.color},
+            PresetManager._commonProperty,
+            preset,
             {
                 isLeftClick: isLeftClick,
                 opacity: this._context.opacity.val(),
@@ -138,6 +142,10 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
                         + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
                         + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
         return (c);
+    }
+
+    getCommonProperties() {
+        return PresetManager._commonProperty;
     }
 
     /**
@@ -321,13 +329,13 @@ onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material
                 changeHtml += `<div onclick="${this._globalSelf}.updatePreset(${preset.presetID}, 
 {objectFactory: openseadragon_image_annotations.getAnnotationObjectFactory('${factory.type}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
-style="color: ${preset.fill};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
+style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
             }
         });
 
         return `<div class="position-relative border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" 
 onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons" 
-style="color: ${preset.fill};">${icon}</span>  ${comment}
+style="color: ${preset.color};">${icon}</span>  ${comment}
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
     }
 
@@ -381,7 +389,7 @@ onclick="if (${this._globalSelf}.removePreset(${preset.presetID})) {$(this).pare
 ${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: 
 ${this._context.id}.getAnnotationObjectFactory(this.value)});">${select}</select></div>
 <div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" 
-onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {fill: this.value});" value="${preset.fill}"></div>
+onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {fill: this.value});" value="${preset.color}"></div>
 <br>Comment<br><input class="form-control" type="text" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, 
 {comment: this.value});" value="${preset.comment}"><br></div>`;
     }
@@ -567,6 +575,13 @@ class AnnotationObjectFactory {
     finishIndirect() {
     }
 
+    /**
+     * Called when object is selected
+     * @param theObject selected fabricjs object
+     */
+    selected(theObject) {
+    }
+
     getASAP_XMLTypeName() {
         return "Generic Object";
     }
@@ -649,6 +664,7 @@ class Rect extends AnnotationObjectFactory {
             width: parameters.width,
             height: parameters.height,
             fill: ofObject.fill,
+            color: ofObject.color,
             isLeftClick: ofObject.isLeftClick,
             opacity: ofObject.opacity,
             strokeWidth: ofObject.strokeWidth,
@@ -801,6 +817,7 @@ class Ellipse extends AnnotationObjectFactory {
             originY: ofObject.originY,
             angle: ofObject.angle,
             fill: ofObject.fill,
+            color: ofObject.color,
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             opacity: ofObject.opacity,
@@ -958,6 +975,7 @@ class Polygon extends AnnotationObjectFactory {
         return new fabric.Polygon(parameters, {
             hasRotatingPoint: ofObject.hasRotatingPoint,
             fill: ofObject.fill,
+            color: ofObject.color,
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             isLeftClick: ofObject.isLeftClick,
@@ -991,7 +1009,6 @@ class Polygon extends AnnotationObjectFactory {
             let circle = _this._createControlPoint(point.x, point.y, {
                 name: index,
                 selectable: true,
-                hasBorders: false,
                 hasControls: false,
                 objectCaching: false,
                 evented: true
@@ -1058,19 +1075,19 @@ class Polygon extends AnnotationObjectFactory {
         }
         this.isLeftClick = isLeftClick;
 
-        let commonProperties = {
+        let properties = {
             selectable: false,
-            hasBorders: false,
             hasControls: false,
             evented: false,
             objectCaching: false,
+            hasBorders: false,
             lockMovementX: true,
             lockMovementY: true
-        };
+        }
 
         //create circle representation of the point
-        let circle = this._createControlPoint(x, y, commonProperties);
-        if (this._pointArray.length === 0) circle.set({fill: 'red', strokeWidth: 0.7});
+        let circle = this._createControlPoint(x, y, properties);
+        if (this._pointArray.length === 0) circle.set({fill: 'red'});
         this._pointArray.push(circle);
         this._context.addHelperAnnotation(circle);
 
@@ -1086,7 +1103,7 @@ class Polygon extends AnnotationObjectFactory {
             this._context.replaceAnnotation(this._current, polygon);
         }  else {
             polygon = this.create([{ x: x, y: y }],
-                $.extend(commonProperties, this._presets.getAnnotationOptions(isLeftClick))
+                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
             this._context.addHelperAnnotation(polygon);
         }
@@ -1176,9 +1193,7 @@ class Polygon extends AnnotationObjectFactory {
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
             radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
-            fill: '#F58B8B',
-            stroke: '#333333',
-            strokeWidth: 0.5,
+            fill: '#fbb802',
             left: x,
             top: y,
             originX: 'center',

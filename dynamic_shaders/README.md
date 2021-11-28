@@ -40,7 +40,7 @@ Contains definitions of shader names, filenames, parameter names, parameters-to-
 Required parameters (`GET` or `POST`) are `index` and `dataId`. Other parameters are voluntary, shader-dependent, except `unique-id` - a value 
 that can be passed from outer `params` field. All parameters must use the same protocol transfer type as the parameter `id`.
 
-_Example URL_: http://ip-78-128-251-178.flt.cloud.muni.cz/visualization/release/client/dynamic_shaders/colors.php?index=1&color=#9900fa&dataId=my_data_identifier
+_Example URL_: https://ip-78-128-251-178.flt.cloud.muni.cz/visualization/release/client/dynamic_shaders/colors.php?index=1&color=#9900fa&dataId=my_data_identifier
 
 Each shader type has a shader part script that generates following JSON-encoded object output with following fields:
 - `definition` - define global variables or custom functions in the resulting shader

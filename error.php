@@ -9,6 +9,7 @@ $title = hasKey($_SESSION, "title") ? $_SESSION['title'] : false;
 $description = hasKey($_SESSION, "description") ? $_SESSION['description'] : false;
 $techNFO = hasKey($_SESSION, "details") ? $_SESSION['details'] : false;
 
+//todo not a clean design!!! move to config.php?
 if (!$title) {
     header("Location: ../list-experiments.php");
     exit;

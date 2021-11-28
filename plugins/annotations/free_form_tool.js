@@ -22,7 +22,12 @@ FreeFormTool.prototype = {
                 this._setupPolygon(object);
             } else {
                 let points = objectFactory.toPointArray(object, AnnotationObjectFactory.withObjectPoint, 1);
-                this._createPolygonAndSetupFrom(points, object);
+                if (points) {
+                    this._createPolygonAndSetupFrom(points, object);
+                } else {
+                    PLUGINS.dialog.show("This object cannot be modified.", 5000, PLUGINS.dialog.MSG_WARN);
+                    return;
+                }
             }
         } else {
             this.polygon = null;

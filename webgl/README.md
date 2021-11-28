@@ -35,6 +35,7 @@ These parameters will be given to WebGLWrapper and can customize the behaviour. 
 - `htmlControlsId`: REQUIRED, id of a HTML element to fill with visualisation controls
 - `scriptId`:  REQUIRED, id of a HTML element where to append dynamic javascript code (this code is replaced from time to time)
 - `shaderGenerator`: REQUIRED, full URL to a script that is able to receive the visualisation parameters and return necessary data (shaders), see `../dynamic_shaders/`
+- `~~authorization~~` : value for the 'Authorization' header: e.g. `"Basic" + btoa("username:password")`
 - `jsGlLoadedCall`: custom name for the function called when a WebGL program is going to be loaded, required (unique) if multiple instances of OpenSeadragonGL are running
 - `jsGlDrawingCall`: custom name for the function called when a WebGL program is going to be used, required (unique) if multiple instances of OpenSeadragonGL are running
 - `glContextFactory`: an instance, a subclass of `GlContextFactory` that can provide the visualiser with desired WebGL rendering functionality 

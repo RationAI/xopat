@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
-  <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 
 </head>
 
@@ -49,6 +49,14 @@ if (!$layer) {
     "Visualisation was not defined and custom data sources are missing. See POST data:",
     print_r($_POST, true));
 }
+$experiment = hasKey($_GET, "experiment") ? $_GET["experiment"] : (hasKey($_POST, "experiment") ? $_POST["experiment"] : false);
+$experiment = $experiment ? "<input type='text' disabled value='$experiment' id='experiment-id'>" :
+    "<input id='experiment-id' type='text' value='' placeholder='Please specify the experiment ID.'>";
+
+echo <<<EOF
+<br><h3 class="d-inline-block">Experiment:</h3> $experiment
+EOF;
+
 $shader_selections = array();
 $inputs = array();
 
@@ -93,7 +101,7 @@ if ($i == 0) {
         print_r($_POST, true));
 }
 
-$path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
+$path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 ?>
 
 <br>
@@ -154,6 +162,15 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         $(self).append(html + "</div><div class='shader-part-advanced mt-3'></div></div>");
     }
 
+    function getExperimentId() {
+        let id = $("#experiment-id").val();
+        if (!id || id.length < 5) {
+            //TODO HARDCODED!!
+            id = "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69";
+        }
+        return id;
+    }
+
     function selectShaderPart(self, name, filename, dataID) {
         let node = self.parentNode.parentNode.lastChild;
         self.parentNode.childNodes.forEach(child => {
@@ -199,6 +216,8 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     function exportSettings() {
         let name = $("#settings-name").val();
         if (!name) return;
+
+        user_settings.params["experimentId"] = getExperimentId();
 
         let count = 0;
         let exported = [];
@@ -268,6 +287,8 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         let name = $("#export-name").val();
         if (!name) return;
 
+        user_settings.params["experimentId"] = getExperimentId();
+
         var action = $("#request").attr('action');
         var visSetup = JSON.stringify([user_settings]);
 
@@ -301,6 +322,8 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 
     // new form handling
     $('#request').submit(function(evt) {
+        user_settings.params["experimentId"] = getExperimentId();
+
         let shaders = user_settings.shaders;
 
         //reorder to reflect the ordering in the GUI

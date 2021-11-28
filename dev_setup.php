@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
-  <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 
 </head>
 
@@ -23,6 +23,7 @@
 <br><br>
 <?php
 
+include_once("config.php");
 include_once("dynamic_shaders/defined.php");
 
 function hasKey($array, $key) {
@@ -71,6 +72,7 @@ onchange="
     "name": "The visualization name",
     "data": $image,
     "params": {
+         "experimentId": "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69",
          "losslessImageLayer": false,
          "losslessDataLayer": true
     }
@@ -109,11 +111,10 @@ EOF;
 }
 echo "</div></div>";
 
-$path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 ?>
 
 <br>
-<form method="POST" target="_blank" action="<?php echo $path; ?>/index.php" id="request">
+<form method="POST" target="_blank" action="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/index.php" id="request">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
    <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp; 
    
@@ -143,6 +144,7 @@ $path = "http://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 {
       "name": "Visualisation 1",
       "params": {
+            "experimentId": "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69",
             "losslessImageLayer": false,
             "losslessDataLayer": true
       },

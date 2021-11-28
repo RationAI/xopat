@@ -10,13 +10,13 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
-  <script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 
 </head>
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
 
-<form method="POST" action="<?php echo "http://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php" id="redirect">
+<form method="POST" action="<?php echo "https://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']); ?>/index.php" id="redirect">
    <input type="hidden" name="visualisation" id="visualisation" value=''>
 </form>
 <button class="btn float-right" onclick="exportVisualisation(this);" title="Export visualisation" style="cursor: pointer;">Save setup</button>

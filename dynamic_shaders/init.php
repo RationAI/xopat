@@ -34,17 +34,23 @@ $uniqueId .= $index;
 //texture naming convention
 $texture_name = getTextureId($index);
 
+//todo not portable solution, somehow find the instance on the global scope..? or maybe inside function!!!
 
+//function (self) {
+//
+// self....etc.
+//
+//} ();
 
 $setJSProperty = function($variableName, $variableValue) {
     global $dataId;
-    return "currentVisualisation().shaders['$dataId'].cache['$variableName'] = $variableValue";
+    return "if (currentVisualisation().shaders.hasOwnProperty('$dataId')) currentVisualisation().shaders['$dataId'].cache['$variableName'] = $variableValue";
 };
 
 $getJSProperty = function($variableName, $defaultValue) {
     global $dataId;
     return <<<EOF
-currentVisualisation().shaders['$dataId'].cache.hasOwnProperty('$variableName') ? 
+currentVisualisation().shaders.hasOwnProperty('$dataId') && currentVisualisation().shaders['$dataId'].cache.hasOwnProperty('$variableName') ? 
   currentVisualisation().shaders['$dataId'].cache['$variableName'] : $defaultValue
 EOF;
 };

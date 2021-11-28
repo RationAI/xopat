@@ -33,6 +33,18 @@ OSDAnnotations = function (incoming) {
 //TODO performance check where i use Object.keys() or Object.values() whether it does not copy objects deeply
 OSDAnnotations.prototype = {
 
+	registerAnnotationFactory: function(AnnotationObjectFactoryClass, late=true) {
+		let factory = new AnnotationObjectFactoryClass(this, this._automaticCreationStrategy, this.presets);
+		if (this.objectFactories.hasOwnProperty(factory.type)) {
+			throw `The factory ${AnnotationObjectFactoryClass} conflicts with another factory: ${factory.type}`;
+		}
+		this.objectFactories[factory.type] = factory;
+
+		if (late) {
+			this.presetManager().updatePresetsHTML();
+		}
+	},
+
 	/*
 	Initialize member variables
 	*/
@@ -46,8 +58,7 @@ OSDAnnotations.prototype = {
 		// Annotation Objects
 		this.objectFactories = {};
 		AnnotationObjectFactory.visitRegistered(function (AnnotationObjectFactoryClass) {
-			let factory = new AnnotationObjectFactoryClass(this, this._automaticCreationStrategy, this.presets);
-			this.objectFactories[factory.type] = factory;
+			this.registerAnnotationFactory(AnnotationObjectFactoryClass, false);
 		}.bind(this));
 
 		if (this.objectFactories.hasOwnProperty("polygon")) {
@@ -58,6 +69,7 @@ OSDAnnotations.prototype = {
 				"least a polygon implementation in order to work. Did you maybe named the polygon factory " +
 				"implementation differently other than 'polygon'?", "See list of factories available.",
 				this.objectFactories);
+			//todo throw error instead? it is safe...
 			return;
 		}
 
@@ -204,13 +216,16 @@ OSDAnnotations.prototype = {
 							lockMovementY: true
 						});
 					} else {
-
 						let factory = _this.getAnnotationObjectFactory(e.target.type);
 						if (factory) factory.edit(e.target);
 					}
+				} else {
+					let factory = _this.getAnnotationObjectFactory(e.target.type);
+					if (factory) factory.selected(e.target);
 				}
 
-				_this.history.highlight(e.target); //todo remove?
+				//keep annotation board selection up to date
+				_this.history.highlight(e.target);
 			}
 		});
 
@@ -562,8 +577,8 @@ OSDAnnotations.prototype = {
 	*****************************************************************************************************************/
 
 	getJSONContent: function () {
-		//todo include preset ID ?
-		return JSON.stringify(this.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor']));
+		return JSON.stringify(this.overlay.fabricCanvas().toObject(['comment', 'a_group', 'threshold', 'borderColor',
+			'cornerColor', 'borderScaleFactor', 'color', 'presetID']));
 	},
 
 	getXMLDocumentContent: function() {
@@ -594,7 +609,7 @@ OSDAnnotations.prototype = {
 			//todo a_group not defined
 			//todo include preset ID?
 			xml_annotation.setAttribute("PartOfGroup", obj.a_group);
-			xml_annotation.setAttribute("Color", obj.fill);
+			xml_annotation.setAttribute("Color", obj.color);
 
 			//get coordinates in ASAP format
 			var xml_coordinates = doc.createElement("Coordinates");
@@ -719,6 +734,10 @@ OSDAnnotations.prototype = {
 		this.overlay.fabricCanvas().deactivateAll().renderAll();
 	},
 
+	presetManager: function() {
+		return this.presets;
+	},
+
 	removeActiveObject: function () {
 		let toRemove = this.overlay.fabricCanvas().getActiveObject();
 		if (toRemove) {
@@ -751,7 +770,7 @@ OSDAnnotations.prototype = {
 
 	enableAnnotations: function (on) {
 		let objects = this.overlay.fabricCanvas().getObjects();
-		this.enableAnnotations(on);
+		this.enableInteraction(on);
 
 		if (on) {
 			this.showAnnotations = true;

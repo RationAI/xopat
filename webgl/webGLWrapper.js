@@ -17,26 +17,21 @@ class WebGLWrapper {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         }
         this.ready = function () { };
+        //todo clarify API (visSwitched throws error cuz not defined implicitly...)
 
         //default values that might come from options and be overwritten later
         this.jsGlLoadedCall = "viaGlLoadedCall";
         this.jsGlDrawingCall = "viaGlDrawingCall";
 
+        //todo do not allow to redefine these functions!!
         this.gl_loaded = function (gl, program) {
-            //call pre-defined name of
+            //call pre-defined name
             this._callString(this.jsGlLoadedCall, program, gl);
         };
 
         this.gl_drawing = function (gl, tile, e) {
-            //use shaders only for certain tile source
-            //todo DIRTY make this more elegant (move decision into osdGL script)
-            if (e.tiledImage.source.postData) {
-                this._callString(this.jsGlDrawingCall, gl, e);
-                return true; //use webGL if not urlImage source
-            } else {
-                //otherwise no POST data was used, so no advanced protocol draw normally
-                return false;
-            }
+            //call pre-defined name
+            this._callString(this.jsGlDrawingCall, gl, e);
         };
 
         // Assign from incoming terms
@@ -79,6 +74,14 @@ class WebGLWrapper {
         }
         this._visualisations.push(visualisation);
         return true;
+    }
+
+    /**
+     * Runs a callback on each visualisation goal
+     * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+     */
+    foreachVisualisation(call) {
+        this._visualisations.forEach(vis => call(vis));
     }
 
     /**
@@ -132,40 +135,14 @@ class WebGLWrapper {
         return this._visualisations[this._program].dziExtendedUrl;
     }
 
+    processImage(imageElement, tileDimension, zoomLevel, pixelSize) {
+        return this._toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, this._visualisations[this._program]);
+    }
+
     /////////////////////////////////////////////////////////////////////////////////////
     //// YOU PROBABLY WANT TO READ FUNCTIONS BELOW SO YOU KNOW HOW TO SET UP YOUR SHADERS
     //// BUT YOU SHOULD NOT CALL THEM DIRECTLY
     /////////////////////////////////////////////////////////////////////////////////////
-
-    /**
-     * Prepare for a certain program to use, call before this program is used for rendering
-     * @param {WebGLProgram} program current program to use
-     */
-    toBuffers(program) {
-        this.webGLImplementation.toBuffers(program);
-    }
-
-    /**
-     * Renders data using WebGL
-     * @param {<img>} imageElement image data
-     * @param {Object} e event object given by OSD on tile-drawing event
-     * @returns canvas (with transparency) with the data rendered based on current program
-     *          null if willUseWebGL(imageElement, e) would return false
-     */
-    toCanvas(imageElement, e) {
-        return this.webGLImplementation.toCanvas(imageElement, e);
-    }
-
-    /**
-     * 
-     * @param {<img>} imageElement image data
-     * @param {Object} e event object given by OSD on tile-drawing event
-     * @returns true if the given tile associated in the event obect should be processed using WebGL
-     */
-    willUseWebGL(imageElement, e) {
-        //todo dirty do it differently
-        return this['gl_drawing'].call(this, this.gl, imageElement, e);
-    }
 
     exportSettings() {
         //export all except eventSource: automatically attached by OpenSeadragon event engine; or generated data
@@ -199,10 +176,6 @@ class WebGLWrapper {
         }
 
         this._prepared = true;
-        // Allow for mouse actions on click
-        if (this.hasOwnProperty('container') && this.hasOwnProperty('onclick')) {
-            this.container.onclick = this[this.onclick].bind(this);
-        }
 
         // Load the shaders when ready and return the promise
         return Promise.all(
@@ -251,6 +224,7 @@ class WebGLWrapper {
      */
     getter(visualisation) {
         const isWebGL2 = this.webGLImplementation.isWebGL2();
+        const authorization = this.hasOwnProperty("authorization") ? this["authorization"] : undefined;
 
         return new Promise(function (done) {
 
@@ -260,6 +234,11 @@ class WebGLWrapper {
             postData.append("shaders", JSON.stringify(visualisation["shaders"]));
             postData.append("params", JSON.stringify(visualisation["params"]));
             postData.append("webgl2", JSON.stringify(isWebGL2));
+
+            if (authorization) {
+                bid.withCredentials = true;
+                bid.setRequestHeader("Authorization", authorization);
+            }
 
             bid.send(postData);
             bid.onerror = function () {
@@ -277,6 +256,31 @@ class WebGLWrapper {
     //////////////////////////////////////////////////////////////////////////////
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * @private
+     * Prepare for a certain program to use, call before this program is used for rendering
+     * @param {WebGLProgram} program current program to use
+     * @param currentVisualisation current visualisation data structure
+     */
+    _toBuffers(program, currentVisualisation) {
+        this.webGLImplementation.toBuffers(program, currentVisualisation);
+    }
+
+    /**
+     * @private
+     * Renders data using WebGL
+     * @param {<img>} imageElement image data
+     * @param tileDimension expected dimension of the output (canvas)
+     * @param zoomLevel value passed to the shaders as zoom_level
+     * @param pixelSize value passed to the shaders as pixel_size_in_fragments
+     * @param currentVisualisation current visualisation data structure
+     * @returns canvas (with transparency) with the data rendered based on current program
+     *          null if willUseWebGL(imageElement, e) would return false
+     */
+    _toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation) {
+        return this.webGLImplementation.toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation);
+    }
 
     /**
      * @private
@@ -301,7 +305,7 @@ class WebGLWrapper {
             this.running = true;
             this._loadHtml(i, this._program);
             this._loadScript(i, this._program);
-            this.toBuffers(this._programs[i]);
+            this._toBuffers(this._programs[i], this._visualisations[i]);
         }
     }
 

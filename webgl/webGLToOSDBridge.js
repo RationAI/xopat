@@ -10,10 +10,11 @@
 */
 
 
-OpenSeadragonGL = function(webGLWrapperParams) {
+OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
     this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
+    this.useEvaluator = useEvaluator;
 };
 
 OpenSeadragonGL.prototype = {
@@ -23,9 +24,7 @@ OpenSeadragonGL.prototype = {
      * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
      */
     foreachVisualisation: function(call) {
-        this.webGLWrapper._visualisations.forEach(vis => {
-            call(vis);
-        });
+        this.webGLWrapper.foreachVisualisation(call);
     },
 
     /**
@@ -210,8 +209,10 @@ OpenSeadragonGL.prototype = {
     },
 
     _tileLoaded: function(e) {
+
         if (! e.image) return;
-        if (this.webGLWrapper.willUseWebGL(e.image, e)) {
+
+        if (!this.useEvaluator || this.useEvaluator(e)) {
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             e.tile.origData = e.image;    
             
@@ -228,8 +229,12 @@ OpenSeadragonGL.prototype = {
         if (e.tile.webglRefresh <= this.upToDateTStamp) {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
 
+
+            let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
+                PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+
             // Render a webGL canvas to an input canvas using cached version
-            var output = this.webGLWrapper.toCanvas(e.tile.origData, e);
+            var output = this.webGLWrapper.processImage(e.tile.origData, e.tile.sourceBounds, this.openSD.viewport.getZoom(), dx);
 
             // Note: you can comment out clearing if you don't use transparency 
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);

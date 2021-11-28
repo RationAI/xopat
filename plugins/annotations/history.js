@@ -112,7 +112,10 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
             if (!isNaN(o.incrementId) && o.presetID) {
                 let preset = this._presets.getPreset(o.presetID);
                 if (preset) {
-                    o.fill = preset.fill;
+                    if (typeof o.fill === 'string') {
+                        o.fill = preset.color;
+                    }
+                    o.color = preset.color;
                     o.comment = preset.comment;
                 }
                 _this._addToBoard(o);
@@ -150,7 +153,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
             this.board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
 
-        if (!object || !object.incrementId) return;
+        if (!object || !object.hasOwnProperty("incrementId")) return;
 
         if (object) {
             this.board.find(`#log-object-${object.incrementId}`).css("background", "#ffffff1f");
@@ -167,6 +170,10 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
     },
 
     _focus: function (cx, cy, objectId = null) {
+        cx = Number.parseFloat(cx);
+        cy = Number.parseFloat(cy);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+
         let target = PLUGINS.imageLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
         if (objectId !== null) {
             let targetObj = this._findObjectOnCanvasById(objectId);
@@ -204,19 +211,15 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
 
     _addToBoard: function (object) {
         let desc, icon;
-        if (!object.comment) {
+        if (!object.hasOwnProperty("comment") || object.comment.length < 1) {
             desc = this._getObjectDefaultDescription(object);
             icon = this._getObjectDefaultIcon(object);
         } else {
             desc = object.comment;
-            if (desc === this._context.leftClickLabel || desc === this._context.rightClickLabel) {
-                //auto labelling - append coords to distinguish
-                desc += ` [${Math.round(object.left)}, ${Math.round(object.top)}]`;
-            }
             icon = this._getObjectDefaultIcon(object);
         }
 
-        if (!object.incrementId) {
+        if (!object.hasOwnProperty("incrementId")) {
             object.incrementId = this._autoIncrement;
             this._autoIncrement++;
         }
@@ -224,7 +227,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
         let center = object.getCenterPoint();
         this.board.prepend(`<div id="log-object-${object.incrementId}" 
 onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
-<span class="material-icons" style="color: ${object.fill}">${icon}</span> 
+<span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
 style="width: calc(100% - 80px); background:transparent;" value="${desc}">
 <span class="material-icons" onclick="let self = $(this); if (self.html() === 'edit') {
@@ -296,7 +299,7 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
         if (factory !== undefined) {
             return factory.getIcon();
         }
-        return undefined;
+        return "question_mark";
     },
 
     _performSwap: async function (canvas, toAdd, toRemove) {
