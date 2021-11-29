@@ -186,15 +186,13 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
 
     getAditionalMethodParams() {
         let result = {};
-
+        let _this = this;
         $(".params-for-explainability-method").each((idx, elem) => {
-            let value = elem.value;
-            if (!value) {
-                //checkbox
-                result[elem.dataset.name] = elem.prop("checked")
+            let getter = _this._evaluators[elem.dataset.type];
+            if (getter) {
+                result[elem.dataset.name] = getter(elem);
             } else {
-                let number = parseFloat(value);
-                result[elem.dataset.name] = isNaN(number) ? value : number;
+                result[elem.dataset.name] = null;
             }
         })
         return result;
@@ -288,7 +286,7 @@ experiment is '${params.experimentId}'.`);
                     bounded = `min="${range[0]}" max="${range[1]}"`;
                 }
                 value = defaultValue ? `value="${Number.parseInt(defaultValue)}"` : 'value="" placeholder="Integer number"';
-                return `<input class='form-control ${cls}' type="number" ${bounded} ${value} step="1" data-name="${name}">`;
+                return `<input class='form-control ${cls}' type="number" ${bounded} ${value} step="1" data-name="${name}" data-type="int">`;
             },
             float: function (cls, name, defaultValue, range) {
                 let bounded = "", value = "";
@@ -296,7 +294,7 @@ experiment is '${params.experimentId}'.`);
                     bounded = `min="${range[0]}" max="${range[1]}"`;
                 }
                 value = defaultValue ? `value="${Number.parseFloat(defaultValue)}"` : 'value="" placeholder="Float number"';
-                return `<input  class='form-control ${cls}' type="number" ${bounded} ${value} step="0.00001" data-name="${name}">`;
+                return `<input class='form-control ${cls}' type="number" ${bounded} ${value} step="0.00001" data-name="${name}" data-type="float">`;
             },
             str: function (cls, name, defaultValue, range) {
                 if (range && Array.isArray(range)) {
@@ -305,14 +303,33 @@ experiment is '${params.experimentId}'.`);
                         let selected = defaultValue == item ? " selected" : "";
                         options.push(`<option value="${item}"${selected}>${item}</option>`)
                     });
-                    return `<select class='form-control ${cls}' data-name="${name}">${options.join('')}</select>`;
+                    return `<select class='form-control ${cls}' data-name="${name}" data-type="str">>${options.join('')}</select>`;
                 }
                 let value = defaultValue ? `value="${defaultValue}"` : `value=""  placeholder="Text"`;
-                return `<input class="form-control  ${cls}" data-name="${name}" type="text" ${value}>`;
+                return `<input ${cls}" data-name="${name}" data-type="str" type="text" ${value}>`;
             },
             bool: function (cls, name, defaultValue, range) {
                 let value = defaultValue ? `checked` : ``;
-                return `<input class="form-control" class='form-control ${cls}' type="checkbox" data-name="${name}" ${value}>`;
+                return `<input class='form-control ${cls}' type="checkbox" data-name="${name}" data-type="bool" ${value}>`;
+            }
+        }
+
+        this._evaluators = {
+            int: function (elem) {
+                let result = Number.parseInt(elem.value);
+                if (isNaN(result)) return null;
+                return result;
+            },
+            float: function (elem) {
+                let result = Number.parseFloat(elem.value);
+                if (isNaN(result)) return null;
+                return result;
+            },
+            str: function (elem) {
+                return elem.value;
+            },
+            bool: function (elem) {
+                return elem.checked;
             }
         }
     },

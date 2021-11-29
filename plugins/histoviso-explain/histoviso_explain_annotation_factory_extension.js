@@ -218,7 +218,7 @@ class HistovisoImage extends AnnotationObjectFactory {
                 model_name: this._dataSource.getModel()
             }, this._dataSource.getAditionalMethodParams())
         };
-        console.log(data);
+        console.log("Sending request for explainability: ", data);
 
         //make ajax call to server for data (demo image here)
         fetch(`/histoviso-explain/explainability`, {
