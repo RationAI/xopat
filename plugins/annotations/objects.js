@@ -23,7 +23,7 @@ class Preset {
     toJSONFriendlyObject() {
         return {
             comment: this.comment,
-            fill: this.color,
+            color: this.color,
             objectType: this.objectFactory.type,
             presetID: this.presetID
         };

@@ -5,15 +5,25 @@
 * Based on OpenSeadragonGL plugin
 * https://github.com/thejohnhoffer/viaWebGL
 *
-* TODO: merge this class into webglWrapper
+* TODO: THIS is probably going to be a OSD drawing strategy class..
+*  merge this class into webglWrapper
 *
 */
 
+//todo layerIndex replace with tileSource itself
+OpenSeadragonGL = function(webGLWrapperParams, useEvaluator, layerIndex) {
+    let _this  = this;
+    webGLWrapperParams.resetCallback = function () {
+        _this.redraw(layerIndex);
+    }
 
-OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
+    this.refresh = layerIndex;
+
     this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
+
+    //todo instead bind this to specific drawing policy on a tilesource
     this.useEvaluator = useEvaluator;
 };
 
@@ -37,15 +47,15 @@ OpenSeadragonGL.prototype = {
     
     /**
      * Set program shaders. Just forwards the call to webGLWrapper, for easier access.
-     * @param {string} visualisation program fragment shaders components
+     * @param {object} visualisation - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      */
-    setVisualisation: function(visualisation) {
+    addVisualisation: function(...visualisation) {
         if (this._shadersLoaded) {
             console.warn("Invalid action: visualisations have been already loaded.")
             return false;
         }
-        return this.webGLWrapper.setVisualisation(visualisation);
+        return this.webGLWrapper.addVisualisation(...visualisation);
     },
 
     /**
@@ -58,9 +68,7 @@ OpenSeadragonGL.prototype = {
             let result = true;
             let setup = JSON.parse(json);
             if (Array.isArray(setup)) {
-                for (let idx in setup) {
-                    result &= this.setVisualisation(setup[i]);
-                }
+                this.addVisualisation(...setup);
             } else {
                 console.warn("Invalid input: parameter visualisation must be an array of objects.");
                 return false;
@@ -86,8 +94,8 @@ OpenSeadragonGL.prototype = {
      * Change visualisation in use
      * @param {integer} visIdx index of the visualisation 
      */
-    switchVisualisation: function(visIdx) {
-        this.webGLWrapper.switchVisualisation(visIdx);
+    switchVisualisation: function(visIdx, onFinished) {
+        this.webGLWrapper.switchVisualisation(visIdx, onFinished);
     },
 
     /**
@@ -105,23 +113,21 @@ OpenSeadragonGL.prototype = {
      * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLWrapper.shaderGenerator
      * @param {array} order array of strings that refer to ID's in the visualisation data (pyramidal tiff paths in our case)
      */
-    reorder: function(order = null) {
+    reorder: function(order) {
         if (!Array.isArray(order)) {
-            this.webGLWrapper.rebuildVisualisation(null);
+            this.webGLWrapper.rebuildVisualisation(null, this.redraw.bind(this));
         } else {
             //webGLWrapper rendering is first in order: first drawn, last in order: last drawn (atop)
-            this.webGLWrapper.rebuildVisualisation(order.reverse());
+            this.webGLWrapper.rebuildVisualisation(order.reverse(), this.redraw.bind(this));
         }
     },
 
     /**
      * TODO bad design
      * Redraw the scene using cached images.
-     * @param {World} world - openSeadragon world instance
-     * @param idx index that is being redrawn
      */
-    redraw: function(world, idx) {
-        var imageTile = world.getItemAt(idx);
+    redraw: function() {
+        var imageTile = this.openSD.world.getItemAt(this.refresh);
 
         if (!imageTile) {
             alert("The layer data is not available. This error user notification will be implemented later.");
@@ -134,10 +140,10 @@ OpenSeadragonGL.prototype = {
 
         imageTile._drawer.context.clearRect(0, 0, imageTile._drawer.context.canvas.width, imageTile._drawer.context.canvas.height);
 
-        var imageTileNav = this.openSD.navigator.world.getItemAt(idx);
+        let imageTileNav = this.openSD.navigator.world.getItemAt(this.refresh);
         imageTileNav._drawer.context.clearRect(0, 0, imageTileNav._drawer.context.canvas.width, imageTileNav._drawer.context.canvas.height);
 
-        world.draw();
+        this.openSD.world.draw();
         this.openSD.navigator.world.draw();
     },
 
@@ -234,6 +240,7 @@ OpenSeadragonGL.prototype = {
                 PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
 
             // Render a webGL canvas to an input canvas using cached version
+
             var output = this.webGLWrapper.processImage(e.tile.origData, e.tile.sourceBounds, this.openSD.viewport.getZoom(), dx);
 
             // Note: you can comment out clearing if you don't use transparency 

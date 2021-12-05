@@ -12,7 +12,6 @@ function isFlagInProtocols($flag) {
 }
 
 function letUserSetUp($image, $layer) {
-    //todo encode params for url?
     header("Location: user_setup.php?image=$image&layer=$layer");
     exit;
 }
@@ -32,7 +31,6 @@ function showError($title, $description, $details) {
 
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
 
-//TODO fix cookies USAGE
 if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
     $image = hasKey($_GET, "image") ? $_GET["image"] : (hasKey($_POST, "image") ? $_POST["image"] : false);
     if (!$image) {
@@ -75,14 +73,14 @@ foreach ($parsedParams as $visualisationTarget) {
         "JSON parametrization of the visualiser requires <i>shaders</i> array: a list of data and its interpretation. This field is missing.",
         print_r($visualisation, true));
     foreach ($visualisationTarget->shaders as $data=>$layer) {
-        if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
-            $layer->cache = $cookieCache->{$layer->name};
-        }
-
         if (!isset($layer->name)) {
             $temp = substr($data, max(0, strlen($data)-24), 24);
             if (strlen($temp) != strlen($data)) $temp  = "...$temp";
             $layer->name = "Source: $temp";
+        }
+
+        if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
+            $layer->cache = $cookieCache->{$layer->name};
         }
 
         if (!isset($layer->type) && !isset($layer->source)) {
@@ -102,7 +100,7 @@ foreach ($PLUGINS as $_ => $plugin) {
 }
 
 
-$version = VERSION;
+$version = VERSION . ""; //force to use variable :( it somehow set $version = "VERSION"
 echo <<<EOF
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -111,7 +109,7 @@ echo <<<EOF
     <meta charset="utf-8">
     <title>Visualisation</title>
 
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./style.css?v=$version">
     <link rel="stylesheet" href="./external/primer_css.css">
     <!--
     Possible external dependency
@@ -139,12 +137,14 @@ echo <<<EOF
     <script src="./osd_debug/src/control.js"></script>
     <script src="./osd_debug/src/controldock.js"></script>
     <script src="./osd_debug/src/displayrectangle.js"></script>
+    
+    <script src="./osd_debug/src/imageloader.js"></script>
     <script src="./osd_debug/src/drawer.js"></script>
+       
     <script src="./osd_debug/src/dzitilesource.js"></script>
     <script src="./osd_debug/src/dziexttilesource.js?v=$version"></script>
     <script src="./osd_debug/src/fullscreen.js"></script>
     <script src="./osd_debug/src/iiiftilesource.js"></script>
-    <script src="./osd_debug/src/imageloader.js"></script>
     <script src="./osd_debug/src/imagetilesource.js"></script>
     <script src="./osd_debug/src/legacytilesource.js"></script>
     <script src="./osd_debug/src/mousetracker.js"></script>
@@ -164,8 +164,15 @@ echo <<<EOF
     <script src="./osd_debug/src/world.js"></script>
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
-    <script src="./webgl/webGLContext.js?v=$version"></script>
     <script src="./webgl/webGLWrapper.js?v=$version"></script>
+
+    <script src="./webgl/visualisationLayer.js?v=$version"></script>
+    <script src="./webgl/shaders/identityVisualisationLayer.js?v=$version"></script>
+    <script src="./webgl/shaders/heatmapVisualisationLayer.js?v=$version"></script>
+    <script src="./webgl/shaders/edgeVisualisationLayer.js?v=$version"></script>
+    <script src="./webgl/shaders/bipolarHeatmapVisualisationLayer.js?v=$version"></script>
+
+    <script src="./webgl/webGLContext.js?v=$version"></script>
     <script src="./webgl/webGLToOSDBridge.js?v=$version"></script>
 
     <!--Tutorials-->
@@ -173,11 +180,12 @@ echo <<<EOF
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
     <link rel="stylesheet" href="./external/enjoyhint.css">
     <script src="./external/enjoyhint.min.js"></script>
+    
 
 </head>
 EOF;
 ?>
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
+<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
     <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
@@ -200,6 +208,9 @@ EOF;
     <div id="tutorials"></div>
     <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
 </div>
+
+<img id="debug" style="position:absolute; top: 0; left: 0;">
+<img id="debug2" style="position:absolute; bottom: 0; left: 0;">
 
 <!-- Panel -->
 <span id="main-panel-show" class="material-icons" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
@@ -234,8 +245,14 @@ EOF;
                     <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
                 </div>
 
-                <div id="shader-options" class="inner-panel-hidden">
-                    <!--populated with options for a given shader -->
+                <div  class="inner-panel-hidden">
+                    <div id="image-layer-options">
+                        <!--populated with options for a given shader -->
+                    </div>
+
+                    <div id="data-layer-options">
+                        <!--populated with options for a given shader -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -251,10 +268,6 @@ EOF;
         <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;"><span class="material-icons">school</span>Tutorial</span>&emsp;
     </div>
 </div>
-
-<!-- Auto-appended scripts -->
-<div id="auto-scripts"></div>
-
 
 <!-- DEFAULT SETUP SCRIPTING -->
 <script type="text/javascript">
@@ -285,7 +298,7 @@ EOF;
     <?php
 
     if($errorSource) {
-        //todo make this more sophisticated
+        //todo redirect to error.php?
         echo "$('#main-panel').addClass('d-none');";
         $debugSource = "";
         if (!$debugSource) $debugSource = "null";
@@ -300,6 +313,11 @@ EOF;
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
     /*---------------------------------------------------------*/
+
+    if (!OpenSeadragon.supportsCanvas) {
+        window.location = `./error.php?title=${encodeURIComponent('Your browser is not supported.')}
+&description=${encodeURIComponent('ERROR: The visualisation requires canvasses in order to work.')}`;
+    }
 
     // Initialize viewer - OpenSeadragon
     var viewer = OpenSeadragon({
@@ -319,25 +337,20 @@ EOF;
     /*------------ Initialization of Visualisation ------------*/
     /*---------------------------------------------------------*/
 
-    var setup = <?php echo $visualisation ?>;
     var shadersCache = <?php echo $cookieCache ?>;
     var activeShader = 0; //todo active shader from settings
     var activeData = "";
     const iipSrvUrlPOST = '/iipsrv-martin/iipsrv.fcgi?#DeepZoomExt=';
     const iipSrvUrlGET = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
+    let imageIDX = 0;
+    let layerIDX = 1;
 
     // Initialize viewer webGL extension - webGLWrapper
     let shaderNames = $("#shaders");
     seaGL = new OpenSeadragonGL({
-        //todo CHECK if parameters not missing and throw error if required param missing
-        htmlControlsId: "shader-options",
-        scriptId: "auto-scripts",
-        jsGlLoadedCall: "glLoaded",
-        jsGlDrawingCall: "glDrawing",
-        //todo create relative path, for some reason this does not work well inside release/ folder probably shader generator issue
-        shaderGenerator: "/visualization/client/dynamic_shaders/build.php",
+        htmlControlsId: "data-layer-options",
         authorization: "<?php echo AUTH_HEADERS ?>",
-
+        htmlShaderPartHeader: createHTMLLayerConstrols,
         //called once fully initialized
         ready: function() {
             var i = 0;
@@ -350,15 +363,8 @@ EOF;
                 i++;
             });
         },
-
-        //called once a visualisation is compiled and linked (might not happen)
-        visualisationReady: function(i, visualisation) {
-
-        },
-
-        //called once a visualisation is switched to (including first run)
         visualisationInUse: function(visualisation) {
-            enableDragSort("shader-options");
+            enableDragSort("data-layer-options");
             //called only if everything is fine
             DisplayError.hide(); //preventive
             //re-fetch data
@@ -383,8 +389,6 @@ EOF;
             viewer.raiseEvent('visualisation-used', visualisation);
         },
 
-
-        //todo remove this, only temporary solution
         visualisationChanged: function(oldVis, newVis) {
             //todo problems when switching - show 'loading' and prevent user from interaction until ready again!!!
             if (oldVis.data !== newVis.data) {
@@ -415,54 +419,33 @@ EOF;
         },
 
         //called when exception (usually some missing function) occurs
-        onException: function(error) {
+        onError: function(error) {
             DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
         },
-
-        //called to get custom HTML header for each shader part
-        htmlShaderPartHeader: function(title, html, dataId, isVisible, isControllable=true) {
-            let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
-            let checked = isVisible ? 'checked' : '';
-            let disabled = isControllable ? '' : 'disabled';
-            return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
-            <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
-              &emsp;${title}<span class="material-icons position-absolute right-1" style="width: 10%;">swap_vert</span>
-            </div>
-            <div class="non-draggable">${html}</div>
-            </div>`;
-        }
-    },
-    function (e) {
+    }, function (e) {
         return e.tiledImage.source.postData;
-    });
+    }, layerIDX);
 
     //Set visualisations
-    setup.forEach(visualisationDef => {
-        //setup all visualisations defined
-        seaGL.setVisualisation(visualisationDef);
-    });
-
+    seaGL.addVisualisation(...<?php echo $visualisation; ?>);
 
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
-
-    //must be defined
-    function redraw() {
-        seaGL.redraw(viewer.world, layerIDX);
-    }
 
     function currentVisualisation() {
         return seaGL.currentVisualisation();
     }
 
     function makeCacheSnapshot() {
-        for (let key in seaGL.currentVisualisation().shaders) {
-            let shaderSettings = seaGL.currentVisualisation().shaders[key];
-            shadersCache[shaderSettings.name] = shaderSettings.cache;
+        let active = seaGL.currentVisualisation().shaders;
+        for (let key in active) {
+            if (active.hasOwnProperty(key)) {
+                let shaderSettings = active[key];
+                shadersCache[shaderSettings.name] = shaderSettings.cache;
+            }
         }
-        document.cookie = `cache=${JSON.stringify(shadersCache)}; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`;
+        document.cookie = `cache=${JSON.stringify(shadersCache)}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`;
         Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
     }
 
@@ -535,22 +518,19 @@ EOF;
     }, {
         'next #shaders' : 'Multiple different visualisations <br>are supported - you can select <br>which one is being displayed.'
     }, {
-        'next #shader-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
+        'next #data-layer-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
     }], function() {
         //prerequisite - pin in default state
         let pin = $("#shaders-pin");
         let container = pin.parent().children().eq(1);
         pin.removeClass('pressed');
-        pin.removeClass('locked');
         container.removeClass('force-visible');
-        container.removeClass('force-hidden');
     });
 
     // load desired shader upon selection
     shaderNames.on("change", function () {
         activeShader = $(this).val();
-        seaGL.switchVisualisation(activeShader);
-        redraw();
+        seaGL.switchVisualisation(activeShader, redraw);
     });
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
@@ -640,9 +620,8 @@ EOF;
 
     function enableDragSort(listId) {
         const sortableList = document.getElementById(listId);
-        Array.prototype.map.call(sortableList.children, (item) => {enableDragItem(item)});
+        Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
     }
-
 
     function enableDragItem(item) {
         item.setAttribute('draggable', true);
@@ -701,11 +680,9 @@ EOF;
         });
 
         seaGL.reorder(order);
-        redraw();
     }
 
     function shaderPartToogleOnOff(self) {
-        //todo test if working, otherwise:  if (self.checked == true) {
         if (self.checked) {
             seaGL.currentVisualisation().shaders[self.dataset.id].visible = 1;
             self.parentNode.parentNode.classList.remove("shader-part-error");
@@ -713,24 +690,59 @@ EOF;
             seaGL.currentVisualisation().shaders[self.dataset.id].visible = 0;
             self.parentNode.parentNode.classList.add("shader-part-error");
         }
-        seaGL.reorder();
-        redraw();
+        seaGL.reorder(null);
     }
 
+    function changeVisualisationLayer(self, layerId) {
+        let _this = $(self),
+            type = _this.val();
+        let factoryClass = WebGLWrapper.ShaderMediator.getClass(type);
+        if (factoryClass !== undefined) {
+            let viz = currentVisualisation();
+            if (viz.shaders.hasOwnProperty(layerId)) {
+                viz.shaders[layerId].type = type;
+                seaGL.reorder(null); //force to re-build
+            } else {
+                console.error("Invalid layer: bad initialization?");
+            }
+        } else {
+            console.error("Invalid shader: unknown type!");
+        }
+        _this.html("");
+    }
 
     function pinClick(jQSelf, jQTargetParent) {
         if (jQTargetParent.hasClass('force-visible')) {
             jQTargetParent.removeClass('force-visible');
-            jQTargetParent.addClass('force-hidden');
             jQSelf.removeClass('pressed');
-            jQSelf.addClass('locked')
-        } else if (jQTargetParent.hasClass('force-hidden')) {
-            jQTargetParent.removeClass('force-hidden');
-            jQSelf.removeClass('locked')
         } else {
             jQSelf.addClass('pressed');
             jQTargetParent.addClass('force-visible');
         }
+    }
+
+    function createHTMLLayerConstrols(title, html, dataId, isVisible, layer, isControllable) {
+        let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
+        let checked = isVisible ? 'checked' : '';
+        let disabled = isControllable ? '' : 'disabled';
+        let availableShaders = "";
+        for (let available of WebGLWrapper.ShaderMediator.availableShaders()) {
+            let selected = available.type() === layer.type ? " selected" : "";
+            availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
+        }
+
+        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
+              &emsp;${title}
+                <span class="material-icons position-absolute right-5" style="width: 10%;">swap_vert</span>
+                <div class="position-absolute right-0 d-inline-block" id="label-render-type" style="cursor: pointer;">
+                  <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <select id="change-render-type" onchange="changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control">${availableShaders}</select>
+                </div>
+            </div>
+            <div class="non-draggable">${html}</div>
+            </div>`;
     }
 
 
@@ -782,14 +794,47 @@ EOF;
         },
 
         showCustom: function(parentId, title, content, footer) {
+            this._showBuild(parentId, title, content, footer,
+                `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`, "");
+        },
+
+        showCustomModal: function(parentId, title, content, footer) {
+            this._showBuild(parentId, title, content, footer,
+                `class="position-absolute" style="left: 15px; top: 50px; z-index: 999;"`, 'style="cursor:move;"');
+            let element = document.getElementById(parentId);
+            if (!element) return;
+            let dragged = element.firstElementChild.firstElementChild;
+            dragged.setAttribute('draggable', true);
+            dragged.ondragstart = startDrag;
+            dragged.ondragend = enddrag;
+
+            var x, y;
+            function startDrag(event) {
+                x = event.x;
+                y = event.y;
+            }
+
+            function enddrag(event) {
+                const selectedItem = event.target,
+                    dx = event.x,
+                    dy = event.y;
+
+                element.style.left = (element.offsetLeft + (dx - x)) + "px";
+                element.style.top = (element.offsetTop + (dy - y)) + "px";
+                x = dx;
+                y = dy;
+            }
+        },
+
+        _showBuild: function(parentId, title, content, footer, positionStrategy, headerStyle) {
             if (!parentId) {
                 console.error("Invalid form: unique container id not defined.");
                 return;
             }
             $(`#${parentId}`).remove(); //prevent from multiple same windows shown
-            $("body").append(`<div id="${parentId}" class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
+            $("body").append(`<div id="${parentId}" ${positionStrategy}>
 <details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
-    <div class="Box-header">
+    <div class="Box-header" ${headerStyle}>
       <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
         <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
       </button>
@@ -803,7 +848,7 @@ EOF;
     </div>
 </details-dialog>
 </div>`);
-        }
+        },
     }  // end of namespace Dialogs
     Dialogs.init();
 
@@ -899,7 +944,6 @@ ${constructExportVisualisationForm()}
         seaGL: seaGL,
         addTutorial: Tutorials.add.bind(Tutorials),
         dialog: Dialogs,
-        //todo add class to all elements = the plugin ID and remove them in the group?
         appendToMainMenu: function(title, titleHtml, html, id, pluginId) {
             $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
         },
@@ -949,18 +993,22 @@ ${constructExportVisualisationForm()}
         try {
             var plugin = new PluginClass();
         } catch (e) {
-            //todo this is always true, somehow get the ID
-            if (!plugin || !plugin.id) return;
+            if (!PluginClass.identifier) {
+                console.warn("Plugin registered with no static identifier!", PluginClass);
+                return;
+            }
+            let id = PluginClass.identifier;
 
-            //todo also we could find what has been attached to HTML by the plugin and remove it?
-            console.warn(`Failed to create plugin ${PluginClass} which is probably broken.`, e);
-            PLUGINS.each[plugin.id].loaded = false;
-            PLUGINS.each[plugin.id].permaLoaded = false;
-            PLUGINS.each[plugin.id].error = e;
-            $(`.${plugin.id}-plugin-root`).remove();
+            console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
+            PLUGINS.each[id].loaded = false;
+            PLUGINS.each[id].permaLoaded = false;
+            PLUGINS.each[id].error = e;
+            $(`.${id}-plugin-root`).remove();
             return;
         }
-
+        if (PluginClass.identifier !== plugin.id) {
+            console.warn("Plugin.identifier should equal to the plugin instance.id!", PluginClass);
+        }
         if (plugin.id !== PLUGINS.each[plugin.id].id) {
             console.warn(`Plugin ${PluginClass} has invalid ID set. It must equal to the id defined in include.json`, plugin);
             return;
@@ -974,10 +1022,10 @@ ${constructExportVisualisationForm()}
 
     //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
     //todo try catch to fail nicely
-    var defViz = setup[0];
+    //todo do not access private stuff!
+    var defViz = seaGL.webGLWrapper._visualisations[0];
 
-    let imageIDX = 0;
-    let layerIDX = 1;
+
     const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
     const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
 
@@ -1020,8 +1068,6 @@ ${constructExportVisualisationForm()}
     });
 
     function showAvailablePlugins() {
-        //todo click enable aslo required plugin dependency!!!
-
         let content = "<input type='checkbox' class='form-control position-absolute top-1 right-0' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-4'  for='remember-plugin-selection'>remember selection</label><br>";
         Object.values(PLUGINS.each).forEach(plugin => {
             let dependency = "";
@@ -1049,7 +1095,7 @@ ${constructExportVisualisationForm()}
             }
         });
         plugins = remember ? plugins.join(',') : "";
-        document.cookie = `plugins=${plugins}; expires=Sun, 1 Jan 2023 00:00:00 UTC; path=/`;
+        document.cookie = `plugins=${plugins}; expires=Sun, 1 Jan 2023 00:00:00 UTC; SameSite=Strict; path=/`;
         $("body").append(constructExportVisualisationForm(formData, false));
     }
 
@@ -1062,7 +1108,7 @@ foreach ($PLUGINS as $_ => $plugin) {
     if ($plugin->loaded) {
         //add plugin style sheet if exists
         if (file_exists(PLUGIN_FOLDER . $plugin->directory . "/style.css")) {
-            echo "<link rel=\"stylesheet\" href=\"" . PLUGIN_FOLDER . $plugin->directory . "/style.css\">";
+            echo "<link rel=\"stylesheet\" href=\"" . PLUGIN_FOLDER . $plugin->directory . "/style.css?v=$version\">";
         }
         //add plugin includes
         foreach ($plugin->includes as $__ => $file) {
@@ -1080,8 +1126,6 @@ foreach ($PLUGINS as $_ => $plugin) {
 
     seaGL.loadShaders(function() {
         //activeData = seaGL.dataImageSources();
-
-        //todo does not support webgl1
         activeData = Object.keys(seaGL.currentVisualisation().shaders).join(',');
         viewer.open([iipSrvUrlGET + defViz.data + ".dzi", iipSrvUrlPOST + activeData + ".dzi"]);
     });

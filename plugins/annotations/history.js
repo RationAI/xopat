@@ -37,6 +37,9 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
 
         this._context.canvasObjects().forEach(object => {
             this._addToBoard(object);
+
+            //some properties are not set, these are necessary for correct control behaviour
+            $.extend(object, PresetManager._commonProperty);
         });
     },
 
@@ -198,12 +201,12 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
     _setControlsVisuallyEnabled: function(enabled) {
         if (enabled) {
             [this.undoBtn, this.redoBtn, $("#history-refresh"),
-                $("#history-sync"), $("#delete-all-annotations")].map(e => {
+                $("#history-sync"), $("#delete-all-annotations")].forEach(e => {
                     e.css({cursor: "default", filter: "brightness(0.5)"});
             });
         } else {
             [this.undoBtn, this.redoBtn, $("#history-refresh"),
-                $("#history-sync"), $("#delete-all-annotations")].map(e => {
+                $("#history-sync"), $("#delete-all-annotations")].forEach(e => {
                 e.css({cursor: "pointer", filter: "none"});
             });
         }
@@ -229,7 +232,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
 onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
-style="width: calc(100% - 80px); background:transparent;" value="${desc}">
+style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
 <span class="material-icons" onclick="let self = $(this); if (self.html() === 'edit') {
 ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">edit</span></div>`);
     },
@@ -306,7 +309,7 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
         if (toRemove) {
             let center = toRemove.getCenterPoint();
             this._focus(center.x, center.y);
-            await sleep(150); //let user to orient where canvas moved before deleting the element
+            await OSDAnnotations.sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
 
@@ -320,7 +323,7 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
         } else if (toAdd) {
             let center = toAdd.getCenterPoint();
             this._focus(center.x, center.y);
-            await sleep(150); //let user to orient where canvas moved before deleting the element
+            await OSDAnnotations.sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
             this._context.canvas().setActiveObject(toAdd);
             canvas.renderAll();

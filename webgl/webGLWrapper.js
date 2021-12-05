@@ -2,77 +2,95 @@
 * Wrapping the funcionality of WebGL to be suitable for the visualisation.
 * Written by Jiří Horák, 2021
 *
-* Based on viaWebGL
+* Originally based on viaWebGL (and almost nothing-alike as of now)
 * Built on 2016-9-9
 * http://via.hoff.in
 */
 
 class WebGLWrapper {
     constructor(incomingOptions) {
-        //default calls
+        /////////////////////////////////////////////////////////////////////////////////
+        ///////////// Default values overrideable from incomingOptions  /////////////////
+        /////////////////////////////////////////////////////////////////////////////////
+        this.uniqueId = "";
+        this.ready = function () { };
+        this.authorization = {};
+
+        this.htmlShaderPartHeader = function (title, html, dataId, isVisible, layer, isControllable = true) {
+            return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
+        }
+        this.resetCallback = function () { };
+        //called once a visualisation is compiled and linked (might not happen)
+        this.visualisationReady = function(i, visualisation) { }
+        //called once a visualisation is switched to (including first run)
+        this.visualisationInUse = function(visualisation) { }
+        this.visualisationChanged = function(oldVis, newVis) { }
+        //called when the module has longer time to process stuff, user can react by GUI update for example
+        this.notifyWorkStarted = function () { }
+        this.notifyWorkFinished = function () { }
+        //called when exception (usually some missing function) occurs
+        this.onError = function(error) {
+            console.warn("An error has occurred:", error);
+        }
+        //called when key functionality fails
         this.onFatalError = function (vis) {
             console.error(vis["error"], vis["desc"]);
         }
-        this.htmlShaderPartHeader = function (title, html, dataId, isVisible, isControllable = true) {
-            return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
-        }
-        this.ready = function () { };
-        //todo clarify API (visSwitched throws error cuz not defined implicitly...)
 
-        //default values that might come from options and be overwritten later
-        this.jsGlLoadedCall = "viaGlLoadedCall";
-        this.jsGlDrawingCall = "viaGlDrawingCall";
-
-        //todo do not allow to redefine these functions!!
-        this.gl_loaded = function (gl, program) {
-            //call pre-defined name
-            this._callString(this.jsGlLoadedCall, program, gl);
-        };
-
-        this.gl_drawing = function (gl, tile, e) {
-            //call pre-defined name
-            this._callString(this.jsGlDrawingCall, gl, e);
-        };
+        /////////////////////////////////////////////////////////////////////////////////
+        ///////////// Incoming Values ///////////////////////////////////////////////////
+        /////////////////////////////////////////////////////////////////////////////////
 
         // Assign from incoming terms
-        for (var key in incomingOptions) {
-            this[key] = incomingOptions[key];
+        for (let key in incomingOptions) {
+            if (incomingOptions.hasOwnProperty(key)) {
+                this[key] = incomingOptions[key];
+            }
         }
+
+        /////////////////////////////////////////////////////////////////////////////////
+        ///////////// Internals /////////////////////////////////////////////////////////
+        /////////////////////////////////////////////////////////////////////////////////
 
         //Initialize WebGL context: the way how tiles are being rendered
-        if (!this.glContextFactory) {
-            this.glContextFactory = new DefaultGLContextFactory(); 
+        try {
+            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+        } catch (e) {
+            this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
+            return;
         }
-        this.glContextFactory.init(this);
 
-        // Private shader management
+        this.gl_loaded = function (gl, program, vis) {
+            this._eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
+        };
+
+        this.gl_drawing = function (gl, program, vis, bounds) {
+            this._eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
+        };
+
         this._visualisations = [];
-
-        this._programs = [];
+        this._programs = {};
         this._program = -1;
         this._initialized = false;
+        this._workingNotified = false;
     }
 
     /**
      * Set program shaders. Vertex shader is set by default a square.
-     * @param {object} visualisation visualisation setup
+     * @param {object} visualisations - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      */
-    setVisualisation(visualisation) {
-        if (!this.shaderGenerator) {
-            console.error("No shader source generator defined. Missing `shaderGenerator` property in the instance creation.");
-            return false;
-        }
-
-        if (this._prepared) {
+    addVisualisation(...visualisations) {
+          if (this._prepared) {
             console.error("New visualisation cannot be introduced after the visualiser was prepared.");
             return false;
         }
-        visualisation.url = this.shaderGenerator;
-        if (!visualisation.hasOwnProperty("params")) {
-            visualisation.params = {};
+        for (let vis of visualisations) {
+            if (!vis.hasOwnProperty("params")) {
+                vis.params = {};
+            }
+            this._visualisations.push(vis);
         }
-        this._visualisations.push(visualisation);
         return true;
     }
 
@@ -88,18 +106,23 @@ class WebGLWrapper {
      * Rebuild visualisation and update scene
      * @param {array} order order in reverse, ID's of data as defined in setup JSON
      */
-    rebuildVisualisation(order) {
-        var vis = this._visualisations[this._program],
-            program = this._programs[this._program];
+    rebuildVisualisation(order, onFinished) {
+        let vis = this._visualisations[this._program];
 
         if (order) {
             vis.order = order;
         }
-        //must remove before attaching new
-        this._detachShader(program, "VERTEX_SHADER");
-        this._detachShader(program, "FRAGMENT_SHADER");
-        this._visualisationToProgram(vis, program, this._program);
-        this._forceSwitchShader(null);
+        if (this._programs.hasOwnProperty(this._program)) {
+            //must remove before attaching new
+            let program = this._programs[this._program];
+            this._detachShader(program, "VERTEX_SHADER");
+            this._detachShader(program, "FRAGMENT_SHADER");
+        }
+        this._visualisationToProgram(vis, this._program).then(
+           this._forceSwitchShader.bind(this, this._program)
+        ).then(
+            onFinished
+        );
     }
 
     /**
@@ -108,11 +131,12 @@ class WebGLWrapper {
      * has been set with second setShaders(...) call, pass i=1.
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
-    switchVisualisation(i) {
+    switchVisualisation(i, onFinished) {
         if (this._program === i) return;
-        //todo remove this, only temporary solution
         this.visualisationChanged(this._visualisations[this._program], this._visualisations[i]);
-        this._forceSwitchShader(i);
+        this._forceSwitchShader(i).then(
+            onFinished
+        );
     }
 
     /**
@@ -135,8 +159,22 @@ class WebGLWrapper {
         return this._visualisations[this._program].dziExtendedUrl;
     }
 
+    /**
+     * Renders data using WebGL
+     * @param {<img>} imageElement image data
+     * @param tileDimension expected dimension of the output (canvas)
+     * @param zoomLevel value passed to the shaders as zoom_level
+     * @param pixelSize value passed to the shaders as pixel_size_in_fragments
+     * @returns canvas (with transparency) with the data rendered based on current program
+     *          null if willUseWebGL(imageElement, e) would return false
+     */
     processImage(imageElement, tileDimension, zoomLevel, pixelSize) {
-        return this._toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, this._visualisations[this._program]);
+        return this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
+            imageElement, tileDimension, zoomLevel, pixelSize);
+    }
+
+    supportsHtmlControls() {
+        return typeof this.htmlControlsId === "string" && this.htmlControlsId.length > 0;
     }
 
     /////////////////////////////////////////////////////////////////////////////////////
@@ -145,44 +183,41 @@ class WebGLWrapper {
     /////////////////////////////////////////////////////////////////////////////////////
 
     exportSettings() {
-        //export all except eventSource: automatically attached by OpenSeadragon event engine; or generated data
-
-        //todo move all these properties to 'unexportable'
-        let forbidden = ["eventSource", "vertex_shader", "fragment_shader", "js", "html", "definition", "execution", "glLoaded", "glDrawing"];
+        //export all except eventSource or private props: automatically attached by OpenSeadragon event engine; or generated data
+        let forbidden = ["eventSource"];
         return JSON.stringify(this._visualisations,
-            (key, value) => forbidden.includes(key) ? undefined : value);
+            (key, value) => key.startsWith("_") || forbidden.includes(key) ? undefined : value);
     }
 
     /**
      * Prepares the WebGL wrapper for being initialized. More concretely,
      * each visualisation is prepared by downloading all necessary files (e.g. shaders),
-     * shaders are compiled and other WebGL structures initialized. It is separated from 
+     * shaders are compiled and other WebGL structures initialized. It is separated from
      * initialization as this must be finished before OSD is ready (we must be ready to draw when the data comes).
      * The idea is to open the protocol for OSD in onPrepared.
      * Shaders are fetched from `visualisation.url` parameter.
-     * 
-     * @param {callback} onPrepared callback to execute after succesfull preparing.
+     *
+     * @param {number} visIndex index of the initial visualisation
+     * @param {function} onPrepared callback to execute after succesfull preparing.
      */
-    prepare(onPrepared) {
+    prepare(onPrepared, visIndex=0) {
         if (this._prepared) {
             console.error("Already prepared!");
             return;
         }
 
         if (this._visualisations.length < 1) {
-            //todo show GUI error instead
             console.error("No visualisation specified!");
+            this.onFatalError({error: "No visualisation specified!",
+                desc: "::prepare() called with no visualisation set."});
             return;
         }
+        this._program = visIndex;
 
         this._prepared = true;
+        if (this._program >= this._visualisations.length) this._program = 0;
 
-        // Load the shaders when ready and return the promise
-        return Promise.all(
-            this._visualisations.map(this.getter.bind(this))
-        ).then(
-            this._toProgram.bind(this)
-        ).then(
+        this._visualisationToProgram(this._visualisations[visIndex], visIndex).then(
             onPrepared
         );
     }
@@ -207,49 +242,15 @@ class WebGLWrapper {
         this.setDimensions(width, height);
         this.running = true;
 
-        this._forceSwitchShader(null);
-        this.ready();
+        this._forceSwitchShader(null).then(
+            this.ready.bind(this)
+        );
     }
 
     prepareAndInit() {
         let _this = this;
         this.prepare(() => {
             _this.init(1, 1);
-        });
-    }
-
-    /**
-     * Downloads shader data and fires shader linking upon success.
-     * @param {Object} visualisation setup of a concrete visualisation target, JSON object given to the visualiser
-     */
-    getter(visualisation) {
-        const isWebGL2 = this.webGLImplementation.isWebGL2();
-        const authorization = this.hasOwnProperty("authorization") ? this["authorization"] : undefined;
-
-        return new Promise(function (done) {
-
-            var bid = new XMLHttpRequest();
-            bid.open('POST', visualisation.url, true);
-            var postData = new FormData();
-            postData.append("shaders", JSON.stringify(visualisation["shaders"]));
-            postData.append("params", JSON.stringify(visualisation["params"]));
-            postData.append("webgl2", JSON.stringify(isWebGL2));
-
-            if (authorization) {
-                bid.withCredentials = true;
-                bid.setRequestHeader("Authorization", authorization);
-            }
-
-            bid.send(postData);
-            bid.onerror = function () {
-                if (bid.status == 200) {
-                    return done(bid.response);
-                }
-                return done(requestURL);
-            };
-            bid.onload = function () {
-                return done(bid.response);
-            };
         });
     }
 
@@ -269,157 +270,89 @@ class WebGLWrapper {
 
     /**
      * @private
-     * Renders data using WebGL
-     * @param {<img>} imageElement image data
-     * @param tileDimension expected dimension of the output (canvas)
-     * @param zoomLevel value passed to the shaders as zoom_level
-     * @param pixelSize value passed to the shaders as pixel_size_in_fragments
-     * @param currentVisualisation current visualisation data structure
-     * @returns canvas (with transparency) with the data rendered based on current program
-     *          null if willUseWebGL(imageElement, e) would return false
-     */
-    _toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation) {
-        return this.webGLImplementation.toCanvas(imageElement, tileDimension, zoomLevel, pixelSize, currentVisualisation);
-    }
-
-    /**
-     * @private
      * Force switch shader (program), will reset even if the specified
      * program is currently active, good if you need 'gl-loaded' to be
      * invoked (e.g. some uniform variables changed)
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
-    _forceSwitchShader(i) {
+    async _forceSwitchShader(i) {
         if (!i) i = this._program;
 
-        if (i >= this._programs.length) {
-            console.error("Invalid shader index.");
-        } else if (this._visualisations[i].hasOwnProperty("error") || !this._programs[i]) {
-            this._program = i;
-            this._loadHtml(i, this._program);
-            this._loadScript(i, this._program);
-            this.onFatalError(this._visualisations[i]);
+        if (i >= this._visualisations.length) {
+            console.error("Invalid visualisation index " + i);
+            return;
+        }
+
+        let target = this._visualisations[i];
+        if (!this._programs.hasOwnProperty(i)) {
+            await this._visualisationToProgram(target, i);
+        }
+
+        this._program = i;
+        if (target.hasOwnProperty("error")) {
+            if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
+            this.onFatalError(target);
             this.running = false;
         } else {
-            this._program = i; //must set first, so that current visualisation points to the new one (_loadScript uses it)
             this.running = true;
-            this._loadHtml(i, this._program);
+            if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
             this._loadScript(i, this._program);
-            this._toBuffers(this._programs[i], this._visualisations[i]);
+            this._toBuffers(this._programs[i], target);
         }
     }
 
-
-    _loadHtml(visId, prevVisId) {
+    _loadHtml(visId) {
         var htmlControls = document.getElementById(this.htmlControlsId);
-        htmlControls.innerHTML = this._visualisations[visId]["html"];
+        htmlControls.innerHTML = this._visualisations[visId]._built["html"];
     }
 
-    _loadScript(visId, prevVisId) {
-        var forScript = document.getElementById(this.scriptId);
-        forScript.innerHTML = "";
-        var script = document.createElement("script");
-        script.type = "text/javascript";
-        script.text = this._visualisations[visId]["js"];
-        forScript.appendChild(script);
+    _loadScript(visId) {
+        this._eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
     }
 
-    // https://stackoverflow.com/questions/359788/how-to-execute-a-javascript-function-when-i-have-its-name-as-a-string
-    _callString(fn, ...args) {
-        try {
-            let func = (typeof fn == "string") ? window[fn] : fn;
-            if (typeof func == "function") func(...args);
-            else this.onException(new Error(`${fn} is Not a function!`));
-        } catch (e) {
-            console.error(e);
-            this.onException(e);
+    _buildFailed(visualisation, error) {
+        console.error(error);
+        visualisation.error = "Failed to compose visualisation.";
+        visualisation.desc = error;
+    }
+
+    _eachValidVisualizationLayer(vis, callback) {
+        let shaders = vis.shaders;
+        for (let key in shaders) {
+            if (shaders.hasOwnProperty(key) && !shaders[key].hasOwnProperty("error")) {
+                callback(shaders[key]);
+            }
         }
     }
 
-    _buildVisualisation(order, visualisation, glLoadCall, glDrawingCall) {
+    _eachValidVisibleVisualizationLayer(vis, callback) {
+        let shaders = vis.shaders;
+        for (let key in shaders) {
+            //rendering == true means no error
+            if (shaders.hasOwnProperty(key) && shaders[key].rendering) {
+                callback(shaders[key]);
+            }
+        }
+    }
+
+    _buildVisualisation(order, visualisation) {
         try {
-            let data = this.webGLImplementation.generateVisualisation(order, visualisation, glLoadCall, glDrawingCall);
+            let data = this.webGLImplementation.generateVisualisation(order, visualisation, this.supportsHtmlControls());
             if (data.usableShaders < 1) {
-                //todo visualisation.data is the url to tissue...? wut
-                //todo avoid throw
-                throw `Empty visualisation: no valid visualisation has been specified.<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation)}</code><br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`;
+                this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
+<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation)}</code>
+<br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
+            } else {
+                data.dziExtendedUrl = data.dataUrls.join(",");
+                visualisation._built = data;
+
+                //preventive
+                delete visualisation.error;
+                delete visualisation.desc;
             }
-
-            visualisation.dziExtendedUrl = data.dataUrls.join(",");
-            visualisation.vertex_shader = data.vertex_shader;
-            visualisation.fragment_shader = data.fragment_shader;
-            visualisation.js = data.js;
-            visualisation.html = data.html;
-
-            delete visualisation.error;
-            delete visualisation.desc;
         } catch (error) {
-            console.error(error);
-            if (!visualisation.html) visualisation.html = "";
-            visualisation.vertex_shader = "";
-            visualisation.fragment_shader = "";
-            visualisation.js = `function ${glLoadCall}(){} function ${glDrawingCall}(){}`;
-            visualisation.error = "Failed to compose visualisation.";
-            visualisation.desc = error;
+            this._buildFailed(visualisation, error);
         }
-    }
-
-    // Link shaders from strings
-    _toProgram(responses) {
-        if (this._program < 0) this._program = 0;
-
-        // Load multiple shaders - visalisations
-        for (let i = 0; i < responses.length; i++) {
-            var responseData;
-            try {
-                responseData = JSON.parse(responses[i]);
-                if (!responseData || typeof responseData !== "object") {
-                    responseData = { error: "" };
-                }
-            } catch (error) {
-                responseData = { error: error.message };
-            }
-
-            let vis = this._visualisations[i];
-
-            if (responseData.hasOwnProperty("error")) {
-                //load default JS to not to cause errors
-                vis.js = `function ${this.jsGlLoadedCall}(){} function ${this.jsGlDrawingCall}(){}`;
-                vis.html = "Invalid visualisation.";
-                vis.error = responseData.error;
-                vis.desc = responseData.desc;
-                this._programs.push(null); //no program
-                if (i === this._program) this._program++;
-                continue;
-            }
-
-            //Deep merge
-            for (let key in this._visualisations[i].shaders) {
-                let layer = this._visualisations[i].shaders[key];
-                if (!responseData.hasOwnProperty(key)) {
-                    console.warn(`Visualisation ${this._visualisations[i].name} is missing the visualisation data for layer ${key}.`);
-                    responseData[key] = {
-                        error: "Unable to show this layer.",
-                        desc: "Data ID not found in the output of shaderGenerator."
-                    };
-                }
-                Object.assign(layer, responseData[key]);
-                if (!layer.hasOwnProperty("cache")) {
-                    layer.cache = {};
-                }
-            }
-
-            let program = this.gl.createProgram();
-            this._programs.push(program); //preventive
-            if (!vis.hasOwnProperty("order")) {
-                vis.order = Object.keys(vis.shaders);
-            }
-            this._visualisationToProgram(vis, program, i);
-        }
-        //if all invalid go back  
-        if (this._program >= this._programs.length) this._program = 0;
-
-        return this._programs[this._program];
     }
 
     _detachShader(program, type) {
@@ -428,8 +361,93 @@ class WebGLWrapper {
         this.gl.deleteShader(shader);
     }
 
-    _visualisationToProgram(vis, program, idx) {
-        var gl = this.gl,
+    async _downloadAndRegisterShader(url, headers) {
+        await fetch(url, {
+            method: "GET",
+            body: null,
+            redirect: 'error',
+            mode: 'cors', // no-cors, *cors, same-origin
+            credentials: 'same-origin', // include, *same-origin, omit
+            cache: "no-cache",
+            referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+            headers: headers
+        }).then(response => {
+            if (response.status < 200 || response.status > 299) {
+                return response.text()
+                    .then(e => {
+                        console.error("Fetching of the shader failed.", e);
+                        throw new Error("There was an error when fetching the shader source: " + url);
+                    });
+            } else {
+                return response.text();
+            }
+        }).then(text => {
+            let script = document.createElement("script");
+            script.type = "text/javascript";
+            script.text = text;
+            script.onerror = e => {
+                //Just ignore it, only log into the console.
+                console.error("Failed to interpret downloaded shader layer script: ", url, "Ignoring this script...");
+            }
+            document.body.appendChild(script);
+        }).catch(e => {
+            console.error("Failed to download and initialize shader " + url, e);
+        });
+    }
+
+    async _downloadRequiredShaderFactories(vis) {
+        if (vis.hasOwnProperty("shaderSources")) {
+            for (let source of vis["shaderSources"]) {
+                let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(source["typedef"]);
+                if (!ShaderFactoryClass) {
+                    if (!this._workingNotified) {
+                        this._workingNotified = true;
+                        this.notifyWorkStarted();
+                    }
+                    await this._downloadAndRegisterShader(source["url"], source["headers"]);
+                } else {
+                    console.warn("Shader source " + source["typedef"] + " already defined!")
+                }
+            }
+        }
+        if (this._workingNotified) {
+            this._workingNotified = false;
+            this.notifyWorkFinished();
+        }
+    }
+
+    async _visualisationToProgram(vis, idx) {
+        if (!vis.hasOwnProperty("_built")) {
+            vis._built = {};
+        }
+
+        if (vis.hasOwnProperty("error")) {
+            vis._built.html = "Invalid visualisation.";
+            return;
+        }
+
+        await this._downloadRequiredShaderFactories(vis);
+        this._processVisualisation(vis, idx);
+        return idx;
+    }
+
+    _initializeShaderFactory(ShaderFactoryClass, layer, idx) {
+        if (!ShaderFactoryClass) {
+            layer.error = "Unknown layer type.";
+            layer.desc = `The layer type '${layer.type}' has no associated factory. Missing in 'shaderSources'.`;
+            console.warn("Skipping layer " + layer.name);
+            return;
+        }
+        layer._renderContext = new ShaderFactoryClass(layer.params);
+        layer.order = idx;
+
+        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.order}`, layer.order);
+        layer._renderContext._setWebglContext(this.webGLImplementation);
+        layer._renderContext._setResetCallback(this.resetCallback);
+    }
+
+    _processVisualisation(vis, idx) {
+        let gl = this.gl,
             ok = function (kind, status, value, sh) {
                 if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
                     console.log((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
@@ -437,15 +455,48 @@ class WebGLWrapper {
                 }
                 return true;
             },
-            err = function (message, description, glLoad, glDraw) {
-                vis.js = `function ${glLoad}(){} function ${glDraw}(){}`;
+            err = function (message, description) {
                 vis.error = message;
                 vis.desc = description;
             };
 
-        this._buildVisualisation(vis.order, vis, this.jsGlLoadedCall, this.jsGlDrawingCall);
+        let program;
 
-        if (vis.hasOwnProperty("error")) return;
+        if (!this._programs.hasOwnProperty(idx)) {
+            program = gl.createProgram();
+            this._programs[idx] = program;
+
+            let index = 0;
+            for (let key in vis.shaders) {
+                if (vis.shaders.hasOwnProperty(key)) {
+                    let layer = vis.shaders[key],
+                        ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
+
+                    if (!layer.hasOwnProperty("cache")) layer.cache = {};
+                    this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
+                }
+            }
+
+            if (!vis.hasOwnProperty("order")) {
+                vis.order = Object.keys(vis.shaders);
+            }
+        } else {
+            program = this._programs[idx];
+            for (let key in vis.shaders) {
+                if (vis.shaders.hasOwnProperty(key)) {
+                    let layer = vis.shaders[key];
+
+                    if (layer.hasOwnProperty("_renderContext") &&
+                        layer._renderContext.constructor.type() === layer.type) {
+                        continue;
+                    }
+                    let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
+                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer.order);
+                }
+            }
+        }
+
+        this._buildVisualisation(vis.order, vis);
 
         function useShader(gl, program, data, type) {
             var shader = gl.createShader(gl[type]);
@@ -456,22 +507,19 @@ class WebGLWrapper {
             return ok('Shader', 'COMPILE', shader, type);
         }
 
-        if (!useShader(gl, program, vis["vertex_shader"], 'VERTEX_SHADER') ||
-            !useShader(gl, program, vis["fragment_shader"], 'FRAGMENT_SHADER')) {
-            err("Unable to use this visualisation.", "Compilation of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
-            console.warn("VERTEX SHADER", vis["vertex_shader"]);
-            console.warn("FRAGMENT SHADER", vis["fragment_shader"]);
-            if (idx === this._program) this._program++;
+        if (!useShader(gl, program, vis._built["vertex_shader"], 'VERTEX_SHADER') ||
+            !useShader(gl, program, vis._built["fragment_shader"], 'FRAGMENT_SHADER')) {
+            err("Unable to use this visualisation.",
+                "Compilation of shader failed. For more information, see logs in the console.");
+            console.warn("VERTEX SHADER", vis._built["vertex_shader"]);
+            console.warn("FRAGMENT SHADER", vis._built["fragment_shader"]);
         } else {
             gl.linkProgram(program);
-            console.log("FRAGMENT SHADER", vis["fragment_shader"]);
-            //todo error here as well...
             if (!ok('Program', 'LINK', program)) {
-                err("Unable to use this visualisation.", "Linking of shader failed. For more information, see logs in the console.", this.jsGlLoadedCall, this.jsGlDrawingCall);
+                err("Unable to use this visualisation.",
+                    "Linking of shader failed. For more information, see logs in the console.");
             }
         }
         this.visualisationReady(idx, vis);
     }
 }
-
-

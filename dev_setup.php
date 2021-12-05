@@ -65,7 +65,7 @@ onchange="
               user_settings = $.extend(user_settings, JSON.parse($(this).val()));
           } catch (e) {
               console.warn(e, 'Data:', $(this).val());
-              alert(`Incorrect JSON in the visualisation setting: ${e} (see console).`);
+              alert(`Incorrect JSON in the visualisation setting: \${e} (see console).`);
           }
 ">
 {
@@ -94,7 +94,7 @@ placeholder="Layer is ignored if no data set." style="width: 50%;">
               JSON.parse($(this).val());
           } catch (e) {
               console.warn(e, 'Data: ', $(this).val());
-              alert(`Incorrect JSON in the layer setting: ${e} (see console).`);
+              alert(`Incorrect JSON in the layer setting: \${e} (see console).`);
           }
 ">
 {
@@ -162,7 +162,7 @@ echo "</div></div>";
 }
 ]
 </textarea>
-          <form method="POST" target="_blank" action="<?php echo $path; ?>/index.php" id="custom-request">
+          <form method="POST" target="_blank" action="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/index.php" id="custom-request">
               <input type="hidden" name="visualisation" id="custom-visualisation" value=''>
               <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp;
           </form>

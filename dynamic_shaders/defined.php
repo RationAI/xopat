@@ -1,15 +1,18 @@
 <?php
 
-//EXISTING SHADERS
- $COLORS_NAME = "color";
+//todo move this to some JSON...
+
+//EXISTING SHADERS and their images
+ $COLORS_NAME = "heatmap";
  $COLORS_FILENAME = "colors";
  $EDGES_NAME = "edge";
  $EDGES_FILENAME = "edges";
- $BICOLORS_NAME = "dual-color";
+ $BICOLORS_NAME = "bipolar-heatmap";
  $BICOLORS_FILENAME = "bicolors";
  $IDENTITY_NAME = "identity";
  $IDENTITY_FILENAME = "identity";
 
+ //mapping type->image name
  $shaders = array(
      $COLORS_NAME=>$COLORS_FILENAME,
      $EDGES_NAME=>$EDGES_FILENAME,

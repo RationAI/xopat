@@ -1,8 +1,8 @@
 //todo use getters from the parent class and do not rely on jQuery!!!
 
 class HistovisoImage extends AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "histoviso-explain");
+    constructor(context, autoCreationStrategy, presetManager, id) {
+        super(context, autoCreationStrategy, presetManager, id);
         this._current = null;
         this.active = false;
 
@@ -68,6 +68,7 @@ class HistovisoImage extends AnnotationObjectFactory {
 
     instantCreate(point, isLeftClick = true) {
         //no support: do not create requests in mistake as the operation is not cheap
+        throw "Use ";
     }
 
     initCreate(x, y, isLeftClick) {
@@ -95,10 +96,6 @@ class HistovisoImage extends AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
-    selected(theObject) {
-        this._selected = theObject;
-    }
-
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return;
@@ -120,13 +117,170 @@ class HistovisoImage extends AnnotationObjectFactory {
         return undefined;
     }
 
-    getASAP_XMLTypeName() {
-        return "NN inspector";
+    _abortSendRequest(message, dummyRect) {
+        PLUGINS.dialog.show(message, 8000, PLUGINS.dialog.MSG_ERR);
+        if (dummyRect) {
+            this._context.deleteHelperAnnotation(dummyRect);
+        }
+    }
+}
+
+class HistovisoImageExplorer extends HistovisoImage {
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "histoviso-explain-explorer");
     }
 
-    setWebGLRenderer(renderer, dataSource) {
+    getIcon() {
+        return "query_stats";
+    }
+
+    setContext(dataSource) {
+        this._dataSource = dataSource;
+    }
+
+    getDescription(ofObject) {
+        return `Histoviso: network insight rendering`;
+    }
+
+    selected(theObject) {
+        //do nothing
+    }
+
+    getASAP_XMLTypeName() {
+        return "NN measure";
+    }
+
+    sendRequest(imageBounds, dummyRect=undefined) {
+        if (!this.active) {
+            this._abortSendRequest("Please wait for the server to download model data.", dummyRect);
+            return;
+        }
+
+        const _this = this;
+        let coords = {
+            x1: imageBounds.x,
+            y1: imageBounds.y,
+            x2: imageBounds.x + imageBounds.width,
+            y2: imageBounds.y + imageBounds.height
+        }
+
+        if (Math.abs(coords.x1 - coords.x2) > 5000 || Math.abs(coords.y1 - coords.y2) > 5000) {
+            this._abortSendRequest("Selected area is too big to process: either zoom closer or select smaller area.", dummyRect);
+            return;
+        }
+
+        if (!dummyRect) {
+            dummyRect = this.create(
+                {
+                    left: imageBounds.x,
+                    top: imageBounds.y,
+                    width: imageBounds.width,
+                    height: imageBounds.height,
+                },
+                this._presets.getAnnotationOptions(true)
+            );
+            this._context.addHelperAnnotation(dummyRect);
+        }
+
+        let begin = currentVisualisation().data.lastIndexOf('/')+1;
+        let data = currentVisualisation().data.substr(begin, currentVisualisation().data.length - begin - 4);
+        data = {
+            slide_name: data,
+            coords: coords,
+            params: {
+                model_name: this._dataSource.getModel()
+                //also top_n, batch_size params, now not send server-default used
+            }
+        };
+        console.log("Sending request for exploration: ", data);
+
+        //make ajax call to server for data (demo image here)
+        fetch(`/histoviso-explain/top-feature-maps`, {
+            method: "POST",
+            body: JSON.stringify(data),
+            redirect: 'error',
+            mode: 'cors', // no-cors, *cors, same-origin
+            credentials: 'same-origin', // include, *same-origin, omit
+            cache: "no-cache",
+            referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+            headers: new Headers({
+                "content-type": "application/json",
+                'Authorization': 'Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw=='
+            })
+        }).then(response => {
+            if (response.status == 422 || response.status == 503) {
+                return response.text()
+                    .then(e => {
+                        console.error("Fetching NN top stats:", e);
+                        throw new Error(e);
+                    });
+            } else if (response.status < 200 || response.status > 299) {
+                return response.text()
+                    .then(e => {
+                        console.error("Fetching NN top stats:", e);
+                        throw new Error("There was an error when contacting the server. Is it online?");
+                    });
+            } else {
+                return response.json();
+            }
+        }).then(json => {
+            let html = [
+                `<div id="nn-explainability-exploration-results"><table><tr class="pb-3 border-bottom">
+<th><span class=\"material-icons\">layers</span> name </th>
+<th><span class="material-icons">functions</span> sum </th>
+<th><span class="material-icons">trending_up</span> max </th></tr>`
+            ];
+
+            for (let layer in json) {
+                html.push(`<tr class="py-2"><td class="px-2">${layer}</td>
+<td class="px-2">${json[layer]["sum"].join(", ")}</td>
+<td class="px-2">${json[layer]["max"].join(", ")}</td></tr>`);
+            }
+            html.push("</table></div>");
+
+            let elem = document.getElementById("nn-explainability-exploration-results");
+            if (elem) {
+                elem.innerHTML = html.join("");
+            } else {
+                Dialogs.showCustomModal(
+                    "nn-explainability-exploration",
+                    `Top feature maps for the model <br><b>${data.params.model_name}</b>`,
+                    html.join(""),
+                    "");
+            }
+            _this._context.deleteHelperAnnotation(dummyRect);
+
+        }).catch(e => {
+            PLUGINS.dialog.show(e, 8000, PLUGINS.dialog.MSG_WARN);
+            _this._context.deleteHelperAnnotation(dummyRect);
+        });
+    }
+}
+
+class HistovisoImageRenderer extends HistovisoImage {
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "image");
+    }
+
+    getIcon() {
+        return "assessment";
+    }
+
+    setContext(renderer, dataSource) {
         this._renderer = renderer;
         this._dataSource = dataSource;
+    }
+
+    getDescription(ofObject) {
+        return `Histoviso: network insight rendering`;
+    }
+
+    selected(theObject) {
+        this._selected = theObject;
+    }
+
+    getASAP_XMLTypeName() {
+        return "NN inspector";
     }
 
     reRenderSelectedObject() {
@@ -156,14 +310,23 @@ class HistovisoImage extends AnnotationObjectFactory {
             _this._context.canvas().renderAll();
             _this._selected = img;
         });
-
     }
 
-    _abortSendRequest(message, dummyRect) {
-        PLUGINS.dialog.show(message, 8000, PLUGINS.dialog.MSG_ERR);
-        if (dummyRect) {
-            this._context.deleteHelperAnnotation(dummyRect);
-        }
+    reSendRequest() {
+        if (!this._selected || !this._renderer) return;
+
+        this._context.deleteAnnotation(this._selected);
+        this._current = this.create(  {
+                left: this._selected.left,
+                top: this._selected.top,
+                width: this._selected.width,
+                height: this._selected.height,
+            },
+            this._presets.getAnnotationOptions(this._selected.isLeftClick)
+        );
+        this._context.addHelperAnnotation(this._current);
+        this._selected = null;
+        this.finishDirect();
     }
 
     sendRequest(imageBounds, dummyRect=undefined) {
@@ -206,8 +369,8 @@ class HistovisoImage extends AnnotationObjectFactory {
             this._context.addHelperAnnotation(dummyRect);
         }
 
-        let begin = setup[0].data.lastIndexOf('/')+1;
-        let data = setup[0].data.substr(begin, setup[0].data.length - begin - 4);
+        let begin = currentVisualisation().data.lastIndexOf('/')+1;
+        let data = currentVisualisation().data.substr(begin, setup[0].data.length - begin - 4);
         data = {
             slide_name: data,
             coords: coords,
@@ -234,14 +397,16 @@ class HistovisoImage extends AnnotationObjectFactory {
                 'Authorization': 'Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw=='
             })
         }).then(response => {
-            if (response.status == 422) {
-                return response.blob()
-                    .then(_ => {
-                        throw new Error("Selected area is too small or does not contain any tissue.");
+            if (response.status == 422 || response.status == 503) {
+                return response.text()
+                    .then(e => {
+                        console.error("Fetching NN image:", e);
+                        throw new Error(e);
                     });
             } else if (response.status < 200 || response.status > 299) {
-                return response.blob()
-                    .then(_ => {
+                return response.text()
+                    .then(e => {
+                        console.error("Fetching NN image:", e);
                         throw new Error("There was an error when contacting the server. Is it online?");
                     });
             } else {
@@ -262,44 +427,13 @@ class HistovisoImage extends AnnotationObjectFactory {
                 return response.blob();
             }
         }).then(blob => {
-                //todo feed blob instantly to GPU?
-                // let urlCreator = window.URL || window.webkitURL;
-                //
-                // let dataUrl = urlCreator.createObjectURL(blob);
-                //
-                // fabric.Image.fromURL(dataUrl, function (img) {
-                //     img.set($.extend({},
-                //         _this._presets.getAnnotationOptions(dummyRect.isLeftClick),
-                //         {
-                //             left: imageBounds.x,
-                //             top: imageBounds.y,
-                //             width: imageBounds.width,
-                //             height: imageBounds.height,
-                //             type: _this.type,
-                //             comment: `(${data.expl_method}) Layer ${data.expl_params.layer_name} [feature ${data.expl_params.feature_map_id}]`
-                //         }
-                //     ));
-                //
-                //     _this._context.deleteHelperAnnotation(dummyRect);
-                //     _this._context.addAnnotation(img);
-                //     img.bringToFront();
-                //
-                //     _this._context.canvas().renderAll();
-                // });
-
-
-
-            //once data ready
             let urlCreator = window.URL || window.webkitURL;
             //drawing with opengl now not implemented
             var myImage = document.createElement('img');
             myImage.src = urlCreator.createObjectURL(blob);
 
             myImage.onload = () => {
-                //_this.lastDrawn = myImage;
-                var width = pointRightBottom.x - pointLeftTop.x;
-                var height = pointRightBottom.y - pointLeftTop.y;
-                //canvas dimensions to be equal to screen dimensions, a bit unsafe to set image dimensions (big numbers)
+                //todo necessary?
                 _this._renderer.setDimensions(myImage.width, myImage.height);
 
                 // Render a webGL canvas to an input canvas using cached version
@@ -328,8 +462,7 @@ class HistovisoImage extends AnnotationObjectFactory {
                 });
 
             };
-            }
-        ).catch(e => {
+        }).catch(e => {
             PLUGINS.dialog.show(e, 8000, PLUGINS.dialog.MSG_WARN);
             _this._context.deleteHelperAnnotation(dummyRect);
         });
@@ -337,4 +470,5 @@ class HistovisoImage extends AnnotationObjectFactory {
 }
 
 //registering is performed after the plugin has been successfully initialized
-//AnnotationObjectFactory.register(HistovisoImage);
+AnnotationObjectFactory.register(HistovisoImageRenderer);
+AnnotationObjectFactory.register(HistovisoImageExplorer);

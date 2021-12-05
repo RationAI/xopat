@@ -1,17 +1,18 @@
 <?php
+require_once("config.php");
+
 session_start();
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
-$title = hasKey($_SESSION, "title") ? $_SESSION['title'] : false;
-$description = hasKey($_SESSION, "description") ? $_SESSION['description'] : false;
-$techNFO = hasKey($_SESSION, "details") ? $_SESSION['details'] : false;
+$title = hasKey($_SESSION, "title") ? $_SESSION['title'] : (hasKey($_GET, "title") ? $_GET['title'] : false);
+$description = hasKey($_SESSION, "description") ? $_SESSION['description'] : (hasKey($_GET, "description") ? $_GET['description'] : false);
+$techNFO = hasKey($_SESSION, "details") ? $_SESSION['details'] : (hasKey($_GET, "details") ? $_GET['details'] : false);
 
-//todo not a clean design!!! move to config.php?
 if (!$title) {
-    header("Location: ../list-experiments.php");
+    header("Location: " . GATEWAY_ENTRY_SCRIPT);
     exit;
 }
 
@@ -45,7 +46,7 @@ session_destroy();
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 
-    <button onclick="window.location='../list-experiments.php'" class="btn" type="button">Back to experiments</button>
+    <button onclick="window.location='<?php echo GATEWAY_ENTRY_SCRIPT; ?>'" class="btn" type="button">Back to experiments</button>
 
 </div>
 

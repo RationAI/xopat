@@ -51,7 +51,7 @@ if (!$layer) {
 }
 $experiment = hasKey($_GET, "experiment") ? $_GET["experiment"] : (hasKey($_POST, "experiment") ? $_POST["experiment"] : false);
 $experiment = $experiment ? "<input type='text' disabled value='$experiment' id='experiment-id'>" :
-    "<input id='experiment-id' type='text' value='' placeholder='Please specify the experiment ID.'>";
+    "<input id='experiment-id' type='text' value='' class='form-control' placeholder='Please specify the experiment ID.'>";
 
 echo <<<EOF
 <br><h3 class="d-inline-block">Experiment:</h3> $experiment

@@ -1,16 +1,18 @@
-HistovisoExplain = function () {
-    //comply to the documentation:
-	this.id = "histoviso_explain";
-	this.setupData = {};
-    this.model_list = {};
-    this.current_method = undefined;
-    this.current_model = undefined;
-}
+class HistovisoExplain  {
 
-HistovisoExplain.prototype = {
+    static identifier = "histoviso_explain";
+
+    constructor() {
+        //comply to the documentation:
+        this.id = HistovisoExplain.identifier;
+        this.setupData = {};
+        this.model_list = {};
+        this.current_method = undefined;
+        this.current_model = undefined;
+    }
 
     //delayed after OSD initialization is finished...
-    openSeadragonReady: function () {
+    openSeadragonReady() {
         const _this = this;
         PLUGINS.appendToMainMenu("Neural Network (NN) inspector", "", "Waiting for the server...", "feature-maps", this.id);
         this.fetchParameters("/histoviso-explain/available-expl-methods").then(
@@ -21,9 +23,9 @@ HistovisoExplain.prototype = {
             console.error(e);
             _this.createErrorMenu(`An error has occured while loading the plugin.`, e);
         });
-    },
+    }
 
-    createMenu: function(notification=undefined) {
+    createMenu(notification=undefined) {
         //bit dirty :)
         if (notification) {
             let style = (notification.startsWith("NOTE")) ? "color-bg-severe" : "";
@@ -33,28 +35,27 @@ HistovisoExplain.prototype = {
         //controlPanelId is incomming parameter, defines where to add HTML
         PLUGINS.replaceInMainMenuExtended("Neural Network (NN) inspector", "",
             `${notification}<div id="method-setup"></div><div id="model-setup">Loading...</div>
-<div style="text-align: right">Use <b>NN inspector</b> or 
-<button class="btn" onclick="${this.id}.sendRequest();">Evaluate viewport</button></div>`,
+<div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.id}.reSendRequest();">Re-evaluate selected</button>
+<button class="btn" onclick="${this.id}.reRenderSelectedObject();">Repaint selected</button></div>`,
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
-onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>
-<button class="btn" onclick="${this.id}.reRenderSelectedObject();">Re-render selected data</button>`,
+onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
         PLUGINS.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
-    },
+    }
 
-    createErrorMenu: function(html, err=undefined) {
+    createErrorMenu(html, err=undefined) {
         if (!err) {
             PLUGINS.replaceInMainMenu("Neural Network (NN) inspector", "", html, "feature-maps", this.id);
         } else {
             PLUGINS.replaceInMainMenuExtended("Neural Network (NN) inspector", "", html,
-                `Error description: <br><code>${err}</code>`, "feature-maps", this.id);
+                `<br>Error description: <br><code>${err}</code>`, "feature-maps", this.id);
         }
-    },
+    }
 
     /**
      * Load supported method list and setup method GUI controls, the top of the cascade update
      */
-    updateMethodList: function() {
+    updateMethodList() {
         //hardcoded for now
         let first = undefined;
         let options = [];
@@ -72,7 +73,7 @@ onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id=
 <select id="method-selection" class="form-control" onchange="${this.id}.updateMethodProperties($(this).val());" 
 name="method-selection">${options.join('')}</select><div id="method-specifier"></div>`);
         this.updateMethodProperties(first);
-    },
+    }
 
     updateMethodProperties(method) {
         this.current_method = method;
@@ -88,15 +89,16 @@ name="method-selection">${options.join('')}</select><div id="method-specifier"><
                 console.warn("Unsupported parameter type " + param["type"]);
                 continue;
             }
-            html += `<br><span class="d-inline-block text-bold" style="width: 120px;height: 28px;">${paramName} </span>`
+            html += `<span class="d-inline-block ml-3" style="width: 120px;height: 28px;">${paramName} </span>`
             html += parser("params-for-explainability-method", paramName, param["default"], param["range"]);
+            html += "<br>";
         }
         container.html(html);
 
         this.updateLayerList(this.setupData[method]["model_name"]);
-    },
+    }
 
-    updateLayerList: function(model, fetches=true) {
+    updateLayerList(model, fetches=true) {
         if (!model) {
             $("#model-setup").html(`There was an error when obtaining the model information. Please, select a different method.`);
             console.warn(`Invalid model name ${model}.`);
@@ -107,7 +109,8 @@ name="method-selection">${options.join('')}</select><div id="method-specifier"><
         let _this = this,
             container = $("#model-setup"),
             method_select = $("#method-selection");
-        this._ownFactory.active = false;
+        this._ownExplorer.active = false;
+        this._ownRenderer.active = false;
 
         if (!this.model_list.hasOwnProperty(model)) {
             if (fetches) {
@@ -145,7 +148,7 @@ name="method-selection">${options.join('')}</select><div id="method-specifier"><
             options.push(`<option value="${layer}"${selected}>${layer}</option>`)
         }
 
-        container.html(`<br><span class="d-inline-block text-bold" style="width: 80px;">Layer </span>
+        container.html(`<br><span class="d-inline-block text-bold ml-2" style="width: 70px;">Layer </span>
 <select id="layer-selection" style="font-size: smaller;" name="layer-selection" class="form-control" onchange="${this.id}.updateFeatureMaps('${model}', $(this).val())">
 ${options.join('')}</select><div id="feature-map-specifier"></div>`);
         //cascade
@@ -153,36 +156,37 @@ ${options.join('')}</select><div id="feature-map-specifier"></div>`);
             this.updateFeatureMaps(model, first);
         }
 
-        this._ownFactory.active = true;
-    },
+        this._ownExplorer.active = true;
+        this._ownRenderer.active = true;
+    }
 
-    updateFeatureMaps: function(model, layer) {
+    updateFeatureMaps(model, layer) {
         let maxFeatureMapCount = this.model_list[model][layer];
         if (maxFeatureMapCount) {
             maxFeatureMapCount = Number.parseInt(maxFeatureMapCount);
-            $("#feature-map-specifier").html(`<span class="d-inline-block text-bold" style="width: 80px;">Feature </span>
+            $("#feature-map-specifier").html(`<span class="d-inline-block ml-3" style="width: 100px;">Feature Map</span>
 <input id="feature-map-number" class="form-control" type="number" min="0" 
 max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         } else {
             $("#feature-map-specifier").html(`Missing features data!`);
         }
-    },
+    }
 
     getModel() {
         return this.current_model;
-    },
+    }
 
     getMethod() {
         return this.current_method;
-    },
+    }
 
     getLayer() {
         return $("#layer-selection").val();
-    },
+    }
 
     getLayerFeatureId() {
         return Number.parseInt($("#feature-map-number").val());
-    },
+    }
 
     getAditionalMethodParams() {
         let result = {};
@@ -196,9 +200,9 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
             }
         })
         return result;
-    },
+    }
 
-    fetchParameters: async function(url = '') {
+    async fetchParameters(url = '') {
         // Default options are marked with *
         const response = await fetch(url, {
             method: 'GET',
@@ -215,14 +219,14 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         });
 
         if (response.status < 200 || response.status > 299) {
-            return response.json().then(_ => {
-                throw new Error(`Server returned ${response.status}`);
+            return response.text().then(text => {
+                throw new Error(`Server returned ${response.status}: ${text}`);
             });
         }
         return response.json(); // parses JSON response into native JavaScript objects
-    },
+    }
 
-    _init: function(setupData) {
+    _init(setupData) {
         if (!PLUGINS.dataLayer) {
             throw "Histoviso interactive explainability plugin needs TiledImage class instance of the data visualisation layer in order to work.";
         }
@@ -250,10 +254,10 @@ experiment is '${params.experimentId}'.`);
         }
 
         if (!notification) notification = "Experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
-
+        this._initParamParsers();
         this._annotationPlugin = annotationPlugin.instance;
-        this._annotationPlugin.registerAnnotationFactory(HistovisoImage);
-        this._ownFactory = this._annotationPlugin.getAnnotationObjectFactory("histoviso-explain");
+        this._ownRenderer = this._annotationPlugin.getAnnotationObjectFactory("image");
+        this._ownExplorer = this._annotationPlugin.getAnnotationObjectFactory("histoviso-explain-explorer");
 
         this.createMenu(notification);
         //todo check structure?
@@ -261,24 +265,17 @@ experiment is '${params.experimentId}'.`);
 
         this.updateMethodList();
         this._initWebGL();
-        this._initParamParsers();
-    },
+    }
 
-    sendRequest: function () {
-        var clipBounds = PLUGINS.osd.viewport.getConstrainedBounds(false);
-        this._ownFactory.sendRequest(
-            PLUGINS.imageLayer.viewportToImageRectangle(
-                clipBounds.x, clipBounds.y, clipBounds.width, clipBounds.height,
-                true
-            )
-        );
-    },
+    reSendRequest() {
+        this._ownRenderer.reSendRequest();
+    }
 
-    reRenderSelectedObject: function() {
-        this._ownFactory.reRenderSelectedObject();
-    },
+    reRenderSelectedObject() {
+        this._ownRenderer.reRenderSelectedObject();
+    }
 
-    _initParamParsers: function() {
+    _initParamParsers() {
         this._parsers = {
             int: function (cls, name, defaultValue, range) {
                 let bounded = "", value = "";
@@ -332,9 +329,9 @@ experiment is '${params.experimentId}'.`);
                 return elem.checked;
             }
         }
-    },
+    }
 
-    _initWebGL: function() {
+    _initWebGL() {
         //TODO not debugged...
         let shaderNames = $("#histoviso-explain-rendering");
         const _this = this;
@@ -342,14 +339,10 @@ experiment is '${params.experimentId}'.`);
         this.viaGL = new WebGLWrapper({
             //where to append html/css designed for shaders to use, these containers are emptied before append!
             htmlControlsId: "histoviso-explain-html",
-            scriptId: "histoviso-explain-scripts",
+            uniqueId: "histoviso_explain",
             //just a custom function names to avoid collision
-            jsGlLoadedCall: "glNetworkLoaded",
-            jsGlDrawingCall: "glNetworkDrawing",
-            //where are shaders fetched
-            shaderGenerator: "/visualization/client/dynamic_shaders/build.php",
+            //todo hardcoded!!
             authorization: "Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw==",
-            //called once fully initialized
             ready: function() {
                 var i = 0;
                 _this.viaGL.foreachVisualisation(function (vis) {
@@ -361,25 +354,11 @@ experiment is '${params.experimentId}'.`);
                     i++;
                 });
             },
-            visualisationChanged: function(oldVis, newVis) {
-
-            },
-            //some callbacks
-            visualisationReady: function (i, visualisation) {
-
-            },
-            visualisationInUse: function (visualisation) {
-
-            },
             onFatalError: function (vis) {
-                //use vis["error"] -> user message
-                // vis["desc"] -> dev detailed message
                 alert("Error in network plugin:" + vis["error"] + (vis["desc"] ? vis["desc"] : ""));
             },
-            htmlShaderPartHeader: function(title, html, dataId, isVisible, isControllable=true) {
+            htmlShaderPartHeader: function(title, html, dataId, isVisible, layer, isControllable) {
                 let style = isVisible ? 'style="cursor:default;"' : 'style="filter: brightness(0.5);cursor:default;"';
-                let checked = isVisible ? 'checked' : '';
-                let disabled = isControllable ? '' : 'disabled';
                 return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
             <div class="h5 py-1 position-relative">
               ${title}
@@ -388,47 +367,38 @@ experiment is '${params.experimentId}'.`);
             </div>`;
             }
         });
-        this.visualisations = [
-            {
+
+        this.viaGL.addVisualisation({
                 name: "Identity",
-                params: {
-                    unique_id: "histoviso_explain" //voluntary parameter, avoids namespace collision
-                },
+                params: {},
                 shaders: {
                     "__automaticaly_generated_data": {
                         name: "Network Output",
                         type: "identity",
                         visible: "1",
-                        params: {
-                        }
+                        params: {}
                     }
                 }
             },
             {
                 name: "HeatMap",
-                params: {
-                    unique_id: "histoviso_explain" //voluntary parameter, avoids namespace collision
-                },
+                params: {},
                 shaders: {
                     "__automaticaly_generated_data": {
                         name: "Network Output",
-                        type: "color",
+                        type: "heatmap",
                         visible: "1",
-                        params: {
-                            ctrlOpacity: 0,
-                        }
+                        params: {ctrlOpacity: 0}
                     }
                 }
             },
             {
                 name: "HeatMap (LogScale)",
-                params: {
-                    unique_id: "histoviso_explain" //voluntary parameter, avoids namespace collision
-                },
+                params: {},
                 shaders: {
                     "__automaticaly_generated_data": {
                         name: "Network Output",
-                        type: "color",
+                        type: "heatmap",
                         visible: "1",
                         params: {
                             ctrlOpacity: 0,
@@ -440,29 +410,23 @@ experiment is '${params.experimentId}'.`);
             },
             {
                 name: "Two-polar HeatMap",
-                params: {
-                    unique_id: "histoviso_explain" //voluntary parameter, avoids namespace collision
-                },
+                params: {},
                 shaders: {
                     "__automaticaly_generated_data": {
                         name: "Network Output",
-                        type: "dual-color",
+                        type: "bipolar-heatmap",
                         visible: "1",
-                        params: {
-                            ctrlOpacity: 0,
-                        }
+                        params: {ctrlOpacity: 0}
                     }
                 }
             },
             {
                 name: "Two-polar HeatMap (LogScale)",
-                params: {
-                    unique_id: "histoviso_explain" //voluntary parameter, avoids namespace collision
-                },
+                params: {},
                 shaders: {
                     "__automaticaly_generated_data": {
                         name: "Network Output",
-                        type: "dual-color",
+                        type: "bipolar-heatmap",
                         visible: "1",
                         params: {
                             ctrlOpacity: 0,
@@ -472,20 +436,14 @@ experiment is '${params.experimentId}'.`);
                     }
                 }
             }
-        ]
-
-        this.viaGL.setVisualisation(this.visualisations[0]);
-        this.viaGL.setVisualisation(this.visualisations[1]);
-        this.viaGL.setVisualisation(this.visualisations[2]);
-        this.viaGL.setVisualisation(this.visualisations[3]);
-        this.viaGL.setVisualisation(this.visualisations[4]);
+        );
 
         this.viaGL.prepare(() => {
             _this.viaGL.init(1, 1);
-            this._ownFactory.setWebGLRenderer(_this.viaGL, _this);
+            this._ownRenderer.setContext(_this.viaGL, _this);
+            this._ownExplorer.setContext(_this);
         });
     }
-
 }
 
 registerPlugin(HistovisoExplain);

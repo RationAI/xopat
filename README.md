@@ -42,37 +42,49 @@ Then, based on the presence of `visualisation` the user is
 #### ``visualisation`` parameter example
 ````JSON
 [{    
-      "name": "A visualisation setup 1",
-      "params": {
-            "experimentId": "ID_OF_THE_EXPERIMENT",
-            "uniqueId": "myPlugin",
-            "losslessImageLayer": false,
-            "losslessDataLayer": true
-      }, 
-      "data": "path/to/tissue/scan.tif",
-      "shaders": {
-            "path/to/annotation/layer.tif": { 
-                   "name": "Annotation layer",
-                   "type": "identity", 
-                   "visible": "1", 
-                   "params": { }
-            },
-            "path/to/probability/layer.tif": {
-                   "name": "Probability layer",
-                   "type": "edge", 
-                   "visible": "1", 
-                   "params": { 
-                      "color": "#fa0058"
-                   }
-            }
-      }
+    "name": "A visualisation setup 1",
+    "params": {
+        "experimentId": "ID_OF_THE_EXPERIMENT",
+        "losslessImageLayer": false,
+        "losslessDataLayer": true
+    }, 
+    "shaderSources" : [
+        {
+            "url": "http://my-shader-url.com/customShader.js",
+            "headers": {},
+            "typedef": "new_type"
+        }, 
+        ...
+    ],
+    "data": "path/to/tissue/scan.tif",
+    "shaders": {
+         "path/to/annotation/layer.tif": { 
+              "name": "Annotation layer",
+              "type": "new_type", 
+              "visible": "1", 
+              "params": { }
+         },
+         "path/to/probability/layer.tif": {
+              "name": "Probability layer",
+              "type": "edge", 
+              "visible": "1", 
+              "params": { 
+                  "color": "#fa0058"
+              }
+         },
+         ...
+    }
  },
 ... //multiple visualisation presets allowed
 ]
 ````
+The parameters shown above are inherited from the WebGL-based module, extended with the properties of
+this application. Although the module was written for this application, it was designed so that it can be
+re-used. The module is closely described in `./webgl/` folder.
+
 **External parameters** &emsp;
-All items are required except for items inside `params` field and the exception of `type`/`source`. 
-In fact, some (such as `params` or `name` are somehow derived if missing).
+All items are required except for items inside `params` field. In fact, some (such as `params` or `name` are somehow derived if missing, 
+note this is not true for the rendering module!).
 - `name` - visualisation name
 - `params` - visualisation parameters, supported:
     - `experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
@@ -80,12 +92,15 @@ In fact, some (such as `params` or `name` are somehow derived if missing).
     - `losslessImageLayer` - optional, whether the first layer (tissue) should use lossless data transfer, default `false`
     - `losslessDataLayer` - optional, whether the second layer (data) should use lossless data transfer, default `true`
 - `data` - defines the data (path to the pyramidal tif such that that server can understand it) for the first layer (tissue scan), can be omitted (see below)
+- `shaderSources` - voluntary, array of objects, more details in `./webgl/shaders/`, each object must have these properties:
+    - `url` - url where to fetch the shader implementation
+    - `headers` - arbitrary headers
+    - `typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
+        - NOTE: this value must equal to the shader id registered in the `ShaderMediator`, see `./webgl/shaders/`
 - `shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - `name` - name of the layer: displayed to the user
-    - one of the following two:
-        - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be missing if `source` is defined
-        - `srouce` - full URL to a shader part source, expects the output of a shader part (JSON-encoded), for more information see ˙./dynamic-shaders/README.md˙, optional and ignored if `type` defined
+    - `type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
     - `visible` -  `1` or `0`, whether by default the data layer is visible
     - `params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
 
@@ -101,7 +116,7 @@ shader type, so always check whether a desired property exists or not
     
 
 ####  `plugins.php` and `./plugins/`
-The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integrating 
+The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integration 
 of functionality to the visualizer. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
 ### `./webgl/`

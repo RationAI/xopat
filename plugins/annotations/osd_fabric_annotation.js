@@ -1,9 +1,5 @@
-sleep = function (ms) {
-	return new Promise(resolve => setTimeout(resolve, ms));
-};
-
 OSDAnnotations = function (incoming) {
-	this.id = "openseadragon_image_annotations";
+	this.id = OSDAnnotations.identifier;
 
 	this.overlay = null;
 
@@ -79,16 +75,28 @@ OSDAnnotations.prototype = {
 			fireRightClick: true
 		});
 
+		const _this = this;
+
+		//init on html sooner than history so it is placed above
+		this.initHTML();
+
 		//restore annotations if any
 		// todo allow user to load his own annotations (probably to a separate layer)
 		PLUGINS.addPostExport("annotation-list", this.getJSONContent.bind(this), this.id);
-		try {
-			let imageJson = PLUGINS.postData["annotation-list"];
-			if (imageJson) {
-				this.overlay.fabricCanvas().loadFromJSON(imageJson, this.overlay.fabricCanvas().renderAll.bind(this.overlay.fabricCanvas()));
+		let imageJson = PLUGINS.postData["annotation-list"];
+		if (imageJson) {
+			try {
+				this.overlay.fabricCanvas().loadFromJSON(imageJson, function () {
+					_this.overlay.fabricCanvas().renderAll.bind(_this.overlay.fabricCanvas());
+					_this.history.init(50);
+				});
+			} catch (e) {
+				console.warn(e);
+				PLUGINS.dialog.show("Could not load annotations. Please, let us know about this issue and provide means how the visualisation was loaded.", 20000, PLUGINS.dialog.MSG_ERR);
+				this.history.init(50);
 			}
-		} catch (e) {
-			PLUGINS.dialog.show("Could not load annotations. Please, let us know about this issue and provide means how the visualisation was loaded.", 20000, PLUGINS.dialog.MSG_ERR);
+		} else {
+			this.history.init(50);
 		}
 
 		//restore presents if any
@@ -100,9 +108,6 @@ OSDAnnotations.prototype = {
 			this.presets.updatePresetsHTML();
 		}
 
-		this.initHTML();
-		//init history after my own HTML to occur below
-		this.history.init(50);
 		//cache nodes after HTML added
 		this._modesJqNode = $("#annotation-mode");
 		this.presets.updatePresetsHTML();
@@ -114,7 +119,6 @@ OSDAnnotations.prototype = {
 		this.opacity = $("#annotations-opacity");
 		this.osdLayer = PLUGINS.imageLayer;
 
-		const _this = this;
 
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", function(event) {
@@ -703,6 +707,7 @@ OSDAnnotations.prototype = {
 	promoteHelperAnnotation: function(annotation) {
 		this.history.push(annotation);
 		this.overlay.fabricCanvas().setActiveObject(annotation);
+		//todo no need to render here - but level up in (some) function call?
 		this.overlay.fabricCanvas().renderAll();
 	},
 
@@ -717,6 +722,12 @@ OSDAnnotations.prototype = {
 		if (updateHistory) this.history.push(next, previous);
 		this.overlay.fabricCanvas().renderAll();
     },
+
+	deleteAnnotation: function(annotation) {
+		this.overlay.fabricCanvas().remove(annotation);
+		this.history.push(null, annotation);
+		this.overlay.fabricCanvas().renderAll();
+	},
 
 	clearAnnotationSelection: function() {
 		this.overlay.fabricCanvas().selection = false;
@@ -1116,6 +1127,13 @@ class StateCustomCreate extends AnnotationState {
 		return code === "AltLeft";
 	}
 }
+
+OSDAnnotations.identifier = "openseadragon_image_annotations";
+
+//todo move to script where used
+OSDAnnotations.sleep = function (ms) {
+	return new Promise(resolve => setTimeout(resolve, ms));
+};
 
 
 /*------------ Initialization of OSD Annotations ------------*/
