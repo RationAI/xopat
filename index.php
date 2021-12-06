@@ -902,17 +902,17 @@ form.submit();<\/script>`;
     }
 
     function copyHashUrlToClipboard() {
-        let url = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
-        url += encodeURIComponent(seaGL.exportSettings()) + "|";
+        let baseUrl = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
+        let postData = seaGL.exportSettings() + "|";
         Object.values(PLUGINS.each).forEach(plugin => {
             if (plugin.loaded) {
-                url += encodeURIComponent(plugin.flag) + "|";
+                postData += plugin.flag + "|";
             }
         });
 
         let $temp = $("<input>");
         $("body").append($temp);
-        $temp.val(url).select();
+        $temp.val(baseUrl + encodeURIComponent(postData)).select();
         document.execCommand("copy");
         $temp.remove();
         Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
@@ -1072,7 +1072,7 @@ ${constructExportVisualisationForm()}
         Object.values(PLUGINS.each).forEach(plugin => {
             let dependency = "";
             if (plugin.requires) {
-                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode) {otherNode.checked = this.checked; otherNode.disabled = this.checked;}"`;
+                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode && this.checked) {otherNode.checked = true; otherNode.disabled = true;} else {otherNode.disabled = false;}"`;
             }
 
             let checked = plugin.loaded ? "checked" : "";

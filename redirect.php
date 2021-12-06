@@ -31,14 +31,14 @@
   }
 
   var form = document.getElementById("redirect");
-  let params = url.hash.split("|");
-  document.getElementById("visualisation").value = decodeURIComponent(params[0]).substring(1);
+  let params = decodeURIComponent(url.hash).split("|");
+  document.getElementById("visualisation").value = params[0].substring(1);
 
   //turn on plugins
   for (let i = 2; i < params.length; i++) {
     let node = document.createElement("input");
     node.setAttribute("type", "hidden");
-    node.setAttribute("name", decodeURIComponent(params[i]));
+    node.setAttribute("name", params[i]);
     node.setAttribute("value", "1");
     form.appendChild(node);
   }

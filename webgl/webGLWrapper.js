@@ -52,9 +52,9 @@ class WebGLWrapper {
         ///////////// Internals /////////////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
 
-        //Initialize WebGL context: the way how tiles are being rendered
         try {
-            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+            WebGLWrapper.GlContextFactory.init(this, "1.0");
+            //WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             return;

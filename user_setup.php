@@ -149,7 +149,6 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 
     function addShader(self, dataId) {
         var shadersNo = parseInt(self.dataset.count);
-        //TODO multiple intepretations not allowed for now, enable?
         if (shadersNo > 1) return;
         //var html = `<div><p class='f3-light text-center mt-4'>interpretation no. ${shadersNo}</p><div>`;
         var html = `<div class="data-interpretation"><div>`;
@@ -269,7 +268,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 
                 $('#request').submit();
 
-                //todo modify GUI? now for simplicity just redirect...
+                //modify GUI? now for simplicity just redirect...
                 // $(".data-interpretation").remove();
                 // $(".data-layer-container").each(e => {
                 //      addShader()...

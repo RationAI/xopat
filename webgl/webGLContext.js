@@ -157,11 +157,11 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
-
         this.texture = {
             debug: $("#debug"),
             debug2: $("#debug2"),
             _units: [],
+
             init: function() {
                 this.canvas = document.createElement('canvas');
                 this.canvasReader = this.canvas.getContext('2d');
@@ -172,14 +172,13 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                 this.filter = filter;
 
                 //todo maybe leave the textures there...
-                this._units.forEach(u => gl.deleteTexture(u));
-                this._units = [];
+
             },
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
                 let index = 0;
-                tileBounds.width = Math.round(tileBounds.width);
-                tileBounds.height = Math.round(tileBounds.height);
+                // tileBounds.width = Math.round(tileBounds.width);
+                // tileBounds.height = Math.round(tileBounds.height);
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
                 this.canvas.width = image.width;
                 this.canvas.height = image.height;
@@ -189,6 +188,15 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                     this.debug.css({width: image.width, height: image.height});
                     this.debug.get(0).src = this.canvas.toDataURL();
                 }
+
+                // //does not help
+                // this._units.forEach(u => gl.deleteTexture(u));
+                // this._units = [];
+
+                gl.viewport(0, 0, tileBounds.width, tileBounds.height);
+                // gl.canvas.width = tileBounds.width;
+                //  gl.canvas.height = tileBounds.height;
+
 
                 for (let key of this.renderOrder) {
                     if (!visualisation.shaders.hasOwnProperty(key)) continue;
@@ -223,6 +231,7 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                         layer.order*tileBounds.height, tileBounds.width, tileBounds.height);
                     let pixels = new Uint8Array(read.data.buffer);
 
+
                     if (tileBounds.width != 256 || tileBounds.height != 256)  {
                         var canvas = document.createElement('canvas');
                         var ctx = canvas.getContext('2d');
@@ -232,8 +241,6 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                         this.debug2.css({width: tileBounds.width, height: tileBounds.height});
                         this.debug2.get(0).src = canvas.toDataURL();
                     }
-
-
 
                     // gl.texImage2D(gl.TEXTURE_2D,
                     //     0,
@@ -444,6 +451,8 @@ void main() {
         gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), pixelSize);
         gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
+        //this.context.setDimensions(tileDimension.width, tileDimension.height);
+
         // Upload textures
         this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, context.gl);
 
@@ -476,16 +485,18 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
                 this.filter = filter;
             },
 
-
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-
                 // use canvas to get the pixel data array of the image
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
-                this.canvas.width = image.width;
-                this.canvas.height = image.height;
-                this.canvasReader.drawImage(image, 0, 0);
-                let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
-                let pixels = new Uint8Array(imageData.data.buffer);
+                // this.canvas.width = image.width;
+                // this.canvas.height = image.height;
+                // this.canvasReader.drawImage(image, 0, 0);
+                // let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
+                // let pixels = new Uint8Array(imageData.data.buffer);
+
+                if (NUM_IMAGES !== this.imageCount) {
+                    console.warn("Incoming data does not contain necessary number of images!");
+                }
 
                 //Init Texture
                 gl.activeTexture(gl.TEXTURE0);
@@ -516,7 +527,7 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
                     0,
                     gl.RGBA,
                     gl.UNSIGNED_BYTE,
-                    pixels
+                    image
                 );
             }
         }
@@ -586,6 +597,8 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
                 }
             }
         }
+
+        this.texture.imageCount = urls.length;
 
         return {
             vertex_shader: this.getVertexShader(),
