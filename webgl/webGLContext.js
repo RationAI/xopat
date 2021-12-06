@@ -165,38 +165,31 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
             init: function() {
                 this.canvas = document.createElement('canvas');
                 this.canvasReader = this.canvas.getContext('2d');
+
+                this.canvasConverter = document.createElement('canvas');
+                this.canvasConverterReader = this.canvasConverter.getContext('2d');
             },
 
             toBuffers: function (gl, wrap, filter, visualisation) {
                 this.wrap = wrap;
                 this.filter = filter;
-
-                //todo maybe leave the textures there...
-
             },
 
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
                 let index = 0;
-                // tileBounds.width = Math.round(tileBounds.width);
-                // tileBounds.height = Math.round(tileBounds.height);
-                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
+                tileBounds.width = Math.round(tileBounds.width);
+                tileBounds.height = Math.round(tileBounds.height);
+
+                //we read from here
                 this.canvas.width = image.width;
                 this.canvas.height = image.height;
                 this.canvasReader.drawImage(image, 0, 0);
 
-                if (tileBounds.width != 256 || tileBounds.height != 256)  {
-                    this.debug.css({width: image.width, height: image.height});
-                    this.debug.get(0).src = this.canvas.toDataURL();
-                }
-
-                // //does not help
-                // this._units.forEach(u => gl.deleteTexture(u));
-                // this._units = [];
-
-                gl.viewport(0, 0, tileBounds.width, tileBounds.height);
-                // gl.canvas.width = tileBounds.width;
-                //  gl.canvas.height = tileBounds.height;
-
+                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
+                //Allowed texture size dimension only 256+ and power of two...
+                const IMAGE_SIZE = image.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(image.width)));
+                this.canvasConverter.width = IMAGE_SIZE;
+                this.canvasConverter.height = IMAGE_SIZE;
 
                 for (let key of this.renderOrder) {
                     if (!visualisation.shaders.hasOwnProperty(key)) continue;
@@ -226,20 +219,17 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.filter);
                     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
 
-                    //load data
-                    let read = this.canvasReader.getImageData(0,
-                        layer.order*tileBounds.height, tileBounds.width, tileBounds.height);
-                    let pixels = new Uint8Array(read.data.buffer);
 
+                    var pixels;
+                    if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
+                        this.canvasConverterReader.drawImage(this.canvas, 0, layer.order*tileBounds.height,
+                            tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
-                    if (tileBounds.width != 256 || tileBounds.height != 256)  {
-                        var canvas = document.createElement('canvas');
-                        var ctx = canvas.getContext('2d');
-                        canvas.width = read.width;
-                        canvas.height = read.height;
-                        ctx.putImageData(read, 0, 0);
-                        this.debug2.css({width: tileBounds.width, height: tileBounds.height});
-                        this.debug2.get(0).src = canvas.toDataURL();
+                        pixels = this.canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
+                    } else {
+                        //load data
+                        pixels = this.canvasReader.getImageData(0,
+                            layer.order*tileBounds.height, tileBounds.width, tileBounds.height);
                     }
 
                     // gl.texImage2D(gl.TEXTURE_2D,
@@ -254,16 +244,13 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                     gl.texImage2D(gl.TEXTURE_2D,
                         0,
                         gl.RGBA,
-                        tileBounds.width,
-                        tileBounds.height,
-                        0,
                         gl.RGBA,
                         gl.UNSIGNED_BYTE,
                         pixels);
-
                     index++;
                 }
             }
+
         }
         this.texture.init();
     }
@@ -475,8 +462,6 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
 
         this.texture = {
             init: function (gl) {
-                this.canvas = document.createElement('canvas');
-                this.canvasReader = this.canvas.getContext('2d');
                 this.textureId = gl.createTexture();
             },
 
@@ -488,11 +473,6 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
             toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
                 // use canvas to get the pixel data array of the image
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
-                // this.canvas.width = image.width;
-                // this.canvas.height = image.height;
-                // this.canvasReader.drawImage(image, 0, 0);
-                // let imageData = this.canvasReader.getImageData(0, 0, image.width, image.height);
-                // let pixels = new Uint8Array(imageData.data.buffer);
 
                 if (NUM_IMAGES !== this.imageCount) {
                     console.warn("Incoming data does not contain necessary number of images!");

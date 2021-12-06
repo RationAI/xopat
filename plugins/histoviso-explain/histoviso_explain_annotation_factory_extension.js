@@ -370,7 +370,7 @@ class HistovisoImageRenderer extends HistovisoImage {
         }
 
         let begin = currentVisualisation().data.lastIndexOf('/')+1;
-        let data = currentVisualisation().data.substr(begin, setup[0].data.length - begin - 4);
+        let data = currentVisualisation().data.substr(begin, currentVisualisation().data.length - begin - 4);
         data = {
             slide_name: data,
             coords: coords,

@@ -45,6 +45,8 @@ WebGLWrapper.VisualisationLayer = class {
         if (options.hasOwnProperty("channel")) {
             this.__channel = options.__channel;
         }
+        //todo allow also multichannel access?
+        //todo allow shader with different source...
         if (!["r", "g", "b", "a"].some(ch => this.__channel === ch, this)) {
             this.__channel = "r";
         }
