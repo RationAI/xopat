@@ -310,7 +310,7 @@ WebGLWrapper.VisualisationLayer = class {
      */
     sampleReferenced(textureCoords, otherDataIndex) {
         let refs = this.__visualisationLayer.dataReferences;
-        if (otherDataIndex >= refs.length || refs[otherDataIndex] === -1) {
+        if (otherDataIndex >= refs.length) {
             return 'vec4(0.0)';
         }
 

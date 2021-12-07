@@ -49,8 +49,7 @@ Then, based on the presence of `visualisation` the user is
     "params": {
         "experimentId": "ID_OF_THE_EXPERIMENT"
     }, 
-    "data": ["path/to/tissue/scan.tif"],
-    "shadersData" : ["path/to/annotation.tif", "path/to/probability.tif"],
+    "data": ["path/to/tissue/scan.tif", "path/to/annotation.tif", "path/to/probability.tif"],
     "background": [
         {
             "dataReference": 0,
@@ -74,7 +73,7 @@ Then, based on the presence of `visualisation` the user is
                     "name": "Advanced visualisation layer",
                     "type": "new_type", 
                     "visible": "1", 
-                    "dataReferences": [1, 0],
+                    "dataReferences": [2, 0],
                     "params": { }
                 },
                 "another_shader_id": {
@@ -98,11 +97,10 @@ this application. Although the module was written for this application, it was d
 re-used. The module is closely described in `./webgl/` folder.
 
 **External parameters** &emsp;
-We will use [R] for required and [O] for optional parameters. [OC] is optional under a condition.
+We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
     - [O]`experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
 - [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it)
-- [OC]`shadersData` - defines the data for shaders (probably removed in the future, present because we now download all data to shaders...), can be missing if data part is omitted
 - [R]`background` - defines what images compose the **image part**
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [0]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
@@ -120,8 +118,8 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
         - [R]`visible` -  `1` or `0`, whether by default the data layer is visible
         - [R]`dataReferences` - indices **array** to the `data` array
-            - shaders can then reference `shadersData` items using index to the `dataReferences` array
-            - e.g. if `shader_id_1` uses texture with index `1`, it will receive data to `"path/to/annotation.tif"`
+            - shaders can then reference `data` items using index to the `dataReferences` array
+            - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
 
 **Internal parameters** &emsp;

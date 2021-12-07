@@ -72,7 +72,7 @@ seaGL = new OpenSeadragonGL({
 
 //Set visualisations
 seaGL.addVisualisation(...setup.visualizations);
-seaGL.addData(...setup.shadersData);
+seaGL.addData(...setup.data);
 
 /*---------------------------------------------------------*/
 /*------------ JS utilities and enhancements --------------*/

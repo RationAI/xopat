@@ -53,8 +53,8 @@ class WebGLWrapper {
         /////////////////////////////////////////////////////////////////////////////////
 
         try {
-            //WebGLWrapper.GlContextFactory.init(this,  "1.0");
-            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+            WebGLWrapper.GlContextFactory.init(this,  "1.0");
+           // WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             return;
@@ -70,6 +70,7 @@ class WebGLWrapper {
 
         this._visualisations = [];
         this._dataSources = [];
+        this._origDataSources = [];
         this._programs = {};
         this._program = -1;
         this._initialized = false;
@@ -100,7 +101,7 @@ class WebGLWrapper {
      * @param {[string]} dataSources data sources identifiers (e.g. paths)
      */
     addData(...dataSources) {
-        this._dataSources.push(...dataSources);
+        this._origDataSources.push(...dataSources);
     }
 
     /**
@@ -173,7 +174,8 @@ class WebGLWrapper {
      * Get a list of image pyramids used to compose the current visualisation goal
      */
     getSources() {
-        return this._visualisations[this._program].dziExtendedUrl;
+        //return this._visualisations[this._program].dziExtendedUrl;
+        return this._dataSources;
     }
 
     /**
@@ -465,7 +467,7 @@ class WebGLWrapper {
         layer._renderContext = new ShaderFactoryClass(layer.params);
         layer.index = idx;
 
-        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.index}`);
+        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.index}`, this);
         layer._renderContext._setWebglContext(this.webGLImplementation);
         layer._renderContext._setResetCallback(this.resetCallback);
     }
@@ -522,6 +524,28 @@ class WebGLWrapper {
             }
         }
 
+
+        //todo for now just request all data, later decide in the context on what to really send
+        let usedIds = new Set();
+        for (let key in vis.shaders) {
+            if (vis.shaders.hasOwnProperty(key)) {
+                let layer = vis.shaders[key];
+                for (let id of layer.dataReferences) {
+                    usedIds.add(id);
+                }
+            }
+        }
+        usedIds = [...usedIds].sort();
+        this._dataSources = [];
+        this._dataSourceMapping = new Array(this._origDataSources.length).fill(-1);
+        for (let id of usedIds) {
+            this._dataSourceMapping[id] = this._dataSources.length;
+            this._dataSources.push(this._origDataSources[id]);
+            while (id > this._dataSourceMapping.length) {
+                this._dataSourceMapping.push(-1);
+            }
+        }
+
         this._buildVisualisation(vis.order, vis);
 
         function useShader(gl, program, data, type) {
@@ -545,8 +569,8 @@ class WebGLWrapper {
                 err("Unable to use this visualisation.",
                     "Linking of shader failed. For more information, see logs in the console.");
             }
+            console.log(vis._built["fragment_shader"]);
         }
-        console.log(vis._built["fragment_shader"]);
         this.visualisationReady(idx, vis);
     }
 }

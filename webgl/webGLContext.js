@@ -161,6 +161,7 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
             debug: $("#debug"),
             debug2: $("#debug2"),
             _units: [],
+            context: context,
 
             init: function() {
                 this.canvas = document.createElement('canvas');
@@ -193,7 +194,10 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                 this.canvasConverter.height = IMAGE_SIZE;
 
                 //just load all images and let shaders reference them...
-                for (let i = 0; i < NUM_IMAGES; i++) {
+                for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
+                    if (this.context._dataSourceMapping[i] === -1) {
+                        continue;
+                    }
                     if (index >= NUM_IMAGES) {
                         console.warn("The visualisation contains less data than layers. Skipping layers ...");
                         return;
@@ -205,7 +209,7 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                     }
                     let bindConst = `TEXTURE${index}`;
                     gl.activeTexture(gl[bindConst]);
-                    let location = gl.getUniformLocation(program, `vis_data_sampler_${index}`);
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
                     gl.uniform1i(location, index);
 
                     gl.bindTexture(gl.TEXTURE_2D, this._units[index]);
@@ -218,14 +222,14 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
 
                     var pixels;
                     if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                        this.canvasConverterReader.drawImage(this.canvas, 0, index*tileBounds.height,
+                        this.canvasConverterReader.drawImage(this.canvas, 0, this.context._dataSourceMapping[i]*tileBounds.height,
                             tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
                         pixels = this.canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
                     } else {
                         //load data
                         pixels = this.canvasReader.getImageData(0,
-                            index*tileBounds.height, tileBounds.width, tileBounds.height);
+                            this.context._dataSourceMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
                     }
 
                     gl.texImage2D(gl.TEXTURE_2D,
@@ -246,8 +250,8 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
         return "1.0";
     }
 
-    getTextureSamplingCode(order, textureCoords) {
-        return `texture2D(vis_data_sampler_${order}, ${textureCoords})`;
+    getTextureSamplingCode(dataIndex, textureCoords) {
+        return `texture2D(vis_data_sampler_${dataIndex}, ${textureCoords})`;
     }
 
     generateVisualisation(order, visualisation, withHtml) {
@@ -313,7 +317,8 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
 
         //since we download for now all data, we can just index the sources...
         this.texture.loadOrder = this.context.currentVisualisation();
-        for (let i = 0; i < this.context._dataSources.length; i++) {
+        for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
+            if (this.context._dataSourceMapping[i] === -1) continue;
             samplers += `uniform sampler2D vis_data_sampler_${i};`;
         }
 
@@ -578,24 +583,18 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
         //this.texture.imageCount = urls.length;
 
         this.texture.imageCount = this.context._dataSources.length;
-        let indicesMapping = [];
-        for (let i = 0; i < this.texture.imageCount; i++) {
-            //for now we download all data, so i'th image is at i'th position in the output, however,
-            //this mapping will change once we download only what we need
-            indicesMapping.push(i);
-        }
 
         return {
             vertex_shader: this.getVertexShader(),
-            fragment_shader: this.getFragmentShader(definition, execution, indicesMapping),
+            fragment_shader: this.getFragmentShader(definition, execution, this.context._dataSourceMapping),
             html: html,
             usableShaders: usableShaders,
             dataUrls: this.context._dataSources
         };
     }
 
-    getTextureSamplingCode(order, textureCoords) {
-        return `texture(vis_data_sampler_array, vec3(${textureCoords}, _vis_data_sampler_array_indices[${order}]))`;
+    getTextureSamplingCode(dataIndex, textureCoords) {
+        return `texture(vis_data_sampler_array, vec3(${textureCoords}, _vis_data_sampler_array_indices[${dataIndex}]))`;
     }
 
     getFragmentShader(definition, execution, indicesOfImages) {

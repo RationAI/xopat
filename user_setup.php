@@ -139,7 +139,6 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         params: {},
         shaders: {},
         data: ['<?php echo $image; ?>'],
-        shadersData: [],
         background: [{
             dataReference: 0,
             lossless: false
@@ -150,6 +149,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
             shaders: {}
         }]
     };
+    var bgImage = '<?php echo $image; ?>';
     var SHADERS = <?php echo $shaders_json; ?>;
     var PARAMS = <?php echo $inputs_json; ?>;
     var LAYERS = <?php echo json_encode(array_reverse($layer)); ?>;
@@ -188,11 +188,11 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
             let shaderObject = {
                 type: name,
                 visible: "1",
-                dataReferences: [user_settings.shadersData.length],
+                dataReferences: [user_settings.data.length],
                 params: {}
             };
             user_settings.visualizations[0].shaders[dataID] = shaderObject;
-            user_settings.shadersData.push(dataID);
+            user_settings.data.push(dataID);
         } else {
             let shaderObject = user_settings.visualizations[0].shaders[dataID];
             shaderObject.type = name;
@@ -257,12 +257,12 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         let fileReader = new FileReader();
         fileReader.onload = function(e) {
             user_settings.visualizations[0].shaders = {};
-            user_settings.shadersData = [];
+            user_settings.data = [bgImage];
             try {
                 let imported = JSON.parse(e.target.result);
                 let count = 0;
 
-                //todo why reversed order? but it works...
+                //reversed since LAYERS are created using array_reverse
                 for(let i = Math.min(LAYERS.length, imported.length)-1; i >= 0; i--) {
                     // if (user_settings.visualizations[0].shaders.hasOwnProperty(LAYERS[i])) {
                     //     user_settings.visualizations[0].shaders[LAYERS[i]].type = imported[i].type;
@@ -276,7 +276,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
                     }
                     if (!empty) {
                         user_settings.visualizations[0].shaders[LAYERS[i]] = imported[i];
-                        user_settings.shadersData.push(LAYERS[i]);
+                        user_settings.data.push(LAYERS[i]);
                     }
 
                     // }

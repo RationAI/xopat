@@ -80,10 +80,6 @@ if (!isset($parsedParams->shaderSources)) {
 
 $layerVisible = isset($parsedParams->visualizations);
 if ($layerVisible) {
-    //todo possible not necessary when we really download only necessary stuff...
-    propertyExists($parsedParams, "shadersData", "No data available.",
-        "JSON parametrization of the visualiser requires <i>shadersData</i> object: a list of data used in shaders. This field is missing.",
-        print_r($parsedParams, true));
 
     foreach ($parsedParams->visualizations as $visualisationTarget) {
         if (!isset($visualisationTarget->name)) {
@@ -951,10 +947,7 @@ if ($layerVisible) {
     /*---------------------------------------------------------*/
 
     seaGL.loadShaders(function() {
-        //activeData = seaGL.dataImageSources(); //todo reflect data change?
-        
-        //todo dirty hardcoded all sources for now:
-        activeData = seaGL.webGLWrapper._dataSources.join(',');
+        activeData = seaGL.dataImageSources(); 
         let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");
         toOpen.push(iipSrvUrlPOST + activeData + ".dzi");
         viewer.open(toOpen);
