@@ -118,7 +118,7 @@ class WebGLWrapper {
      * Rebuild visualisation and update scene
      * @param {array} order order in reverse, ID's of data as defined in setup JSON
      */
-    rebuildVisualisation(order, onFinished) {
+    rebuildVisualisation(order) {
         let vis = this._visualisations[this._program];
 
         if (order) {
@@ -132,7 +132,6 @@ class WebGLWrapper {
         }
         this._visualisationToProgram(vis, this._program);
         this._forceSwitchShader(this._program);
-        onFinished();
     }
 
     /**
