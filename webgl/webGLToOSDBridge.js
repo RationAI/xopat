@@ -74,10 +74,11 @@ OpenSeadragonGL.prototype = {
 
     /**
      * Change visualisation in use
-     * @param {integer} visIdx index of the visualisation 
+     * @param {number} visIdx index of the visualisation
      */
-    switchVisualisation: function(visIdx, onFinished) {
-        this.webGLWrapper.switchVisualisation(visIdx, onFinished);
+    switchVisualisation: function(visIdx) {
+        this.webGLWrapper.switchVisualisation(visIdx);
+        this.redraw();
     },
 
     /**
@@ -97,11 +98,12 @@ OpenSeadragonGL.prototype = {
      */
     reorder: function(order) {
         if (!Array.isArray(order)) {
-            this.webGLWrapper.rebuildVisualisation(null, this.redraw.bind(this));
+            this.webGLWrapper.rebuildVisualisation(null);
         } else {
             //webGLWrapper rendering is first in order: first drawn, last in order: last drawn (atop)
-            this.webGLWrapper.rebuildVisualisation(order.reverse(), this.redraw.bind(this));
+            this.webGLWrapper.rebuildVisualisation(order.reverse());
         }
+        this.redraw();
     },
 
     /**

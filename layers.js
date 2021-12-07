@@ -73,6 +73,7 @@ seaGL = new OpenSeadragonGL({
 //Set visualisations
 seaGL.addVisualisation(...setup.visualizations);
 seaGL.addData(...setup.data);
+seaGL.webGLWrapper.addCustomShaderSources(...setup.shaderSources);
 
 /*---------------------------------------------------------*/
 /*------------ JS utilities and enhancements --------------*/
@@ -126,7 +127,7 @@ Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foun
 // load desired shader upon selection
 $("#shaders").on("change", function () {
     activeVisualization = Number.parseInt(this.value);
-    seaGL.switchVisualisation(activeVisualization, seaGL.redraw);
+    seaGL.switchVisualisation(activeVisualization);
 });
 
 /**

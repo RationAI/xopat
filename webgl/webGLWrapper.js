@@ -25,9 +25,6 @@ class WebGLWrapper {
         //called once a visualisation is switched to (including first run)
         this.visualisationInUse = function(visualisation) { }
         this.visualisationChanged = function(oldVis, newVis) { }
-        //called when the module has longer time to process stuff, user can react by GUI update for example
-        this.notifyWorkStarted = function () { }
-        this.notifyWorkFinished = function () { }
         //called when exception (usually some missing function) occurs
         this.onError = function(error) {
             console.warn("An error has occurred:", error.error, error.desc);
@@ -53,8 +50,8 @@ class WebGLWrapper {
         /////////////////////////////////////////////////////////////////////////////////
 
         try {
-            WebGLWrapper.GlContextFactory.init(this,  "1.0");
-           // WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+            //WebGLWrapper.GlContextFactory.init(this,  "1.0");
+            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             return;
@@ -71,10 +68,9 @@ class WebGLWrapper {
         this._visualisations = [];
         this._dataSources = [];
         this._origDataSources = [];
+        this._customShaders = [];
         this._programs = {};
         this._program = -1;
-        this._initialized = false;
-        this._workingNotified = false;
     }
 
     /**
@@ -97,11 +93,17 @@ class WebGLWrapper {
     }
 
     /**
-     *
-     * @param {[string]} dataSources data sources identifiers (e.g. paths)
+     * @param {string} dataSources data sources identifiers (e.g. paths)
      */
     addData(...dataSources) {
         this._origDataSources.push(...dataSources);
+    }
+
+    /**
+     * @param {object} shaderSources custom shaders
+     */
+    addCustomShaderSources(...shaderSources) {
+        this._customShaders.push(...shaderSources);
     }
 
     /**
@@ -128,11 +130,9 @@ class WebGLWrapper {
             this._detachShader(program, "VERTEX_SHADER");
             this._detachShader(program, "FRAGMENT_SHADER");
         }
-        this._visualisationToProgram(vis, this._program).then(
-           this._forceSwitchShader.bind(this, this._program)
-        ).then(
-            onFinished
-        );
+        this._visualisationToProgram(vis, this._program);
+        this._forceSwitchShader(this._program);
+        onFinished();
     }
 
     /**
@@ -149,12 +149,10 @@ class WebGLWrapper {
      * has been set with second setShaders(...) call, pass i=1.
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
-    switchVisualisation(i, onFinished) {
+    switchVisualisation(i) {
         if (this._program === i) return;
         this.visualisationChanged(this._visualisations[this._program], this._visualisations[i]);
-        this._forceSwitchShader(i).then(
-            onFinished
-        );
+        this._forceSwitchShader(i);
     }
 
     /**
@@ -239,7 +237,10 @@ class WebGLWrapper {
         this._prepared = true;
         if (this._program >= this._visualisations.length) this._program = 0;
 
-        this._visualisationToProgram(this._visualisations[visIndex], visIndex).then(
+        this._downloadRequiredShaderFactories(this._customShaders).
+        then(
+            this._visualisationToProgram.bind(this, this._visualisations[this._program], this._program)).
+        then(
             onPrepared
         );
     }
@@ -264,9 +265,8 @@ class WebGLWrapper {
         this.setDimensions(width, height);
         this.running = true;
 
-        this._forceSwitchShader(null).then(
-            this.ready.bind(this)
-        );
+        this._forceSwitchShader(null);
+        this.ready();
     }
 
     prepareAndInit() {
@@ -297,7 +297,7 @@ class WebGLWrapper {
      * invoked (e.g. some uniform variables changed)
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
-    async _forceSwitchShader(i) {
+    _forceSwitchShader(i) {
         if (!i) i = this._program;
 
         if (i >= this._visualisations.length) {
@@ -307,7 +307,7 @@ class WebGLWrapper {
 
         let target = this._visualisations[i];
         if (!this._programs.hasOwnProperty(i)) {
-            await this._visualisationToProgram(target, i);
+            this._visualisationToProgram(target, i);
         }
 
         this._program = i;
@@ -421,28 +421,18 @@ class WebGLWrapper {
         });
     }
 
-    async _downloadRequiredShaderFactories(vis) {
-        if (vis.hasOwnProperty("shaderSources")) {
-            for (let source of vis["shaderSources"]) {
-                let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(source["typedef"]);
-                if (!ShaderFactoryClass) {
-                    if (!this._workingNotified) {
-                        this._workingNotified = true;
-                        this.notifyWorkStarted();
-                    }
-                    await this._downloadAndRegisterShader(source["url"], source["headers"]);
-                } else {
-                    console.warn("Shader source " + source["typedef"] + " already defined!")
-                }
+    async _downloadRequiredShaderFactories(shaderSources) {
+        for (let source of shaderSources) {
+            let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(source["typedef"]);
+            if (!ShaderFactoryClass) {
+                await this._downloadAndRegisterShader(source["url"], source["headers"]);
+            } else {
+                console.warn("Shader source " + source["typedef"] + " already defined!")
             }
-        }
-        if (this._workingNotified) {
-            this._workingNotified = false;
-            this.notifyWorkFinished();
         }
     }
 
-    async _visualisationToProgram(vis, idx) {
+    _visualisationToProgram(vis, idx) {
         if (!vis.hasOwnProperty("_built")) {
             vis._built = {};
         }
@@ -452,7 +442,6 @@ class WebGLWrapper {
             return;
         }
 
-        await this._downloadRequiredShaderFactories(vis);
         this._processVisualisation(vis, idx);
         return idx;
     }
