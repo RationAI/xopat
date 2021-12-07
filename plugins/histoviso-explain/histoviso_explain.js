@@ -227,9 +227,8 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
     }
 
     _init(setupData) {
-        if (!PLUGINS.dataLayer) {
-            throw "Histoviso interactive explainability plugin needs TiledImage class instance of the data visualisation layer in order to work.";
-        }
+        //todo add annotation objects at runtime to avoid interaction in failure
+
         //Requires Annotations plugin
         let annotationPlugin = PLUGINS.each[PLUGINS.each[this.id].requires];
         if (!annotationPlugin || !annotationPlugin.loaded) {

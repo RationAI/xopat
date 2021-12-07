@@ -1,4 +1,4 @@
-# Dynamic shader building
+# Dynamic shader building  [NEEDS UPDATES]
 
 The visualisation setup is used to instantiate to JavaScript shader layer classes.
 ````JSON
@@ -308,29 +308,27 @@ We recommend to extend each custom variable and function name with `$uniqueId`, 
 
 
 ### More advanced stuff: using multiple data sources at once
-##### **NOTE**: this is an idea of what can be further introduced, it is not implemented (yet)!
-
 One might want to combine multiple data into one visualisation (shader) part. To do so:
-- Check the shader source code what indices the shader accesses (the shader might read at index+1 or index-1 or any other value, dependes on the developer!)
-    - in case you are wriging the shader yourself: use `$texture($texCoordsString, $dataIndex)` `PHP` function to access arbitrary data, e.g. use `$dataIndex=$index+$i` where `$i` is offset, `$index` is current index: this way we can say 'use data of the following layers: although object, the `shaders` field will keep the order of definition, see the example below'
-- Construct the visualisation so that the order of rendering is such that the additional data is at the index position where the shader part accesses it
-    - `type` should be `"none"` because we won't render this data, of course you can use any other type to render it as well (e.g. use it twice)
-    - `target` must refer to any other `shaders` child that does not have its type `"none"`
-Following the example above:
+- Define all data ID's you access in the shader setup using `dataReference` array
 ```json
      "shaders": {
          "data_source_main": {
              "name": "Shader that uses multiple data",
              "type": "sophisticated_shader", 
              "visible": "1", 
+             "dataReference": ["data_source_additional_1"],
              "params": { 
                   //your params
              }
          },
          "data_source_additional_1": {
-             "type": "none", //tell the visualisation not to touch this data
-             "target": "data_source_main" //bind this to the 'data_source_main' visualisation style
-             //as an exception, you can ommit other parameters here
+             "type": "none", //do not draw this data inside this shader
          }
      }
 ```
+
+- Sample the shader in the class with `this.sampleReferenced(..)` or `this.sampleChannelReferenced(...)`
+    - arguments are: `vec2(--texture coordinates--)` string representing sampling coords and index to the `dataReference` array
+- Allowed are any combinations you like
+    - sampling any number of dataSources
+    - adding any number

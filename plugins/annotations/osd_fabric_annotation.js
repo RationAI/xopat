@@ -21,6 +21,7 @@ OSDAnnotations = function (incoming) {
 	});
 	this.mode = this.Modes.AUTO;
 	this.disabledInteraction = false;
+	this.autoSelectionEnabled = PLUGINS.hasLayers;
 
 	//Register used annotation object factories
 	AnnotationObjectFactory.register(Rect, Ellipse, Polygon);
@@ -71,7 +72,7 @@ OSDAnnotations.prototype = {
 
 		/* OSD values used by annotations */
 		this.overlay = PLUGINS.osd.fabricjsOverlay({
-			scale: PLUGINS.imageLayer.source.Image.Size.Width,
+			scale: PLUGINS.imageLayer().source.Image.Size.Width,
 			fireRightClick: true
 		});
 
@@ -117,8 +118,6 @@ OSDAnnotations.prototype = {
 
 		this.cursor.init();
 		this.opacity = $("#annotations-opacity");
-		this.osdLayer = PLUGINS.imageLayer;
-
 
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", function(event) {
@@ -133,7 +132,7 @@ OSDAnnotations.prototype = {
 		*****************************************************************************************************************/
 
 		let screenToPixelCoords = function(x, y) {
-			return this.osdLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+			return PLUGINS.imageLayer().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 		}.bind(this);
 
 		function handleRightClickUp(event) {
@@ -365,6 +364,9 @@ OSDAnnotations.prototype = {
 	*****************************************************************************************************************/
 
 	initHTML: function() {
+		let autoSelectionControls = this.autoSelectionEnabled ? this._automaticCreationStrategy.sensitivityControls() : "";
+		autoSelectionControls += "<br>";
+
 		PLUGINS.appendToMainMenuExtended("Annotations", `
 		<span class="material-icons" onclick="${this.id}.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
 		<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
@@ -388,8 +390,7 @@ OSDAnnotations.prototype = {
 					<br>
 					${this.presets.presetHiddenControls()}
 					<br>
-					${this._automaticCreationStrategy.sensitivityControls()}
-					<br>
+					${autoSelectionControls}
 					${this.modifyTool.brushSizeControls()}				
 					</div>`, 
 					"annotations-panel", this.id);
@@ -985,7 +986,9 @@ class StateAuto extends  AnnotationState {
 
 	_finish(event, isLeftClick, updater) {
 		let delta = Date.now() - this.context.cursor.mouseTime;
-		if (delta > 100 || !updater) return; // just navigate if click longer than 100ms
+
+		// just navigate if click longer than 100ms or other conds not met
+		if (delta > 100 || !updater || !this.context.autoSelectionEnabled) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {

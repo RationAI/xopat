@@ -136,15 +136,23 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
 <script type="text/javascript">
 
     var user_settings = {
-        name: "Custom Visualisation",
         params: {},
-        data: '<?php echo $image; ?>',
-        shaders: {}
+        shaders: {},
+        data: ['<?php echo $image; ?>'],
+        shadersData: [],
+        background: [{
+            dataReference: 0,
+            lossless: false
+        }],
+        shaderSources: [],
+        visualizations: [{
+            name: "Custom Visualization",
+            shaders: {}
+        }]
     };
     var SHADERS = <?php echo $shaders_json; ?>;
     var PARAMS = <?php echo $inputs_json; ?>;
     var LAYERS = <?php echo json_encode(array_reverse($layer)); ?>;
-    var shaderObject = null;
     var setShader = null;
 
     function addShader(self, dataId) {
@@ -176,15 +184,17 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
             child.classList.remove("color-border-warning");
         });
 
-        if (!user_settings.shaders[dataID]) {
-            shaderObject = {
+        if (!user_settings.visualizations[0].shaders[dataID]) {
+            let shaderObject = {
                 type: name,
                 visible: "1",
+                dataReferences: [user_settings.shadersData.length],
                 params: {}
             };
-            user_settings.shaders[dataID] = shaderObject;
+            user_settings.visualizations[0].shaders[dataID] = shaderObject;
+            user_settings.shadersData.push(dataID);
         } else {
-            shaderObject = user_settings.shaders[dataID];
+            let shaderObject = user_settings.visualizations[0].shaders[dataID];
             shaderObject.type = name;
             shaderObject.params = {};
         }
@@ -204,7 +214,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     }
 
     function setValue(self, option, type, dataID) {
-        let shader = user_settings.shaders[dataID];
+        let shader = user_settings.visualizations[0].shaders[dataID];
         if (type === "bool" || type === "neg_bool") {
             shader.params[option] = (self.checked == true); //type coercion
         } else {
@@ -221,8 +231,8 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         let count = 0;
         let exported = [];
         for (let idx in LAYERS) {
-            if (user_settings.shaders.hasOwnProperty(LAYERS[idx])) {
-                exported.push(user_settings.shaders[LAYERS[idx]]);
+            if (user_settings.visualizations[0].shaders.hasOwnProperty(LAYERS[idx])) {
+                exported.push(user_settings.visualizations[0].shaders[LAYERS[idx]]);
                 count++;
             } else {
                 exported.push({});
@@ -246,17 +256,29 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         if (!file) return;
         let fileReader = new FileReader();
         fileReader.onload = function(e) {
-
+            user_settings.visualizations[0].shaders = {};
+            user_settings.shadersData = [];
             try {
                 let imported = JSON.parse(e.target.result);
                 let count = 0;
-                for(let i = 0; i < Math.min(LAYERS.length, imported.length); i++) {
-                    // if (user_settings.shaders.hasOwnProperty(LAYERS[i])) {
-                    //     user_settings.shaders[LAYERS[i]].type = imported[i].type;
-                    //     user_settings.shaders[LAYERS[i]].params = imported[i].params;
-                    //     user_settings.shaders[LAYERS[i]].visible = 1;
+
+                //todo why reversed order? but it works...
+                for(let i = Math.min(LAYERS.length, imported.length)-1; i >= 0; i--) {
+                    // if (user_settings.visualizations[0].shaders.hasOwnProperty(LAYERS[i])) {
+                    //     user_settings.visualizations[0].shaders[LAYERS[i]].type = imported[i].type;
+                    //     user_settings.visualizations[0].shaders[LAYERS[i]].params = imported[i].params;
+                    //     user_settings.visualizations[0].shaders[LAYERS[i]].visible = 1;
                     // } else {
-                    user_settings.shaders[LAYERS[i]] = imported[i];
+                    let empty = true;
+                    for (let key in imported[i]) {
+                        empty = false;
+                        break;
+                    }
+                    if (!empty) {
+                        user_settings.visualizations[0].shaders[LAYERS[i]] = imported[i];
+                        user_settings.shadersData.push(LAYERS[i]);
+                    }
+
                     // }
                     count++;
                 }
@@ -289,9 +311,8 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         user_settings.params["experimentId"] = getExperimentId();
 
         var action = $("#request").attr('action');
-        var visSetup = JSON.stringify([user_settings]);
+        var visSetup = JSON.stringify(user_settings);
 
-        //todo missing plugins? etc. use only one JS file with form creation to unify export
         var doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
@@ -323,16 +344,16 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     $('#request').submit(function(evt) {
         user_settings.params["experimentId"] = getExperimentId();
 
-        let shaders = user_settings.shaders;
+        let shaders = user_settings.visualizations[0].shaders;
 
         //reorder to reflect the ordering in the GUI
-        user_settings.shaders = {};
+        user_settings.visualizations[0].shaders = {};
         for (let idx in LAYERS) {
             if (shaders.hasOwnProperty(LAYERS[idx])) {
-                user_settings.shaders[LAYERS[idx]] = shaders[LAYERS[idx]];
+                user_settings.visualizations[0].shaders[LAYERS[idx]] = shaders[LAYERS[idx]];
             }
         }
-        document.getElementById("visualisation").value = JSON.stringify([user_settings]);
+        document.getElementById("visualisation").value = JSON.stringify(user_settings);
     });
 
 </script>

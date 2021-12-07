@@ -1,4 +1,4 @@
-# WebGL in OpenSeadragon
+# WebGL in OpenSeadragon [NEEDS UPDATES]
 Performs the visualisation rendering. It is a custom plugin to OpenSeadragon that takes a JSON describing the visualisation and handles the rendering using WebGL 2.0 or 1.0 (fallback). It is highly customizable and allows for multiple contexts in use.
 In fact, you can even use this module (except the bridge class obviously) for any suitable purpose, without employing the OpenSeadragon library.
 
@@ -85,7 +85,7 @@ These parameters will be given to WebGLWrapper and can customize the behaviour. 
     - TODO: create a class for visualisation object?
 - `visualisationInUse()`: a function called when a certain visualisation is going to be used (e.g. user switches to a different vis goal)
     - params: `visualisation` object holding all the visualisation data
-- `onFatalError()`: a function called when a certain visualisation goal is unable to run (e.g. shader compilation fails)
+- `onFatalError()`: a function called when fatal error occurs (unable to continue)
     - params: `visualisation` object holding all the visualisation data; this object has `error` and `desc` member variables (and can miss other normaly pressent ones)
-- `onError()`: a function called when an unknown error occurs, but the visualisation is somewhat able to cope with it
+- `onError()`: a function called when an unknown error occurs, but the visualisation is somewhat able to cope with it (e.g. by switching to a different goal if available)
     - params: `error` object that has `message`  member variable

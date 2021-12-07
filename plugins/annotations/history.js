@@ -177,7 +177,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
         cy = Number.parseFloat(cy);
         if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
 
-        let target = PLUGINS.imageLayer.imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+        let target = PLUGINS.imageLayer().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
         if (objectId !== null) {
             let targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {

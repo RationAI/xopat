@@ -51,8 +51,9 @@ FreeFormTool.prototype = {
     },
 
     setRadius: function (radius) {
-        let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
+        let imageTileSource = PLUGINS.imageLayer();
+        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
         this.radius = Math.round(Math.abs(pointB.x - pointA.x));
     },
@@ -196,9 +197,10 @@ FreeFormTool.prototype = {
     },
 
     getScreenToolRadius: function () {
-        return PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
+        let imageTileSource = PLUGINS.imageLayer();
+        return imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
             .distanceTo(
-                PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
+                imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
             );
     },
 

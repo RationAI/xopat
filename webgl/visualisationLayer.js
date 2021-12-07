@@ -45,8 +45,7 @@ WebGLWrapper.VisualisationLayer = class {
         if (options.hasOwnProperty("channel")) {
             this.__channel = options.__channel;
         }
-        //todo allow also multichannel access?
-        //todo allow shader with different source...
+
         if (!["r", "g", "b", "a"].some(ch => this.__channel === ch, this)) {
             this.__channel = "r";
         }
@@ -284,21 +283,58 @@ WebGLWrapper.VisualisationLayer = class {
     }
 
     /**
-     * Return code for appropriate sampling of the texture bound to this shader
+     * Alias for sampleReferenced(textureCoords, 0)
+     * @param {string} textureCoords valid GLSL vec2 object as string
      * @return {string} code for appropriate texture sampling within the shader
      */
     sample(textureCoords) {
-        return this.webglContext.getTextureSamplingCode(this.__uidx, textureCoords);
+        return this.sampleReferenced(textureCoords, 0);
     }
 
     /**
-     * Sample only one channel (which is defined in options)
-     * @param textureCoords
+     * Alias for sampleChannelReferenced(textureCoords, 0)
+     * @param {string} textureCoords valid GLSL vec2 object as string
      * @return {string} code for appropriate texture sampling within the shader,
      *                  where only one channel is extracted
      */
     sampleChannel(textureCoords) {
-        return `${this.sample(textureCoords)}.${this.__channel}`;
+        return this.sampleChannelReferenced(textureCoords, 0);
+    }
+
+    /**
+     * Return code for appropriate sampling of the texture bound to this shader
+     * @param {string} textureCoords valid GLSL vec2 object as string
+     * @param {number} otherDataIndex index of the data in self.dataReference JSON array
+     * @return {string} code for appropriate texture sampling within the shader or vec4(.0) if
+     *                  the reference is not valid
+     */
+    sampleReferenced(textureCoords, otherDataIndex) {
+        let refs = this.__visualisationLayer.dataReferences;
+        if (otherDataIndex >= refs.length || refs[otherDataIndex] === -1) {
+            return 'vec4(0.0)';
+        }
+
+        return this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords);
+    }
+
+    /**
+     * Sample only one channel (which is defined in options)
+     * @param {string} textureCoords valid GLSL vec2 object as string
+     * @param {number} otherDataIndex index of the data in self.dataReference JSON array
+     * @return {string} code for appropriate texture sampling within the shader,
+     *                  where only one channel is extracted or float with zero value if
+     *                  the reference is not valid
+     */
+    sampleChannelReferenced(textureCoords, otherDataIndex) {
+        return `${this.sampleReferenced(textureCoords, otherDataIndex)}.${this.__channel}`;
+    }
+
+    /**
+     * For error detection, how many textures are available
+     * @return {number} number of textures available
+     */
+    dataSourcesCount() {
+        return this.__visualisationLayer.dataReferences.length;
     }
 
     /**
@@ -327,9 +363,8 @@ WebGLWrapper.VisualisationLayer = class {
     ////////// PRIVATE /////////////////
     ////////////////////////////////////
 
-    _setContextVisualisationLayer(visualisationLayer, uniqueId, uniqueIndex) {
+    _setContextVisualisationLayer(visualisationLayer, uniqueId) {
         this.uid = uniqueId;
-        this.__uidx = uniqueIndex;
         this.__visualisationLayer = visualisationLayer;
     }
 

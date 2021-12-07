@@ -340,8 +340,6 @@ class HistovisoImageRenderer extends HistovisoImage {
             return;
         }
 
-        var pointLeftTop = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x, imageBounds.y));
-        var pointRightBottom = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(imageBounds.x + imageBounds.width, imageBounds.y + imageBounds.height));
         const _this = this;
 
         let coords = {

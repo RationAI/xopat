@@ -23,6 +23,9 @@
 <br><br>
 <?php
 
+//TODO implement
+die("DEVELOPER SCRIPT HAS NOT BEEN REWRITTEN TO REFLECT NEW API.");
+
 include_once("config.php");
 include_once("dynamic_shaders/defined.php");
 

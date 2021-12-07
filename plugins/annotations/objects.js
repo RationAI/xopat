@@ -1290,8 +1290,9 @@ class Polygon extends AnnotationObjectFactory {
      */
 
     getRelativePixelDiffDistSquared(relativeDiff) {
-        let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
+        let imageTileSource = PLUGINS.imageLayer();
+        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
         return Math.pow(pointB.x - pointA.x, 2) + Math.pow(pointB.y - pointA.y, 2);
     }
 
@@ -1347,8 +1348,8 @@ class AutoObjectCreationStrategy {
             let key = "";
             for (key in visualisation.shaders) {
                 layer = visualisation.shaders[key];
-                if (layer.order === _this._readingIndex) {
-                    index = layer.order;
+                if (layer.index === _this._readingIndex) {
+                    index = layer.index;
                     _this._readingKey = key;
                     html += `<option value='${key}' selected>${layer.name}</option>`;
                 } else {
@@ -1357,7 +1358,7 @@ class AutoObjectCreationStrategy {
             }
 
             if (index < 0) {
-                _this._readingIndex = layer.order;
+                _this._readingIndex = layer.index;
                 _this._readingKey = key;
                 html = "<option selected " + html.substr(8);
             }
@@ -1370,7 +1371,7 @@ class AutoObjectCreationStrategy {
 annotations.">Target data layer:</span><select style="width:50%" title="What layer is selected for the data." 
 type="number" id="sensitivity-auto-outline" class="form-control" onchange="
 let layer = PLUGINS.seaGL.currentVisualisation().shaders[$(this).val()];
-${this._globalSelf}._readingIndex = layer.order;
+${this._globalSelf}._readingIndex = layer.index;
 ${this._globalSelf}._readingKey = $(this).val();"></select>`;
     }
 
@@ -1463,8 +1464,9 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
 
 
     pixelSize() {
-        let pointA = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(1, 0));
+        let imageTileSource = PLUGINS.imageLayer();
+        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(1, 0));
         return Math.round(Math.abs(pointB.x - pointA.x));
     }
 
@@ -1685,11 +1687,11 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
 
 
     toGlobalPointXY (x, y) {
-		return PLUGINS.imageLayer.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return PLUGINS.imageLayer().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	toGlobalPoint (point) {
-		return PLUGINS.imageLayer.windowToImageCoordinates(point);
+		return PLUGINS.imageLayer().windowToImageCoordinates(point);
 	}
 
 	/**
@@ -1698,7 +1700,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
      */
 	changeTile(eventPosition) {
 		let viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		let tiles = PLUGINS.dataLayer.lastDrawn;
+		let tiles = PLUGINS.dataLayer().lastDrawn;
 		for (let i = 0; i < tiles.length; i++) {
 			if (tiles[i].bounds.containsPoint(viewportPos)) {
 				this._currentTile = tiles[i];

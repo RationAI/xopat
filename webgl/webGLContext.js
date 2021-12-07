@@ -89,7 +89,7 @@ WebGLWrapper.WebGLImplementation = class {
 
     /**
      * Get GLSL texture sampling code
-     * @param {string} order order number in the shader, available in vis.shaders[id].order
+     * @param {string} order order number in the shader, available in vis.shaders[id].index
      * @param {string} textureCoords string representing GLSL code of valid texture coordinates
      *  e.g. 'tex_coords' or 'vec2(1.0, 0.0)'
      * @return {string} GLSL code that is correct in texture sampling wrt. WebGL version used
@@ -187,19 +187,15 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
 
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
                 //Allowed texture size dimension only 256+ and power of two...
+                //TODO it worked for arbitrary size until we begun with image arrays... is it necessary?
                 const IMAGE_SIZE = image.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(image.width)));
                 this.canvasConverter.width = IMAGE_SIZE;
                 this.canvasConverter.height = IMAGE_SIZE;
 
-                for (let key of this.renderOrder) {
-                    if (!visualisation.shaders.hasOwnProperty(key)) continue;
-
-                    let layer = visualisation.shaders[key];
-                    if (!layer.rendering) continue;
-
+                //just load all images and let shaders reference them...
+                for (let i = 0; i < NUM_IMAGES; i++) {
                     if (index >= NUM_IMAGES) {
-                        console.warn("The visualisation contains less data than layers. Skipping current " +
-                            "layer and all the following ones.", layer);
+                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
                         return;
                     }
 
@@ -209,7 +205,7 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                     }
                     let bindConst = `TEXTURE${index}`;
                     gl.activeTexture(gl[bindConst]);
-                    let location = gl.getUniformLocation(program, `vis_data_sampler_${layer.order}`);
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${index}`);
                     gl.uniform1i(location, index);
 
                     gl.bindTexture(gl.TEXTURE_2D, this._units[index]);
@@ -222,25 +218,16 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
 
                     var pixels;
                     if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                        this.canvasConverterReader.drawImage(this.canvas, 0, layer.order*tileBounds.height,
+                        this.canvasConverterReader.drawImage(this.canvas, 0, index*tileBounds.height,
                             tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
                         pixels = this.canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
                     } else {
                         //load data
                         pixels = this.canvasReader.getImageData(0,
-                            layer.order*tileBounds.height, tileBounds.width, tileBounds.height);
+                            index*tileBounds.height, tileBounds.width, tileBounds.height);
                     }
 
-                    // gl.texImage2D(gl.TEXTURE_2D,
-                    //     0,
-                    //     gl.RED,
-                    //     tileBounds.width,
-                    //     tileBounds.height,
-                    //     0,
-                    //     gl.RED,
-                    //     gl.UNSIGNED_BYTE,
-                    //     pixels);
                     gl.texImage2D(gl.TEXTURE_2D,
                         0,
                         gl.RGBA,
@@ -281,10 +268,9 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
                 let visible = false;
                 usableShaders++;
 
-                if (layer.visible == 1 && simultaneouslyVisible < _this.max_textures) {
+                if (layer.visible == 1 && simultaneouslyVisible < _this.max_textures && layer.hasOwnProperty("_renderContext") && layer.hasOwnProperty("index")) {
                     definition += layer._renderContext.getFragmentShaderDefinition();
                     execution += layer._renderContext.getFragmentShaderExecution();
-                    samplers += `uniform sampler2D vis_data_sampler_${layer["order"]};`;
                     visible = true;
                     layer.rendering = true;
                     simultaneouslyVisible++;
@@ -301,34 +287,42 @@ WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
         });
 
         //must preserve the definition order
-        let urls = [];
-        for (let key in visualisation.shaders) {
-            if (visualisation.shaders.hasOwnProperty(key)) {
-                let layer = visualisation.shaders[key];
+        // let urls = [];
+        // for (let key in visualisation.shaders) {
+        //     if (visualisation.shaders.hasOwnProperty(key)) {
+        //         let layer = visualisation.shaders[key];
+        //
+        //         //TODO implement?
+        //         // if (layer.hasOwnProperty("target")) {
+        //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+        //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
+        //         //     } else if (visualisation.shaders[target].rendering) {
+        //         //         urls.push(key);
+        //         //     }
+        //         // } else
+        //
+        //         //todo once we start to reflect only decessary data to donwload, not all...
+        //         // if (layer.rendering) {
+        //         //     urls.push(key);
+        //         // }
+        //         urls.push(key);
+        //     }
+        // }
+        // this.texture.renderOrder = urls;
 
-                //TODO implement?
-                // if (layer.hasOwnProperty("target")) {
-                //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
-                //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
-                //     } else if (visualisation.shaders[target].rendering) {
-                //         urls.push(key);
-                //     }
-                // } else
 
-                if (layer.rendering) {
-                    urls.push(key);
-                }
-            }
+        //since we download for now all data, we can just index the sources...
+        this.texture.loadOrder = this.context.currentVisualisation();
+        for (let i = 0; i < this.context._dataSources.length; i++) {
+            samplers += `uniform sampler2D vis_data_sampler_${i};`;
         }
-
-        this.texture.renderOrder = urls;
 
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(samplers, definition, execution),
             html: html,
             usableShaders: usableShaders,
-            dataUrls: urls
+            dataUrls: this.context._dataSources
         };
     }
 
@@ -474,8 +468,8 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
                 // use canvas to get the pixel data array of the image
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
 
-                if (NUM_IMAGES !== this.imageCount) {
-                    console.warn("Incoming data does not contain necessary number of images!");
+                if (NUM_IMAGES < this.imageCount) {
+                     console.warn("Incoming data does not contain necessary number of images!");
                 }
 
                 //Init Texture
@@ -531,7 +525,7 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name, layer.error, dataId, false, layer, false) + html;
                 console.warn(layer.error, layer["desc"]);
 
-            } else if (layer._renderContext) {
+            } else if (layer._renderContext && layer.hasOwnProperty("index")) {
                 let visible = false;
                 usableShaders++;
 
@@ -555,37 +549,48 @@ WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
         });
 
         //must preserve the definition order
-        let urls = [], indicesMapping = [];
-        for (let key in visualisation.shaders) {
-            if (visualisation.shaders.hasOwnProperty(key)) {
-                let layer = visualisation.shaders[key];
+        // let urls = [], indicesMapping = new Array(usableShaders).fill(0);
+        // for (let key in visualisation.shaders) {
+        //     if (visualisation.shaders.hasOwnProperty(key)) {
+        //         let layer = visualisation.shaders[key];
+        //
+        //         //TODO implement?
+        //         // if (layer.hasOwnProperty("target")) {
+        //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+        //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
+        //         //     } else if (visualisation.shaders[target].rendering) {
+        //         //         urls.push(key);
+        //         //     }
+        //         // } else
+        //
+        //         if (!layer.hasOwnProperty("order")) continue;
+        //
+        //         //todo enable once we really DOWNLOAD only necessary stuff, otherwise this mapping is invalid
+        //         // if (layer.rendering) {
+        //         //     urls.push(key);
+        //         //     indicesMapping[layer.index] = urls.length-1;
+        //         // }
+        //
+        //         urls.push(key);
+        //         indicesMapping[layer.index] = urls.length-1;
+        //     }
+        // }
+        //this.texture.imageCount = urls.length;
 
-                //TODO implement?
-                // if (layer.hasOwnProperty("target")) {
-                //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
-                //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
-                //     } else if (visualisation.shaders[target].rendering) {
-                //         urls.push(key);
-                //     }
-                // } else
-
-                if (layer.rendering) {
-                    urls.push(key);
-                    indicesMapping.push(urls.length-1);
-                } else {
-                    indicesMapping.push(0);
-                }
-            }
+        this.texture.imageCount = this.context._dataSources.length;
+        let indicesMapping = [];
+        for (let i = 0; i < this.texture.imageCount; i++) {
+            //for now we download all data, so i'th image is at i'th position in the output, however,
+            //this mapping will change once we download only what we need
+            indicesMapping.push(i);
         }
-
-        this.texture.imageCount = urls.length;
 
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(definition, execution, indicesMapping),
             html: html,
             usableShaders: usableShaders,
-            dataUrls: urls
+            dataUrls: this.context._dataSources
         };
     }
 

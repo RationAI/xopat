@@ -30,11 +30,11 @@ class WebGLWrapper {
         this.notifyWorkFinished = function () { }
         //called when exception (usually some missing function) occurs
         this.onError = function(error) {
-            console.warn("An error has occurred:", error);
+            console.warn("An error has occurred:", error.error, error.desc);
         }
         //called when key functionality fails
-        this.onFatalError = function (vis) {
-            console.error(vis["error"], vis["desc"]);
+        this.onFatalError = function (error) {
+            console.error(error["error"], error["desc"]);
         }
 
         /////////////////////////////////////////////////////////////////////////////////
@@ -53,8 +53,8 @@ class WebGLWrapper {
         /////////////////////////////////////////////////////////////////////////////////
 
         try {
-            WebGLWrapper.GlContextFactory.init(this, "1.0");
-            //WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+            //WebGLWrapper.GlContextFactory.init(this,  "1.0");
+            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             return;
@@ -69,6 +69,7 @@ class WebGLWrapper {
         };
 
         this._visualisations = [];
+        this._dataSources = [];
         this._programs = {};
         this._program = -1;
         this._initialized = false;
@@ -92,6 +93,14 @@ class WebGLWrapper {
             this._visualisations.push(vis);
         }
         return true;
+    }
+
+    /**
+     *
+     * @param {[string]} dataSources data sources identifiers (e.g. paths)
+     */
+    addData(...dataSources) {
+        this._dataSources.push(...dataSources);
     }
 
     /**
@@ -123,6 +132,14 @@ class WebGLWrapper {
         ).then(
             onFinished
         );
+    }
+
+    /**
+     * Get currently used visualisation
+     * @return {object} current visualisation
+     */
+    currentVisualisation() {
+        return this._visualisations[this._program];
     }
 
     /**
@@ -182,11 +199,14 @@ class WebGLWrapper {
     //// BUT YOU SHOULD NOT CALL THEM DIRECTLY
     /////////////////////////////////////////////////////////////////////////////////////
 
-    exportSettings() {
-        //export all except eventSource or private props: automatically attached by OpenSeadragon event engine; or generated data
-        let forbidden = ["eventSource"];
-        return JSON.stringify(this._visualisations,
-            (key, value) => key.startsWith("_") || forbidden.includes(key) ? undefined : value);
+    /**
+     * Function to JSON.stringify replacer
+     * @param key key to the value
+     * @param value value to be exported
+     * @return {*} value if key passes exportable condition, undefined otherwise
+     */
+    jsonReplacer(key, value) {
+        return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     }
 
     /**
@@ -291,8 +311,12 @@ class WebGLWrapper {
         this._program = i;
         if (target.hasOwnProperty("error")) {
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
-            this.onFatalError(target);
             this.running = false;
+            if (this._visualisations.length < 2) {
+                this.onFatalError(target); //considered fatal as there is no valid goal
+            } else {
+                this.onError(target);
+            }
         } else {
             this.running = true;
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
@@ -439,9 +463,9 @@ class WebGLWrapper {
             return;
         }
         layer._renderContext = new ShaderFactoryClass(layer.params);
-        layer.order = idx;
+        layer.index = idx;
 
-        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.order}`, layer.order);
+        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.index}`);
         layer._renderContext._setWebglContext(this.webGLImplementation);
         layer._renderContext._setResetCallback(this.resetCallback);
     }
@@ -467,6 +491,7 @@ class WebGLWrapper {
             this._programs[idx] = program;
 
             let index = 0;
+            //init shader factories and unique id's
             for (let key in vis.shaders) {
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key],
@@ -480,6 +505,7 @@ class WebGLWrapper {
             if (!vis.hasOwnProperty("order")) {
                 vis.order = Object.keys(vis.shaders);
             }
+
         } else {
             program = this._programs[idx];
             for (let key in vis.shaders) {
@@ -491,7 +517,7 @@ class WebGLWrapper {
                         continue;
                     }
                     let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
-                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer.order);
+                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }
             }
         }
@@ -520,6 +546,7 @@ class WebGLWrapper {
                     "Linking of shader failed. For more information, see logs in the console.");
             }
         }
+        console.log(vis._built["fragment_shader"]);
         this.visualisationReady(idx, vis);
     }
 }

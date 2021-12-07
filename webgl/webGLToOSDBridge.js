@@ -42,7 +42,7 @@ OpenSeadragonGL.prototype = {
      * @returns current visualisaiton goal object
      */
     currentVisualisation: function() {
-        return this.webGLWrapper._visualisations[this.webGLWrapper._program];
+        return this.webGLWrapper.currentVisualisation();
     },
     
     /**
@@ -59,35 +59,17 @@ OpenSeadragonGL.prototype = {
     },
 
     /**
-     * Import JSON encoded visualisation parameter, as described in the documentation
-     * @param json
+     * Set program data.
+     * @param {string} data - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      */
-    importSettings(json) {
-        try {
-            let result = true;
-            let setup = JSON.parse(json);
-            if (Array.isArray(setup)) {
-                this.addVisualisation(...setup);
-            } else {
-                console.warn("Invalid input: parameter visualisation must be an array of objects.");
-                return false;
-            }
-            return result;
-        } catch (e) {
-            console.warn("Invalid input for visualisation settings.", e);
+    addData: function(...data) {
+        if (this._shadersLoaded) {
+            console.warn("Invalid action: visualisations have been already loaded.")
             return false;
         }
-    },
-
-    /**
-     * Export JSON-encoded visualisation with all changes
-     * that has been made, the visualiser can be initialized
-     * with
-     * @return JSON-encoded string
-     */
-    exportSettings() {
-        return this.webGLWrapper.exportSettings();
+        this.webGLWrapper.addData(...data);
+        return true;
     },
 
     /**
@@ -236,8 +218,9 @@ OpenSeadragonGL.prototype = {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
 
 
-            let dx = PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-                PLUGINS.imageLayer.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+            let imageTileSource = PLUGINS.imageLayer();
+            let dx = imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
+                imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
 
             // Render a webGL canvas to an input canvas using cached version
 

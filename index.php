@@ -25,10 +25,6 @@ function throwFatalError($title, $description, $details) {
     exit;
 }
 
-function showError($title, $description, $details) {
-    //todo mild error
-}
-
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
 
 if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
@@ -47,7 +43,6 @@ if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
     letUserSetUp($image, $layer);
 }
 
-
 $errorSource = false;
 
 function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
@@ -62,33 +57,57 @@ if (!$parsedParams) {
         "The visualisation setup is not parse-able.", $visualisation);
 }
 $cookieCache = isset($_COOKIE["cache"]) && !isFlagInProtocols("ignoreCookiesCache") ? json_decode($_COOKIE["cache"]) : (object)[];
-foreach ($parsedParams as $visualisationTarget) {
-    propertyExists($visualisationTarget, "data", "No image data available.",
-        "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
-        print_r($visualisation, true));
-    if (!isset($visualisationTarget->name)) {
-        $visualisationTarget->name = "Custom Visualisation";
-    }
-    propertyExists($visualisationTarget, "shaders", "No data available.",
-        "JSON parametrization of the visualiser requires <i>shaders</i> array: a list of data and its interpretation. This field is missing.",
-        print_r($visualisation, true));
-    foreach ($visualisationTarget->shaders as $data=>$layer) {
-        if (!isset($layer->name)) {
-            $temp = substr($data, max(0, strlen($data)-24), 24);
-            if (strlen($temp) != strlen($data)) $temp  = "...$temp";
-            $layer->name = "Source: $temp";
+
+propertyExists($parsedParams, "data", "No image data available.",
+    "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
+    print_r($parsedParams, true));
+
+propertyExists($parsedParams, "background", "No data available.",
+    "JSON parametrization of the visualiser requires <i>background</i> object: a dictionary of data interpretation. This field is missing.",
+    print_r($parsedParams, true));
+
+foreach ($parsedParams->background as $bg) {
+    propertyExists($bg, "dataReference", "No data available.",
+        "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
+        print_r($bg, true));
+}
+if (!isset($parsedParams->params)) {
+    $parsedParams->params = (object)array();
+}
+if (!isset($parsedParams->shaderSources)) {
+    $parsedParams->shaderSources  = array();
+}
+
+$layerVisible = isset($parsedParams->visualizations);
+if ($layerVisible) {
+    //todo possible not necessary when we really download only necessary stuff...
+    propertyExists($parsedParams, "shadersData", "No data available.",
+        "JSON parametrization of the visualiser requires <i>shadersData</i> object: a list of data used in shaders. This field is missing.",
+        print_r($parsedParams, true));
+
+    foreach ($parsedParams->visualizations as $visualisationTarget) {
+        if (!isset($visualisationTarget->name)) {
+            $visualisationTarget->name = "Custom Visualisation";
         }
 
-        if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
-            $layer->cache = $cookieCache->{$layer->name};
-        }
+        foreach ($visualisationTarget->shaders as $data=>$layer) {
+            if (!isset($layer->name)) {
+                $temp = substr($data, max(0, strlen($data)-24), 24);
+                if (strlen($temp) != strlen($data)) $temp  = "...$temp";
+                $layer->name = "Source: $temp";
+            }
 
-        if (!isset($layer->type) && !isset($layer->source)) {
-            throwFatalError("No visualisation style defined for " . $layer->name,
-                "You must specify one of <br>layer</b> or <b>source</b> parameters.", print_r($layer, true));
+            if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
+                $layer->cache = $cookieCache->{$layer->name};
+            }
+
+            propertyExists($layer, "type", "No visualisation style defined for $layer->name",
+                "You must specify one of <br>type</b> or <b>source</b> parameters.", print_r($layer, true));
         }
     }
 }
+
+
 
 $visualisation = json_encode($parsedParams);
 $cookieCache = json_encode($cookieCache);
@@ -163,6 +182,10 @@ echo <<<EOF
     <script src="./osd_debug/src/viewport.js"></script>
     <script src="./osd_debug/src/world.js"></script>
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
+EOF;
+
+if ($layerVisible) {
+    echo <<<EOF
 
     <script src="./webgl/webGLWrapper.js?v=$version"></script>
 
@@ -174,7 +197,10 @@ echo <<<EOF
 
     <script src="./webgl/webGLContext.js?v=$version"></script>
     <script src="./webgl/webGLToOSDBridge.js?v=$version"></script>
+EOF;
+}
 
+echo <<<EOF
     <!--Tutorials-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
@@ -183,8 +209,7 @@ echo <<<EOF
     
 
 </head>
-EOF;
-?>
+
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
@@ -209,8 +234,6 @@ EOF;
     <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
 </div>
 
-<img id="debug" style="position:absolute; top: 0; left: 0;">
-<img id="debug2" style="position:absolute; bottom: 0; left: 0;">
 
 <!-- Panel -->
 <span id="main-panel-show" class="material-icons" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
@@ -225,38 +248,62 @@ EOF;
 
         <div id="general-controls" class="inner-panel d-flex" style="margin-top: 320px;">
             <!--TODO export also these values? -->
-            <label for="global-opacity"> Opacity: &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 200px;">&emsp;
+EOF;
+
+//if only one data layer visible, show as checkbox, else add Images menu
+if (count($parsedParams->background) == 1) {
+    echo <<<EOF
+            <label for="global-opacity">Layer Opacity: &nbsp;</label>
+            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 150px;">&emsp;
             <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
             <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
-                   onchange="viewer.world.getItemAt(imageIDX).setOpacity(this.checked ? 1 : 0);">
+                   onchange="viewer.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
         </div> <!--Height of navigator = margn top of this div + padding-->
-        <div id="panel-shaders" class="inner-panel" >
-
-            <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
-
-            <div class="inner-panel-content noselect" id="inner-panel-content-1">
-                <div>
-
-                    <span id="shaders-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
-                    <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
-                        <!--populated with shaders from the list -->
-                    </select>
-                    <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
-                </div>
-
-                <div  class="inner-panel-hidden">
-                    <div id="image-layer-options">
-                        <!--populated with options for a given shader -->
+EOF;
+} else {
+    echo <<<EOF
+            <label for="global-opacity">Layer Opacity: &nbsp;</label>
+            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;
+        </div> <!--Height of navigator = margn top of this div + padding-->
+        <div id="panel-images" class="inner-panel">   
+                <div class="inner-panel-content noselect" id="inner-panel-content-1">
+                    <div>
+                        <span id="images-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+                        <h3 class="d-inline-block">Images</h3>
                     </div>
+   
+                    <div id="image-layer-options" class="inner-panel-hidden">
+                        <!--populated with options for a given image data -->
+                    </div>
+                </div>
+           </div>
+EOF;
+}
 
-                    <div id="data-layer-options">
-                        <!--populated with options for a given shader -->
+if ($layerVisible) {
+    echo <<<EOF
+          <div id="panel-shaders" class="inner-panel" >
+    
+                <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
+    
+                <div class="inner-panel-content noselect" id="inner-panel-content-1">
+                    <div>
+    
+                        <span id="shaders-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+                        <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
+                            <!--populated with shaders from the list -->
+                        </select>
+                        <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
+                    </div>
+    
+                    <div id="data-layer-options" class="inner-panel-hidden">
+                            <!--populated with options for a given image data -->
                     </div>
                 </div>
             </div>
-        </div>
-
+EOF;
+}
+?>
         <!-- Appended controls for other plugins -->
     </div>
 
@@ -298,9 +345,9 @@ EOF;
     <?php
 
     if($errorSource) {
-        //todo redirect to error.php?
+        //todo redirect to error.php? //todo this does not work anymore
         echo "$('#main-panel').addClass('d-none');";
-        $debugSource = "";
+        $debugSource = ""; //todo $debugSource not existing
         if (!$debugSource) $debugSource = "null";
         $postdata = print_r($_POST, true);
         echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', `ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$postdata</code>`);";
@@ -338,116 +385,12 @@ EOF;
     /*---------------------------------------------------------*/
 
     var shadersCache = <?php echo $cookieCache ?>;
-    var activeShader = 0; //todo active shader from settings
-    var activeData = "";
+    var setup = <?php echo $visualisation ?>;
+    var activeVisualization = 0; //todo dynamic?
     const iipSrvUrlPOST = '/iipsrv-martin/iipsrv.fcgi?#DeepZoomExt=';
     const iipSrvUrlGET = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
-    let imageIDX = 0;
-    let layerIDX = 1;
-
-    // Initialize viewer webGL extension - webGLWrapper
-    let shaderNames = $("#shaders");
-    seaGL = new OpenSeadragonGL({
-        htmlControlsId: "data-layer-options",
-        authorization: "<?php echo AUTH_HEADERS ?>",
-        htmlShaderPartHeader: createHTMLLayerConstrols,
-        //called once fully initialized
-        ready: function() {
-            var i = 0;
-            seaGL.foreachVisualisation(function (vis) {
-                if (vis.error) {
-                    shaderNames.append(`<option value="${i}" title="${vis.error}">&#9888; ${vis['name']}</option>`);
-                } else {
-                    shaderNames.append(`<option value="${i}">${vis['name']}</option>`);
-                }
-                i++;
-            });
-        },
-        visualisationInUse: function(visualisation) {
-            enableDragSort("data-layer-options");
-            //called only if everything is fine
-            DisplayError.hide(); //preventive
-            //re-fetch data
-
-
-
-            // TODO maybe do not use this at all, or perform it more sophistically
-            // let data = seaGL.dataImageSources();
-            // if (data !== activeData) {
-            //     activeData = data;
-            //     //todo dirty?
-            //     if (PLUGINS.dataLayer) {
-            //         viewer.addTiledImage({
-            //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
-            //             index: layerIDX,
-            //             opacity: $("#global-opacity").val(),
-            //             replace: true
-            //         });
-            //     }
-            // }
-
-            viewer.raiseEvent('visualisation-used', visualisation);
-        },
-
-        visualisationChanged: function(oldVis, newVis) {
-            //todo problems when switching - show 'loading' and prevent user from interaction until ready again!!!
-            if (oldVis.data !== newVis.data) {
-                viewer.addTiledImage({
-                    tileSource : iipSrvUrlGET + newVis.data + ".dzi",
-                    index: imageIDX,
-                    opacity: 1,
-                    replace: true
-                });
-            }
-
-            let newVisData = Object.keys(newVis.shaders).join(",");
-            if (newVisData !== Object.keys(oldVis.shaders).join(",")) {
-                if (PLUGINS.dataLayer) {
-                    viewer.addTiledImage({
-                        tileSource : iipSrvUrlPOST + newVisData + ".dzi",
-                        index: layerIDX,
-                        opacity: $("#global-opacity").val(),
-                        replace: true
-                    });
-                }
-            }
-        },
-
-        //called when visualisation is unable to run
-        onFatalError: function(vis) {
-            DisplayError.show(vis.error, vis.desc);
-        },
-
-        //called when exception (usually some missing function) occurs
-        onError: function(error) {
-            DisplayError.show("Something went wrong and the visualissation is unable to continue. You can use other visualisation if available.", error.message);
-        },
-    }, function (e) {
-        return e.tiledImage.source.postData;
-    }, layerIDX);
-
-    //Set visualisations
-    seaGL.addVisualisation(...<?php echo $visualisation; ?>);
-
-    /*---------------------------------------------------------*/
-    /*------------ JS utilities and enhancements --------------*/
-    /*---------------------------------------------------------*/
-
-    function currentVisualisation() {
-        return seaGL.currentVisualisation();
-    }
-
-    function makeCacheSnapshot() {
-        let active = seaGL.currentVisualisation().shaders;
-        for (let key in active) {
-            if (active.hasOwnProperty(key)) {
-                let shaderSettings = active[key];
-                shadersCache[shaderSettings.name] = shaderSettings.cache;
-            }
-        }
-        document.cookie = `cache=${JSON.stringify(shadersCache)}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`;
-        Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
-    }
+    //index of the layer composed of shaders, last one or not present (-1)
+    let layerIDX = setup.hasOwnProperty("shaders") ? setup.background.length : -1;
 
     // Tutorial functionality
     var Tutorials = {
@@ -499,39 +442,6 @@ EOF;
         }
     }
 
-    Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
-        'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
-    },{
-        'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
-    }, {
-        'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
-    }, {
-        'next #general-controls' : 'The whole visualisation consists of two layers: <br> the tissue scan and the data layer above.<br>You can control the data layer opacity here.'
-    }, {
-        'next #copy-url' : 'To share the visualisation with URL, use this button.<br>It will copy the URL to your clipboard.<b>Plugins will be included, but without their data.'
-    }, {
-        'next #global-export' : 'If you want to share the visualisation <b>along with plugins data</b>, <br> you can export it here - all changes you\'ve made will be stored <br>(<i>note: the behaviour depends on the plugin itself</i>).'
-    }, {
-        'next #panel-shaders' : 'The data layer <br>-the core visualisation functionality-<br> can be controlled here. Hovering over<br>the element will show additional hidden controls.'
-    }, {
-        'click #shaders-pin' : 'Click on the pin to set <br>this controls subpanel to be always visible.'
-    }, {
-        'next #shaders' : 'Multiple different visualisations <br>are supported - you can select <br>which one is being displayed.'
-    }, {
-        'next #data-layer-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
-    }], function() {
-        //prerequisite - pin in default state
-        let pin = $("#shaders-pin");
-        let container = pin.parent().children().eq(1);
-        pin.removeClass('pressed');
-        container.removeClass('force-visible');
-    });
-
-    // load desired shader upon selection
-    shaderNames.on("change", function () {
-        activeShader = $(this).val();
-        seaGL.switchVisualisation(activeShader, redraw);
-    });
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
         let val = $(this).val();
@@ -610,107 +520,6 @@ EOF;
     /*------------ MAIN PANEL JS ------------------------------*/
     /*---------------------------------------------------------*/
 
-    /**
-     * Made with love by @fitri
-     * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
-     *
-     * Shader re-compilation and re-ordering logics
-     * Modified by Jiří
-     */
-
-    function enableDragSort(listId) {
-        const sortableList = document.getElementById(listId);
-        Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
-    }
-
-    function enableDragItem(item) {
-        item.setAttribute('draggable', true);
-        item.ondragstart = startDrag;
-        item.ondrag = handleDrag;
-        item.ondragend = handleDrop;
-    }
-
-    function startDrag(event) {
-        const currentTarget = event.target;
-        let clicked = document.elementFromPoint(event.x, event.y);
-        if (isPrevented(clicked, 'non-draggable')) {
-            event.preventDefault();
-        }
-    }
-
-    //modified from https://codepen.io/akorzun/pen/aYwXoR
-    const isPrevented = (element, cls) => {
-        let currentElem = element;
-        let isParent = false;
-
-        while (currentElem) {
-            const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
-            if (hasClass) {
-                isParent = true;
-                currentElem = undefined;
-            } else {
-                currentElem = currentElem.parentElement;
-            }
-        }
-        return isParent;
-    }
-
-    function handleDrag(item) {
-        const selectedItem = item.target,
-            list = selectedItem.parentNode,
-            x = event.clientX,
-            y = event.clientY;
-
-        selectedItem.classList.add('drag-sort-active');
-        let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
-
-        if (list === swapItem.parentNode) {
-            swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
-            list.insertBefore(selectedItem, swapItem);
-        }
-    }
-
-    function handleDrop(item) {
-        item.target.classList.remove('drag-sort-active');
-        const listItems = item.target.parentNode.children;
-
-        var order = [];
-        Array.prototype.forEach.call(listItems, function(child) {
-            order.push(child.dataset.id);
-        });
-
-        seaGL.reorder(order);
-    }
-
-    function shaderPartToogleOnOff(self) {
-        if (self.checked) {
-            seaGL.currentVisualisation().shaders[self.dataset.id].visible = 1;
-            self.parentNode.parentNode.classList.remove("shader-part-error");
-        } else {
-            seaGL.currentVisualisation().shaders[self.dataset.id].visible = 0;
-            self.parentNode.parentNode.classList.add("shader-part-error");
-        }
-        seaGL.reorder(null);
-    }
-
-    function changeVisualisationLayer(self, layerId) {
-        let _this = $(self),
-            type = _this.val();
-        let factoryClass = WebGLWrapper.ShaderMediator.getClass(type);
-        if (factoryClass !== undefined) {
-            let viz = currentVisualisation();
-            if (viz.shaders.hasOwnProperty(layerId)) {
-                viz.shaders[layerId].type = type;
-                seaGL.reorder(null); //force to re-build
-            } else {
-                console.error("Invalid layer: bad initialization?");
-            }
-        } else {
-            console.error("Invalid shader: unknown type!");
-        }
-        _this.html("");
-    }
-
     function pinClick(jQSelf, jQTargetParent) {
         if (jQTargetParent.hasClass('force-visible')) {
             jQTargetParent.removeClass('force-visible');
@@ -720,31 +529,6 @@ EOF;
             jQTargetParent.addClass('force-visible');
         }
     }
-
-    function createHTMLLayerConstrols(title, html, dataId, isVisible, layer, isControllable) {
-        let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
-        let checked = isVisible ? 'checked' : '';
-        let disabled = isControllable ? '' : 'disabled';
-        let availableShaders = "";
-        for (let available of WebGLWrapper.ShaderMediator.availableShaders()) {
-            let selected = available.type() === layer.type ? " selected" : "";
-            availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-        }
-
-        return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
-            <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
-              &emsp;${title}
-                <span class="material-icons position-absolute right-5" style="width: 10%;">swap_vert</span>
-                <div class="position-absolute right-0 d-inline-block" id="label-render-type" style="cursor: pointer;">
-                  <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="change-render-type" onchange="changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control">${availableShaders}</select>
-                </div>
-            </div>
-            <div class="non-draggable">${html}</div>
-            </div>`;
-    }
-
 
     /*---------------------------------------------------------*/
     /*------------ DIALOGS ------------------------------------*/
@@ -858,15 +642,20 @@ EOF;
 
     function constructExportVisualisationForm(customAttributes="", includeCurrentPlugins=true) {
         let form = `
-      <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER[REQUEST_URI]; ?>">
+      <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
         ${customAttributes}
         <input type="submit" value="">
       </form>
       <script type="text/javascript">
-        //safely set values (JSON)
-        document.getElementById("visualisation").value = \`${seaGL.exportSettings()}\`;
-
+<?php
+     if ($layerVisible) {
+         //we need to safely stringify setup (which has been modified by the webgl module)
+         echo "document.getElementById(\"visualisation\").value = JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer);";
+     } else {
+         echo "document.getElementById(\"visualisation\").value = JSON.stringify(setup);";
+     }
+?>
         var form = document.getElementById("redirect");
         var node;`;
         if (includeCurrentPlugins) {
@@ -903,7 +692,14 @@ form.submit();<\/script>`;
 
     function copyHashUrlToClipboard() {
         let baseUrl = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
-        let postData = seaGL.exportSettings() + "|";
+<?php
+if ($layerVisible) {
+    //we need to safely stringify setup (which has been modified by the webgl module)
+    echo "        let postData = JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer) + '|';";
+} else {
+    echo "        let postData = JSON.stringify(setup) + '|';";
+}
+?>
         Object.values(PLUGINS.each).forEach(plugin => {
             if (plugin.loaded) {
                 postData += plugin.flag + "|";
@@ -934,13 +730,22 @@ ${constructExportVisualisationForm()}
         downloader.download = "export.html";
         downloader.click();
     }
+</script>
 
+<?php
+if ($layerVisible) {
+    echo "<script src=\"layers.js?v=$version\" type=\"text/javascript\"></script>";
+}
+?>
+
+<script type="text/javascript">
     /*---------------------------------------------------------*/
     /*------------ PLUGINS ------------------------------------*/
     /*---------------------------------------------------------*/
 
     var PLUGINS = {
         osd: viewer,
+        hasLayers: seaGL !== undefined,
         seaGL: seaGL,
         addTutorial: Tutorials.add.bind(Tutorials),
         dialog: Dialogs,
@@ -978,6 +783,8 @@ ${constructExportVisualisationForm()}
                 pluginRoot.append(html);
             }
         },
+        imageLayer: viewer.world.getItemAt.bind(viewer.world, 0),
+        dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,
         _exportHandlers: []
@@ -1020,23 +827,43 @@ ${constructExportVisualisationForm()}
         }
     }
 
-    //todo which visualisation is default? 0? if changed, also webGL needs to rewrite this
-    //todo try catch to fail nicely
-    //todo do not access private stuff!
-    var defViz = seaGL.webGLWrapper._visualisations[0];
-
-
-    const losslessImageLayer = defViz.params.hasOwnProperty("losslessImageLayer") ? defViz.params.losslessImageLayer : false;
-    const losslessDataLayer = defViz.params.hasOwnProperty("losslessDataLayer") ? defViz.params.losslessDataLayer : true;
+    function fileNameOf(imageFilePath) {
+        let begin = imageFilePath.lastIndexOf('/')+1;
+        return imageFilePath.substr(begin, imageFilePath.length - begin - 4);
+    }
 
     viewer.addHandler('open', function() {
-        PLUGINS.imageLayer = viewer.world.getItemAt(imageIDX);
-        if (losslessImageLayer && PLUGINS.imageLayer) {
-            PLUGINS.dataLayer.source.fileFormat = "png";
+        PLUGINS.imageLayers = [];
+        let i = 0;
+        let imageNode = $("#image-layer-options");
+        //image-layer-options can be missing --> populate menu only if exists
+        if (imageNode) {
+            for (let image of setup.background) {
+                let worldItem = viewer.world.getItemAt(i);
+                if (image.hasOwnProperty("lossless") && image.lossless) {
+                    worldItem.source.fileFormat = "png";
+                }
+                imageNode.append(`<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2">
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" checked class="form-control"
+              onchange="viewer.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">
+              &emsp;Image ${fileNameOf(setup.data[image.dataReference])}
+            </div></div>`);
+                i++;
+            }
         }
-        PLUGINS.dataLayer = viewer.world.getItemAt(layerIDX);
-        if (losslessDataLayer && PLUGINS.dataLayer) {
-            PLUGINS.dataLayer.source.fileFormat = "png";
+
+        if (layerIDX !== -1) {
+            if (layerIDX !== i) {
+                console.warn("Invalid initialization: layer index should be ", i);
+                layerIDX = i;
+            }
+
+            let layerWorldItem = viewer.world.getItemAt(layerIDX);
+            let activeVis = setup.visualizations[activeVisualization];
+            if (activeVis.hasOwnProperty("lossless") && activeVis.lossless && layerWorldItem) {
+                layerWorldItem.source.fileFormat = "png";
+            }
         }
 
         _registeredPlugins.forEach(plugin => {
@@ -1100,10 +927,8 @@ ${constructExportVisualisationForm()}
     }
 
 </script>
-
 <!-- PLUGINS -->
 <?php
-
 foreach ($PLUGINS as $_ => $plugin) {
     if ($plugin->loaded) {
         //add plugin style sheet if exists
@@ -1116,18 +941,23 @@ foreach ($PLUGINS as $_ => $plugin) {
         }
     }
 }
-?>
 
+if ($layerVisible) {
+    echo <<<EOF
 <script type="text/javascript">
 
     /*---------------------------------------------------------*/
-    /*------------ Init                          --------------*/
+    /*----- Init with layers (variables from layers.js) -------*/
     /*---------------------------------------------------------*/
 
     seaGL.loadShaders(function() {
-        //activeData = seaGL.dataImageSources();
-        activeData = Object.keys(seaGL.currentVisualisation().shaders).join(',');
-        viewer.open([iipSrvUrlGET + defViz.data + ".dzi", iipSrvUrlPOST + activeData + ".dzi"]);
+        //activeData = seaGL.dataImageSources(); //todo reflect data change?
+        
+        //todo dirty hardcoded all sources for now:
+        activeData = seaGL.webGLWrapper._dataSources.join(',');
+        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");
+        toOpen.push(iipSrvUrlPOST + activeData + ".dzi");
+        viewer.open(toOpen);
     });
     seaGL.init(viewer);
 
@@ -1137,5 +967,20 @@ foreach ($PLUGINS as $_ => $plugin) {
     });
 
 </script>
+EOF;
+
+} else {
+    echo <<<EOF
+    /*---------------------------------------------------------*/
+    /*----- Init without layers (layers.js) -------------------*/
+    /*---------------------------------------------------------*/
+
+    (function() {
+        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");     
+        viewer.open(toOpen);
+    })();
+EOF;
+}
+?>
 </body>
 </html>
