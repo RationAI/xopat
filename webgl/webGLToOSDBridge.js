@@ -14,7 +14,7 @@
 OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
     let _this  = this;
     webGLWrapperParams.resetCallback = function () {
-        _this.redraw(layerIndex);
+        _this.redraw(_this.refresh);
     }
 
     this.refresh = -1;

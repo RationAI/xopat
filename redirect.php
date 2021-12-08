@@ -35,7 +35,8 @@
   document.getElementById("visualisation").value = params[0].substring(1);
 
   //turn on plugins
-  for (let i = 2; i < params.length; i++) {
+  for (let i = 1; i < params.length; i++) {
+    if (!params[i]) continue;
     let node = document.createElement("input");
     node.setAttribute("type", "hidden");
     node.setAttribute("name", params[i]);
