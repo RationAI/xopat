@@ -7,5 +7,6 @@
     ],
     "flag": "histoviso_explain",
     "priority": 10,
-    "requires": "openseadragon_image_annotations"
+    "requires": "openseadragon_image_annotations",
+    "modules": ["webgl"]
 }

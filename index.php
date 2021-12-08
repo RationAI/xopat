@@ -69,7 +69,13 @@ propertyExists($parsedParams, "background", "No data available.",
 foreach ($parsedParams->background as $bg) {
     propertyExists($bg, "dataReference", "No data available.",
         "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
-        print_r($bg, true));
+        print_r($parsedParams->background, true));
+
+    if (!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data)) {
+        throwFatalError("Invalid image.",
+            "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
+            "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
+    }
 }
 if (!isset($parsedParams->params)) {
     $parsedParams->params = (object)array();
@@ -86,7 +92,13 @@ if ($layerVisible) {
             $visualisationTarget->name = "Custom Visualisation";
         }
 
+        propertyExists($visualisationTarget, "shaders", "No visualisation defined.",
+            "You must specify non-empty <b>shaders</b> object.", print_r($visualisationTarget, true));
+
         foreach ($visualisationTarget->shaders as $data=>$layer) {
+            propertyExists($layer, "type", "No visualisation style defined for $layer->name.",
+                "You must specify <b>type</b> parameter.", print_r($layer, true));
+
             if (!isset($layer->name)) {
                 $temp = substr($data, max(0, strlen($data)-24), 24);
                 if (strlen($temp) != strlen($data)) $temp  = "...$temp";
@@ -96,9 +108,6 @@ if ($layerVisible) {
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 $layer->cache = $cookieCache->{$layer->name};
             }
-
-            propertyExists($layer, "type", "No visualisation style defined for $layer->name",
-                "You must specify one of <br>type</b> or <b>source</b> parameters.", print_r($layer, true));
         }
     }
 }
@@ -109,9 +118,13 @@ $visualisation = json_encode($parsedParams);
 $cookieCache = json_encode($cookieCache);
 
 $pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
+$webglModuleRequired = $layerVisible;
 foreach ($PLUGINS as $_ => $plugin) {
     $plugin->loaded = !isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies);
     $plugin->permaLoaded = $plugin->loaded && isset($_GET[$plugin->flag]) && $_GET[$plugin->flag] == "true";
+    if ($plugin->loaded) {
+        $webglModuleRequired = $webglModuleRequired || in_array("webgl", $plugin->modules);
+    }
 }
 
 
@@ -180,7 +193,7 @@ echo <<<EOF
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
 EOF;
 
-if ($layerVisible) {
+if ($layerVisible || $webglModuleRequired) {
     echo <<<EOF
 
     <script src="./webgl/webGLWrapper.js?v=$version"></script>
@@ -386,7 +399,7 @@ EOF;
     const iipSrvUrlPOST = '/iipsrv-martin/iipsrv.fcgi?#DeepZoomExt=';
     const iipSrvUrlGET = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
     //index of the layer composed of shaders, last one or not present (-1)
-    let layerIDX = setup.hasOwnProperty("shaders") ? setup.background.length : -1;
+    let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
 
     // Tutorial functionality
     var Tutorials = {
@@ -539,7 +552,7 @@ EOF;
         init: function() {
             $("body").append(`<div id="annotation-messages-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
           <span class="Toast-icon"><svg width="12" height="16" id="annotation-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
-          <span id="annotation-messages" class="Toast-content v-align-middle"></span>
+          <span id="annotation-messages" class="Toast-content v-align-middle" style="max-width: 350px;"></span>
           <button class="Toast-dismissButton" onclick="Dialogs.hide(false);">
           <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
           </button>
@@ -741,8 +754,15 @@ if ($layerVisible) {
 
     var PLUGINS = {
         osd: viewer,
-        hasLayers: seaGL !== undefined,
-        seaGL: seaGL,
+<?php
+if ($layerVisible) {
+    echo "        hasLayers: true,
+                  seaGL: seaGL,";
+} else {
+    echo "        hasLayers: false,
+                  seaGL: null,";
+}
+?>
         addTutorial: Tutorials.add.bind(Tutorials),
         dialog: Dialogs,
         appendToMainMenu: function(title, titleHtml, html, id, pluginId) {
@@ -779,7 +799,6 @@ if ($layerVisible) {
                 pluginRoot.append(html);
             }
         },
-        imageLayer: viewer.world.getItemAt.bind(viewer.world, 0),
         dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,
@@ -829,25 +848,33 @@ if ($layerVisible) {
     }
 
     viewer.addHandler('open', function() {
-        PLUGINS.imageLayers = [];
         let i = 0;
+        let largestWidth = 0, selectedImageLayer = 0;
         let imageNode = $("#image-layer-options");
         //image-layer-options can be missing --> populate menu only if exists
         if (imageNode) {
-            for (let image of setup.background) {
+            //reverse order menu since we load images in reverse order
+            for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
+                let image = setup.background[revidx];
                 let worldItem = viewer.world.getItemAt(i);
                 if (image.hasOwnProperty("lossless") && image.lossless) {
                     worldItem.source.fileFormat = "png";
                 }
-                imageNode.append(`<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2">
-            <div class="h5 py-1 position-relative">
+                let width = worldItem.getContentSize().x;
+                if (width > largestWidth) {
+                    largestWidth = width;
+                    selectedImageLayer = i;
+                }
+                imageNode.prepend(`
+            <div class="h5 pl-3 py-1 position-relative">
               <input type="checkbox" checked class="form-control"
               onchange="viewer.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">
               &emsp;Image ${fileNameOf(setup.data[image.dataReference])}
-            </div></div>`);
+            </div>`);
                 i++;
             }
         }
+        PLUGINS.imageLayer = viewer.world.getItemAt.bind(viewer.world, selectedImageLayer);
 
         if (layerIDX !== -1) {
             if (layerIDX !== i) {
@@ -860,6 +887,11 @@ if ($layerVisible) {
             if (activeVis.hasOwnProperty("lossless") && activeVis.lossless && layerWorldItem) {
                 layerWorldItem.source.fileFormat = "png";
             }
+<?php
+if ($layerVisible) {
+    echo "seaGL.setLayerIndex(layerIDX);";
+}
+?>
         }
 
         _registeredPlugins.forEach(plugin => {
@@ -948,15 +980,18 @@ if ($layerVisible) {
 
     seaGL.loadShaders(function() {
         activeData = seaGL.dataImageSources(); 
-        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");
+        //reverse order: last opened IMAGE is the first visible
+        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi").reverse();
         toOpen.push(iipSrvUrlPOST + activeData + ".dzi");
         viewer.open(toOpen);
     });
     seaGL.init(viewer);
 
     viewer.addHandler('open-failed', function(e) {
-        //todo handle cases where image is not loaded properly
-        alert("Open failed");
+        let sources = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");
+        sources.push(iipSrvUrlPOST + activeData + ".dzi");
+        DisplayError.show("No valid images.", `We were unable to open provided image sources. 
+Url's are probably invalid. <code>\${sources.join(", ")}</code>`);
     });
 
 </script>
@@ -964,6 +999,8 @@ EOF;
 
 } else {
     echo <<<EOF
+<script type="text/javascript">
+
     /*---------------------------------------------------------*/
     /*----- Init without layers (layers.js) -------------------*/
     /*---------------------------------------------------------*/
@@ -972,6 +1009,7 @@ EOF;
         let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");     
         viewer.open(toOpen);
     })();
+</script>
 EOF;
 }
 ?>

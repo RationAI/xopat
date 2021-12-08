@@ -43,17 +43,13 @@ seaGL = new OpenSeadragonGL({
     },
 
     visualisationChanged: function(oldVis, newVis) {
-        //todo setup lossless
-        let newVisData = Object.keys(newVis.shaders).join(",");
-        if (newVisData !== Object.keys(oldVis.shaders).join(",")) {
-            if (PLUGINS.dataLayer) {
-                viewer.addTiledImage({
-                    tileSource : iipSrvUrlPOST + newVisData + ".dzi",
-                    index: layerIDX,
-                    opacity: $("#global-opacity").val(),
-                    replace: true
-                });
-            }
+        if (PLUGINS.hasLayers) {
+            viewer.addTiledImage({
+                tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
+                index: layerIDX,
+                opacity: $("#global-opacity").val(),
+                replace: true
+            });
         }
     },
 
@@ -68,7 +64,7 @@ seaGL = new OpenSeadragonGL({
     },
 }, function (e) {
     return e.tiledImage.source.postData;
-}, layerIDX);
+});
 
 //Set visualisations
 seaGL.addVisualisation(...setup.visualizations);

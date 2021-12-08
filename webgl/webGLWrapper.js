@@ -150,8 +150,9 @@ class WebGLWrapper {
      */
     switchVisualisation(i) {
         if (this._program === i) return;
-        this.visualisationChanged(this._visualisations[this._program], this._visualisations[i]);
+        let oldIndex = this._program;
         this._forceSwitchShader(i);
+        this.visualisationChanged(this._visualisations[oldIndex], this._visualisations[i]);
     }
 
     /**
@@ -297,7 +298,7 @@ class WebGLWrapper {
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
     _forceSwitchShader(i) {
-        if (!i) i = this._program;
+        if (isNaN(i) || i === null || i === undefined) i = this._program;
 
         if (i >= this._visualisations.length) {
             console.error("Invalid visualisation index " + i);
@@ -307,6 +308,8 @@ class WebGLWrapper {
         let target = this._visualisations[i];
         if (!this._programs.hasOwnProperty(i)) {
             this._visualisationToProgram(target, i);
+        } else if (i !== this._program) {
+            this._updateRequiredDataSources(target);
         }
 
         this._program = i;
@@ -440,7 +443,7 @@ class WebGLWrapper {
             vis._built.html = "Invalid visualisation.";
             return;
         }
-
+        this._updateRequiredDataSources(vis);
         this._processVisualisation(vis, idx);
         return idx;
     }
@@ -458,6 +461,29 @@ class WebGLWrapper {
         layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.index}`, this);
         layer._renderContext._setWebglContext(this.webGLImplementation);
         layer._renderContext._setResetCallback(this.resetCallback);
+    }
+
+    _updateRequiredDataSources(vis) {
+        //todo for now just request all data, later decide in the context on what to really send
+        let usedIds = new Set();
+        for (let key in vis.shaders) {
+            if (vis.shaders.hasOwnProperty(key)) {
+                let layer = vis.shaders[key];
+                for (let id of layer.dataReferences) {
+                    usedIds.add(id);
+                }
+            }
+        }
+        usedIds = [...usedIds].sort();
+        this._dataSources = [];
+        this._dataSourceMapping = new Array(this._origDataSources.length).fill(-1);
+        for (let id of usedIds) {
+            this._dataSourceMapping[id] = this._dataSources.length;
+            this._dataSources.push(this._origDataSources[id]);
+            while (id > this._dataSourceMapping.length) {
+                this._dataSourceMapping.push(-1);
+            }
+        }
     }
 
     _processVisualisation(vis, idx) {
@@ -502,39 +528,25 @@ class WebGLWrapper {
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key];
 
-                    if (layer.hasOwnProperty("_renderContext") &&
+                    if (!layer.hasOwnProperty("error") && !layer.error &&
+                        layer.hasOwnProperty("_renderContext") &&
                         layer._renderContext.constructor.type() === layer.type) {
                         continue;
                     }
+                    delete layer.error;
+                    delete layer.desc;
                     let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
                     this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }
             }
         }
 
-
-        //todo for now just request all data, later decide in the context on what to really send
-        let usedIds = new Set();
-        for (let key in vis.shaders) {
-            if (vis.shaders.hasOwnProperty(key)) {
-                let layer = vis.shaders[key];
-                for (let id of layer.dataReferences) {
-                    usedIds.add(id);
-                }
-            }
-        }
-        usedIds = [...usedIds].sort();
-        this._dataSources = [];
-        this._dataSourceMapping = new Array(this._origDataSources.length).fill(-1);
-        for (let id of usedIds) {
-            this._dataSourceMapping[id] = this._dataSources.length;
-            this._dataSources.push(this._origDataSources[id]);
-            while (id > this._dataSourceMapping.length) {
-                this._dataSourceMapping.push(-1);
-            }
-        }
-
         this._buildVisualisation(vis.order, vis);
+
+        if (vis.hasOwnProperty("error") && vis.error) {
+            this.visualisationReady(idx, vis);
+            return;
+        }
 
         function useShader(gl, program, data, type) {
             var shader = gl.createShader(gl[type]);

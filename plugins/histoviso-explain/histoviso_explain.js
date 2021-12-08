@@ -26,10 +26,26 @@ class HistovisoExplain  {
     }
 
     createMenu(notification=undefined) {
+        let targetSetup = "";
+        // if (setup.background.length > 1) {
+        targetSetup = `<br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
+onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(this.value);'>`;
+        var name;
+        for (let i = setup.background.length-1; i >= 0; i--) {
+            name = this.getNameFromImagePath(setup.data[setup.background[i].dataReference]);
+            let selected = i === 0 ? "selected" : "";
+            targetSetup += `<option value='${name}' ${selected}>image ${name}</option>`;
+        }
+        this.targetImageSourceName = name; //reverse order, remember last one
+        targetSetup += "</select>"
+        // }  else {
+        //     this.targetImageSourceName = this.getNameFromImagePath(setup.data[setup.background[0].dataReference]);
+        // }
+
         //bit dirty :)
-        if (notification) {
-            let style = (notification.startsWith("NOTE")) ? "color-bg-severe" : "";
-            notification = `<div class="p-2 ${style}">${notification}</div>`;
+        if (notification || targetSetup) {
+            let style = (notification && notification.startsWith("NOTE")) ? "color-bg-severe" : "";
+            notification = `<div class="p-2 ${style}">${notification}${targetSetup}</div>`;
         }
 
         //controlPanelId is incomming parameter, defines where to add HTML
@@ -50,6 +66,11 @@ onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id=
             PLUGINS.replaceInMainMenuExtended("Neural Network (NN) inspector", "", html,
                 `<br>Error description: <br><code>${err}</code>`, "feature-maps", this.id);
         }
+    }
+
+    getNameFromImagePath(path) {
+        let begin = path.lastIndexOf('/')+1;
+        return path.substr(begin, path.length - begin - 4);
     }
 
     /**
@@ -188,6 +209,10 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         return Number.parseInt($("#feature-map-number").val());
     }
 
+    getImageSource() {
+        return this.targetImageSourceName;
+    }
+
     getAditionalMethodParams() {
         let result = {};
         let _this = this;
@@ -237,7 +262,7 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         }
 
         let notification = "";
-        let params = PLUGINS.seaGL.currentVisualisation().params;
+        let params = setup.params;
         if (params) {
             //todo hardcoded
             if (params.experimentId && params.experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
@@ -375,6 +400,7 @@ experiment is '${params.experimentId}'.`);
                         name: "Network Output",
                         type: "identity",
                         visible: "1",
+                        dataReferences: [0],
                         params: {}
                     }
                 }
@@ -387,6 +413,7 @@ experiment is '${params.experimentId}'.`);
                         name: "Network Output",
                         type: "heatmap",
                         visible: "1",
+                        dataReferences: [0],
                         params: {ctrlOpacity: 0}
                     }
                 }
@@ -399,6 +426,7 @@ experiment is '${params.experimentId}'.`);
                         name: "Network Output",
                         type: "heatmap",
                         visible: "1",
+                        dataReferences: [0],
                         params: {
                             ctrlOpacity: 0,
                             logScale: 1,
@@ -415,6 +443,7 @@ experiment is '${params.experimentId}'.`);
                         name: "Network Output",
                         type: "bipolar-heatmap",
                         visible: "1",
+                        dataReferences: [0],
                         params: {ctrlOpacity: 0}
                     }
                 }
@@ -427,6 +456,7 @@ experiment is '${params.experimentId}'.`);
                         name: "Network Output",
                         type: "bipolar-heatmap",
                         visible: "1",
+                        dataReferences: [0],
                         params: {
                             ctrlOpacity: 0,
                             logScale: 1,
@@ -436,6 +466,8 @@ experiment is '${params.experimentId}'.`);
                 }
             }
         );
+
+        this.viaGL.addData("__automaticaly_generated_data");
 
         this.viaGL.prepare(() => {
             _this.viaGL.init(1, 1);

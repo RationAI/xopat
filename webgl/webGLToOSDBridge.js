@@ -11,13 +11,13 @@
 */
 
 //todo layerIndex replace with tileSource itself
-OpenSeadragonGL = function(webGLWrapperParams, useEvaluator, layerIndex) {
+OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
     let _this  = this;
     webGLWrapperParams.resetCallback = function () {
         _this.redraw(layerIndex);
     }
 
-    this.refresh = layerIndex;
+    this.refresh = -1;
 
     this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
@@ -28,6 +28,10 @@ OpenSeadragonGL = function(webGLWrapperParams, useEvaluator, layerIndex) {
 };
 
 OpenSeadragonGL.prototype = {
+
+    setLayerIndex: function(idx) {
+        this.refresh = idx;
+    },
     
     /**
      * Runs a callback on each visualisation goal
@@ -78,7 +82,6 @@ OpenSeadragonGL.prototype = {
      */
     switchVisualisation: function(visIdx) {
         this.webGLWrapper.switchVisualisation(visIdx);
-        this.redraw();
     },
 
     /**

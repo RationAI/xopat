@@ -182,10 +182,8 @@ class HistovisoImageExplorer extends HistovisoImage {
             this._context.addHelperAnnotation(dummyRect);
         }
 
-        let begin = currentVisualisation().data.lastIndexOf('/')+1;
-        let data = currentVisualisation().data.substr(begin, currentVisualisation().data.length - begin - 4);
-        data = {
-            slide_name: data,
+        let data = {
+            slide_name: this._dataSource.getImageSource(),
             coords: coords,
             params: {
                 model_name: this._dataSource.getModel()
@@ -367,10 +365,8 @@ class HistovisoImageRenderer extends HistovisoImage {
             this._context.addHelperAnnotation(dummyRect);
         }
 
-        let begin = currentVisualisation().data.lastIndexOf('/')+1;
-        let data = currentVisualisation().data.substr(begin, currentVisualisation().data.length - begin - 4);
-        data = {
-            slide_name: data,
+        let data = {
+            slide_name: this._dataSource.getImageSource(),
             coords: coords,
             expl_method: this._dataSource.getMethod(),
             expl_params: $.extend({

@@ -15,5 +15,6 @@
     ],
     "flag": "annotations",
     "priority": 0,
-    "requires": null
+    "requires": null,
+    "modules": []
 }
