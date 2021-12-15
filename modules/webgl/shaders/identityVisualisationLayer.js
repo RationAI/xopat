@@ -1,5 +1,7 @@
 /**
  * Identity shader
+ *
+ * data reference must contain one index to the data to render using identity
  */
 WebGLWrapper.IdentityLayer = class extends WebGLWrapper.VisualisationLayer {
 

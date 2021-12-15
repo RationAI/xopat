@@ -249,6 +249,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         downloader.href = downloadURL;
         downloader.download = `${name}.json`;
         downloader.click();
+        URL.revokeObjectURL(downloadURL);
     }
     
     function importSettings(event, self) {
@@ -336,6 +337,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         downloader.href = downloadURL;
         downloader.download = `${name}.html`;
         downloader.click();
+        URL.revokeObjectURL(downloadURL);
     }
 
     $(document).off('submit');

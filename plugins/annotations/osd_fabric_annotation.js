@@ -336,8 +336,10 @@ OSDAnnotations.prototype = {
 		$('#downloadAnnotation').click(function (event) {
 			function download(id, content) {
 				let data = new Blob([content], { type: 'text/plain' });
-				document.getElementById(id).href = window.URL.createObjectURL(data);
+				let downloadURL = window.URL.createObjectURL(data);
+				document.getElementById(id).href = downloadURL;
 				document.getElementById(id).click();
+				URL.revokeObjectURL(downloadURL);
 			}
 			//TODO add other attributes for export to preserve funkcionality (border width, etc)
 			download(_this.getJSONContent());
@@ -371,16 +373,12 @@ OSDAnnotations.prototype = {
 		<span class="material-icons" onclick="${this.id}.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
 		<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
 		<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
-		
 		<span class="material-icons" id="enable-disable-annotations" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
-		if ($(this).attr('data-ref') === 'on'){
-			${this.id}.enableAnnotations(false);
-			$(this).html('visibility_off');
-			$(this).attr('data-ref', 'off');
+		let self = $(this);
+		if (self.attr('data-ref') === 'on'){
+			${this.id}.enableAnnotations(false); self.html('visibility_off'); self.attr('data-ref', 'off');
 		} else {
-			${this.id}.enableAnnotations(true);
-			$(this).html('visibility');
-			$(this).attr('data-ref', 'on');
+			${this.id}.enableAnnotations(true); self.html('visibility'); self.attr('data-ref', 'on');
 		}"> visibility</span>`,
 		`<span>Opacity: &emsp;</span><input type="range" id="annotations-opacity" min="0" max="1" value="0.4" step="0.1"><br><br>
 		${this.presets.presetControls()}		
@@ -394,6 +392,7 @@ OSDAnnotations.prototype = {
 					${this.modifyTool.brushSizeControls()}				
 					</div>`, 
 					"annotations-panel", this.id);
+
 
 		let modeOptions = "";
 		Object.values(this.Modes).forEach(mode => {
@@ -467,17 +466,17 @@ OSDAnnotations.prototype = {
 			{
 				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
 			}, {
-				"next #annotation-board": "Annotation board is the second panel part of this plugin: <br>useful for existing objects management."
-			},{
-				"click #annotations-panel-pin": "Click on the pin to keep visible all controls."
+				"next #window-manager": "Annotation board is useful for existing objects management.<br> You can control the board window in the window manager."
 			},{
 				"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all plugin controls and hotkeys."
 			},{
 				"next #downloadAnnotation": "Here you can download <b>just</b> your annotations.<br>This is included automatically when using global `Export` option."
 			},{
-				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by hovering mouse."
+				"click #annotations-panel-pin": "Click on the pin to keep visible all controls."
 			},{
-				"click #annotations-right-click": "Click here to specify an annotation<br>for your right mouse button."
+				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by mouse hover."
+			},{
+				"click #annotations-right-click": "Click on one of these buttons to open <b>Presets dialog window</b>."
 			},{
 				"next #preset-no-0": "This is an example of an annotation preset."
 			},{
@@ -485,7 +484,7 @@ OSDAnnotations.prototype = {
 			},{
 				"click #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
 			},{
-				"click #select-annotation-preset": "Click <b>Select</b> to assign it to the right mouse button."
+				"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
 			},{
 				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 			},{
@@ -493,7 +492,8 @@ OSDAnnotations.prototype = {
 			}]
 		);
 
-		let pluginOpener = (function() {$(`#${this.id}-pin`).trigger()}).bind(this);
+		//todo bit dirty...
+		let pluginOpener = (function() {let pin = document.getElementById("annotations-panel-pin"); if (pin) pin.click()});
 		PLUGINS.addTutorial(
 			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
 				{
@@ -537,7 +537,7 @@ OSDAnnotations.prototype = {
 					"next #annotation-mode": "You need to be in free form tool. We recommend using 'Left Shift' key <br> instead of setting this manually."
 				},
 				{
-					"next #annotation-board": "First highlight any object on board (or on the canvas)."
+					"next #bord-for-annotations": "First highlight any object on board (or on the canvas)."
 				},
 				{
 					"next #viewer-container": "Selected object can be appended to (LEFT mouse button) or removed from (RIGHT mouse button)."
@@ -569,7 +569,7 @@ OSDAnnotations.prototype = {
 					"next #history-sync": "You can update all objects to reflect the most recent changes on presets. <br><b>Caveat</b>: this will overwrite any custom modifications made to annotations (comment/color)."
 				},
 				{
-					"next #annotation-board": "If you want to modify some object, click on the pencil icon.<br> The board will turn red to notify you navigation is disabled."
+					"next #bord-for-annotations": "If you want to modify some object, click on the pencil icon.<br> The board will turn red to notify you navigation is disabled."
 				}
 			], pluginOpener
 		);
@@ -959,6 +959,7 @@ class AnnotationState {
 class StateAuto extends  AnnotationState {
 	constructor(context) {
 		super("auto", "automatic shape & navigation", context);
+		this.clickInBetweenDelta = 0;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -985,15 +986,19 @@ class StateAuto extends  AnnotationState {
 	}
 
 	_finish(event, isLeftClick, updater) {
-		let delta = Date.now() - this.context.cursor.mouseTime;
+		let clickTime = Date.now();
 
-		// just navigate if click longer than 100ms or other conds not met
-		if (delta > 100 || !updater || !this.context.autoSelectionEnabled) return;
+		let clickDelta = clickTime - this.context.cursor.mouseTime,
+			finishDelta = clickTime - this.clickInBetweenDelta;
+
+		// just navigate if click longer than 100ms or other conds not met, also if user clicked twice very quickly
+		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta < 300) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
 			PLUGINS.dialog.show("Could not create automatic annotation.", 5000, PLUGINS.dialog.MSG_WARN);
 		}
+		this.clickInBetweenDelta = clickTime;
 	}
 
 	setFromAuto() {

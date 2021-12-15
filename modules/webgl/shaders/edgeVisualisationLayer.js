@@ -1,5 +1,6 @@
 /**
  * Edges shader
+ * data reference must contain one index to the data to render using edges strategy
  *
  * $_GET/$_POST expected parameters:
  *  index - unique number in the compiled shader

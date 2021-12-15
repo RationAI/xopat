@@ -14,8 +14,7 @@ class WebGLWrapper {
         /////////////////////////////////////////////////////////////////////////////////
         this.uniqueId = "";
         this.ready = function () { };
-        this.authorization = {};
-
+        this.htmlControlsId = null;
         this.htmlShaderPartHeader = function (title, html, dataId, isVisible, layer, isControllable = true) {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         }
@@ -103,6 +102,10 @@ class WebGLWrapper {
      * @param {object} shaderSources custom shaders
      */
     addCustomShaderSources(...shaderSources) {
+        if (this._prepared) {
+            console.error("The viaGL was already prepared: shaders are no longer add-able.");
+            return;
+        }
         this._customShaders.push(...shaderSources);
     }
 
@@ -569,7 +572,6 @@ class WebGLWrapper {
                 err("Unable to use this visualisation.",
                     "Linking of shader failed. For more information, see logs in the console.");
             }
-            console.log(vis._built["fragment_shader"]);
         }
         this.visualisationReady(idx, vis);
     }

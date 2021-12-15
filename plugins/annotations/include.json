@@ -14,7 +14,7 @@
         "osd_fabric_annotation.js"
     ],
     "flag": "annotations",
-    "priority": 0,
-    "requires": null,
+    "public": true,
+    "requires": [],
     "modules": []
 }

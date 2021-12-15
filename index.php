@@ -25,6 +25,10 @@ function throwFatalError($title, $description, $details) {
     exit;
 }
 
+/**
+ * Redirection: based on parameters, either setup visualisation or redirect
+ */
+
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
 
 if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
@@ -43,7 +47,9 @@ if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
     letUserSetUp($image, $layer);
 }
 
-$errorSource = false;
+/**
+ * Parsing: verify valid parameters
+ */
 
 function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
     if (!isset($data->{$key})) {
@@ -110,26 +116,35 @@ if ($layerVisible) {
             }
         }
     }
+
+    //requires webgl module
+    $MODULES["webgl"]->loaded = true;
 }
-
-
 
 $visualisation = json_encode($parsedParams);
 $cookieCache = json_encode($cookieCache);
+$version = VERSION;
+
+/**
+ * Plugins+Modules loading: load required parts of the application
+ */
 
 $pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
-$webglModuleRequired = $layerVisible;
 foreach ($PLUGINS as $_ => $plugin) {
-    $plugin->loaded = !isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies);
+    //plugin is loaded if flag not specified or if flag set and no error in the plugin occurred
+    $plugin->loaded = !isset($plugin->error) &&
+        (!isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies));
     $plugin->permaLoaded = $plugin->loaded && isset($_GET[$plugin->flag]) && $_GET[$plugin->flag] == "true";
+
+    //make sure all modules required by plugins are also loaded
     if ($plugin->loaded) {
-        $webglModuleRequired = $webglModuleRequired || in_array("webgl", $plugin->modules);
+        foreach ($plugin->modules as $modId) {
+            $MODULES[$modId]->loaded = true;
+        }
     }
 }
 
-
-$version = VERSION . ""; //force to use variable :( it somehow set $version = "VERSION"
-echo <<<EOF
+?>
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 
@@ -191,31 +206,25 @@ echo <<<EOF
     <script src="./osd_debug/src/viewport.js"></script>
     <script src="./osd_debug/src/world.js"></script>
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
-EOF;
-
-if ($layerVisible || $webglModuleRequired) {
-    echo <<<EOF
-
-    <script src="./webgl/webGLWrapper.js?v=$version"></script>
-
-    <script src="./webgl/visualisationLayer.js?v=$version"></script>
-    <script src="./webgl/shaders/identityVisualisationLayer.js?v=$version"></script>
-    <script src="./webgl/shaders/heatmapVisualisationLayer.js?v=$version"></script>
-    <script src="./webgl/shaders/edgeVisualisationLayer.js?v=$version"></script>
-    <script src="./webgl/shaders/bipolarHeatmapVisualisationLayer.js?v=$version"></script>
-
-    <script src="./webgl/webGLContext.js?v=$version"></script>
-    <script src="./webgl/webGLToOSDBridge.js?v=$version"></script>
-EOF;
-}
-
-echo <<<EOF
+    
     <!--Tutorials-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
     <link rel="stylesheet" href="./external/enjoyhint.css">
     <script src="./external/enjoyhint.min.js"></script>
     
+    <!--Modules-->
+<?php
+
+foreach ($MODULES as $_ => $mod) {
+    if ($mod->loaded) {
+        foreach ($mod->includes as $__ => $file) {
+            echo "    <script src=\"" . MODULES . "/" . $mod->directory . "/$file?v=$version\"></script>\n";
+        }
+    }
+}
+
+?>
 
 </head>
 
@@ -243,21 +252,22 @@ echo <<<EOF
     <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
 </div>
 
-
-<!-- Panel -->
+<!-- Main Panel -->
 <span id="main-panel-show" class="material-icons" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
-    <div id="main-panel-content" class='position-relative' style="padding-bottom: 25px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;">
+    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 40px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;">
         <span id="main-panel-hide" class="material-icons" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
         <div id="navigator-container" class="inner-panel position-absolute right-0 top-0" style="width: 400px;">
             <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
         </div>
 
-        <div id="general-controls" class="inner-panel d-flex" style="margin-top: 320px;">
+        <div id="window-manager" class="inner-panel d-flex overflow-x-auto" style="margin-top: 320px;"></div>
+
+        <div id="general-controls" class="inner-panel d-flex">
             <!--TODO export also these values? -->
-EOF;
+<?php
 
 //if only one data layer visible, show as checkbox, else add Images menu
 if (count($parsedParams->background) == 1) {
@@ -351,21 +361,6 @@ EOF;
         }
     }
 
-    <?php
-
-    if($errorSource) {
-        //todo redirect to error.php? //todo this does not work anymore
-        echo "$('#main-panel').addClass('d-none');";
-        $debugSource = ""; //todo $debugSource not existing
-        if (!$debugSource) $debugSource = "null";
-        $postdata = print_r($_POST, true);
-        echo "DisplayError.show('Something went wrong. Please, re-open the visualizer (your URL might be wrong).', `ERROR: Visualiser expects input data. Following data does not contain one: <br><code>$postdata</code>`);";
-        echo "</script></body></html>";
-        exit;
-    }
-
-    ?>
-
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
     /*---------------------------------------------------------*/
@@ -396,8 +391,9 @@ EOF;
     var shadersCache = <?php echo $cookieCache ?>;
     var setup = <?php echo $visualisation ?>;
     var activeVisualization = 0; //todo dynamic?
-    const iipSrvUrlPOST = '/iipsrv-martin/iipsrv.fcgi?#DeepZoomExt=';
-    const iipSrvUrlGET = '/iipsrv-martin/iipsrv.fcgi?Deepzoom=';
+    const visualizationUrlMaker = new Function("path,data",
+        "return " + (setup.params.visualizationProtocol || "`${path}#DeepZoomExt=${data.join(',')}.dzi`"));
+
     //index of the layer composed of shaders, last one or not present (-1)
     let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
 
@@ -432,18 +428,17 @@ EOF;
         run: function(index) {
             if (index >= this.steps.length || index < 0) return;
             $('#main-panel').css('right', '0px');
-            //do prerequisite setup if necessary
-            if(this.prerequisites[index]) this.prerequisites[index]();
+
 
             //reset plugins visibility
             $(".plugins-pin").each(function() {
                 let pin = $(this);
-                let container = pin.parent().children().eq(2);
+                let container = pin.parents().eq(1).children().eq(2);
                 pin.removeClass('pressed');
-                pin.removeClass('locked');
                 container.removeClass('force-visible');
-                container.removeClass('force-hidden');
             });
+            //do prerequisite setup if necessary
+            if(this.prerequisites[index]) this.prerequisites[index]();
             let enjoyhintInstance = new EnjoyHint({});
             enjoyhintInstance.set(this.steps[index]);
             this.hide();
@@ -561,6 +556,7 @@ EOF;
             this._body = $("#annotation-messages-container");
             this._board = $("#annotation-messages");
             this._icon = $("#annotation-icon");
+            this._windowManager = $("#window-manager");
         },
 
         show: function (text, delayMS, importance) {
@@ -586,14 +582,15 @@ EOF;
             this._timer = null;
         },
 
-        showCustom: function(parentId, title, content, footer) {
-            this._showBuild(parentId, title, content, footer,
-                `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`, "");
+        showCustom: function(parentId, title, content, footer, params={allowClose:true}) {
+            this._buildComplexWindow(false, parentId, title, content, footer,
+                `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`,
+                "", params);
         },
 
-        showCustomModal: function(parentId, title, content, footer) {
-            this._showBuild(parentId, title, content, footer,
-                `class="position-absolute" style="left: 15px; top: 50px; z-index: 999;"`, 'style="cursor:move;"');
+        showCustomModal: function(parentId, title, content, footer, params={allowClose:true}) {
+            this._buildComplexWindow(true, parentId, title, content, footer,
+                `class="position-absolute" style="left: 15px; top: 50px; z-index: 999;"`, 'style="cursor:move;"', params);
             let element = document.getElementById(parentId);
             if (!element) return;
             let dragged = element.firstElementChild.firstElementChild;
@@ -619,29 +616,76 @@ EOF;
             }
         },
 
-        _showBuild: function(parentId, title, content, footer, positionStrategy, headerStyle) {
-            if (!parentId) {
+        closeWindow: function(id) {
+            if (!id) {
                 console.error("Invalid form: unique container id not defined.");
-                return;
+                return false;
             }
-            $(`#${parentId}`).remove(); //prevent from multiple same windows shown
-            $("body").append(`<div id="${parentId}" ${positionStrategy}>
+
+            let node = document.getElementById(id);
+            if (node && node.dataset.dialog !== "true") {
+                console.error("Invalid form: identifier not unique.");
+                return false;
+            }
+            if (node) $(node).remove();
+            $(`#${id}-dialog-manager`).remove();
+            return true;
+        },
+
+        _buildComplexWindow: function(isModal, parentId, title, content, footer, positionStrategy, headerStyle, params) {
+            //preventive close
+            if (!this.closeWindow(parentId)) return;
+            params = params || {};
+            let height = params.defaultHeight === undefined ? "" :
+                (typeof params.defaultHeight === "string" ? params.defaultHeight : params.defaultHeight+"px");
+
+            let close = params.allowClose ? this._getCloseButton(parentId) : '';
+            let resize = params.allowResize ? "resize:vertical;" : "";
+            footer = footer ? `<div class="position-absolute bottom-0 right-0 left-0 border-top"
+style="border-color: var(--color-border-primary);">${footer}</div>` : "";
+
+            if (isModal) {
+                let titleContent = title.replace(/(<([^>]+)>)/gi, "");
+                let idx = titleContent.indexOf(" ");
+                if (idx > 2) titleContent = titleContent.substr(0, idx)
+                let titleName = titleContent.length > 12 ? titleContent.substr(0, 11) + ".." : titleContent;
+                this._buildWindowMangerItem(parentId, titleName, close);
+            }
+
+            $("body").append(`<div id="${parentId}" data-dialog="true" ${positionStrategy}>
 <details-dialog class="Box Box--overlay d-flex flex-column" style=" max-width:80vw; max-height: 80vh">
     <div class="Box-header" ${headerStyle}>
-      <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
-        <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
-      </button>
+      ${close}
       <h3 class="Box-title">${title}</h3>
     </div>
-    <div class="overflow-auto position-relative">
-      <div class="Box-body overflow-auto" style="padding-bottom: 45px;">
+    <div class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
+      <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
 	  ${content}
 	  </div>
-	  ${footer}
+       ${footer}
     </div>
 </details-dialog>
 </div>`);
         },
+
+        _getCloseButton: function(id) {
+            return `<button class="Box-btn-octicon btn-octicon float-right" type="button"
+aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
+<svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true">
+<path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77
+4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg></button>`;
+        },
+
+        _buildWindowMangerItem(id, name, closeFunctionality) {
+            this._windowManager.append(`<div id="${id}-dialog-manager" class="d-inline-block rounded border-xl px-2 py-1 m-1">
+${closeFunctionality}
+<span style="vertical-align: text-top;">${name}</span>&emsp;<span class="material-icons" title="Visibility"
+style="cursor: pointer;font-size: initial; padding: 0;" data-ref="on" onclick="let self = $(this);
+if (self.attr('data-ref') === 'on'){$('#${id}').css('display', 'none'); self.html('visibility_off'); self.attr('data-ref', 'off');
+} else {$('#${id}').css('display', 'block'); self.html('visibility'); self.attr('data-ref', 'on');}">visibility</span>
+<span class="material-icons" title="Reset position" style="cursor: pointer;font-size: initial;padding: 0;"
+onclick="$('#${id}').css({left: '15px', top: '50px'})">restart_alt </span></div>`);
+        }
     }  // end of namespace Dialogs
     Dialogs.init();
 
@@ -660,9 +704,9 @@ EOF;
 <?php
      if ($layerVisible) {
          //we need to safely stringify setup (which has been modified by the webgl module)
-         echo "document.getElementById(\"visualisation\").value = JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer);";
+         echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer)}\`;";
      } else {
-         echo "document.getElementById(\"visualisation\").value = JSON.stringify(setup);";
+         echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(setup)}\`;";
      }
 ?>
         var form = document.getElementById("redirect");
@@ -738,6 +782,7 @@ ${constructExportVisualisationForm()}
         downloader.href = downloadURL;
         downloader.download = "export.html";
         downloader.click();
+        URL.revokeObjectURL(downloadURL);
     }
 </script>
 
@@ -866,11 +911,10 @@ if ($layerVisible) {
                     selectedImageLayer = i;
                 }
                 imageNode.prepend(`
-            <div class="h5 pl-3 py-1 position-relative">
-              <input type="checkbox" checked class="form-control"
-              onchange="viewer.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">
-              &emsp;Image ${fileNameOf(setup.data[image.dataReference])}
-            </div>`);
+<div class="h5 pl-3 py-1 position-relative"><input type="checkbox" checked class="form-control"
+onchange="viewer.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">Image
+${fileNameOf(setup.data[image.dataReference])}<input type="range" min="0" max="1" value="1" step="0.1"
+onchange="viewer.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));"></div>`);
                 i++;
             }
         }
@@ -923,11 +967,11 @@ if ($layerVisible) {
     });
 
     function showAvailablePlugins() {
-        let content = "<input type='checkbox' class='form-control position-absolute top-1 right-0' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-4'  for='remember-plugin-selection'>remember selection</label><br>";
+        let content = "<input type='checkbox' class='form-control position-absolute top-1 right-2' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-5' for='remember-plugin-selection'>remember selection</label><br>";
         Object.values(PLUGINS.each).forEach(plugin => {
             let dependency = "";
             if (plugin.requires) {
-                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode && this.checked) {otherNode.checked = true; otherNode.disabled = true;} else {otherNode.disabled = false;}"`;
+                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode && this.checked) {otherNode.checked = true; otherNode.disabled = true;} else if (otherNode) {otherNode.disabled = false;}"`;
             }
 
             let checked = plugin.loaded ? "checked" : "";
@@ -937,7 +981,7 @@ if ($layerVisible) {
         });
 
         Dialogs.showCustom("load-plugins", "Add plugins", content + "<br>",
-            `<button onclick="loadWithPlugins(document.getElementById('remember-plugin-selection'));" class="btn position-absolute bottom-2 right-4">Load with selected</button>`);
+            `<button onclick="loadWithPlugins(document.getElementById('remember-plugin-selection'));" class="btn position-absolute bottom-2 right-4">Load with selected</button>`, {allowClose: true});
     }
 
     function loadWithPlugins(remember=false) {
@@ -960,16 +1004,17 @@ if ($layerVisible) {
 foreach ($PLUGINS as $_ => $plugin) {
     if ($plugin->loaded) {
         //add plugin style sheet if exists
-        if (file_exists(PLUGIN_FOLDER . $plugin->directory . "/style.css")) {
-            echo "<link rel=\"stylesheet\" href=\"" . PLUGIN_FOLDER . $plugin->directory . "/style.css?v=$version\">";
+        if (file_exists(PLUGINS . "/" . $plugin->directory . "/style.css")) {
+            echo "<link rel=\"stylesheet\" href=\"" . PLUGINS . "/" . $plugin->directory . "/style.css?v=$version\">\n";
         }
         //add plugin includes
         foreach ($plugin->includes as $__ => $file) {
-            echo "<script src=\"" . PLUGIN_FOLDER . $plugin->directory . "/$file?v=$version\"></script>";
+            echo "<script src=\"" . PLUGINS . "/" . $plugin->directory . "/$file?v=$version\"></script>\n";
         }
     }
 }
 
+$imageServerPath = SERVER . "" . IIPIMAGE_SERVER;
 if ($layerVisible) {
     echo <<<EOF
 <script type="text/javascript">
@@ -981,15 +1026,17 @@ if ($layerVisible) {
     seaGL.loadShaders(function() {
         activeData = seaGL.dataImageSources(); 
         //reverse order: last opened IMAGE is the first visible
-        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi").reverse();
-        toOpen.push(iipSrvUrlPOST + activeData + ".dzi");
+        let toOpen = setup.background.map(value => {
+            const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
+            return urlmaker("$imageServerPath", setup.data[value.dataReference]);
+        }).reverse();
+        toOpen.push(visualizationUrlMaker("$imageServerPath", activeData));
         viewer.open(toOpen);
     });
     seaGL.init(viewer);
 
     viewer.addHandler('open-failed', function(e) {
-        let sources = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");
-        sources.push(iipSrvUrlPOST + activeData + ".dzi");
+        let sources = []; //todo create valid urls again
         DisplayError.show("No valid images.", `We were unable to open provided image sources. 
 Url's are probably invalid. <code>\${sources.join(", ")}</code>`);
     });
@@ -1006,7 +1053,11 @@ EOF;
     /*---------------------------------------------------------*/
 
     (function() {
-        let toOpen = setup.background.map(value => iipSrvUrlGET + setup.data[value.dataReference] + ".dzi");     
+         let toOpen = setup.background.map(value => {
+            const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
+            //todo absolute path? dynamic using php?
+            return urlmaker("$imageServerPath", setup.data[value.dataReference]);
+        }).reverse(); 
         viewer.open(toOpen);
     })();
 </script>

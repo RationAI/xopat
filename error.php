@@ -11,11 +11,6 @@ $title = hasKey($_SESSION, "title") ? $_SESSION['title'] : (hasKey($_GET, "title
 $description = hasKey($_SESSION, "description") ? $_SESSION['description'] : (hasKey($_GET, "description") ? $_GET['description'] : false);
 $techNFO = hasKey($_SESSION, "details") ? $_SESSION['details'] : (hasKey($_GET, "details") ? $_GET['details'] : false);
 
-if (!$title) {
-    header("Location: " . GATEWAY_ENTRY_SCRIPT);
-    exit;
-}
-
 unset($_SESSION['title']);
 unset($_SESSION['description']);
 unset($_SESSION['details']);
@@ -46,7 +41,7 @@ session_destroy();
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 
-    <button onclick="window.location='<?php echo GATEWAY_ENTRY_SCRIPT; ?>'" class="btn" type="button">Back to experiments</button>
+    <button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button">Back to experiments</button>
 
 </div>
 

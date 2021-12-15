@@ -1,17 +1,27 @@
 <?php
-define("PLUGIN_FOLDER", "./plugins/");
 
+require_once("modules.php");
 $PLUGINS = array();
 
-$plugin_list = array_diff(scandir(PLUGIN_FOLDER), array('..', '.'));
-foreach ($plugin_list as $_=>$dir) {
-    $interface = PLUGIN_FOLDER . $dir . "/include.json";
+foreach (array_diff(scandir(PLUGINS), array('..', '.')) as $_=>$dir) {
+    $interface = PLUGINS . "/" . $dir . "/include.json";
     if (file_exists($interface)) {
         $data = json_decode(file_get_contents($interface));
-        //todo verify values
-        if (!is_numeric($data->priority)) $data->priority = 0;
         $data->directory = $dir;
+
+        foreach ($data->modules as $modId) {
+            if (!isset($MODULES[$modId])) {
+                $data->error = "The plugin requires unknown module.";
+            }
+        }
         $PLUGINS[$data->id] = $data;
+    }
+}
+
+//resolve dependencies
+foreach ($PLUGINS as $id=>$plugin) {
+    if (!isset($plugin->priority)) {
+        scanDependencies($PLUGINS, $id, 'plugins');
     }
 }
 

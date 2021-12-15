@@ -1,6 +1,6 @@
 # Plugins
 
-Dynamic `PHP` scripting allows for painless plugin creation and insertion. A plugin must be in its own folder placed
+Dynamic `PHP` scripting allows for painless plugin creation, insertion and dependency deduction. A plugin must be in its own folder placed
  here (`./plugins/`). Inside, one file must exist (otherwise the plugin won't load):
  
 ### `include.json`
@@ -10,28 +10,28 @@ Since we're in `JavaScript`, a `JSON` file is required that defines the plugin a
 {
     "id": "plugin_id",
     "name": "Plugin Name",
+    "description": "My awesome plugin for this and that.",
     "includes" : [
         "dependency1.js",
         "dependency2.js",
         "implementation.js"
     ],
     "flag": null,
-    "priority": 0,
-    "requires": null
+    "requires": [],
+    "modules": []
 }
 ````
-- `id` is a required value that defines plugin's ID as well as it's global variable name: the plugin is thereby commiting 
-to define a global variable with the same name, e.g define in the global scope:
-     > var plugin_id = new MyAwesomePlugin(...);
-- `name` is a plugin name 
-- `includes` is a list of files relative to the plugin folder to include 
+- `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
+- `name` is the plugin name 
+- `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
+- `includes` is a list of JavaScript files relative to the plugin folder to include 
 - `flag` can be either `null` (the plugin is included implicitly) or a keyword, in that case the plugin is included only and only
 if `GET` or `POST` data contains `keyword` with value `1`
-- `priority` is a number that defines the load order among other plugins (greater number is loaded later and thus has more content available)
-- `requries` can be either null or a string that describes an id of another plugin that must be already loaded before this plugin (we don't expect
-multiple plugins dependency but in future, this could be also an array)
+- `requries` array of id's of all plugins that must be already loaded before this plugin, because this plugin is dependent on them
+- `modules` array of id's of required modules (libraries)
+    - note that in case the library is probably not useful to the whole system, include it internally within the plugin `"includes"`
 
-You can than find this data stored in `PLUGINS.each["plugin_id"]`.
+You can than find the plugin instance stored in `PLUGINS.each["plugin_id"]`.
 
 ### Must do's
 - A plugin must have its id in a member variable named after `id` from `includes.json`.
@@ -82,10 +82,7 @@ This function will register the plugin and initialize it. It will make sure that
 - in case `openSeadragonReady` is defined, it will be invoked when the visualisation is ready
     - especially **if you access any properties from the visualisation itself**, make sure you use this feature
 
-#### `redraw()`
-This function will trigger re-drawing of the whole data layer.
-
-### Available functionality
+### Available functionality (hard-wired modules)
 You can use
  - [jQuery](https://jquery.com/), 
  - [OpenSeadragon](https://openseadragon.github.io/docs/) utilities (working with points etc.), 
@@ -93,7 +90,7 @@ You can use
  for icons (use `<span>`) and 
  - [Primer CSS bootstrap](https://primer.style/css).
 
-### CSS
+### Styling with CSS
 If you want to use CSS, please, first rely on _Primer CSS_ bootstrap (https://primer.style/css) using class styling. 
 If you need your own CSS file anyway, you can create in your plugin root directory `style.css` - this file will be
 automatically included.

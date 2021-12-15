@@ -107,7 +107,7 @@ class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"><
         return `<span class="d-inline-block" style="width:46%" title="Importing and exporting presets">Preset control:</span>
 <button class="btn px-1" onclick="${this._globalSelf}.exportToFile();" id="presets-download" 
 title="Download presets" style="height:30px;width:23%;"><span class="material-icons px-0">file_download</span>
-Export</button><a style="display:none;" id="presets-export"></a><button class="btn px-1" style="height:30px;width:23%;"
+Export</button><a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a><button class="btn px-1" style="height:30px;width:23%;"
 id="presets-upload" onclick="this.nextSibling.click();" title="Import presets"><span class="material-icons px-0">
 file_upload</span>Import</button><input type='file' style="visibility:hidden; width: 0; height: 0;" 
 onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
@@ -231,6 +231,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
         downloader.href = downloadURL;
         downloader.download = "annotation-presets.json";
         downloader.click();
+        URL.revokeObjectURL(downloadURL);
     }
 
     /**
@@ -416,16 +417,21 @@ ${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:
 ${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, 
 $(this).index())); "><span class="material-icons">add</span> New</div>`;
 
-        let title = isLeftClick ? "for left click" : "for right click";
-
         PLUGINS.dialog.showCustom("preset-modify-dialog",
-            `Annotations presets <b>${title}</b>`,
+            `<b>Annotations presets</b>`,
             html,
-            `<button id="select-annotation-preset" onclick="if (${this._globalSelf}._selection === 
+            `<div class="d-flex flex-row-reverse">
+<button id="select-annotation-preset-right" onclick="if (${this._globalSelf}._selection === 
 undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); 
-return false;} setTimeout(function(){ $('#preset-modify-dialog').remove(); 
-${this._globalSelf}.selectPreset(${isLeftClick}); }, 150);" class="btn position-absolute bottom-2 right-4">Select
-</button>`);
+return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
+${this._globalSelf}.selectPreset(false); }, 150);" class="btn m-2">Set for right click 
+</button>
+<button id="select-annotation-preset-left" onclick="if (${this._globalSelf}._selection === 
+undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); 
+return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
+${this._globalSelf}.selectPreset(true); }, 150);" class="btn m-2">Set for left click 
+</button>
+</div>`);
     }
 }
 

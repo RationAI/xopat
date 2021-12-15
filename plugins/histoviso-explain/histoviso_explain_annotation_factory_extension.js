@@ -4,6 +4,7 @@ class HistovisoImage extends AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager, id) {
         super(context, autoCreationStrategy, presetManager, id);
         this._current = null;
+        this._pending = {};
         this.active = false;
 
         let _this = this;
@@ -117,6 +118,29 @@ class HistovisoImage extends AnnotationObjectFactory {
         return undefined;
     }
 
+    _setRequestStarted(id, request) {
+        if (this._isRequestPending(id)) {
+            PLUGINS.dialog.show("Still working on the task, please, be patient.", 8000, PLUGINS.dialog.MSG_ERR);
+            return;
+        }
+        let _this = this;
+        this._pending[id] = setTimeout((() => {_this._setRequestTimedOut(id, request)}), 90000);
+    }
+
+    _setRequestTimedOut(id, request) {
+        this._abortSendRequest("Timed out: the server is probably busy. Please, try again.", request.dummyRect);
+        this._clearRequestTimeOut(id);
+    }
+
+    _isRequestPending(id) {
+        return this._pending[id] !== undefined;
+    }
+
+    _clearRequestTimeOut(id) {
+        clearTimeout(this._pending[id]);
+        delete this._pending[id];
+    }
+
     _abortSendRequest(message, dummyRect) {
         PLUGINS.dialog.show(message, 8000, PLUGINS.dialog.MSG_ERR);
         if (dummyRect) {
@@ -190,8 +214,9 @@ class HistovisoImageExplorer extends HistovisoImage {
                 //also top_n, batch_size params, now not send server-default used
             }
         };
+        let reqId = imageBounds.toString();
         console.log("Sending request for exploration: ", data);
-
+        this._setRequestStarted(reqId, {dummyRect: dummyRect});
         //make ajax call to server for data (demo image here)
         fetch(`/histoviso-explain/top-feature-maps`, {
             method: "POST",
@@ -202,8 +227,8 @@ class HistovisoImageExplorer extends HistovisoImage {
             cache: "no-cache",
             referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
             headers: new Headers({
-                "content-type": "application/json",
-                'Authorization': 'Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw=='
+                //todo remove headers from everywhere!!
+                "content-type": "application/json"
             })
         }).then(response => {
             if (response.status == 422 || response.status == 503) {
@@ -222,6 +247,9 @@ class HistovisoImageExplorer extends HistovisoImage {
                 return response.json();
             }
         }).then(json => {
+            if (!_this._isRequestPending(reqId)) return;
+            _this._clearRequestTimeOut(reqId);
+
             let html = [
                 `<div id="nn-explainability-exploration-results"><table><tr class="pb-3 border-bottom">
 <th><span class=\"material-icons\">layers</span> name </th>
@@ -244,7 +272,7 @@ class HistovisoImageExplorer extends HistovisoImage {
                     "nn-explainability-exploration",
                     `Top feature maps for the model <br><b>${data.params.model_name}</b>`,
                     html.join(""),
-                    "");
+                    "", {allowResize:true, allowClose: true});
             }
             _this._context.deleteHelperAnnotation(dummyRect);
 
@@ -375,8 +403,9 @@ class HistovisoImageRenderer extends HistovisoImage {
                 model_name: this._dataSource.getModel()
             }, this._dataSource.getAditionalMethodParams())
         };
+        let reqId = imageBounds.toString();
         console.log("Sending request for explainability: ", data);
-
+        this._setRequestStarted(reqId, {dummyRect: dummyRect});
         //make ajax call to server for data (demo image here)
         fetch(`/histoviso-explain/explainability`, {
             method: "POST",
@@ -387,8 +416,7 @@ class HistovisoImageRenderer extends HistovisoImage {
             cache: "no-cache",
             referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
             headers: new Headers({
-                "content-type": "application/json",
-                'Authorization': 'Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw=='
+                "content-type": "application/json"
             })
         }).then(response => {
             if (response.status == 422 || response.status == 503) {
@@ -421,6 +449,9 @@ class HistovisoImageRenderer extends HistovisoImage {
                 return response.blob();
             }
         }).then(blob => {
+            if (!_this._isRequestPending(reqId)) return;
+            _this._clearRequestTimeOut(reqId);
+
             let urlCreator = window.URL || window.webkitURL;
             //drawing with opengl now not implemented
             var myImage = document.createElement('img');

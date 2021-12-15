@@ -43,17 +43,19 @@ Then, based on the presence of `visualisation` the user is
 - redirected to `user_setup.php` if missing, and both `image` and `layer` parameters are set
 - shown error otherwise
 
-#### ``visualisation`` parameter example
+#### ``visualisation`` parameter [full example]
 ````JSON
 {    
     "params": {
-        "experimentId": "ID_OF_THE_EXPERIMENT"
+        "experimentId": "ID_OF_THE_EXPERIMENT",
+        "visualizationProtocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";"
     }, 
     "data": ["path/to/tissue/scan.tif", "path/to/annotation.tif", "path/to/probability.tif"],
     "background": [
         {
             "dataReference": 0,
-            "lossless": false
+            "lossless": false,
+            "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
         }
     ],
     "shaderSources" : [
@@ -100,10 +102,12 @@ re-used. The module is closely described in `./webgl/` folder.
 We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
     - [O]`experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
+    - [O]`visualizationProtocol` - see protocol construction below
 - [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it)
-- [R]`background` - defines what images compose the **image part**
+- [R]`background` - defines what images compose the **image part**, at least one element must be present
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [0]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
+    - [0]`protocol` - see protocol construction below
 - [0]`shaderSources` - voluntary, array of objects, more details in `./webgl/shaders/`, each object must have these properties:
     - [R]`url` - url where to fetch the shader implementation
     - [0]`headers` - arbitrary headers
@@ -132,17 +136,46 @@ shader type, so always check whether a desired property exists or not
     - it is in fact equal to default values overriding
     - it is data-type dependent, so if you enter different value or data type than expected by the shader, you will break things
     
+_Protocol construction_ &emsp;
+To use custom-defined protocol, pass a string that can be evaluated to a valid URL. It must be one-liner expression, which
+can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving server. `background.data` contains
+elements of `data` array defined in the outer scope (selected to be used). Note that `visualizationProtocol` expression receives a string **list** as `data` whereas
+`protocol` only a single string. That means a server behind `visualizationProtocol` url must be able to serve simultaneously multiple images. These images
+must be concatenated below each other into a single bigger image (see the `webgl` module for more details).
+<details>
+ <summary>Example:</summary>
+ 
+> "protocol": "path + \\"?Deepzoom=\\" + data + \\".dzi\\";"
 
-####  `plugins.php` and `./plugins/`
+is the default behaviour for `background` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=my/data.tif`, url
+`http://serv.org/iipsrv.fcgi?Deepzoom=my/data.tif.dzi` which is a DZI protocol request to IIPImage's `fcgi` script.
+
+> "visualizationProtocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
+
+is the default behaviour for `visualizations` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=[my/data.tif, other/data.tif]`,
+the `http://serv.org/iipsrv.fcgi#DeepZoomExt=my/data.tif,other/data.tif.dzi` url 
+using string template one-liner (`;` is optional). The protocol in this
+case is our custom protocol, able to handle multiple image acquisition as described above. Moreover, data behind `#` sign
+is sent to as `HTTP POST` data in the request.   
+
+</details>
+
+### `./external/`
+Always-present third-party libraries and styles which are guaranteed to be included.
+
+### `plugins.php` and `./plugins/`
 The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integration 
-of functionality to the visualizer. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
+of functionality to the visualizer GUI. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
-### `./webgl/`
-Contains modified version of WebGl plugin for OpenSeadragon. It is an application capable of parsing the visualisation
-parameters, loading & compiling shaders and using them to draw on a canvas, passed to OpenSeadragon.
+### `modules.php` and `./modules/`
+The visualizer supports **modules** - a `JavaScript` libraries: it is more dynamic version of `./external/`.
+Modules allow versatile library inclusion: plugins and other modules can declare dependency: 
+this dependency is resolved and necessary items are included (in the right order).
+See `./modules/README.md`. Modules are placed in `./modules/` folder.
 
 ### `./dynamic_shaders/`
 Deprecated structure, will be eventually removed.
 
 ### `./osd/` or `./osd_debug/`
-OpenSeadragon third-party javascript library. `debug` contains unminified version for debugging & OSD modifications.
+OpenSeadragon third-party javascript library the whole visualisation builds on. `debug` contains unminified version for debugging & OSD modifications.
+These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.

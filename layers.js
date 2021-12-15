@@ -45,7 +45,7 @@ seaGL = new OpenSeadragonGL({
     visualisationChanged: function(oldVis, newVis) {
         if (PLUGINS.hasLayers) {
             viewer.addTiledImage({
-                tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
+                tileSource : visualizationUrlMaker('/iipsrv-martin/iipsrv.fcgi', seaGL.dataImageSources()),
                 index: layerIDX,
                 opacity: $("#global-opacity").val(),
                 replace: true
@@ -98,6 +98,8 @@ Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foun
     'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
 }, {
     'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
+},{
+    'next #window-manager' : 'In case some modal windows are opened by plugins: <br> you can mage them here (reset position, hide/show...).'
 }, {
     'next #general-controls' : 'The whole visualisation consists of two layers: <br> the tissue scan and the data layer above.<br>You can control the data layer opacity here.'
 }, {
@@ -112,7 +114,9 @@ Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foun
     'next #shaders' : 'Multiple different visualisations <br>are supported - you can select <br>which one is being displayed.'
 }, {
     'next #data-layer-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
-}], function() {
+}, {
+    'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
+},], function() {
     //prerequisite - pin in default state
     let pin = $("#shaders-pin");
     let container = pin.parent().children().eq(1);

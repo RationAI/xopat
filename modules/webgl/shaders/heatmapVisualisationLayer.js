@@ -1,5 +1,6 @@
 /**
- * Colors shader
+ * Heatmap shader
+ * data reference must contain one index to the data to render using heatmap strategy
  *
  * expected parameters:
  *  index - unique number in the compiled shader

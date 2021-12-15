@@ -235,8 +235,7 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
             cache: 'no-cache',
             credentials: 'same-origin', // include, *same-origin, omit
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw=='
+                'Content-Type': 'application/json'
             },
             redirect: 'error',
             referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
@@ -361,12 +360,8 @@ experiment is '${params.experimentId}'.`);
         const _this = this;
 
         this.viaGL = new WebGLWrapper({
-            //where to append html/css designed for shaders to use, these containers are emptied before append!
             htmlControlsId: "histoviso-explain-html",
             uniqueId: "histoviso_explain",
-            //just a custom function names to avoid collision
-            //todo hardcoded!!
-            authorization: "Basic cmF0aW9uYWk6cmF0aW9uYWlfZGVtbw==",
             ready: function() {
                 var i = 0;
                 _this.viaGL.foreachVisualisation(function (vis) {

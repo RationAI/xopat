@@ -6,7 +6,7 @@
         "histoviso_explain_annotation_factory_extension.js"
     ],
     "flag": "histoviso_explain",
-    "priority": 10,
-    "requires": "openseadragon_image_annotations",
+    "public": false,
+    "requires": ["openseadragon_image_annotations"],
     "modules": ["webgl"]
 }

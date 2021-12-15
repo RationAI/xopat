@@ -1,0 +1,15 @@
+{
+    "id": "webgl",
+    "name": "WebGL rendering module",
+    "includes" : [
+        "webGLWrapper.js",
+        "visualisationLayer.js",
+        "shaders/bipolarHeatmapVisualisationLayer.js",
+        "shaders/edgeVisualisationLayer.js",
+        "shaders/heatmapVisualisationLayer.js",
+        "shaders/identityVisualisationLayer.js",
+        "webGLContext.js",
+        "webGLToOSDBridge.js"
+    ],
+    "requires": []
+}

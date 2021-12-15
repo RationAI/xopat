@@ -217,6 +217,7 @@ class Presenter {
         downloader.href = downloadURL;
         downloader.download = "visualisation-recording.json";
         downloader.click();
+        URL.revokeObjectURL(downloadURL);
     }
 
     import(event) {

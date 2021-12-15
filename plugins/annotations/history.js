@@ -13,8 +13,10 @@ History = function (selfName, context, presetManager) {
 History.prototype = {
 
     init: function (historySize = 30) {
-        PLUGINS.appendToMainMenu("Board",
-            `<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
+
+        PLUGINS.dialog.showCustomModal("bord-for-annotations",
+            `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
+<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
 onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
 <span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
 onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
@@ -22,12 +24,11 @@ onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 <span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
-<button class="btn btn-danger mr-2 position-absolute right-2 top-0" type="button" aria-pressed="false" 
+<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
-            `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-<div id="annotation-logs" class="height-full" style="cursor:pointer;overflow-y: overlay;"></div></div></div>`,
-            'annotation-board',
-            this._context.id);
+            `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3; width: 400px;">
+<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`,
+            '', {defaultHeight: "250px", allowResize:true});
 
         this.board = $("#annotation-logs");
         this.undoBtn = $("#history-undo");
@@ -41,6 +42,14 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
             //some properties are not set, these are necessary for correct control behaviour
             $.extend(object, PresetManager._commonProperty);
         });
+    },
+
+    hideBoard: function() {
+        $("#bord-for-annotations").css("display", "none");
+    },
+
+    showBoard: function() {
+        $("#bord-for-annotations").css("display", "block");
     },
 
     back: function () {
@@ -228,7 +237,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
         }
 
         let center = object.getCenterPoint();
-        this.board.prepend(`<div id="log-object-${object.incrementId}" 
+        this.board.prepend(`<div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
@@ -242,7 +251,7 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
         if (this._editSelection) {
             this._boardItemSave(true);
         } else {
-            $('#annotation-board').css('background', 'var(--color-merge-box-error-indicator-bg)');
+            $('#bord-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
             this._context.setMouseOSDInteractive(false);
             this._context.enableInteraction(false);
         }
@@ -282,7 +291,7 @@ ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this
         self.prev().prop('disabled', true);
 
         if (!switches) {
-            $('#annotation-board').css('background', 'none');
+            $('#bord-for-annotations .Box-header').css('background', 'none');
             this._context.setMouseOSDInteractive(true);
             this._context.enableInteraction(true);
         }

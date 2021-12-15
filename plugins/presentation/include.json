@@ -5,7 +5,7 @@
         "presenter.js"
     ],
     "flag": "presentation",
-    "priority": 0,
-    "requires": null,
+    "requires": [],
+    "public": true,
     "modules": []
 }
