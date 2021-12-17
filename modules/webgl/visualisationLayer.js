@@ -1,25 +1,25 @@
-WebGLWrapper.ShaderMediator = class {
+WebGLModule.ShaderMediator = class {
 
     static _layers = {};
 
     static registerLayer(LayerRendererClass) {
-        if (WebGLWrapper.ShaderMediator._layers.hasOwnProperty(LayerRendererClass.type())) {
+        if (WebGLModule.ShaderMediator._layers.hasOwnProperty(LayerRendererClass.type())) {
             console.warn("Registering an already existing layer renderer:", LayerRendererClass.type());
         }
-        WebGLWrapper.ShaderMediator._layers[LayerRendererClass.type()] = LayerRendererClass;
+        WebGLModule.ShaderMediator._layers[LayerRendererClass.type()] = LayerRendererClass;
     }
 
     static getClass(id) {
-        return WebGLWrapper.ShaderMediator._layers[id];
+        return WebGLModule.ShaderMediator._layers[id];
     }
 
     static availableShaders() {
-        return Object.values(WebGLWrapper.ShaderMediator._layers);
+        return Object.values(WebGLModule.ShaderMediator._layers);
     }
 }
 
 
-WebGLWrapper.VisualisationLayer = class {
+WebGLModule.VisualisationLayer = class {
 
     /**
      * Override **static** type definition

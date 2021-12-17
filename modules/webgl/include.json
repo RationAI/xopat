@@ -8,6 +8,7 @@
         "shaders/edgeVisualisationLayer.js",
         "shaders/heatmapVisualisationLayer.js",
         "shaders/identityVisualisationLayer.js",
+        "shaders/noneVisualisationLayer.js",
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],

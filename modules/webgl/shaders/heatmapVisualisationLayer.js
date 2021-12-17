@@ -19,7 +19,7 @@
  * supports thresholding - outputs color on areas above certain value
  * mapping html input slider 0-100 to .0-1.0
  */
-WebGLWrapper.HeatmapLayer = class extends WebGLWrapper.VisualisationLayer {
+WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
 
     static type() {
         return "heatmap";
@@ -139,4 +139,4 @@ class="with-direct-input" min="1" max="100" ${directionRange} step="1">
     }
 }
 
-WebGLWrapper.ShaderMediator.registerLayer(WebGLWrapper.HeatmapLayer);
+WebGLModule.ShaderMediator.registerLayer(WebGLModule.HeatmapLayer);

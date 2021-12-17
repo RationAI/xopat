@@ -16,13 +16,13 @@ History.prototype = {
 
         PLUGINS.dialog.showCustomModal("bord-for-annotations",
             `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
-<span id="history-undo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
+<span id="history-undo" class="material-icons pointer" style="color: var(--color-icon-tertiary);" 
 onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
-<span id="history-redo" class="material-icons" style="color: var(--color-icon-tertiary); cursor: pointer;" 
+<span id="history-redo" class="material-icons pointer" style="color: var(--color-icon-tertiary);" 
 onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
-<span id="history-refresh" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.refresh()" 
+<span id="history-refresh" class="material-icons pointer" onclick="${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-<span id="history-sync" class="material-icons" style="cursor: pointer;" onclick="${this._globalSelf}.sync()" 
+<span id="history-sync" class="material-icons pointer" onclick="${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
@@ -242,7 +242,7 @@ onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.increment
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
 style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
-<span class="material-icons" onclick="let self = $(this); if (self.html() === 'edit') {
+<span class="material-icons pointer" onclick="let self = $(this); if (self.html() === 'edit') {
 ${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">edit</span></div>`);
     },
 

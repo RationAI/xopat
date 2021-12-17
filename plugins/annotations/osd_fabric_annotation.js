@@ -370,10 +370,10 @@ OSDAnnotations.prototype = {
 		autoSelectionControls += "<br>";
 
 		PLUGINS.appendToMainMenuExtended("Annotations", `
-		<span class="material-icons" onclick="${this.id}.showHelp();" title="Help" style="cursor: pointer;float: right;">help</span>
-		<span class="material-icons" id="downloadAnnotation" title="Export annotations" style="cursor: pointer;float: right;">download</span>
+		<span class="material-icons pointer" onclick="${this.id}.showHelp();" title="Help" style="float: right;">help</span>
+		<span class="material-icons pointer" id="downloadAnnotation" title="Export annotations" style="float: right;">download</span>
 		<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
-		<span class="material-icons" id="enable-disable-annotations" title="Enable/disable annotations" style="cursor: pointer;float: right;" data-ref="on" onclick="
+		<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="
 		let self = $(this);
 		if (self.attr('data-ref') === 'on'){
 			${this.id}.enableAnnotations(false); self.html('visibility_off'); self.attr('data-ref', 'off');
@@ -497,7 +497,7 @@ OSDAnnotations.prototype = {
 		PLUGINS.addTutorial(
 			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
 				{
-					"next #sensitivity-auto-outline": "You have to select what data you want to annotate."
+					"next #sensitivity-auto-outline": "You have to select what data you want to annotate.<br> Then, automatic annotation can be created by a double-click."
 				},
 				{
 					"next #annotations-left-click": "If you use POLYGON and click on empty space, the plugin will tell you.<br>Creation migh also fail - you can try adjusting ZOOM level or clicking on a different spot."
@@ -956,7 +956,7 @@ class AnnotationState {
 	}
 }
 
-class StateAuto extends  AnnotationState {
+class StateAuto extends AnnotationState {
 	constructor(context) {
 		super("auto", "automatic shape & navigation", context);
 		this.clickInBetweenDelta = 0;
@@ -990,15 +990,15 @@ class StateAuto extends  AnnotationState {
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
 			finishDelta = clickTime - this.clickInBetweenDelta;
+		this.clickInBetweenDelta = clickTime;
 
-		// just navigate if click longer than 100ms or other conds not met, also if user clicked twice very quickly
-		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta < 300) return;
+		// just navigate if click longer than 100ms or other conds not met, fire if double click
+		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 300) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
 			PLUGINS.dialog.show("Could not create automatic annotation.", 5000, PLUGINS.dialog.MSG_WARN);
 		}
-		this.clickInBetweenDelta = clickTime;
 	}
 
 	setFromAuto() {

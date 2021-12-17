@@ -2,7 +2,7 @@
  * Modular behaviour of the WebGL plugin.
  * provide your OWN rendering behaviour using a GPU.
  */
-WebGLWrapper.GlContextFactory = class {
+WebGLModule.GlContextFactory = class {
 
     static _GL_MAKERS = {
         "1.0" : {
@@ -11,7 +11,7 @@ WebGLWrapper.GlContextFactory = class {
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
             },
             webGLImplementation: function (wrapper, glContext) {
-                return new WebGLWrapper.WebGL_1_0(wrapper, glContext);
+                return new WebGLModule.WebGL_1_0(wrapper, glContext);
             }
         },
         "2.0" : {
@@ -19,7 +19,7 @@ WebGLWrapper.GlContextFactory = class {
                 return canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
             },
             webGLImplementation: function (wrapper, glContext) {
-                return new WebGLWrapper.WebGL_2_0(wrapper, glContext);
+                return new WebGLModule.WebGL_2_0(wrapper, glContext);
             }
         }
     }
@@ -40,12 +40,12 @@ WebGLWrapper.GlContextFactory = class {
             console.error("Registered context maker must create webgl context visualisation using webGLImplementation()!");
             return;
         }
-        WebGLWrapper.GlContextFactory._GL_MAKERS[version] = maker;
+        WebGLModule.GlContextFactory._GL_MAKERS[version] = maker;
     }
 
     /**
      * Create WebGL context and corresponding implementation (State pattern & Factory method)
-     * @param wrapper {WebGLWrapper}
+     * @param wrapper {WebGLModule}
      * @param versions {string} array of considered versions in the preferred order
      *      currently supported "1.0", "2.0"
      * @throws
@@ -58,11 +58,11 @@ WebGLWrapper.GlContextFactory = class {
         let gl;
 
         for (let version of versions) {
-            if (!WebGLWrapper.GlContextFactory._GL_MAKERS.hasOwnProperty(version)) {
+            if (!WebGLModule.GlContextFactory._GL_MAKERS.hasOwnProperty(version)) {
                 console.warn("WebGL context initialization: unsupported version. Skipping.", version);
                 continue;
             }
-            let maker = WebGLWrapper.GlContextFactory._GL_MAKERS[version];
+            let maker = WebGLModule.GlContextFactory._GL_MAKERS[version];
             gl = maker.glContext(canvas);
             if (gl) {
                 wrapper.gl = gl;
@@ -79,7 +79,7 @@ WebGLWrapper.GlContextFactory = class {
  * Interface for the visualisation rendering implementation which can run
  * on various GLSL versions
  */
-WebGLWrapper.WebGLImplementation = class {
+WebGLModule.WebGLImplementation = class {
     /**
      * @return {string} WebGL version used
      */
@@ -143,7 +143,7 @@ WebGLWrapper.WebGLImplementation = class {
     }
 }
 
-WebGLWrapper.WebGL_1_0 = class extends WebGLWrapper.WebGLImplementation {
+WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
     constructor(context, gl) {
         super();
@@ -450,7 +450,7 @@ void main() {
 }
 
 
-WebGLWrapper.WebGL_2_0 = class extends WebGLWrapper.WebGLImplementation {
+WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
     constructor(context, gl) {
         super();
         this.context = context;

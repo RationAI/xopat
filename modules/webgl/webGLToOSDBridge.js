@@ -1,5 +1,5 @@
 /*
-* Bridge between WebGLWrapper and OSD. Registers appropriate callbacks.
+* Bridge between WebGLModule and OSD. Registers appropriate callbacks.
 * Written by Jiří Horák, 2021
 *
 * Based on OpenSeadragonGL plugin
@@ -19,7 +19,7 @@ OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
 
     this.refresh = -1;
 
-    this.webGLWrapper = new WebGLWrapper(webGLWrapperParams);
+    this.webGLWrapper = new WebGLModule(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
 

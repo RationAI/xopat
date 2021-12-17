@@ -384,7 +384,7 @@ style="color: ${preset.color};">${icon}</span>  ${comment}
         }
         return `${html} style="cursor:pointer; margin: 5px;" 
 onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
-${this._globalSelf}._selection = ${preset.presetID};"><span class="material-icons position-absolute top-0 right-0 px-0" 
+${this._globalSelf}._selection = ${preset.presetID};"><span class="material-icons pointer position-absolute top-0 right-0 px-0" 
 onclick="if (${this._globalSelf}.removePreset(${preset.presetID})) {$(this).parent().remove();}">delete</span>
 <div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="
 ${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: 
@@ -1334,18 +1334,34 @@ class AutoObjectCreationStrategy {
 
     constructor(selfName, context) {
         this._currentTile = null;
-        this._pixelReader = document.createElement('canvas');
-        this._pixelReader.width = 1;
-        this._pixelReader.height = 1;
-        this._pixelReader = this._pixelReader.getContext('2d');
-        this.alphaSensitivity = 1;
-
+        const _this = this;
+        this._renderEngine = new WebGLModule({
+            uniqueId: "annot",
+            onError: function(error) {
+                _this.tileFailure = true;
+            },
+            onFatalError: function (error) {
+                _this.tileFailure = true;
+            }
+        });
+        this.tileFailure = false;
+        this._renderEngine.addData("undefined");
+        this._renderEngine.addVisualisation({
+            shaders: {
+                _ : {
+                    type: "heatmap",
+                    dataReferences: [0],
+                    params: {}
+                }
+            }
+        });
+        this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
+        this._renderEngine.prepareAndInit();
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
         this._readingIndex = 0;
         this._readingKey = "";
 
-        const _this = this;
         PLUGINS.osd.addHandler('visualisation-used', function (visualisation) {
             let html = "";
 
@@ -1354,13 +1370,17 @@ class AutoObjectCreationStrategy {
             let key = "";
             for (key in visualisation.shaders) {
                 layer = visualisation.shaders[key];
+
+                let errIcon = _this.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
+                let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
+                let selected = "";
+
                 if (layer.index === _this._readingIndex) {
                     index = layer.index;
                     _this._readingKey = key;
-                    html += `<option value='${key}' selected>${layer.name}</option>`;
-                } else {
-                    html += `<option value='${key}'>${layer.name}</option>`;
+                    selected = "selected";
                 }
+                html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
             }
 
             if (index < 0) {
@@ -1372,57 +1392,99 @@ class AutoObjectCreationStrategy {
         });
     }
 
+    _beforeAutoMethod() {
+        let vis = PLUGINS.seaGL.currentVisualisation(),
+            layer = vis.shaders[this._readingKey];
+        this._renderEngine._visualisations[0] = {
+            shaders: {}
+        };
+        let toAppend = this._renderEngine._visualisations[0].shaders;
+
+        for (let key in vis.shaders) {
+            if (vis.shaders.hasOwnProperty(key)) {
+                let otherLayer = vis.shaders[key];
+                let type;
+                if (key === this._readingKey) {
+                    if (otherLayer.type === "bipolar-heatmap") {
+                        this.comparator = function(pixel) {
+                            return Math.abs(pixel[0] - this.origPixel[0]) < 10 &&
+                                Math.abs(pixel[1] - this.origPixel[1]) < 10 &&
+                                Math.abs(pixel[2] - this.origPixel[2]) < 10 &&
+                                pixel[3] > 0;
+                        };
+                        type = otherLayer.type;
+                    } else {
+                        this.comparator = function(pixel) {
+                            return pixel[3] > 0;
+                        };
+                        type = "heatmap";
+                    }
+                } else {
+                    type = 'none';
+                }
+
+                toAppend[key] = {
+                    type: type,
+                    visible: otherLayer.visible,
+                    cache: otherLayer.cache,
+                    dataReferences: otherLayer.dataReferences,
+                    params: otherLayer.params,
+                    index: otherLayer.index
+                }
+            }
+        }
+        //todo still unclear API
+        this._renderEngine.setData(...PLUGINS.seaGL.dataImageSources());
+        this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
+
+        let tiles = PLUGINS.dataLayer().lastDrawn;
+        for (let i = 0; i < tiles.length; i++) {
+            let tile = tiles[i];
+            if (!tile.hasOwnProperty("annotationCanvas")) {
+                tile.annotationCanvas = document.createElement("canvas");
+                tile.annotationCanvasCtx = tile.annotationCanvas.getContext("2d");
+            }
+            this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
+            let canvas = this._renderEngine.processImage(
+                tile.origData, tile.sourceBounds, 0, 0
+            );
+            tile.annotationCanvas.width = tile.sourceBounds.width;
+            tile.annotationCanvas.height = tile.sourceBounds.height;
+            tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
+        }
+    }
+
+    _afterAutoMethod() {
+        delete this._renderEngine._visualisations[0];
+    }
+
     sensitivityControls() {
         return `<span class="d-inline-block" style="width:46%" title="What layer is used to create automatic 
 annotations.">Target data layer:</span><select style="width:50%" title="What layer is selected for the data." 
-type="number" id="sensitivity-auto-outline" class="form-control" onchange="
-let layer = PLUGINS.seaGL.currentVisualisation().shaders[$(this).val()];
-${this._globalSelf}._readingIndex = layer.index;
-${this._globalSelf}._readingKey = $(this).val();"></select>`;
+type="number" id="sensitivity-auto-outline" class="form-control" onchange="${this._globalSelf}._setTargetLayer(this);"></select>`;
     }
 
-
-    updateAutoSensitivity() {
+    _setTargetLayer(self) {
+        self = $(self);
+        this._readingKey = self.val();
         let layer = PLUGINS.seaGL.currentVisualisation().shaders[this._readingKey];
-        if (layer) {
-            // 128 empirically set
-            this.alphaSensitivity = Math.max(layer.cache.hasOwnProperty('threshold') ?
-                layer.cache.threshold * 128 / 100 : 1, 20);
-
-            this.comparator = layer.type === "dual-color" ?
-                function(pix) {
-                    //we read grayscale images
-                    return Math.abs(pix[0] - 128) > this.alphaSensitivity;
-                }
-                :
-                function(pix) {
-                    //we read grayscale images
-                    return pix[0] > this.alphaSensitivity;
-                };
-
-        } else {
-            this.comparator = function(pix) {
-                //we read grayscale images
-                return pix[0] > this.alphaSensitivity;
-            }
-        }
-
-
+        this._readingIndex = layer.index;
     }
 
     approximateBounds(point) {
+        this._beforeAutoMethod();
 		if (!this.changeTile(point)) {
-		    return null;
+            this._afterAutoMethod();
+            return null;
         }
-        this.updateAutoSensitivity();
 
-        let origPixel = this.getPixelData(point);
+        this.origPixel = this.getPixelData(point);
         let dimensionSize = Math.max(screen.width, screen.height);
 
 		var x = point.x;
 		var y = point.y;
 
-		if (!this.comparator(origPixel)) {
+		if (!this.comparator(this.origPixel)) {
 			//default object of width 40
 			return { top: this.toGlobalPointXY(x, y - 20), left: this.toGlobalPointXY(x - 20, y),
                 bottom: this.toGlobalPointXY(x, y + 20), right: this.toGlobalPointXY(x + 20, y) }
@@ -1477,12 +1539,13 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
     }
 
     /*async*/ createOutline(eventPosition) {
+        this._beforeAutoMethod();
         if (!this.changeTile(eventPosition)) {
+            this._afterAutoMethod();
             return null;
         }
-        this.updateAutoSensitivity();
 
-        let origPixel = this.getPixelData(eventPosition);
+        this.origPixel = this.getPixelData(eventPosition);
         let dimensionSize = Math.max(screen.width, screen.height);
 
         let points = [];
@@ -1492,17 +1555,20 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
         var y = eventPosition.y;  // current y position
         var direction = "UP"; // current direction of outline
 
-        if (!this.comparator(origPixel)) {
-            console.warn("Outline algorithm exited: outside region.")
-            return
+        if (!this.comparator(this.origPixel)) {
+            console.warn("Outline algorithm exited: outside region.");
+            this._afterAutoMethod();
+            return null;
         }
 
         let counter = 0;
         while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
             x += 2; //all neightbours inside, skip by two
             counter++;
+            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
         }
         if (counter >= dimensionSize) {
+            this._afterAutoMethod();
             return null;
         }
         x -= 2;
@@ -1510,7 +1576,6 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
         //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
         //indexing instead of switch
-        //todo fix openseadragon_image_annotations reference
         var handlers = [
             // 0 - all neighbours outside, invalid
             function () { console.error("Auto outline algorithm: Fell out of region.") },
@@ -1635,6 +1700,7 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
         };
 
         const first_point = new OpenSeadragon.Point(x, y);
+        let time = Date.now();
 
         //best speed is just pixel by pixel as we compute in screen coords
         const speed = 1;
@@ -1643,15 +1709,14 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
             let mark = this.getAreaStamp(x, y);
             if (mark === 0 || mark === 15) {
                 let findClosest = surroundingInspector(x, y, 2 * speed);
-                console.log("CLOSEST", findClosest);
                 if (findClosest) {
                     x = findClosest[0];
                     y = findClosest[1];
                     points.push(this.toGlobalPointXY(x, y));
-                    console.log("continue");
                     continue;
                 } else {
                     console.warn("Outline algorithm exited: could not find close point on the outline.");
+                    this._afterAutoMethod();
                     return;
                 }
             }
@@ -1670,13 +1735,17 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
 
             //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
 
-            if (counter > dimensionSize*8) {
+            //if (counter % 1000 === 0) await OSDAnnotations.sleep(150);
+
+            if (counter % 100 === 0 && Date.now() - time > 2000) {
                 console.warn("Outline algorithm exited: iteration steps exceeded.");
+                this._afterAutoMethod();
                 return;
             }
 
-            //if (counter % 100 === 0) { await sleep(200); }
         }
+        this._afterAutoMethod();
+
         if (points.length < 3) return null;
         let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
         for (let i = 1; i < points.length; i++) {
@@ -1690,8 +1759,6 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
         return points;
     }
 
-
-
     toGlobalPointXY (x, y) {
 		return PLUGINS.imageLayer().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
@@ -1700,25 +1767,32 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
 		return PLUGINS.imageLayer().windowToImageCoordinates(point);
 	}
 
-	/**
-     * Find tile that contains the event point
-     * @param {OpenSeadragon.Point} eventPosition point
-     */
-	changeTile(eventPosition) {
-		let viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-		let tiles = PLUGINS.dataLayer().lastDrawn;
-		for (let i = 0; i < tiles.length; i++) {
-			if (tiles[i].bounds.containsPoint(viewportPos)) {
-				this._currentTile = tiles[i];
-				return true;
-			}	
-		}
-		return false;
-	}
-
 	isValidPixel(eventPosition) {
 		return this.comparator(this.getPixelData(eventPosition));
 	}
+
+	comparator(pixel) {
+        return pixel[0] == this.origPixel[0] &&
+            pixel[1] == this.origPixel[1] &&
+            pixel[2] == this.origPixel[2] &&
+            pixel[3] > 0;
+    }
+
+    /**
+     * Find tile that contains the event point
+     * @param {OpenSeadragon.Point} eventPosition point
+     */
+    changeTile(eventPosition) {
+        let viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
+        let tiles = PLUGINS.dataLayer().lastDrawn;
+        for (let i = 0; i < tiles.length; i++) {
+            if (tiles[i].bounds.containsPoint(viewportPos)) {
+                this._currentTile = tiles[i];
+                return true;
+            }
+        }
+        return false;
+    }
 
 	getPixelData(eventPosition) {
 		//change only if outside
@@ -1734,12 +1808,12 @@ ${this._globalSelf}._readingKey = $(this).val();"></select>`;
 		var relative_x = Math.round((x / this._currentTile.size.x) * this._currentTile.context2D.canvas.width);
 		var relative_y = Math.round((y / this._currentTile.size.y) * this._currentTile.context2D.canvas.height);
 
-		//Images are stacked atop, get desired image by offsetting y
-		relative_y += this._readingIndex * this._currentTile.context2D.canvas.height;
-
-		this._pixelReader.drawImage(this._currentTile.origData, relative_x, relative_y, 1, 1, 0, 0, 1, 1);
-		return this._pixelReader.getImageData(0, 0, 1, 1).data;
-	}
+        // var pixel = new Uint8Array(4);
+        // let gl = this._renderEngine.gl;
+        // gl.readPixels(relative_x, relative_y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+        // return pixel;
+        return this._currentTile.annotationCanvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
+    }
 
 	// CHECKS 4 neightbouring pixels and returns which ones are inside the specified region
 	//  |_|_|_|   --> topRight: first (biggest), bottomRight: second, bottomLeft: third, topLeft: fourth bit

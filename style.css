@@ -246,6 +246,14 @@ select::-ms-expand {
   font-feature-settings: 'liga';
 }
 
+.pointer {
+    cursor: pointer;
+}
+
+.material-icons.pointer:hover {
+    color:var(--color-state-focus-border);
+}
+
 
 /**
 =====================

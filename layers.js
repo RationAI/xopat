@@ -91,39 +91,6 @@ function makeCacheSnapshot() {
     Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
 }
 
-
-Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
-    'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
-},{
-    'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
-}, {
-    'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
-},{
-    'next #window-manager' : 'In case some modal windows are opened by plugins: <br> you can mage them here (reset position, hide/show...).'
-}, {
-    'next #general-controls' : 'The whole visualisation consists of two layers: <br> the tissue scan and the data layer above.<br>You can control the data layer opacity here.'
-}, {
-    'next #copy-url' : 'To share the visualisation with URL, use this button.<br>It will copy the URL to your clipboard.<b>Plugins will be included, but without their data.'
-}, {
-    'next #global-export' : 'If you want to share the visualisation <b>along with plugins data</b>, <br> you can export it here - all changes you\'ve made will be stored <br>(<i>note: the behaviour depends on the plugin itself</i>).'
-}, {
-    'next #panel-shaders' : 'The data layer <br>-the core visualisation functionality-<br> can be controlled here. Hovering over<br>the element will show additional hidden controls.'
-}, {
-    'click #shaders-pin' : 'Click on the pin to set <br>this controls subpanel to be always visible.'
-}, {
-    'next #shaders' : 'Multiple different visualisations <br>are supported - you can select <br>which one is being displayed.'
-}, {
-    'next #data-layer-options' : 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.'
-}, {
-    'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
-},], function() {
-    //prerequisite - pin in default state
-    let pin = $("#shaders-pin");
-    let container = pin.parent().children().eq(1);
-    pin.removeClass('pressed');
-    container.removeClass('force-visible');
-});
-
 // load desired shader upon selection
 $("#shaders").on("change", function () {
     activeVisualization = Number.parseInt(this.value);
@@ -216,7 +183,7 @@ function shaderPartToogleOnOff(self) {
 function changeVisualisationLayer(self, layerId) {
     let _this = $(self),
         type = _this.val();
-    let factoryClass = WebGLWrapper.ShaderMediator.getClass(type);
+    let factoryClass = WebGLModule.ShaderMediator.getClass(type);
     if (factoryClass !== undefined) {
         let viz = currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
@@ -236,7 +203,7 @@ function createHTMLLayerControls(title, html, dataId, isVisible, layer, isContro
     let checked = isVisible ? 'checked' : '';
     let disabled = isControllable ? '' : 'disabled';
     let availableShaders = "";
-    for (let available of WebGLWrapper.ShaderMediator.availableShaders()) {
+    for (let available of WebGLModule.ShaderMediator.availableShaders()) {
         let selected = available.type() === layer.type ? " selected" : "";
         availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
     }

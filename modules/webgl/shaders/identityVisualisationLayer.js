@@ -3,7 +3,7 @@
  *
  * data reference must contain one index to the data to render using identity
  */
-WebGLWrapper.IdentityLayer = class extends WebGLWrapper.VisualisationLayer {
+WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
 
     static type() {
         return "identity";
@@ -24,4 +24,4 @@ WebGLWrapper.IdentityLayer = class extends WebGLWrapper.VisualisationLayer {
     }
 }
 
-WebGLWrapper.ShaderMediator.registerLayer(WebGLWrapper.IdentityLayer);
+WebGLModule.ShaderMediator.registerLayer(WebGLModule.IdentityLayer);

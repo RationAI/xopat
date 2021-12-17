@@ -91,6 +91,8 @@ if (!isset($parsedParams->shaderSources)) {
 }
 
 $layerVisible = isset($parsedParams->visualizations);
+$singleBgImage = count($parsedParams->background) == 1;
+$firstTimeVisited = !isset($_COOKIE["shadersPin"]);
 if ($layerVisible) {
 
     foreach ($parsedParams->visualizations as $visualisationTarget) {
@@ -244,8 +246,8 @@ foreach ($MODULES as $_ => $mod) {
 
 <!--Tutorials-->
 <div id="tutorials-container" class="d-none system-container">
-    <div class="f1-light text-center clearfix">Select a tutorial</div>
-    <p class="text-center">The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.</p>
+    <div id="tutorials-title" class="f1-light text-center clearfix"></div>
+    <p id="tutorials-description" class="text-center"></p>
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
@@ -253,16 +255,16 @@ foreach ($MODULES as $_ => $mod) {
 </div>
 
 <!-- Main Panel -->
-<span id="main-panel-show" class="material-icons" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
+<span id="main-panel-show" class="material-icons pointer" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 40px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;">
-        <span id="main-panel-hide" class="material-icons" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
+        <span id="main-panel-hide" class="material-icons pointer" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
         <div id="navigator-container" class="inner-panel position-absolute right-0 top-0" style="width: 400px;">
             <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
         </div>
-
+        <!--Height of navigator = margn top of this div + padding-->
         <div id="window-manager" class="inner-panel d-flex overflow-x-auto" style="margin-top: 320px;"></div>
 
         <div id="general-controls" class="inner-panel d-flex">
@@ -270,24 +272,26 @@ foreach ($MODULES as $_ => $mod) {
 <?php
 
 //if only one data layer visible, show as checkbox, else add Images menu
-if (count($parsedParams->background) == 1) {
+if ($layerVisible && $singleBgImage) {
     echo <<<EOF
             <label for="global-opacity">Layer Opacity: &nbsp;</label>
             <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 150px;">&emsp;
             <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
             <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
                    onchange="viewer.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-        </div> <!--Height of navigator = margn top of this div + padding-->
+        </div><!--end of general controls-->
 EOF;
 } else {
+    if ($layerVisible) {
+        echo '<label for="global-opacity">Layer Opacity: &nbsp;</label>
+            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;';
+    }
     echo <<<EOF
-            <label for="global-opacity">Layer Opacity: &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;
-        </div> <!--Height of navigator = margn top of this div + padding-->
+        </div> <!--end of general controls-->
         <div id="panel-images" class="inner-panel">   
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
-                        <span id="images-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+                        <span id="images-pin" class="material-icons pointer inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
                         <h3 class="d-inline-block">Images</h3>
                     </div>
    
@@ -300,6 +304,9 @@ EOF;
 }
 
 if ($layerVisible) {
+    $opened = $firstTimeVisited || $_COOKIE["shadersPin"] == "true";
+    $pinClass = $opened ? "pressed" : "";
+    $shadersSettingsClass = $opened ? "force-visible" : "";
     echo <<<EOF
           <div id="panel-shaders" class="inner-panel" >
     
@@ -308,14 +315,15 @@ if ($layerVisible) {
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
     
-                        <span id="shaders-pin" class="material-icons inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+                        <span id="shaders-pin" class="material-icons pointer inline-pin $pinClass" onclick="let jqSelf = $(this); pinClick(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`"> push_pin </span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons" style="text-align:right; cursor:pointer;vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
+                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
                     </div>
     
-                    <div id="data-layer-options" class="inner-panel-hidden">
+                    <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
                             <!--populated with options for a given image data -->
                     </div>
                 </div>
@@ -326,12 +334,12 @@ EOF;
         <!-- Appended controls for other plugins -->
     </div>
 
-    <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0" style="width: 400px; background: #0000005c;">
-        <span id="copy-url" class="pl-2" onclick="copyHashUrlToClipboard();" title="Get the visualisation link" style="cursor: pointer;"><span class="material-icons">link</span>Get link</span>
-        <span id="global-export" class="pl-2" onclick="exportVisualisation();" title="Export visualisation together with plugins data" style="cursor: pointer;"><span class="material-icons">download</span>Export</span>
+    <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer" style="width: 400px; background: #0000005c;">
+        <span id="copy-url" class="pl-2" onclick="copyHashUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pointer">link</span>Get link</span>
+        <span id="global-export" class="pl-2" onclick="exportVisualisation();" title="Export visualisation together with plugins data"><span class="material-icons pointer">download</span>Export</span>
         <a style="display:none;" id="export-visualisation"></a> &emsp;
-        <span id="add-plugins" onclick="showAvailablePlugins();" title="Add plugins to the visualisation" style="cursor: pointer;"><span class="material-icons">extension</span>Plugins</span>&emsp;
-        <span id="global-help" onclick="Tutorials.show();" title="Show tutorials" style="cursor: pointer;"><span class="material-icons">school</span>Tutorial</span>&emsp;
+        <span id="add-plugins" onclick="showAvailablePlugins();" title="Add plugins to the visualisation"><span class="material-icons pointer">extension</span>Plugins</span>&emsp;
+        <span id="global-help" onclick="Tutorials.show();" title="Show tutorials"><span class="material-icons pointer">school</span>Tutorial</span>&emsp;
     </div>
 </div>
 
@@ -353,6 +361,7 @@ EOF;
             this.msgDetails.html(description);
             this.msgContainer.removeClass("d-none");
             this.screenContainer.addClass("disabled");
+            Tutorials.hide(); //preventive
         },
 
         hide: function() {
@@ -400,19 +409,20 @@ EOF;
     // Tutorial functionality
     var Tutorials = {
         tutorials: $("#tutorials"),
-        tutContainer: $("#tutorials-container"),
-        screenContainer: $("#viewer-container"),
         steps: [],
         prerequisites: [],
 
-        show: function() {
-            this.tutContainer.removeClass("d-none");
-            this.screenContainer.addClass("disabled");
+        show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
+            $("#tutorials-container").removeClass("d-none");
+            $("#viewer-container").addClass("disabled");
+            $("#tutorials-title").html(title);
+            $("#tutorials-description").html(description);
         },
 
         hide: function() {
-            this.tutContainer.addClass("d-none");
-            this.screenContainer.removeClass("disabled");
+            $("#tutorials-container").addClass("d-none");
+            $("#viewer-container").removeClass("disabled");
+            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/';
         },
 
         add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
@@ -445,6 +455,67 @@ EOF;
             enjoyhintInstance.run();
         }
     }
+
+    <?php
+
+echo <<<EOF
+    Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
+    'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
+},{
+        'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
+}, {
+        'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
+},{
+        'next #window-manager' : 'In case some modal windows are opened by plugins: <br> you can mage them here (reset position, hide/show...).'
+},
+EOF;
+
+if ($singleBgImage && $layerVisible) {
+    echo '{
+        \'next #general-controls\' : \'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.<br>You can control the data layer opacity here.\'
+},';
+} else {
+    echo '{
+        \'next #panel-images\' : \'There are several background images available: <br> you can turn them on/off or blend using an opacity slider.\'
+        
+},';
+    if ($layerVisible) {
+        echo '{
+        \'next #general-controls\' : \'The data layer opacity atop background images can be controlled here.\'
+},';
+    }
+}
+
+if ($layerVisible) {
+    echo '{
+        \'next #panel-shaders\' : \'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be conrolled here.\'
+}, {
+        \'click #shaders-pin\' : \'Click on the pin to set <br>this controls subpanel to be always visible.\'
+}, {
+        \'next #shaders\' : \'In case multiple different visualisations <br>are set, you can select <br>which one is being displayed.\'
+}, {
+        \'next #data-layer-options\' : \'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.\'
+},';
+}
+
+echo <<<EOF
+{
+        'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
+}]
+EOF; //end of the first argument of Tutorials.add()
+if ($layerVisible) {
+    echo <<<EOF
+, function() {
+    //prerequisite - pin in default state
+    let pin = $("#shaders-pin");
+    let container = pin.parents().eq(1).children().eq(1);
+    pin.removeClass('pressed');
+    container.removeClass('force-visible');
+}
+EOF;
+}
+echo ");"; //end of Tutorials.add(...
+    ?>
 
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
@@ -510,9 +581,6 @@ EOF;
                 zoom = viewer.viewport.getZoom();
                 viewer.viewport.zoomTo(zoom - zoom * speed * 2);
                 return;
-            // case "h":
-            //   Tutorials.show();
-            //   return;
             default:
                 return; // Quit when this doesn't handle the key event.
         }
@@ -679,11 +747,11 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         _buildWindowMangerItem(id, name, closeFunctionality) {
             this._windowManager.append(`<div id="${id}-dialog-manager" class="d-inline-block rounded border-xl px-2 py-1 m-1">
 ${closeFunctionality}
-<span style="vertical-align: text-top;">${name}</span>&emsp;<span class="material-icons" title="Visibility"
-style="cursor: pointer;font-size: initial; padding: 0;" data-ref="on" onclick="let self = $(this);
+<span style="vertical-align: text-top;">${name}</span>&emsp;<span class="material-icons pointer" title="Visibility"
+style="font-size: initial; padding: 0;" data-ref="on" onclick="let self = $(this);
 if (self.attr('data-ref') === 'on'){$('#${id}').css('display', 'none'); self.html('visibility_off'); self.attr('data-ref', 'off');
 } else {$('#${id}').css('display', 'block'); self.html('visibility'); self.attr('data-ref', 'on');}">visibility</span>
-<span class="material-icons" title="Reset position" style="cursor: pointer;font-size: initial;padding: 0;"
+<span class="material-icons pointer" title="Reset position" style="font-size: initial;padding: 0;"
 onclick="$('#${id}').css({left: '15px', top: '50px'})">restart_alt </span></div>`);
         }
     }  // end of namespace Dialogs
@@ -819,7 +887,7 @@ if ($layerVisible) {
         },
         appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
             $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-        <span class="material-icons inline-pin plugins-pin" id="${id}-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
+        <span class="material-icons inline-pin plugins-pin pointer" id="${id}-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
         <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
         </div>
         <div>
@@ -933,7 +1001,7 @@ onchange="viewer.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
             }
 <?php
 if ($layerVisible) {
-    echo "seaGL.setLayerIndex(layerIDX);";
+    echo "            seaGL.setLayerIndex(layerIDX);";
 }
 ?>
         }
@@ -964,6 +1032,12 @@ if ($layerVisible) {
             }
         });
         _registeredPlugins = undefined;
+
+<?php
+if ($firstTimeVisited) {
+    echo "        setTimeout(_ => Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
+}
+?>
     });
 
     function showAvailablePlugins() {
@@ -994,7 +1068,7 @@ if ($layerVisible) {
             }
         });
         plugins = remember ? plugins.join(',') : "";
-        document.cookie = `plugins=${plugins}; expires=Sun, 1 Jan 2023 00:00:00 UTC; SameSite=Strict; path=/`;
+        document.cookie = `plugins=${plugins}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`;
         $("body").append(constructExportVisualisationForm(formData, false));
     }
 

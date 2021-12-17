@@ -10,9 +10,9 @@ class Presenter {
 
         //controlPanelId is incomming parameter, defines where to add HTML
         PLUGINS.appendToMainMenuExtended("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <span class="material-icons" onclick="$('#presenter-help').css('display', 'block');" title="Help" style="cursor: pointer;float: right;">help</span>
-    <span onclick="this.nextSibling.click();" title="Import Recording" style="cursor: pointer; float: right;"><span class="material-icons">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="automatic_presentation.import(event);" />
-    <span onclick="automatic_presentation.export();" title="Export Recording" style="cursor: pointer;float: right;"><span class="material-icons">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
+    <span class="material-icons pointer" onclick="$('#presenter-help').css('display', 'block');" title="Help" style="float: right;">help</span>
+    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="automatic_presentation.import(event);" />
+    <span onclick="automatic_presentation.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
 <button class='btn' onclick="automatic_presentation.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>

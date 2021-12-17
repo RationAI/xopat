@@ -10,7 +10,7 @@ and each goal can define arbitrary amount of layers to render into the output ca
 (downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
 in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
 
-Constructors of both `OpenSeadragonGL` and `WebGLWrapper` accept `options` argument
+Constructors of both `OpenSeadragonGL` and `WebGLModule` accept `options` argument
 - `options.ready()` function called once the visualisation is prepared to render, for the first time only
 - `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
 - `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function for custom UI html controls (ignored if `htmlControlsId` not set)
@@ -80,14 +80,14 @@ An example of valid custom shader source declaration (object(s) passed to `addCu
 
 
 ### webGLToOSDBridge.js
-Binding of WebGLWrapper to OpenSeadragon. The API is docummented in the code. A recommended use is:
+Binding of WebGLModule to OpenSeadragon. The API is docummented in the code. A recommended use is:
 ```js
 var seaGL = new OpenSeadragonGL({...}, drawingEvent => {return true;});
 var osd = new OpenSeadragon({...}); //init OSD without specifying the TileSources to load - delay the initialization
 
 //load shaders now
 seaGL.loadShaders(function() {
-    //fire OpenSeadragon initialization after WebGLWrapper finished and the rendering can begin
+    //fire OpenSeadragon initialization after WebGLModule finished and the rendering can begin
     osd.open(...);
 });
 seaGL.init(osd); //calls seaGL.loadShaders(...) if not performed manually

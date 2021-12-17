@@ -7,7 +7,7 @@
 * http://via.hoff.in
 */
 
-class WebGLWrapper {
+class WebGLModule {
     constructor(incomingOptions) {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Default values overrideable from incomingOptions  /////////////////
@@ -49,19 +49,19 @@ class WebGLWrapper {
         /////////////////////////////////////////////////////////////////////////////////
 
         try {
-            //WebGLWrapper.GlContextFactory.init(this,  "1.0");
-            WebGLWrapper.GlContextFactory.init(this, "2.0", "1.0");
+            //WebGLModule.GlContextFactory.init(this,  "1.0");
+            WebGLModule.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             return;
         }
 
         this.gl_loaded = function (gl, program, vis) {
-            this._eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
+            WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
         };
 
         this.gl_drawing = function (gl, program, vis, bounds) {
-            this._eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
+            WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
         };
 
         this._visualisations = [];
@@ -93,9 +93,15 @@ class WebGLWrapper {
 
     /**
      * @param {string} dataSources data sources identifiers (e.g. paths)
+     * todo move to init or prepare and enable set with re-initialization only
      */
     addData(...dataSources) {
         this._origDataSources.push(...dataSources);
+    }
+
+    setData(...dataSources) {
+        this._origDataSources = dataSources;
+        this._updateRequiredDataSources(this._visualisations[this._program]);
     }
 
     /**
@@ -195,6 +201,25 @@ class WebGLWrapper {
 
     supportsHtmlControls() {
         return typeof this.htmlControlsId === "string" && this.htmlControlsId.length > 0;
+    }
+
+    static eachValidVisualizationLayer(vis, callback) {
+        let shaders = vis.shaders;
+        for (let key in shaders) {
+            if (shaders.hasOwnProperty(key) && !shaders[key].hasOwnProperty("error")) {
+                callback(shaders[key]);
+            }
+        }
+    }
+
+    static eachValidVisibleVisualizationLayer(vis, callback) {
+        let shaders = vis.shaders;
+        for (let key in shaders) {
+            //rendering == true means no error
+            if (shaders.hasOwnProperty(key) && shaders[key].rendering) {
+                callback(shaders[key]);
+            }
+        }
     }
 
     /////////////////////////////////////////////////////////////////////////////////////
@@ -338,7 +363,7 @@ class WebGLWrapper {
     }
 
     _loadScript(visId) {
-        this._eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
+        WebGLModule.eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
     }
 
     _buildFailed(visualisation, error) {
@@ -347,31 +372,12 @@ class WebGLWrapper {
         visualisation.desc = error;
     }
 
-    _eachValidVisualizationLayer(vis, callback) {
-        let shaders = vis.shaders;
-        for (let key in shaders) {
-            if (shaders.hasOwnProperty(key) && !shaders[key].hasOwnProperty("error")) {
-                callback(shaders[key]);
-            }
-        }
-    }
-
-    _eachValidVisibleVisualizationLayer(vis, callback) {
-        let shaders = vis.shaders;
-        for (let key in shaders) {
-            //rendering == true means no error
-            if (shaders.hasOwnProperty(key) && shaders[key].rendering) {
-                callback(shaders[key]);
-            }
-        }
-    }
-
     _buildVisualisation(order, visualisation) {
         try {
             let data = this.webGLImplementation.generateVisualisation(order, visualisation, this.supportsHtmlControls());
             if (data.usableShaders < 1) {
                 this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
-<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation)}</code>
+<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, this.jsonReplacer)}</code>
 <br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
             } else {
                 data.dziExtendedUrl = data.dataUrls.join(",");
@@ -388,8 +394,11 @@ class WebGLWrapper {
 
     _detachShader(program, type) {
         var shader = program[type];
-        this.gl.detachShader(program, shader);
-        this.gl.deleteShader(shader);
+        if (shader) {
+            this.gl.detachShader(program, shader);
+            this.gl.deleteShader(shader);
+            program[type] = null;
+        }
     }
 
     async _downloadAndRegisterShader(url, headers) {
@@ -428,7 +437,7 @@ class WebGLWrapper {
 
     async _downloadRequiredShaderFactories(shaderSources) {
         for (let source of shaderSources) {
-            let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(source["typedef"]);
+            let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(source["typedef"]);
             if (!ShaderFactoryClass) {
                 await this._downloadAndRegisterShader(source["url"], source["headers"]);
             } else {
@@ -514,7 +523,7 @@ class WebGLWrapper {
             for (let key in vis.shaders) {
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key],
-                        ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
+                        ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
 
                     if (!layer.hasOwnProperty("cache")) layer.cache = {};
                     this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
@@ -538,7 +547,7 @@ class WebGLWrapper {
                     }
                     delete layer.error;
                     delete layer.desc;
-                    let ShaderFactoryClass = WebGLWrapper.ShaderMediator.getClass(layer.type);
+                    let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
                     this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }
             }

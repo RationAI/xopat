@@ -359,7 +359,7 @@ experiment is '${params.experimentId}'.`);
         let shaderNames = $("#histoviso-explain-rendering");
         const _this = this;
 
-        this.viaGL = new WebGLWrapper({
+        this.viaGL = new WebGLModule({
             htmlControlsId: "histoviso-explain-html",
             uniqueId: "histoviso_explain",
             ready: function() {

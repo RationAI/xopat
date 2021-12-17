@@ -16,5 +16,5 @@
     "flag": "annotations",
     "public": true,
     "requires": [],
-    "modules": []
+    "modules": ["webgl"]
 }

@@ -17,7 +17,7 @@
  * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively
  */
 
-WebGLWrapper.BipolarHeatmapLayer = class extends WebGLWrapper.VisualisationLayer {
+WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
 
     static type() {
         return "bipolar-heatmap";
@@ -159,4 +159,4 @@ class="with-direct-input" min="1" max="100" ${directionRange} step="1">
     }
 }
 
-WebGLWrapper.ShaderMediator.registerLayer(WebGLWrapper.BipolarHeatmapLayer);
+WebGLModule.ShaderMediator.registerLayer(WebGLModule.BipolarHeatmapLayer);

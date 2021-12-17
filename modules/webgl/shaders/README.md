@@ -128,7 +128,7 @@ In fragment shader (`$execution` and `$definition`), there are several global fu
 /**
  * Identity shader
  */
-MyIdentityLayer = class extends WebGLWrapper.VisualisationLayer {
+MyIdentityLayer = class extends WebGLModule.VisualisationLayer {
 
     static type() {
         return "identity";
@@ -149,7 +149,7 @@ MyIdentityLayer = class extends WebGLWrapper.VisualisationLayer {
     }
 }
 
-WebGLWrapper.ShaderMediator.registerLayer(MyIdentityLayer);
+WebGLModule.ShaderMediator.registerLayer(MyIdentityLayer);
 
 `````
 Shader in WebGL 2.0 is then composed in this manner: (you can see the **global** stuff here)

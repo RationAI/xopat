@@ -12,7 +12,7 @@
  *  edgeThickness
  *  ctrlEdgeThickness
  */
-WebGLWrapper.EdgeLayer = class extends WebGLWrapper.VisualisationLayer {
+WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
 
     static type() {
         return "edge";
@@ -166,4 +166,4 @@ class="with-direct-input" min="1" max="100" ${directionRange} step="1">
     }
 }
 
-WebGLWrapper.ShaderMediator.registerLayer(WebGLWrapper.EdgeLayer);
+WebGLModule.ShaderMediator.registerLayer(WebGLModule.EdgeLayer);
