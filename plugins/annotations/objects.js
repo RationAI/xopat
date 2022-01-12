@@ -949,6 +949,14 @@ class Polygon extends AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
         this._initialize(false);
+
+        const _this = this;
+        fabric.util.loadImage("plugins/annotations/finish.png", function(img) {
+            _this._pattern = new fabric.Pattern({
+                source: img,
+                repeat: 'repeat'
+            });
+        });
     }
 
     getIcon() {
@@ -1093,7 +1101,15 @@ class Polygon extends AnnotationObjectFactory {
 
         //create circle representation of the point
         let circle = this._createControlPoint(x, y, properties);
-        if (this._pointArray.length === 0) circle.set({fill: 'red'});
+        if (this._pointArray.length === 0) {
+            circle.set({fill: this._pattern, radius: circle.radius*2});
+        } else {
+            if (Math.sqrt(Math.pow(this._pointArray[0].left - x, 2) +
+                    Math.pow(this._pointArray[0].top - y, 2)) < circle.radius*2) {
+                this.finishIndirect();
+                return;
+            }
+        }
         this._pointArray.push(circle);
         this._context.addHelperAnnotation(circle);
 
@@ -1120,12 +1136,15 @@ class Polygon extends AnnotationObjectFactory {
     updateCreate(x, y) {
         if (!this._polygonBeingCreated) return;
 
-        let last = this._pointArray[this._pointArray.length - 1],
+        let lastIdx = this._pointArray.length - 1,
+            last = this._pointArray[lastIdx],
             dy = last.top - y,
             dx = last.left - x;
 
-        let powRad = this.getRelativePixelDiffDistSquared(15);
-        if (dx * dx + dy * dy > powRad) {
+        let powRad = this.getRelativePixelDiffDistSquared(10);
+        //startPoint is twice the radius of distance with relativeDiff 10, if smaller
+        //the drag could end inside finish zone
+        if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)){
             this.initCreate(x, y, this.isLeftClick);
         }
     }
@@ -1361,6 +1380,7 @@ class AutoObjectCreationStrategy {
         this._currentTile = "";
         this._readingIndex = 0;
         this._readingKey = "";
+        this._customControls = "";
 
         PLUGINS.osd.addHandler('visualisation-used', function (visualisation) {
             let html = "";
@@ -1388,6 +1408,7 @@ class AutoObjectCreationStrategy {
                 _this._readingKey = key;
                 html = "<option selected " + html.substr(8);
             }
+            _this._customControls = html;
             $("#sensitivity-auto-outline").html(html);
         });
     }
@@ -1437,6 +1458,8 @@ class AutoObjectCreationStrategy {
         this._renderEngine.setData(...PLUGINS.seaGL.dataImageSources());
         this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
 
+        this._currentPixelSize = this.pixelSize();
+
         let tiles = PLUGINS.dataLayer().lastDrawn;
         for (let i = 0; i < tiles.length; i++) {
             let tile = tiles[i];
@@ -1446,7 +1469,7 @@ class AutoObjectCreationStrategy {
             }
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.origData, tile.sourceBounds, 0, 0
+                tile.origData, tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;
@@ -1459,9 +1482,9 @@ class AutoObjectCreationStrategy {
     }
 
     sensitivityControls() {
-        return `<span class="d-inline-block" style="width:46%" title="What layer is used to create automatic 
-annotations.">Target data layer:</span><select style="width:50%" title="What layer is selected for the data." 
-type="number" id="sensitivity-auto-outline" class="form-control" onchange="${this._globalSelf}._setTargetLayer(this);"></select>`;
+        return `<span class="d-inline-block" title="What layer is used to create automatic 
+annotations.">Auto selection target:</span><select title="What layer is selected for the data." 
+type="number" id="sensitivity-auto-outline" class="form-control" onchange="${this._globalSelf}._setTargetLayer(this);">${this._customControls}</select>`;
     }
 
     _setTargetLayer(self) {
@@ -1553,7 +1576,6 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
 
         var x = eventPosition.x;  // current x position
         var y = eventPosition.y;  // current y position
-        var direction = "UP"; // current direction of outline
 
         if (!this.comparator(this.origPixel)) {
             console.warn("Outline algorithm exited: outside region.");
@@ -1571,178 +1593,74 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
             this._afterAutoMethod();
             return null;
         }
-        x -= 2;
-
         //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-
-        //indexing instead of switch
-        var handlers = [
-            // 0 - all neighbours outside, invalid
-            function () { console.error("Auto outline algorithm: Fell out of region.") },
-
-            // 1 - only TopLeft pixel inside
-            function () {
-                if (direction === "DOWN") {
-                    direction = "LEFT";
-                } else if (direction === "RIGHT") {
-                    direction = "UP";
-                } else { /*console.log("INVALID DIRECTION");*/ return; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 2 - only BottomLeft pixel inside
-            function () {
-                if (direction === "UP") {
-                    direction = "LEFT";
-                } else if (direction === "RIGHT") {
-                    direction = "DOWN";
-                } else { /*console.log("INVALID DIRECTION");*/  return; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 3 - TopLeft & BottomLeft pixel inside
-            function () {
-                if (direction !== "UP" && direction !== "DOWN") { /*console.log("INVALID DIRECTION");*/  }
-            },
-
-            // 4 - only BottomRight pixel inside
-            function () {
-                if (direction === "UP") {
-                    direction = "RIGHT";
-                } else if (direction === "LEFT") {
-                    direction = "DOWN";
-                } else { /*console.log("INVALID DIRECTION");*/  return; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 5 - TopLeft & BottomRight pixel inside, one of them does not belong to the area
-            function () {
-                if (direction === "UP") {
-                    direction = "RIGHT";
-                } else if (direction === "LEFT") {
-                    direction = "DOWN";
-                } else if (direction === "RIGHT") {
-                    direction = "UP";
-                } else { direction = "LEFT"; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 6 - BottomLeft & BottomRight pixel inside, one of them does not belong to the area
-            function () {
-                if (direction !== "LEFT" && direction !== "RIGHT") { /*console.log("INVALID DIRECTION");*/  }
-            },
-
-            // 7 - TopLeft & BottomLeft & BottomRight  pixel inside, same case as TopRight only
-            () => handlers[8](),
-
-            // 8 - TopRight only
-            function () {
-                if (direction === "DOWN") {
-                    direction = "RIGHT";
-                } else if (direction === "LEFT") {
-                    direction = "UP";
-                } else { /*console.log("INVALID DIRECTION");*/  return; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 9 - TopLeft & TopRight
-            function () {
-                if (direction !== "LEFT" && direction !== "RIGHT") { /*console.log("INVALID DIRECTION");*/  }
-            },
-
-            // 10 - BottomLeft & TopRight
-            function () {
-                if (direction === "UP") {
-                    direction = "LEFT";
-                } else if (direction === "LEFT") {
-                    direction = "UP";
-                } else if (direction === "RIGHT") {
-                    direction = "DOWN";
-                } else { direction = "RIGHT"; }
-                points.push(_this.toGlobalPointXY(x, y)); //changed direction
-            },
-
-            // 11 - BottomLeft & TopRight & TopLeft --> case 4)
-            () => handlers[4](),
-
-            // 12 - TopRight & BottomRight
-            function () {
-                if (direction !== "TOP" && direction !== "DOWN") { /*console.log("INVALID DIRECTION");*/  }
-            },
-
-            // 13 - TopRight & BottomRight & TopLeft
-            () => handlers[2](),
-
-            // 14 - TopRight & BottomRight & BottomLeft
-            () => handlers[1](),
-
-            // 15 - ALL inside
-            function () { console.error("Auto outline algorithm: Fell out of region."); }
-        ];
-
-        let surroundingInspector = function (x, y, maxDist) {
-            for (var i = 1; i <= maxDist; i++) {
-                //$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
-
-                if (_this.isValidPixel(new OpenSeadragon.Point(x + i, y)) > 0) return [x + i, y + i];
-                //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x + i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
-
-                if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x + i, y - i];
-                //$("#osd").append(`<span style="position:absolute; top:${y + i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
-
-                if (_this.isValidPixel(new OpenSeadragon.Point(x - i, y)) > 0) return [x - i, y + i];
-                //$("#osd").append(`<span style="position:absolute; top:${y - i}px; left:${x - i}px; width:5px;height:5px; background:red;" class="to-delete"></span>`);
-
-                if (_this.isValidPixel(new OpenSeadragon.Point(x, y + i)) > 0) return [x - i, y - i];
-
-            }
-            return null;
-        };
 
         const first_point = new OpenSeadragon.Point(x, y);
         let time = Date.now();
+        let direction = 1;
 
-        //best speed is just pixel by pixel as we compute in screen coords
-        const speed = 1;
-        counter = 0;
-        while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 20) {
-            let mark = this.getAreaStamp(x, y);
-            if (mark === 0 || mark === 15) {
-                let findClosest = surroundingInspector(x, y, 2 * speed);
-                if (findClosest) {
-                    x = findClosest[0];
-                    y = findClosest[1];
-                    points.push(this.toGlobalPointXY(x, y));
-                    continue;
-                } else {
-                    console.warn("Outline algorithm exited: could not find close point on the outline.");
-                    this._afterAutoMethod();
-                    return;
+        let turns = [
+            [0, -1, 0],
+            [1, 0, 1],
+            [0, 1, 2],
+            [-1, 0, 3]
+        ]
+        // 0 -> up, 1 -> right, 2 -> down, 3-> left
+        let rightDirMapping = [1, 2, 3, 0];
+        let leftDirMapping = [3, 0, 1, 2];
+
+        let inside = this.isValidPixel(first_point);
+
+        RUN: for (let i = 3; i >= 0; i--) {
+            let dir = turns[i];
+            let xx = first_point.x;
+            let yy = first_point.y;
+            for (let j = 1; j < 6; j++) {
+                direction = dir[2];
+                first_point.x += dir[0];
+                first_point.y += dir[1];
+
+                if (this.isValidPixel(first_point) !== inside) {
+                    break RUN;
                 }
             }
+            first_point.x = xx;
+            first_point.y = yy;
+        }
 
-            handlers[mark]();
+        let oldDirection = direction;
+        counter = 0;
+        while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 40) {
 
-            //todo instead of UP/LEFT etc. set directly
-            switch (direction) {
-                case 'UP': y--; break;
-                case 'LEFT': x--; break;
-                case 'RIGHT': x++; break;
-                case 'DOWN': y++; break;
-                default: console.error("Invalid direction");
+
+            if (this.isValidPixel(first_point)) {
+                let left = turns[leftDirMapping[direction]];
+                first_point.x += left[0]*2;
+                first_point.y += left[1]*2;
+                oldDirection = direction;
+                direction = left[2];
+
+            } else {
+                let right = turns[rightDirMapping[direction]];
+                first_point.x += right[0]*2;
+                first_point.y += right[1]*2;
+                oldDirection = direction;
+                direction = right[2];
             }
-            counter++;
 
-            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+            if (oldDirection !== direction && counter % 4 === 0) {
+                points.push(this.toGlobalPoint(first_point));
+            }
 
-            //if (counter % 1000 === 0) await OSDAnnotations.sleep(150);
+            //$("#osd").append(`<span style="position:absolute; top:${first_point.y}px; left:${first_point.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
+            //if (counter % 200 === 0) await OSDAnnotations.sleep(2);
 
-            if (counter % 100 === 0 && Date.now() - time > 2000) {
+            if (counter % 100 === 0 && Date.now() - time > 1500) {
                 console.warn("Outline algorithm exited: iteration steps exceeded.");
                 this._afterAutoMethod();
                 return;
             }
-
+            counter++;
         }
         this._afterAutoMethod();
 
@@ -1754,8 +1672,7 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
             minX = Math.min(minX, points[i].x);
             minY = Math.min(minY, points[i].y);
         }
-        //todo not constant, multiply by pixel ratio from zoom!!!
-        if (maxX - minX < 15 && maxY - minY < 15) return null;
+        if (maxX - minX < 5*this._currentPixelSize && maxY - minY < 5*this._currentPixelSize) return null;
         return points;
     }
 

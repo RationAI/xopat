@@ -17,7 +17,7 @@ OSDAnnotations = function (incoming) {
 	this.Modes = Object.freeze({
 		AUTO: new StateAuto(this),
 		CUSTOM: new StateCustomCreate(this),
-		FREE_FORM_TOOL: new StateFreeFormTool(this),
+		FREE_FORM_TOOL: new StateFreeFormTool(this)
 	});
 	this.mode = this.Modes.AUTO;
 	this.disabledInteraction = false;
@@ -123,6 +123,10 @@ OSDAnnotations.prototype = {
 		window.addEventListener("focus", function(event) {
 			_this.setMode(_this.Modes.AUTO);
 		}, false);
+
+		window.addEventListener("wheel", function (event) {
+			_this.mode.scroll(event, event.deltaY / 100);
+		});
 
 		/****************************************************************************************************************
 	
@@ -274,8 +278,8 @@ OSDAnnotations.prototype = {
 			// switching mode only when no mode AUTO and mouse is up
 			if (!_this.showAnnotations || _this.cursor.isDown || _this.disabledInteraction) return;
 
-			let modeFromCode = _this.getModeByKeyCode(e.code);
-			if (modeFromCode) {
+			let modeFromCode = _this.getModeByKeyEvent(e);
+			if (modeFromCode && this.mode === this.Modes.AUTO) {
 				_this.setMode(modeFromCode);
 				e.preventDefault();
 			}
@@ -295,7 +299,7 @@ OSDAnnotations.prototype = {
 				return;
 			}
 
-			if (_this.mode.hasKeyCode(e.code)) {
+			if (_this.mode.rejects(e)) {
 				_this.setMode(this.Modes.AUTO);	
 				e.preventDefault();		
 			}	
@@ -369,29 +373,34 @@ OSDAnnotations.prototype = {
 		let autoSelectionControls = this.autoSelectionEnabled ? this._automaticCreationStrategy.sensitivityControls() : "";
 		autoSelectionControls += "<br>";
 
-		PLUGINS.appendToMainMenuExtended("Annotations", `
-		<span class="material-icons pointer" onclick="${this.id}.showHelp();" title="Help" style="float: right;">help</span>
-		<span class="material-icons pointer" id="downloadAnnotation" title="Export annotations" style="float: right;">download</span>
-		<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
-		<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="
-		let self = $(this);
-		if (self.attr('data-ref') === 'on'){
-			${this.id}.enableAnnotations(false); self.html('visibility_off'); self.attr('data-ref', 'off');
-		} else {
-			${this.id}.enableAnnotations(true); self.html('visibility'); self.attr('data-ref', 'on');
-		}"> visibility</span>`,
-		`<span>Opacity: &emsp;</span><input type="range" id="annotations-opacity" min="0" max="1" value="0.4" step="0.1"><br><br>
-		${this.presets.presetControls()}		
-		<a id="download_link1" download="my_exported_file.json" href="" hidden>Download as json File</a>
-		<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download as xml File</a>`, 
-		`<div id="imageAnnotationToolbarContent">
-					<br>
-					${this.presets.presetHiddenControls()}
-					<br>
-					${autoSelectionControls}
-					${this.modifyTool.brushSizeControls()}				
-					</div>`, 
-					"annotations-panel", this.id);
+		PLUGINS.appendToMainMenuExtended(
+			"Annotations",
+			`
+<span class="material-icons pointer" onclick="Tutorials.show()" title="Help" style="float: right;">help</span>
+<span class="material-icons pointer" id="downloadAnnotation" title="Export annotations" style="float: right;">download</span>
+<!-- <button type="button" class="btn btn-secondary" autocomplete="off" id="sendAnnotation">Send</button> -->
+<span class="material-icons pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.history.openHistoryWindow();">assignment</span>
+<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="
+	let self = $(this); 
+	if (self.attr('data-ref') === 'on'){
+		${this.id}.enableAnnotations(false); self.html('visibility_off'); self.attr('data-ref', 'off');
+	} else {
+		${this.id}.enableAnnotations(true); self.html('visibility'); self.attr('data-ref', 'on');
+	}"> visibility</span>`,
+			`
+<span>Opacity: &emsp;</span>
+<input type="range" id="annotations-opacity" min="0" max="1" value="0.4" step="0.1"><br><br>${this.presets.presetControls()}
+<a id="download_link1" download="my_exported_file.json" href="" hidden>Download JSON</a>
+<a id="download_link2" download="my_exported_file.xml" href="" hidden>Download XML</a>`,
+			`
+<div id="imageAnnotationToolbarContent"><br>
+	${this.presets.presetHiddenControls()}<br>
+	<!--${autoSelectionControls}
+	${this.modifyTool.brushSizeControls()}-->
+</div>`,
+				"annotations-panel",
+				this.id
+		);
 
 
 		let modeOptions = "";
@@ -399,65 +408,16 @@ OSDAnnotations.prototype = {
 			let selected = mode.default() ? "selected" : "";
 			modeOptions += `<option value="${mode.getId()}" ${selected}>${mode.getBanner()}</option>`;
 		});
-		//form for object property modification
-		$("body").append(`<div id="annotation-cursor" class="${this.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
-<select id="annotation-mode" class="form-control position-fixed top-2 left-2 ${this.id}-plugin-root" onchange="${this.id}.setModeById($(this).val());return false;">${modeOptions}</select>`);
-	},
-
-	showHelp: function() {
+		//status bar & cursor
 		$("body").append(`
-		<div class="position-fixed ${this.id}-plugin-root" style="z-index:99999; left: 50%;top: 50%;transform: translate(-50%,-50%);">
-		<details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:80vw; max-height: 80vh;">
-			<div class="Box-header">
-			  <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$(this).parent().parent().parent().remove();">
-				<svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
-			  </button>
-			  <h3 class="Box-title">Annotations help</h3>
-			</div>
-			<div class="overflow-auto">
-			  <div class="Box-body overflow-auto">
-			  
-			  <div class="flash mt-3 flash-error">
-			  <span class="octicon octicon-flame material-icons" viewBox="0 0 16 16" width="16" height="16"> error</span>
-			  Annotations work only for the original visualisations, edge-based visualisations do not support automatic selection (yet).
-			</div>
-			<br>
-			
-			  <h4 class="mt-2"><span class="material-icons">brush</span>Brushes</h3>
-			  <p>You can choose from  <span class="material-icons">crop_5_4</span>rectangle, <span class="material-icons">panorama_fish_eye</span>ellipse or <span class="material-icons">share</span>polygon. </p>
-			  
-			  <h4><span class="material-icons"> settings_overscan</span>Click to annotate</h3>
-			  <p>You can create annotations with both left and right mouse button. Each button has default color and comment you can customize.
-			  When you click on the canvas, a default object depending on a brush is created: if it is inside a visualised region, it will try to fit the underlying shape. Polygon will fail 
-			  outside vis regions, other tools create default-sized object.</p>
-			  <p><b>Automatic shape treshold</b> is the sensitivity of automatic selection: when minimized, the shape will take all surrounding areas. When set high, only the most prominent areas
-			  will be included.</p>
-		
-			  <div class="flash mt-3 flash-error">
-			  <span class="octicon octicon-flame material-icons" viewBox="0 0 16 16" width="16" height="16"> error</span>
-			  Avoid auto-appending of large areas (mainly large probability tile chunks), the algorithm is still not optimized and the vizualiation would freeze. In that case, close the tab and reopen a new one.
-			</div>
-			  <br>
-			  <h4 class="mt-2"><span class="material-icons">highlight_alt</span>Alt+Drag, Alt+Click</h4>
-				<p>With left alt on a keyboard, you can create custom shapes. Simply hold the left alt key and drag for rectangle/ellipse, or click-place points of a polygon. Once you release alt,
-				the polygon will be created. With other shapes, to finish the drag is enough.</p>
-			  <h4 class="mt-2"><span class="material-icons">flip_to_front </span>Shift + Click</h4>
-				<p>You can use left mouse button to append regions to a selected object. With right button, you can <b>remove</b> areas from any annotaion object.</p>
-			  <h4 class="mt-2"><span class="material-icons">assignment</span>Annotation board</h4>
-				<p>You can browse exiting annotation objects there. You can edit a comment by <span class="material-icons">edit</span> modifying the label (do not forget to save <span class="material-icons">save</span>).
-					Also, selecting an object will send you to its location and highlight it so that you can orient easily in existing annotaions. </p>
-			  <h4 class="mt-2"><span class="material-icons"> delete</span>Del to delete</h4>
-				<p>Highlighted object will be deleted, when you hit 'delete' key. This works handily with annotation board - click and delete to remove any object.</p>
-			  <h4 class="mt-2"><span class="material-icons"> history</span>History</h4>
-				<p>You can use Ctrl+Z to revert any changes made on object that affect its shape. This does not include manual resizing or movement of rectangles or ellipses. 
-				You can use Ctrl+Shift+Z to redo the history (note: if you hit the bottom, you can redo history except the last item. In other words, if you undo 'n' operations, you can redo 'n-1').</p>
-			  <h4 class="mt-2"><span class="material-icons"> tune</span>Advanced modifications</h4>
-				<p>By holding the right alt key, you can manually adjust shapes - move them around, resize them or modify polygon vertices. <b style="color: chocolate;">This mode might be very buggy.</b></p>
-			  </div>
-			</div>
-		  </details-dialog>
-		  </div>
-		`);
+<div id="annotation-cursor" class="${this.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>
+<div id="annotation-status-bar-background"></div>
+<div id="annotation-status-bar" class="${this.id}-plugin-root">
+	<select id="annotation-mode" class="form-control mx-2" onchange="${this.id}.setModeById($(this).val());return false;">
+		${modeOptions}
+	</select>
+	<div id="mode-custom-items">${this.mode.customHtml()}</div>
+</div>`);
 	},
 
 	setupTutorials: function() {
@@ -537,13 +497,13 @@ OSDAnnotations.prototype = {
 					"next #annotation-mode": "You need to be in free form tool. We recommend using 'Left Shift' key <br> instead of setting this manually."
 				},
 				{
-					"next #bord-for-annotations": "First highlight any object on board (or on the canvas)."
+					"next #viewer-container": "Hold Left Shift while drawing on a canvas<br>(by a mouse button which has assigned any preset)."
 				},
 				{
-					"next #viewer-container": "Selected object can be appended to (LEFT mouse button) or removed from (RIGHT mouse button)."
+					"next #bord-for-annotations": "Your last-created annotation should be now highlighted."
 				},
 				{
-					"next #fft-size": "You can control the size of the free-form tool here."
+					"next #viewer-container": "Selected object can be appended to (Left Shift only) or removed from (Left Shift + Left Alt)."
 				},
 				{
 					"next #viewer-container": "Now you can try it out."
@@ -824,17 +784,18 @@ OSDAnnotations.prototype = {
 	enableInteraction: function(on) {
 		this.disabledInteraction = !on;
 		this._modesJqNode.attr('disabled', !on);
-		this.history._setControlsVisuallyEnabled(!on);
+		this.history._setControlsVisuallyEnabled(on);
 	},
 
-	getModeByKeyCode: function(keyCode) {
+	getModeByKeyEvent: function(e) {
 		let result = undefined;
-		Object.values(this.Modes).some(mode => {
-			let found = mode.hasKeyCode(keyCode);
-			if (found) result = mode;
-			return found;
-		});
-		return result;
+		for (let key in this.Modes) {
+			if (this.Modes.hasOwnProperty(key)) {
+				let mode = this.Modes[key];
+				if (mode.accepts(e)) return mode;
+			}
+		}
+		return undefined;
 	},
 
 	setModeById: function(id) {
@@ -862,6 +823,9 @@ OSDAnnotations.prototype = {
 	},
 
 	_setModeFromAuto: function(mode) {
+		//must be early due to custom HTML controls that might be used later
+		$("#mode-custom-items").html(mode.customHtml());
+
 		mode.setFromAuto();
 		this.mode = mode;
 		//todo handle the node
@@ -871,6 +835,9 @@ OSDAnnotations.prototype = {
 	_setModeToAuto: function() {
 		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+
+		//must be early due to custom HTML controls that might be used later
+		$("#mode-custom-items").html(this.Modes.AUTO.customHtml());
 
 		this.mode.setToAuto();
 		this.mode = this.Modes.AUTO;
@@ -895,7 +862,12 @@ OSDAnnotations.prototype = {
 		},
 
 		updateRadius: function () {
+			//todo context instead
 			this._toolRadius = openseadragon_image_annotations.modifyTool.getScreenToolRadius() * 2;
+			if (this._node) {
+				this._node.style.width = (this._toolRadius) + "px";
+				this._node.style.height = (this._toolRadius) + "px";
+			}
 		},
 
 		getHTMLNode: function () {
@@ -940,6 +912,10 @@ class AnnotationState {
 
 	getBanner() {
 		return this.banner;
+	}
+
+	scroll(event, delta) {
+
 	}
 
 	getId() {
@@ -993,12 +969,16 @@ class StateAuto extends AnnotationState {
 		this.clickInBetweenDelta = clickTime;
 
 		// just navigate if click longer than 100ms or other conds not met, fire if double click
-		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 300) return;
+		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
 			PLUGINS.dialog.show("Could not create automatic annotation.", 5000, PLUGINS.dialog.MSG_WARN);
 		}
+	}
+
+	customHtml() {
+		return this.context.autoSelectionEnabled ? this.context._automaticCreationStrategy.sensitivityControls() : "";
 	}
 
 	setFromAuto() {
@@ -1009,7 +989,11 @@ class StateAuto extends AnnotationState {
 		//do nothing, we are in AUTO
 	}
 
-	hasKeyCode(code) {
+	accepts(e) {
+		return false;
+	}
+
+	rejects(e) {
 		return false;
 	}
 }
@@ -1024,31 +1008,40 @@ class StateFreeFormTool extends AnnotationState {
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(point, isLeftClick);
+		this._init(o, point, isLeftClick);
 	}
 
 	handleMouseMove(point) {
 		this.context.modifyTool.update(point);
 	}
 
-	_init(point, isLeftClick) {
+	_init(o, point, isLeftClick) {
 		let currentObject = this.context.overlay.fabricCanvas().getActiveObject();
-		if (!currentObject) {
-			if (this.context.modifyTool._cachedSelection) {
-				console.log("READ cache");
-				//cached selection from shift press event, because sometimes the click event deselected active object
-				currentObject = this.context.modifyTool._cachedSelection;
-				this.context.modifyTool._cachedSelection = null;
-			} else {
-				currentObject = this.context.polygonFactory.create(
-					this.context.modifyTool.getCircleShape(point), this.context.presets.getAnnotationOptions(isLeftClick)
-				);
-				this.context.addAnnotation(currentObject);
-			}
+		if (!currentObject && this.context.modifyTool._cachedSelection) {
+			currentObject = this.context.modifyTool._cachedSelection;
+			this.context.modifyTool._cachedSelection = null;
 		}
 
-		this.context.modifyTool.init(currentObject, point, isLeftClick);
+		if (!currentObject) {
+			currentObject = this._initPlain(point, isLeftClick);
+		} else {
+			let bounds = currentObject.getBoundingRect();
+			let w = bounds.left + bounds.width,
+				h = bounds.top + bounds.height;
+			if (o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w) {
+				currentObject = this._initPlain(point, isLeftClick);
+			}
+		}
+		this.context.modifyTool.init(currentObject, point);
 		this.context.modifyTool.update(point);
+	}
+
+	_initPlain(point, isLeftClick) {
+		let currentObject = this.context.polygonFactory.create(
+			this.context.modifyTool.getCircleShape(point), this.context.presets.getAnnotationOptions(isLeftClick)
+		);
+		this.context.addAnnotation(currentObject);
+		return currentObject;
 	}
 
 	_finish() {
@@ -1056,12 +1049,22 @@ class StateFreeFormTool extends AnnotationState {
 		if (result) this.context.canvas().setActiveObject(result);
 	}
 
+	customHtml() {
+		return this.context.modifyTool.brushSizeControls();
+	}
+
+	scroll(event, delta) {
+		//subtract delta - scroll up means increase
+		this.context.modifyTool.setSafeRadius(this.context.modifyTool.screenRadius - delta);
+		this.context.cursor.updateRadius();
+	}
+
 	setFromAuto() {
 		//dirty but when a mouse is clicked, for some reason active object is deselected
 		this.context.modifyTool._cachedSelection = this.context.canvas().getActiveObject();
 		PLUGINS.osd.setMouseNavEnabled(false);
 		this.context.canvas().hoverCursor = "crosshair";
-		//todo value of radius from user
+		this.context.modifyTool.setModeAdd(true);
 		this.context.modifyTool.updateRadius();
 		this.context.cursor.show();
 	}
@@ -1073,8 +1076,22 @@ class StateFreeFormTool extends AnnotationState {
 		this.context.canvas().renderAll();
 	}
 
-	hasKeyCode(code) {
-		return code === "ShiftLeft";
+	accepts(e) {
+		//in case event occurs that we would like to treat as our own but change only the mode of working inside
+		//note: mode will not be changed as this mode is already set
+		if (this.context.mode === this && e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
+			this.context.modifyTool.setModeAdd(false);
+			return true;
+		}
+		return e.key === "Shift" && !e.altKey && !e.ctrlKey;
+	}
+
+	rejects(e) {
+		if (this.context.mode === this && e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
+			this.context.modifyTool.setModeAdd(true);
+			return false; //we do not reject this mode, just change the behaviour
+		}
+		return e.key === "Shift" && !e.altKey && !e.ctrlKey;
 	}
 }
 
@@ -1127,12 +1144,20 @@ class StateCustomCreate extends AnnotationState {
 		this.context.canvas().discardActiveObject();
 	}
 
+	customHtml() {
+		return "";
+	}
+
 	setToAuto() {
 		PLUGINS.osd.setMouseNavEnabled(true);
 	}
 
-	hasKeyCode(code) {
-		return code === "AltLeft";
+	accepts(e) {
+		return e.code === "AltLeft" && !e.ctrlKey && !e.shiftKey;
+	}
+
+	rejects(e) {
+		return e.code === "AltLeft";
 	}
 }
 

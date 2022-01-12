@@ -1,7 +1,7 @@
 <?php
 
 //application data
-define('VERSION', "1.0");
+define('VERSION', "1.0.1");
 define('IIPIMAGE_SERVER', "/iipsrv-martin/iipsrv.fcgi");
 define('AUTH_HEADERS', isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : false);
 

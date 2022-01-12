@@ -151,7 +151,7 @@ DIALOGS
 
 .popUpHide{
     opacity: 0;
-    display: none;
+    display: none !important;
     animation: popUpHide 0.2s;
     -webkit-animation: popUpHide 0.2s;
     -webkit-animation-fill-mode: forwards;

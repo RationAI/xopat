@@ -8,53 +8,69 @@ History = function (selfName, context, presetManager) {
     this._boardSelected = null;
     this._context = context;
     this._presets = presetManager;
-}
+    this.containerId = "bord-for-annotations";
+};
 
 History.prototype = {
 
     init: function (historySize = 30) {
+        this.BUFFER_LENGTH = historySize;
+    },
 
-        PLUGINS.dialog.showCustomModal("bord-for-annotations",
+    openHistoryWindow: function() {
+        let ctx = this.winContext();
+        if (ctx) {
+            ctx.window.focus();
+            return;
+        }
+
+        const _this = this;
+
+        //todo what if there is only 1 object that is not a part of annotaions, but present in the canvas anyway
+        //e.g. from other plugins
+        let undoCss = this._context.canvasObjects().length > 0 ?
+            "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
+
+        PLUGINS.dialog.showCustomModal(this.containerId, "Annotations Board",
             `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
-<span id="history-undo" class="material-icons pointer" style="color: var(--color-icon-tertiary);" 
-onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
+<span id="history-undo" class="material-icons pointer" style="${undoCss}" 
+onclick="opener.${this._globalSelf}.back()" id="history-undo">undo</span>
 <span id="history-redo" class="material-icons pointer" style="color: var(--color-icon-tertiary);" 
-onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
-<span id="history-refresh" class="material-icons pointer" onclick="${this._globalSelf}.refresh()" 
+onclick="opener.${this._globalSelf}.redo()" id="history-redo">redo</span>
+<span id="history-refresh" class="material-icons pointer" onclick="opener.${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-<span id="history-sync" class="material-icons pointer" onclick="${this._globalSelf}.sync()" 
+<span id="history-sync" class="material-icons pointer" onclick="opener.${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
-onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
+onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3; width: 400px;">
-<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`,
-            '', {defaultHeight: "250px", allowResize:true});
+<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`, function () {
+                _this._context.canvasObjects().forEach(object => {
+                    //todo add only valid ones!!!!!
+                    _this._addToBoard(object);
 
-        this.board = $("#annotation-logs");
-        this.undoBtn = $("#history-undo");
-        this.redoBtn = $("#history-redo");
-
-        this.BUFFER_LENGTH = historySize;
-
-        this._context.canvasObjects().forEach(object => {
-            this._addToBoard(object);
-
-            //some properties are not set, these are necessary for correct control behaviour
-            $.extend(object, PresetManager._commonProperty);
-        });
+                    //these are necessary for correct control behaviour
+                    $.extend(object, PresetManager._commonProperty);
+                });
+            });
     },
 
-    hideBoard: function() {
-        $("#bord-for-annotations").css("display", "none");
+    winContextRequired: function() {
+        let ctx = PLUGINS.dialog.getModalContext(this.containerId);
+        if (ctx) return ctx;
+        PLUGINS.dialog.show('Annotations Board window must be opened.',
+            5000, PLUGINS.dialog.MSG_WARN);
+        return undefined;
     },
 
-    showBoard: function() {
-        $("#bord-for-annotations").css("display", "block");
+    winContext: function() {
+        return PLUGINS.dialog.getModalContext(this.containerId);
     },
 
     back: function () {
         if (this._context.disabledInteraction) return;
 
+        const _this = this;
         if (this._buffer[this._buffidx]) {
             this._performSwap(this._context.canvas(),
                 this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward)
@@ -73,13 +89,12 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
             }
 
-            if (this.redoBtn) this.redoBtn.css("color", "var(--color-icon-primary)");
+            this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-primary)"));
         }
 
-        if (this.undoBtn) {
-            let color = this._buffer[this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
-            this.undoBtn.css("color", color);
-        }
+        this._performAtJQNode("history-undo", node => node.css("color",
+            _this._buffer[_this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
+        );
     },
 
     redo: function () {
@@ -91,19 +106,33 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
             this._performSwap(this._context.canvas(),
                 this._buffer[this._buffidx].forward, this._buffer[this._buffidx].back);
 
-            if (this.redoBtn) {
-                let color = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
-                    "var(--color-icon-primary)" : "var(--color-icon-tertiary)";
-                this.redoBtn.css("color", color);
-            }
-            if (this.undoBtn) this.undoBtn.css("color", "var(--color-icon-primary)");
+            const _this = this;
+            this._performAtJQNode("history-redo", node => node.css("color",
+                _this._lastValidIndex >= 0 && _this._buffidx !== _this._lastValidIndex ?
+                    "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
+            );
+
+            this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         }
+    },
+
+    _performAtJQNode: function(id, callback) {
+        let ctx = this.winContext();
+        if (ctx) {
+            callback($(ctx.document.getElementById(id)));
+        }
+    },
+
+    _getJQNode: function(id) {
+        let ctx = this.winContext();
+        if (!ctx)  return undefined;
+        return $(ctx.document.getElementById(id));
     },
 
     refresh: function() {
         if (this._context.disabledInteraction) return;
 
-        this.board.html("");
+        this._performAtJQNode("annotation-logs", node => node.html(""));
         let _this = this;
         this._context.canvasObjects().some(o => {
             if (!isNaN(o.incrementId)) {
@@ -118,7 +147,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
 
         if (!confirm("This will overwrite all properties of all existing annotations - " +
             "even those manually modified. Do you want to proceed?")) return;
-        this.board.html("");
+        this._performAtJQNode("annotation-logs", node => node.html(""));
         let _this = this;
         this._context.canvasObjects().some(o => {
             if (!isNaN(o.incrementId) && o.presetID) {
@@ -154,21 +183,22 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
         this._buffer[this._buffidx] = { forward: newObject, back: previous };
         this._lastValidIndex = this._buffidx; //new object creation overiddes history
 
-        if (this.undoBtn && this.redoBtn) {
-            this.undoBtn.css("color", "var(--color-icon-primary)");
-            this.redoBtn.css("color", "var(--color-icon-tertiary)");
-        }
+        this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
+        this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-tertiary)"));
     },
 
     highlight: function (object) {
-        if (this._boardSelected) {
-            this.board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
+        let board = this._getJQNode("annotation-logs");
+        if (this._boardSelected && board) {
+            board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
 
         if (!object || !object.hasOwnProperty("incrementId")) return;
 
-        if (object) {
-            this.board.find(`#log-object-${object.incrementId}`).css("background", "#ffffff1f");
+        if (object && board) {
+            board.find(`#log-object-${object.incrementId}`).css({
+                background: "var(--color-bg-success)"
+            });
         }
         this._boardSelected = object;
     },
@@ -178,7 +208,7 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
     },
 
     setOnGoingEditObject: function(obj) {
-      this._editSelection.target = obj;
+        this._editSelection.target = obj;
     },
 
     _focus: function (cx, cy, objectId = null) {
@@ -200,25 +230,30 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
     _updateBoardText: function (object, text) {
         //console.log(text);
         if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
-        this.board.find(`#log-object-${object.incrementId} span.desc`).html(text);
+        this._performAtJQNode("annotation-logs", node =>
+            node.find(`#log-object-${object.incrementId} span.desc`).html(text));
     },
 
     _removeFromBoard: function (object) {
-        this.board.children(`#log-object-${object.incrementId}`).remove();
+        this._performAtJQNode("annotation-logs", node =>
+            node.children(`#log-object-${object.incrementId}`).remove());
     },
 
     _setControlsVisuallyEnabled: function(enabled) {
-        if (enabled) {
-            [this.undoBtn, this.redoBtn, $("#history-refresh"),
-                $("#history-sync"), $("#delete-all-annotations")].forEach(e => {
-                    e.css({cursor: "default", filter: "brightness(0.5)"});
-            });
-        } else {
-            [this.undoBtn, this.redoBtn, $("#history-refresh"),
-                $("#history-sync"), $("#delete-all-annotations")].forEach(e => {
-                e.css({cursor: "pointer", filter: "none"});
-            });
+        let ctx = this.winContext();
+        if (ctx) {
+            let header = ctx.document.getElementById(this.containerId + "-header");
+            if (enabled) {
+                ctx.document.body.style.background = "transparent";
+                header.disabled = false;
+                header.style.filter = "none";
+            } else {
+                ctx.document.body.style.background = "#eb7777";
+                header.disabled = true;
+                header.style.filter = "contrast(0.5)";
+            }
         }
+
     },
 
     _addToBoard: function (object) {
@@ -236,14 +271,16 @@ onclick="if (${this._context.id}.disabledInteraction) return;${this._context.id}
             this._autoIncrement++;
         }
 
+        const _this = this;
         let center = object.getCenterPoint();
-        this.board.prepend(`<div id="log-object-${object.incrementId}" class="rounded-2"
-onclick="${this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
+        this._performAtJQNode("annotation-logs", node => node.prepend(`
+<div id="log-object-${object.incrementId}" class="rounded-2"
+onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" disabled="true" class="desc" 
 style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
 <span class="material-icons pointer" onclick="let self = $(this); if (self.html() === 'edit') {
-${this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { ${this._globalSelf}._boardItemSave(); }">edit</span></div>`);
+opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { opener.${_this._globalSelf}._boardItemSave(); }">edit</span></div>`));
     },
 
 

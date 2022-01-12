@@ -103,6 +103,9 @@ We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
     - [O]`experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
     - [O]`visualizationProtocol` - see protocol construction below
+    - [O]`viewport` - where to focus
+        - [R]`point` - center of the focus
+        - [R]`zoomLevel` - level of the zoom
 - [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it)
 - [R]`background` - defines what images compose the **image part**, at least one element must be present
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
@@ -128,9 +131,10 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
 
 **Internal parameters** &emsp;
 The visualisation can internally support more parameters, these are set when the application is running and then used to
-support various caching. Worth noting are
+support various sharing and caching. Worth noting are
 - `order` parameter for each visualisation goal, which can be an array of shader ID's - this order define the order of rendering, note that all data that is being
-rendered must be present (e.g. all data where in the data settings `visible=1` is set)
+rendered must be present (e.g. all data where in the data settings `visible=1` is set and which has no problems such as incorrect 
+parameter values)
 - `cache` object inside each shader definition, contains cached values from the shader usage, its properties are dependent on the
 shader type, so always check whether a desired property exists or not
     - it is in fact equal to default values overriding
@@ -138,7 +142,7 @@ shader type, so always check whether a desired property exists or not
     
 _Protocol construction_ &emsp;
 To use custom-defined protocol, pass a string that can be evaluated to a valid URL. It must be one-liner expression, which
-can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving server. `background.data` contains
+can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script. `background.data` contains
 elements of `data` array defined in the outer scope (selected to be used). Note that `visualizationProtocol` expression receives a string **list** as `data` whereas
 `protocol` only a single string. That means a server behind `visualizationProtocol` url must be able to serve simultaneously multiple images. These images
 must be concatenated below each other into a single bigger image (see the `webgl` module for more details).
@@ -168,7 +172,7 @@ The visualizer supports **plugins** - a `JavaScript` files that, if certain poli
 of functionality to the visualizer GUI. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
 ### `modules.php` and `./modules/`
-The visualizer supports **modules** - a `JavaScript` libraries: it is more dynamic version of `./external/`.
+The visualizer supports **modules** - a `JavaScript` libraries: it is a more dynamic version of `./external/`.
 Modules allow versatile library inclusion: plugins and other modules can declare dependency: 
 this dependency is resolved and necessary items are included (in the right order).
 See `./modules/README.md`. Modules are placed in `./modules/` folder.

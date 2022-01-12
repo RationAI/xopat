@@ -3,6 +3,7 @@
 FreeFormTool = function (selfName, context) {
     this._globalSelf = `${context.id}['${selfName}']`;
     this.polygon = null;
+    this.screenRadius = 20;
     this.radius = 20;
     this.mousePos = null;
     this.SQRT2DIV2 = 0.707106781187;
@@ -13,7 +14,7 @@ FreeFormTool = function (selfName, context) {
 FreeFormTool.prototype = {
 
     //initialize any object for cursor-drawing modification
-    init: function (object, atPosition, add=true) {
+    init: function (object, atPosition) {
 
         let objectFactory = this._context.getAnnotationObjectFactory(object.type);
         if (objectFactory !== undefined) {
@@ -34,23 +35,46 @@ FreeFormTool.prototype = {
             PLUGINS.dialog.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, PLUGINS.dialog.MSG_WARN);
             return;
         }
-
-        this._update = add ? this._union : this._subtract;
-        this.mousePos = atPosition;
+        this.mousePos = {x: -99999, y: -9999}; //first click can also update
         this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
     },
 
     brushSizeControls: function() {
-        return `<span class="d-inline-block" style="width:46%" title="Size of a brush used to modify annotations areas.">Free form tool size:</span>
-        <input style="width:50%" class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="1" max="100" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.radius}" 
-        onchange="${this._globalSelf}.setRadius(this.value);" style="height: 22px;">`;
+        let modeRemove = this._update === this._subtract ? "border" : "";
+        let modeAdd = this._update === this._subtract ? "" : "border";
+
+        return `<span class="d-inline-block" title="Size of a brush used to modify annotations areas.">Brush size:</span>
+        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.screenRadius}" 
+        disabled style="height: 22px;"> (scroll to change)
+<span id="fft-mode-add" onclick="${this._globalSelf}.setModeAdd(true)" class="pointer rounded-2 pb-1 ${modeAdd}" style="border-width: 3px !important;box-sizing: content-box;"><span class="material-icons pointer">add_circle</span> mode add </span> &nbsp;  
+<span id="fft-mode-remove" onclick="${this._globalSelf}.setModeAdd(false)" class="pointer rounded-2 pb-1 ${modeRemove}" style="border-width: 3px !important;box-sizing: content-box;"><span class="material-icons pointer">remove_circle</span> mode remove </span>
+`;
     },
 
     updateRadius: function () {
         this.setRadius(parseFloat($("#fft-size").val()));
     },
 
+    setModeAdd: function(isModeAdd) {
+        if (isModeAdd) {
+            $("#fft-mode-add").addClass('border');
+            $("#fft-mode-remove").removeClass('border');
+            this._update = this._union;
+        } else {
+            $("#fft-mode-add").removeClass('border');
+            $("#fft-mode-remove").addClass('border');
+            this._update = this._subtract;
+        }
+    },
+
+    setSafeRadius: function(radius) {
+        radius = Math.min(Math.max(radius, 3), 100);
+        this.setRadius(radius);
+        $("#fft-size").val(radius)
+    },
+
     setRadius: function (radius) {
+        this.screenRadius = radius;
         let imageTileSource = PLUGINS.imageLayer();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
@@ -60,6 +84,7 @@ FreeFormTool.prototype = {
 
     //update step meant to be executed on mouse move event
     update: function(point) {
+        //todo check if contains NaN values and exit if so
         if (!this.polygon) {
             console.warn("FreeFormTool:invalid state.");
             return;
@@ -72,7 +97,6 @@ FreeFormTool.prototype = {
             if (result && this.polygon.points.length * 0.1 <= result.points.length) {
                 this._context.replaceAnnotation(this.polygon, result, false);
                 this.polygon = result;
-
             }
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
