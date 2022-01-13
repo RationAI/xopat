@@ -129,10 +129,13 @@ var Dialogs = {
      * @param id id used to create the window
      * @returns {{self}|{window}|null} window context or undefined
      */
-    getModalContext: function(id) {
+    getModalContext: function(id, required=false) {
         let ctx = this._modals[id];
         if (!ctx) return undefined;
-        console.log(ctx); //fixme this actually needs to be there so that it works
+
+        if (required) {
+            console.log(ctx); //fixme this actually needs to be there so that it works
+        }
         //probably some sync issues
         if (!ctx.window || !ctx.self) {
             this._destroyModalWindow(id, ctx);

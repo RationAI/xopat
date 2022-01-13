@@ -332,7 +332,7 @@ EOF;
         <!-- Appended controls for other plugins -->
     </div>
 
-    <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer" style="width: 400px; background: #0000005c;">
+    <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer" style="width: 400px; background: #787878cf;">
         <span id="copy-url" class="pl-2" onclick="copyHashUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pointer">link</span>Get link</span>
         <span id="global-export" class="pl-2" onclick="exportVisualisation();" title="Export visualisation together with plugins data"><span class="material-icons pointer">download</span>Export</span>
         <a style="display:none;" id="export-visualisation"></a> &emsp;
@@ -387,6 +387,7 @@ EOF;
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
+        splitHashDataForPost: true,
         // debugMode:  true,
     });
     viewer.gestureSettingsMouse.clickToZoom = false;

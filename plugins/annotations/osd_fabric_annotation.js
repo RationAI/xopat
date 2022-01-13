@@ -598,16 +598,16 @@ OSDAnnotations.prototype = {
 		return new XMLSerializer().serializeToString(this.getXMLDocumentContent());
 	},
 
-	setMouseOSDInteractive: function (isOSDInteractive) {
+	setMouseOSDInteractive: function (isOSDInteractive, changeCursor=true) {
 		if (this.mouseOSDInteractive === isOSDInteractive) return;
 
 		if (isOSDInteractive) {
-			//this.setFabricCanvasInteractivity(true);
-			//this.deselectFabricObjects();
-			PLUGINS.osd.setMouseNavEnabled(true);
-			//$("#input_form").hide();
-			this.overlay.fabricCanvas().defaultCursor = "crosshair";
-			this.overlay.fabricCanvas().hoverCursor = "pointer";
+			this.setOSDTracking(true);
+
+			if (changeCursor) {
+				this.overlay.fabricCanvas().defaultCursor = "crosshair";
+				this.overlay.fabricCanvas().hoverCursor = "pointer";
+			}
 
 			//TODO also finish indirect if creation object changed to another object
 			if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
@@ -619,10 +619,11 @@ OSDAnnotations.prototype = {
 			}
 
 		} else {
-			//this.setFabricCanvasInteractivity(true);
-			PLUGINS.osd.setMouseNavEnabled(false);
-			this.overlay.fabricCanvas().defaultCursor = "auto";
-			//this.overlay.fabricCanvas().hoverCursor = "move";
+			this.setOSDTracking(false);
+			if (changeCursor) {
+				this.overlay.fabricCanvas().defaultCursor = "auto";
+				//this.overlay.fabricCanvas().hoverCursor = "move";
+			}
 
 			let active = this.overlay.fabricCanvas().getActiveObject();
 			if (active) {
@@ -704,6 +705,12 @@ OSDAnnotations.prototype = {
 
 	deselectFabricObjects: function () {
 		this.overlay.fabricCanvas().deactivateAll().renderAll();
+	},
+
+	setOSDTracking: function(tracking) {
+		const osd = PLUGINS.osd;
+		osd.setMouseNavEnabled(tracking);
+		osd.outerTracker.setTracking(tracking);
 	},
 
 	presetManager: function() {
@@ -1062,7 +1069,7 @@ class StateFreeFormTool extends AnnotationState {
 	setFromAuto() {
 		//dirty but when a mouse is clicked, for some reason active object is deselected
 		this.context.modifyTool._cachedSelection = this.context.canvas().getActiveObject();
-		PLUGINS.osd.setMouseNavEnabled(false);
+		this.context.setOSDTracking(false);
 		this.context.canvas().hoverCursor = "crosshair";
 		this.context.modifyTool.setModeAdd(true);
 		this.context.modifyTool.updateRadius();
@@ -1072,7 +1079,7 @@ class StateFreeFormTool extends AnnotationState {
 	setToAuto() {
 		this.context.canvas().hoverCursor = "pointer";
 		this.context.cursor.hide();
-		PLUGINS.osd.setMouseNavEnabled(true);
+		this.context.setOSDTracking(true);
 		this.context.canvas().renderAll();
 	}
 
@@ -1139,7 +1146,7 @@ class StateCustomCreate extends AnnotationState {
 	}
 
 	setFromAuto(mode) {
-		PLUGINS.osd.setMouseNavEnabled(false);
+		this.context.setOSDTracking(false);
 		//deselect active if present
 		this.context.canvas().discardActiveObject();
 	}
@@ -1149,7 +1156,7 @@ class StateCustomCreate extends AnnotationState {
 	}
 
 	setToAuto() {
-		PLUGINS.osd.setMouseNavEnabled(true);
+		this.context.setOSDTracking(true);
 	}
 
 	accepts(e) {

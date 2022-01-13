@@ -18,7 +18,7 @@ History.prototype = {
     },
 
     openHistoryWindow: function() {
-        let ctx = this.winContext();
+        let ctx = this.winContext(true);
         if (ctx) {
             ctx.window.focus();
             return;
@@ -44,7 +44,27 @@ id="history-sync" title="Apply changes on presets to existing objects.">leak_add
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3; width: 400px;">
-<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`, function () {
+<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
+<script>
+
+window.confirm = window.opener.confirm;
+
+document.addEventListener('keyup', (e) => {
+    const parentContext = opener.${this._context.id};   
+
+    if (!parentContext.showAnnotations || parentContext.disabledInteraction) return;
+
+    if (e.code === "Delete") {
+        parentContext.removeActiveObject();
+        return;
+    }
+
+    if (e.ctrlKey && e.code === "KeyY") {
+        if (e.shiftKey) parentContext.history.redo();
+        else parentContext.history.back();
+    }
+});
+</script>`, function () {
                 _this._context.canvasObjects().forEach(object => {
                     //todo add only valid ones!!!!!
                     _this._addToBoard(object);
@@ -55,16 +75,8 @@ onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${thi
             });
     },
 
-    winContextRequired: function() {
-        let ctx = PLUGINS.dialog.getModalContext(this.containerId);
-        if (ctx) return ctx;
-        PLUGINS.dialog.show('Annotations Board window must be opened.',
-            5000, PLUGINS.dialog.MSG_WARN);
-        return undefined;
-    },
-
-    winContext: function() {
-        return PLUGINS.dialog.getModalContext(this.containerId);
+    winContext: function(required=false) {
+        return PLUGINS.dialog.getModalContext(this.containerId, required);
     },
 
     back: function () {

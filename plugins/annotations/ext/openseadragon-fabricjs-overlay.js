@@ -7,7 +7,6 @@
         return;
     }
 
-
     /**
      * @param {Object} options
      *      Allows configurable properties to be entirely specified by passing
@@ -16,23 +15,14 @@
      *      Fabric 'virtual' canvas size, for creating objects
      **/
     OpenSeadragon.Viewer.prototype.fabricjsOverlay = function(options) {
-
-
-        this._fabricjsOverlayInfo = new Overlay(this);
+        this._fabricjsOverlayInfo = new FabricOverlay(this);
         this._fabricjsOverlayInfo._scale = options.scale;
 
         return this._fabricjsOverlayInfo;
     };
-    // static counter for multiple overlays differentiation
-    var counter = (function () {
-        var i = 1;
 
-        return function () {
-            return i++;
-        }
-    })();
     // ----------
-    var Overlay = function(viewer) {
+    var FabricOverlay = function(viewer) {
         var self = this;
 
         this._viewer = viewer;
@@ -60,42 +50,36 @@
         // prevent OSD click elements on fabric objects
         this._fabricCanvas.on('mouse:down', function (options) {
             if (options.target) {
-
                 options.e.preventDefaultAction = true;
                 options.e.preventDefault();
                 options.e.stopPropagation();
             }
         });
 
-
         this._viewer.addHandler('update-viewport', function() {
             self.resize();
             self.resizecanvas();
-
         });
 
         this._viewer.addHandler('open', function() {
             self.resize();
             self.resizecanvas();
         });
-
-
     };
 
-    // ----------
-    Overlay.prototype = {
-        // ----------
+    FabricOverlay.prototype = {
         canvas: function() {
             return this._canvas;
         },
+
         fabricCanvas: function() {
             return this._fabricCanvas;
         },
-        // ----------
+
         clear: function() {
             this._fabricCanvas.clearAll();
         },
-        // ----------
+
         resize: function() {
             if (this._containerWidth !== this._viewer.container.clientWidth) {
                 this._containerWidth = this._viewer.container.clientWidth;
@@ -108,27 +92,33 @@
                 this._canvasdiv.setAttribute('height', this._containerHeight);
                 this._canvas.setAttribute('height', this._containerHeight);
             }
-
         },
-       resizecanvas: function() {
 
-           var origin = new OpenSeadragon.Point(0, 0);
-           var viewportZoom = this._viewer.viewport.getZoom(true);
-           this._fabricCanvas.setWidth(this._containerWidth);
-           this._fabricCanvas.setHeight(this._containerHeight);
-           var zoom = this._viewer.viewport._containerInnerSize.x * viewportZoom / this._scale;
-           this._fabricCanvas.setZoom(zoom);
-           var viewportWindowPoint = this._viewer.viewport.viewportToWindowCoordinates(origin);
-           var x=Math.round(viewportWindowPoint.x);
-           var y=Math.round(viewportWindowPoint.y);
-           var canvasOffset=this._canvasdiv.getBoundingClientRect();
+        resizecanvas: function() {
+            var origin = new OpenSeadragon.Point(0, 0);
+            var viewportZoom = this._viewer.viewport.getZoom(true);
+            this._fabricCanvas.setWidth(this._containerWidth);
+            this._fabricCanvas.setHeight(this._containerHeight);
+            var zoom = this._viewer.viewport._containerInnerSize.x * viewportZoom / this._scale;
+            this._fabricCanvas.setZoom(zoom);
+            var viewportWindowPoint = this._viewer.viewport.viewportToWindowCoordinates(origin);
+            var x=Math.round(viewportWindowPoint.x);
+            var y=Math.round(viewportWindowPoint.y);
+            var canvasOffset=this._canvasdiv.getBoundingClientRect();
 
-           var pageScroll = OpenSeadragon.getPageScroll();
+            var pageScroll = OpenSeadragon.getPageScroll();
 
-           this._fabricCanvas.absolutePan(new fabric.Point(canvasOffset.left - x + pageScroll.x, canvasOffset.top - y + pageScroll.y));
-
-       }
-
+            this._fabricCanvas.absolutePan(new fabric.Point(canvasOffset.left - x + pageScroll.x, canvasOffset.top - y + pageScroll.y));
+        }
     };
+
+    // static counter for multiple overlays differentiation
+    var counter = (function () {
+        var i = 1;
+
+        return function () {
+            return i++;
+        }
+    })();
 
 })();
