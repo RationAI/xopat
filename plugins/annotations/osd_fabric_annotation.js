@@ -129,7 +129,7 @@ OSDAnnotations.prototype = {
 		});
 
 		/****************************************************************************************************************
-	
+
 									Click Handlers
 		 Input must be always the event invoked by the user input and point in the image coordinates (absolute pixel
 		 position in the scan)
@@ -143,7 +143,7 @@ OSDAnnotations.prototype = {
 			if (!_this.cursor.isDown || _this.disabledInteraction) return;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
-			let point = screenToPixelCoords(event.x, event.y)
+			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickUp(event, point, false, factory);
 
 			_this.cursor.isDown = false;
@@ -156,7 +156,7 @@ OSDAnnotations.prototype = {
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
-			let point = screenToPixelCoords(event.x, event.y)
+			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickDown(event, point, false, factory);
 		}
 
@@ -164,7 +164,7 @@ OSDAnnotations.prototype = {
 			if (!_this.cursor.isDown || _this.disabledInteraction) return;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
-			let point = screenToPixelCoords(event.x, event.y)
+			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickUp(event, point, true, factory);
 			_this.cursor.isDown = false;
 		}
@@ -176,14 +176,14 @@ OSDAnnotations.prototype = {
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
-			let point = screenToPixelCoords(event.x, event.y)
+			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickDown(event, point, true, factory);
 		}
 
 		/****************************************************************************************************************
-	
+
 												 E V E N T  L I S T E N E R S: FABRIC
-	
+
 		*****************************************************************************************************************/
 
 		let annotationCanvas = this.overlay.fabricCanvas().upperCanvasEl;
@@ -239,7 +239,7 @@ OSDAnnotations.prototype = {
 		/****************************************************************************************************************
 
 											 E V E N T  L I S T E N E R S: OSD (clicks without alt or shift)
-			Since event listeners on fabricJS are disabled when using OSD interactive mode (and vice versa), 
+			Since event listeners on fabricJS are disabled when using OSD interactive mode (and vice versa),
 			we register both listeners for OSD and fabricjs
 
 		*****************************************************************************************************************/
@@ -267,43 +267,15 @@ OSDAnnotations.prototype = {
 		$(PLUGINS.osd.element).on('contextmenu', function (event) {
 			event.preventDefault();
 		});
-	
+
 		/****************************************************************************************************************
 
 											 E V E N T  L I S T E N E R S: GENERAL
 
 		*****************************************************************************************************************/
-
-		document.addEventListener('keydown', (e) => {
-			// switching mode only when no mode AUTO and mouse is up
-			if (!_this.showAnnotations || _this.cursor.isDown || _this.disabledInteraction) return;
-
-			let modeFromCode = _this.getModeByKeyEvent(e);
-			if (modeFromCode && this.mode === this.Modes.AUTO) {
-				_this.setMode(modeFromCode);
-				e.preventDefault();
-			}
-		});
-
-		document.addEventListener('keyup', (e) => {
-			if (!_this.showAnnotations || _this.disabledInteraction) return;
-
-			if (e.code === "Delete") {
-				_this.removeActiveObject();
-				return;
-			}
-
-			if (e.ctrlKey && e.code === "KeyY") {
-				if (e.shiftKey) _this.history.redo();
-				else _this.history.back();
-				return;
-			}
-
-			if (_this.mode.rejects(e)) {
-				_this.setMode(this.Modes.AUTO);	
-				e.preventDefault();		
-			}	
-		});
+		//explicitly defined in the prototype: called from the modal window
+		document.addEventListener('keydown', this.keyDownHandler.bind(this));
+		document.addEventListener('keyup', this.keyUpHandler.bind(this));
 
 		// TODO re-implement?
 		// listen for annotation send button
@@ -346,9 +318,8 @@ OSDAnnotations.prototype = {
 				URL.revokeObjectURL(downloadURL);
 			}
 			//TODO add other attributes for export to preserve funkcionality (border width, etc)
-			download(_this.getJSONContent());
-			//asap xml
-			download(_this.getXMLStringContent());
+			download(_this.getJSONContent()); //json, containing all necessary properties
+			download(_this.getXMLStringContent()); //asap xml
 		});
 
 		// listen for changes in opacity slider and change opacity for each annotation
@@ -537,6 +508,43 @@ OSDAnnotations.prototype = {
 
 	/****************************************************************************************************************
 
+									 EXPLICIT HANDLERS
+
+	 *****************************************************************************************************************/
+
+	keyDownHandler: function(e)  {
+		// switching mode only when no mode AUTO and mouse is up
+		if (!this.showAnnotations || this.cursor.isDown || this.disabledInteraction) return;
+
+		let modeFromCode = this.getModeByKeyEvent(e);
+		if (modeFromCode && this.mode === this.Modes.AUTO) {
+			this.setMode(modeFromCode);
+			e.preventDefault();
+		}
+	},
+
+	keyUpHandler: function(e) {
+		if (!this.showAnnotations || this.disabledInteraction) return;
+
+		if (e.code === "Delete") {
+			this.removeActiveObject();
+			return;
+		}
+
+		if (e.ctrlKey && e.code === "KeyY") {
+			if (e.shiftKey) this.history.redo();
+			else this.history.back();
+			return;
+		}
+
+		if (this.mode.rejects(e)) {
+			this.setMode(this.Modes.AUTO);
+			e.preventDefault();
+		}
+	},
+
+	/****************************************************************************************************************
+
 									S E T T E R S, GETTERS
 
 	*****************************************************************************************************************/
@@ -637,15 +645,6 @@ OSDAnnotations.prototype = {
 		return this.mouseOSDInteractive;
 	},
 
-	
-	/****************************************************************************************************************
- 
-									 A N N O T A T I O N S (User driven Initializers and Updaters)
- 
-	 *****************************************************************************************************************/
-
-	//todo move all canvas operations here (from other files)
-
 	getAnnotationObjectFactory: function(objectType) {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
@@ -657,6 +656,14 @@ OSDAnnotations.prototype = {
 			object.selectable = boolean;
 		});
 	},
+
+	/****************************************************************************************************************
+
+									 A N N O T A T I O N S (User driven Initializers and Updaters)
+
+	 *****************************************************************************************************************/
+
+	//todo move all canvas operations here (from other files)
 
 	addHelperAnnotation: function(annotation) {
 		this.overlay.fabricCanvas().add(annotation);
@@ -1030,15 +1037,26 @@ class StateFreeFormTool extends AnnotationState {
 		}
 
 		if (!currentObject) {
+			//subtract needs active object
+			if (!this.context.modifyTool.modeAdd) {
+				this.abortClick();
+				return;
+			}
 			currentObject = this._initPlain(point, isLeftClick);
 		} else {
 			let bounds = currentObject.getBoundingRect();
 			let w = bounds.left + bounds.width,
 				h = bounds.top + bounds.height;
 			if (o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w) {
+				//subtract needs active object
+				if (!this.context.modifyTool.modeAdd) {
+					this.abortClick();
+					return;
+				}
 				currentObject = this._initPlain(point, isLeftClick);
 			}
 		}
+
 		this.context.modifyTool.init(currentObject, point);
 		this.context.modifyTool.update(point);
 	}

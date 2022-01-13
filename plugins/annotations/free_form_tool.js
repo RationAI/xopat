@@ -3,13 +3,14 @@
 FreeFormTool = function (selfName, context) {
     this._globalSelf = `${context.id}['${selfName}']`;
     this.polygon = null;
+    this.modeAdd = true;
     this.screenRadius = 20;
     this.radius = 20;
     this.mousePos = null;
     this.SQRT2DIV2 = 0.707106781187;
     this._context = context;
     this._update = null;
-}
+};
 
 FreeFormTool.prototype = {
 
@@ -56,6 +57,7 @@ FreeFormTool.prototype = {
     },
 
     setModeAdd: function(isModeAdd) {
+        this.modeAdd = isModeAdd;
         if (isModeAdd) {
             $("#fft-mode-add").addClass('border');
             $("#fft-mode-remove").removeClass('border');
@@ -86,7 +88,6 @@ FreeFormTool.prototype = {
     update: function(point) {
         //todo check if contains NaN values and exit if so
         if (!this.polygon) {
-            console.warn("FreeFormTool:invalid state.");
             return;
         }
 
@@ -163,8 +164,8 @@ FreeFormTool.prototype = {
                 polygon.objectCaching = false;
             }
             return polygon;
-        } 
-          
+        }
+
         console.log("NO UNION FOUND");
         return null;
     },
@@ -212,10 +213,10 @@ FreeFormTool.prototype = {
                 }
 
                 polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(difference[maxIdx]));
-                polygon.objectCaching = false;               
+                polygon.objectCaching = false;
             }
             return polygon;
-        } 
+        }
         console.log("NO DIFFERENCE FOUND");
         return null;
     },
@@ -262,7 +263,7 @@ FreeFormTool.prototype = {
                 let ress = greinerHormann.union(primary[j], primary[j + 1]);
 
                 if (typeof ress[0][0] === 'number') {
-                    ress = [ress]; 
+                    ress = [ress];
                 }
                 secondary = ress.concat(secondary); //reverse order for different union call in the next loop
             }

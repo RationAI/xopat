@@ -43,26 +43,21 @@ id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
-            `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3; width: 400px;">
+            `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 <div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
 <script>
 
 window.confirm = window.opener.confirm;
 
+document.addEventListener('keydown', (e) => {
+    const parentContext = opener.${this._context.id};  
+    opener.focus();
+    parentContext.keyDownHandler(e);
+});
+
 document.addEventListener('keyup', (e) => {
     const parentContext = opener.${this._context.id};   
-
-    if (!parentContext.showAnnotations || parentContext.disabledInteraction) return;
-
-    if (e.code === "Delete") {
-        parentContext.removeActiveObject();
-        return;
-    }
-
-    if (e.ctrlKey && e.code === "KeyY") {
-        if (e.shiftKey) parentContext.history.redo();
-        else parentContext.history.back();
-    }
+    parentContext.keyUpHandler(e);
 });
 </script>`, function () {
                 _this._context.canvasObjects().forEach(object => {
@@ -257,11 +252,11 @@ document.addEventListener('keyup', (e) => {
             let header = ctx.document.getElementById(this.containerId + "-header");
             if (enabled) {
                 ctx.document.body.style.background = "transparent";
-                header.disabled = false;
+                header.readonly = false;
                 header.style.filter = "none";
             } else {
                 ctx.document.body.style.background = "#eb7777";
-                header.disabled = true;
+                header.readonly = true;
                 header.style.filter = "contrast(0.5)";
             }
         }
@@ -289,7 +284,7 @@ document.addEventListener('keyup', (e) => {
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
-<input type="text" class="form-control border-0" disabled="true" class="desc" 
+<input type="text" class="form-control border-0" readonly class="desc" 
 style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
 <span class="material-icons pointer" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { opener.${_this._globalSelf}._boardItemSave(); }">edit</span></div>`));
@@ -305,7 +300,7 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
             this._context.enableInteraction(false);
         }
 
-        self.prev().prop('disabled', false);
+        self.prev().prop('readonly', false);
         self.html('save');
 
         //todo possible problem with storing dynamic html node
@@ -337,7 +332,7 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
         if (obj) obj.set({comment: self.prev().val()});
 
         self.html('edit');
-        self.prev().prop('disabled', true);
+        self.prev().prop('readonly', true);
 
         if (!switches) {
             $('#bord-for-annotations .Box-header').css('background', 'none');

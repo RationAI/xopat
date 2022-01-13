@@ -127,17 +127,15 @@ var Dialogs = {
      * Gets the context of a modal window,
      * destroys and cleans the context if necessary (e.g. window was closed by the user)
      * @param id id used to create the window
+     * @param required temporary parameter due to a bug, do not use
      * @returns {{self}|{window}|null} window context or undefined
      */
     getModalContext: function(id, required=false) {
         let ctx = this._modals[id];
         if (!ctx) return undefined;
 
-        if (required) {
-            console.log(ctx); //fixme this actually needs to be there so that it works
-        }
-        //probably some sync issues
-        if (!ctx.window || !ctx.self) {
+        //for some reason does not work without checking 'opener' while inspector closed
+        if (!ctx.window || !ctx.opener || !ctx.self) {
             this._destroyModalWindow(id, ctx);
             return null;
         }
@@ -163,7 +161,10 @@ var Dialogs = {
         if (node) $(node).remove();
 
         let ctx = this._modals[id];
-        if (ctx) this._destroyModalWindow(id, ctx);
+        if (ctx) {
+            if (ctx.window) ctx.window.close();
+            this._destroyModalWindow(id, ctx);
+        }
         return true;
     },
 
@@ -175,7 +176,7 @@ var Dialogs = {
         if (windowLoaded) this._cachedOnload = windowLoaded;
         let win = this._openModalWindow(id, title, html);
         if (!win) {
-            this.show(`An application modal window '${id}' was blocked by your browser. <a onclick="
+            this.show(`An application modal window '${title}' was blocked by your browser. <a onclick="
 Dialogs._showCustomModalImpl('${id}', '${title}', null, null); Dialogs.hide();" class='pointer'>Click here to open.</a>`,
                 15000, this.MSG_WARN);
         } else {
@@ -184,7 +185,7 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, null); Dialogs.hide();" 
             win.window.addEventListener('load', function () {
                 callback();
             });
-            const _this = this;
+            //const _this = this;
             // win.window.addEventListener('unload', function () {
             //     delete _this._modals[id];
             // });
