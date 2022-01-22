@@ -1,10 +1,8 @@
 {
     "id": "openseadragon_image_annotations",
     "name": "Annotations",
-    "description": "A plugin for creating and managing annotations.",
+    "description": "A plugin for annotation creation and management.",
     "includes" : [
-        "ext/fabric.min.js",
-        "ext/openseadragon-fabricjs-overlay.js",
         "ext/greiner-hormann.min.js",
         "ext/point-in-polygon.js",
         "ext/hull.js",
@@ -16,5 +14,5 @@
     "flag": "annotations",
     "public": true,
     "requires": [],
-    "modules": ["webgl"]
+    "modules": ["webgl", "fabricjs"]
 }

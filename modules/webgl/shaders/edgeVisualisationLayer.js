@@ -95,8 +95,7 @@ vec4 getBorder_${this.uid}() {
     show(vec4(border_${this.uid}.rgb, border_${this.uid}.a * opacity_${this.uid}));
 `;
     }
-
-
+    
     glDrawing(program, dimension, gl) {
         gl.uniform1f(this.threshold_loc, this.threshold / 100.0);
         gl.uniform1f(this.opacity_loc, this.opacity);
@@ -164,6 +163,6 @@ class="with-direct-input" min="1" max="100" ${directionRange} step="1">
         }
         return html;
     }
-}
+};
 
 WebGLModule.ShaderMediator.registerLayer(WebGLModule.EdgeLayer);

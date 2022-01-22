@@ -488,19 +488,16 @@ OSDAnnotations.prototype = {
 					"next #viewer-container": "First, make sure you have some annotation created. If not, make one now."
 				},
 				{
-					"click #history-undo": "A history cache will allow you to undo few last modifications.<br>Click here to undo the last step. Shortcut is Ctrl+Z."
+					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>But you can use some features even on the canvas itself."
 				},
 				{
-					"click #history-redo": "Click on 'redo' to return the last change.<br><b>Caveat</b>: redo history is erased on manual history change. Shortcut is Ctrl+Shift+Z."
+					"next #viewer-container": "A history cache will allow you to undo few last modifications.<br> Shortcut is Ctrl+Z (or use the board menu)."
 				},
 				{
-					"next #history-refresh": "Refreshing the board might come useful in case<br>some unexpected error caused the board miss an annotation."
+					"next #viewer-container": "Use Ctrl+Shift+Z to revert (redo, or use the board menu button)."
 				},
 				{
-					"next #history-sync": "You can update all objects to reflect the most recent changes on presets. <br><b>Caveat</b>: this will overwrite any custom modifications made to annotations (comment/color)."
-				},
-				{
-					"next #bord-for-annotations": "If you want to modify some object, click on the pencil icon.<br> The board will turn red to notify you navigation is disabled."
+					"next #viewer-container": "If you want to modify some object, click on the pencil icon within the board window.<br> The board will turn red to notify you navigation is disabled."
 				}
 			], pluginOpener
 		);
@@ -717,7 +714,6 @@ OSDAnnotations.prototype = {
 	setOSDTracking: function(tracking) {
 		const osd = PLUGINS.osd;
 		osd.setMouseNavEnabled(tracking);
-		osd.outerTracker.setTracking(tracking);
 	},
 
 	presetManager: function() {

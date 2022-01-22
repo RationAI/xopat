@@ -1,8 +1,10 @@
-<script type="text/javascript">
+<?php
 /*---------------------------------------------------------*/
 /*------------ DIALOGS ------------------------------------*/
 /*--All PHP variables are inherited from index.php---------*/
 /*---------------------------------------------------------*/
+?>
+<script type="text/javascript">
 
 /**
  * GUI messaging system:
@@ -107,20 +109,20 @@ var Dialogs = {
      * Show custom/dialog in a separate browser window
      *  note: the window context does not have to be immediately available
      *  to get the window context, call getModalContext(..)
+     *  to perform event-like calls, use the context and register appropriate events on the new window
      * @param parentId unique ID to the modals context (does not have to be unique in this DOM, it has a different one)
      * @param title non-formatted title string (for messages, window title tag...)
      * @param header HTML content to put in the header
      * @param content HTML content
-     * @param windowLoaded callback performed once the window is ready
      */
-    showCustomModal: function(parentId, title, header, content, windowLoaded) {
+    showCustomModal: function(parentId, title, header, content) {
         if (this._modals[parentId]) {
             console.warn("Modal window with id " + title + " already exists.");
             return;
         }
 
         this._showCustomModalImpl(parentId, title, this._buildComplexWindow(true, parentId, header, content, '',
-            `style="width: 100%; height: 100%"`, {defaultHeight: "100%"}), windowLoaded);
+            `style="width: 100%; height: 100%"`, {defaultHeight: "100%"}));
     },
 
     /**
@@ -168,12 +170,11 @@ var Dialogs = {
         return true;
     },
 
-    _showCustomModalImpl: function(id, title, html, windowLoaded) {
+    _showCustomModalImpl: function(id, title, html) {
         if (html) this._cachedHtml = html;
         else html = this._cachedHtml;
         if (!html) return;
 
-        if (windowLoaded) this._cachedOnload = windowLoaded;
         let win = this._openModalWindow(id, title, html);
         if (!win) {
             this.show(`An application modal window '${title}' was blocked by your browser. <a onclick="
@@ -182,13 +183,11 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, null); Dialogs.hide();" 
         } else {
             const callback = this._cachedOnload;
             this._modals[id] = win;
-            win.window.addEventListener('load', function () {
-                callback();
-            });
-            //const _this = this;
-            // win.window.addEventListener('unload', function () {
-            //     delete _this._modals[id];
-            // });
+            if (callback) {
+                win.window.addEventListener('load', function () {
+                    callback();
+                });
+            }
             delete this._cachedHtml;
             delete this._cachedOnload;
         }

@@ -80,6 +80,7 @@
   width: 100vw;
   height: 35px;
   backdrop-filter: blur(8px);
+  user-select:none;
 }
 
 #annotation-status-bar-background {

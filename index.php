@@ -1,5 +1,9 @@
 <?php
 
+if (version_compare(phpversion(), '7.1', '<')) {
+    die("PHP version required is at least 7.1.");
+}
+
 require_once("config.php");
 require_once("plugins.php");
 
@@ -349,24 +353,32 @@ EOF;
     /*---------------------------------------------------------*/
 
     var DisplayError = {
-        msgTitle: $("#system-message-title"),
-        msgDetails: $("#system-message-details"),
-        msgContainer: $("#system-message"),
-        screenContainer: $("#viewer-container"),
+        active: false,
 
-        show: function(title, description) {
-            this.msgTitle.html(title);
-            this.msgDetails.html(description);
-            this.msgContainer.removeClass("d-none");
-            this.screenContainer.addClass("disabled");
-            Tutorials.hide(); //preventive
+        show: function(title, description, withHiddenMenu=false) {
+            Tutorials._hideImpl(false); //preventive
+            $("#system-message-title").html(title);
+            $("#system-message-details").html(description);
+            $("#system-message").removeClass("d-none");
+            $("#viewer-container").addClass("disabled");
+            if (withHiddenMenu) $("#main-panel").css("right", "-400px");
+            this.active = true;
         },
 
         hide: function() {
-            this.msgContainer.addClass("d-none");
-            this.screenContainer.removeClass("disabled");
+            $("#system-message").addClass("d-none");
+            $("#viewer-container").removeClass("disabled");
+            this.active = false;
         }
-    }
+    };
+
+    //preventive error message, that will be discarded on the full initialization
+    window.onerror = function (message, file, line, col, error) {
+        if (DisplayError.active) return false;
+        DisplayError.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
+<b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
+        return false;
+    };
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -388,6 +400,8 @@ EOF;
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
         splitHashDataForPost: true,
+        //todo maybe do not set for chrome?
+        subPixelRoundingForTransparency: OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
         // debugMode:  true,
     });
     viewer.gestureSettingsMouse.clickToZoom = false;
@@ -412,6 +426,8 @@ EOF;
         prerequisites: [],
 
         show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
+            if (DisplayError.active) return;
+
             $("#tutorials-container").removeClass("d-none");
             $("#viewer-container").addClass("disabled");
             $("#tutorials-title").html(title);
@@ -420,9 +436,15 @@ EOF;
         },
 
         hide: function() {
+            this._hideImpl(true);
+        },
+
+        _hideImpl: function(reflectGUIChange) {
             $("#tutorials-container").addClass("d-none");
-            $("#viewer-container").removeClass("disabled");
-            $('#main-panel').css('right', '0px');
+            if (reflectGUIChange) {
+                $("#viewer-container").removeClass("disabled");
+                $('#main-panel').css('right', '0px');
+            }
             document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/';
         },
 
@@ -502,6 +524,7 @@ echo <<<EOF
         'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
 }]
 EOF; //end of the first argument of Tutorials.add()
+
 if ($layerVisible) {
     echo <<<EOF
 , function() {
@@ -892,6 +915,16 @@ if ($layerVisible) {
             viewer.viewport.zoomTo(setup.params.viewport.zoomLevel);
         }
 
+        window.onerror = function(message, source, lineno, colno, error) {
+            Dialogs.show(message, 10000, Dialogs.MSG_ERR);
+            return false;
+        };
+
+        if (DisplayError.active) {
+            $("#viewer-container").addClass("disabled"); //preventive
+            return;
+        }
+
 <?php
 if ($firstTimeVisited) {
     echo "        setTimeout(_ => Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
@@ -947,7 +980,9 @@ foreach ($PLUGINS as $_ => $plugin) {
     }
 }
 
-$imageServerPath = SERVER . "" . IIPIMAGE_SERVER;
+$srvImages = SERVED_IMAGES;
+$srvLayers = SERVED_LAYERS;
+
 if ($layerVisible) {
     echo <<<EOF
 <script type="text/javascript">
@@ -961,9 +996,9 @@ if ($layerVisible) {
         //reverse order: last opened IMAGE is the first visible
         let toOpen = setup.background.map(value => {
             const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
-            return urlmaker("$imageServerPath", setup.data[value.dataReference]);
+            return urlmaker("$srvImages", setup.data[value.dataReference]);
         }).reverse();
-        toOpen.push(visualizationUrlMaker("$imageServerPath", activeData));
+        toOpen.push(visualizationUrlMaker("$srvLayers", activeData));
         viewer.open(toOpen);
     });
     seaGL.init(viewer);
@@ -971,7 +1006,7 @@ if ($layerVisible) {
     viewer.addHandler('open-failed', function(e) {
         let sources = []; //todo create valid urls again
         DisplayError.show("No valid images.", `We were unable to open provided image sources. 
-Url's are probably invalid. <code>\${sources.join(", ")}</code>`);
+Url's are probably invalid. <br><code>\${sources.join(", ")}</code>`, true);
     });
 
 </script>
@@ -989,7 +1024,7 @@ EOF;
          let toOpen = setup.background.map(value => {
             const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
             //todo absolute path? dynamic using php?
-            return urlmaker("$imageServerPath", setup.data[value.dataReference]);
+            return urlmaker("$srvImages", setup.data[value.dataReference]);
         }).reverse(); 
         viewer.open(toOpen);
     })();

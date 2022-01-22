@@ -51,7 +51,7 @@ class PresetManager {
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,
-    }
+    };
 
     /**
      * Create Preset Manager
@@ -949,14 +949,6 @@ class Polygon extends AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
         this._initialize(false);
-
-        const _this = this;
-        fabric.util.loadImage("plugins/annotations/finish.png", function(img) {
-            _this._pattern = new fabric.Pattern({
-                source: img,
-                repeat: 'repeat'
-            });
-        });
     }
 
     getIcon() {
@@ -1097,12 +1089,12 @@ class Polygon extends AnnotationObjectFactory {
             hasBorders: false,
             lockMovementX: true,
             lockMovementY: true
-        }
+        };
 
         //create circle representation of the point
         let circle = this._createControlPoint(x, y, properties);
         if (this._pointArray.length === 0) {
-            circle.set({fill: this._pattern, radius: circle.radius*2});
+            circle.set({fill: '#d93442', radius: circle.radius*2});
         } else {
             if (Math.sqrt(Math.pow(this._pointArray[0].left - x, 2) +
                     Math.pow(this._pointArray[0].top - y, 2)) < circle.radius*2) {

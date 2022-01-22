@@ -102,8 +102,8 @@
             var zoom = this._viewer.viewport._containerInnerSize.x * viewportZoom / this._scale;
             this._fabricCanvas.setZoom(zoom);
             var viewportWindowPoint = this._viewer.viewport.viewportToWindowCoordinates(origin);
-            var x=Math.round(viewportWindowPoint.x);
-            var y=Math.round(viewportWindowPoint.y);
+            var x= viewportWindowPoint.x;//Math.round(viewportWindowPoint.x);
+            var y=viewportWindowPoint.y;//Math.round(viewportWindowPoint.y);
             var canvasOffset=this._canvasdiv.getBoundingClientRect();
 
             var pageScroll = OpenSeadragon.getPageScroll();

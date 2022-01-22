@@ -49,6 +49,10 @@ onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${thi
 
 window.confirm = window.opener.confirm;
 
+window.addEventListener('load', (e) => {
+    opener.${this._globalSelf}._syncLoad();
+});
+
 document.addEventListener('keydown', (e) => {
     const parentContext = opener.${this._context.id};  
     opener.focus();
@@ -59,15 +63,16 @@ document.addEventListener('keyup', (e) => {
     const parentContext = opener.${this._context.id};   
     parentContext.keyUpHandler(e);
 });
-</script>`, function () {
-                _this._context.canvasObjects().forEach(object => {
-                    //todo add only valid ones!!!!!
-                    _this._addToBoard(object);
 
-                    //these are necessary for correct control behaviour
-                    $.extend(object, PresetManager._commonProperty);
-                });
-            });
+//refresh/close: reset mode
+window.addEventListener("beforeunload", (e) => {
+    const parentContext = opener.${this._globalSelf}; 
+    if (parentContext._editSelection) {
+        parentContext._boardItemSave();
+    }
+}, false);
+
+</script>`);
     },
 
     winContext: function(required=false) {
@@ -155,6 +160,12 @@ document.addEventListener('keyup', (e) => {
         if (!confirm("This will overwrite all properties of all existing annotations - " +
             "even those manually modified. Do you want to proceed?")) return;
         this._performAtJQNode("annotation-logs", node => node.html(""));
+        this._syncLoad();
+        //todo change in color not propagated, set dirty?
+        this._context.canvas().renderAll();
+    },
+
+    _syncLoad: function() {
         let _this = this;
         this._context.canvasObjects().some(o => {
             if (!isNaN(o.incrementId) && o.presetID) {
@@ -170,8 +181,6 @@ document.addEventListener('keyup', (e) => {
             }
             return false;
         });
-        //todo change in color not propagated, set dirty?
-        this._context.canvas().renderAll();
     },
 
     push: function (newObject, previous = null) {

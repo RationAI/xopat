@@ -13,6 +13,20 @@ extension uses the JSON parametrization described below. You can
  - have arbitrary number of images in the image part, these will be fully opaque or transparent, each in it's own canvas
  - have arbitrary number if images in the data part, these will be rendered together into one canvas using your setup.
 
+## Setup
+It should be easy to get the application running, the trickiest part is to set 
+a correct configuration. 
+1. Place the application to a folder from which PHP (**VERSION > 7.1**) can serve files (e.g. create WampServer configuration for localhost)
+2. Change **config.php** configuration, most importantly
+    - _PROTOCOL_: whether to use `http` or `https`
+    - _SERVED_IMAGES_: path to the server that can handle regular tile requests for a single image; and _SERVED_LAYERS_: path to the server that can handle tile requests for image arrays:
+        - note that _SERVED*_ values are only passed to the URL-request image creation (see _Protocol construction_ below)
+    and it is up to the parameters how these values are used, and depending on your server you probably might want to override default URL creation process
+        - note that the visualization parent server must allow `Access-Control-Allow-Origin "*"` CORS policy if you make cross-domain requests
+        (e.g. _SERVED*_ URLs are on a different server)
+3. Use the visualization by sending the `JSON` configuration via `HTTP POST` to the `index.php` (you will most likely want to have 
+a script that is able to provide the user with a link, for reference see how `redirect.php` works)
+
 
 ## Structure
 In each folder you will find a `README` document that describes the given component in more detail.
@@ -141,22 +155,25 @@ shader type, so always check whether a desired property exists or not
     - it is data-type dependent, so if you enter different value or data type than expected by the shader, you will break things
     
 _Protocol construction_ &emsp;
-To use custom-defined protocol, pass a string that can be evaluated to a valid URL. It must be one-liner expression, which
-can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script. `background.data` contains
-elements of `data` array defined in the outer scope (selected to be used). Note that `visualizationProtocol` expression receives a string **list** as `data` whereas
-`protocol` only a single string. That means a server behind `visualizationProtocol` url must be able to serve simultaneously multiple images. These images
+To use custom-defined protocol, pass a string that can be evaluated as a JavaScript code to a valid URL. It must be one-liner expression, which
+can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script (as set in `config.php`). Note that `params.visualizationProtocol` 
+expression receives a string **list** in the `data` parameter (array of selected images), whereas
+`background.protocol` only a single string (one image). That means a server behind `visualizationProtocol` url must be able to serve simultaneously multiple images. These images
 must be concatenated below each other into a single bigger image (see the `webgl` module for more details).
 <details>
- <summary>Example:</summary>
- 
-> "protocol": "path + \\"?Deepzoom=\\" + data + \\".dzi\\";"
+ <summary>Examples:</summary>
 
-is the default behaviour for `background` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=my/data.tif`, url
+- URL construction using **string concatenation** (note the need of `\"` escape as it has to be valid `JSON`)
+    > "protocol": "path + \\"?Deepzoom=\\" + data + \\".dzi\\";"
+
+    is the default behaviour for `background` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=my/data.tif`, url
 `http://serv.org/iipsrv.fcgi?Deepzoom=my/data.tif.dzi` which is a DZI protocol request to IIPImage's `fcgi` script.
 
-> "visualizationProtocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
+- URL construction using **ES6 String Template**
 
-is the default behaviour for `visualizations` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=[my/data.tif, other/data.tif]`,
+    > "visualizationProtocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
+
+    is the default behaviour for `visualizations` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=[my/data.tif, other/data.tif]`,
 the `http://serv.org/iipsrv.fcgi#DeepZoomExt=my/data.tif,other/data.tif.dzi` url 
 using string template one-liner (`;` is optional). The protocol in this
 case is our custom protocol, able to handle multiple image acquisition as described above. Moreover, data behind `#` sign
