@@ -76,7 +76,7 @@ window.addEventListener("beforeunload", (e) => {
     },
 
     winContext: function(required=false) {
-        return PLUGINS.dialog.getModalContext(this.containerId, required);
+        return PLUGINS.dialog.getModalContext(this.containerId);
     },
 
     back: function () {

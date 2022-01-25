@@ -116,8 +116,8 @@ var Dialogs = {
      * @param content HTML content
      */
     showCustomModal: function(parentId, title, header, content) {
-        if (this._modals[parentId]) {
-            console.warn("Modal window with id " + title + " already exists.");
+        if (this.getModalContext(parentId)) {
+            console.warn("Modal window " + title + " with id '" + parentId + "' already exists.");
             return;
         }
 
@@ -129,10 +129,9 @@ var Dialogs = {
      * Gets the context of a modal window,
      * destroys and cleans the context if necessary (e.g. window was closed by the user)
      * @param id id used to create the window
-     * @param required temporary parameter due to a bug, do not use
      * @returns {{self}|{window}|null} window context or undefined
      */
-    getModalContext: function(id, required=false) {
+    getModalContext: function(id) {
         let ctx = this._modals[id];
         if (!ctx) return undefined;
 

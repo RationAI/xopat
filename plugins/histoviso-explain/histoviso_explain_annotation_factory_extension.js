@@ -120,7 +120,7 @@ class HistovisoImage extends AnnotationObjectFactory {
 
     _setRequestStarted(id, request) {
         if (this._isRequestPending(id)) {
-            PLUGINS.dialog.show("Still working on the task, please, be patient.", 8000, PLUGINS.dialog.MSG_ERR);
+            PLUGINS.dialog.show("Still working on the task, please, be patient.", 8000, PLUGINS.dialog.MSG_WARN);
             return;
         }
         let _this = this;
@@ -251,7 +251,7 @@ class HistovisoImageExplorer extends HistovisoImage {
             _this._clearRequestTimeOut(reqId);
 
             let html = [
-                `<div id="nn-explainability-exploration-results"><table><tr class="pb-3 border-bottom">
+                `<table><tr class="pb-3 border-bottom">
 <th><span class=\"material-icons\">layers</span> name </th>
 <th><span class="material-icons">functions</span> sum </th>
 <th><span class="material-icons">trending_up</span> max </th></tr>`
@@ -262,17 +262,17 @@ class HistovisoImageExplorer extends HistovisoImage {
 <td class="px-2">${json[layer]["sum"].join(", ")}</td>
 <td class="px-2">${json[layer]["max"].join(", ")}</td></tr>`);
             }
-            html.push("</table></div>");
+            html.push("</table>");
 
-            let elem = document.getElementById("nn-explainability-exploration-results");
-            if (elem) {
-                elem.innerHTML = html.join("");
+            let ctx = Dialogs.getModalContext("nn-explainability-exploration");
+            if (ctx) {
+                ctx.document.getElementById("nn-explainability-exploration-results").innerHTML = html.join("");
             } else {
                 Dialogs.showCustomModal(
                     "nn-explainability-exploration",
                     `Top feature maps for the model <br><b>${data.params.model_name}</b>`,
-                    html.join(""),
-                    "", {allowResize:true, allowClose: true});
+                    `<div id="nn-explainability-exploration-results">${html.join("")}</div>`,
+                    "");
             }
             _this._context.deleteHelperAnnotation(dummyRect);
 
