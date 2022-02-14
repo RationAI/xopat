@@ -5,10 +5,10 @@
  * expected parameters:
  *  index - unique number in the compiled shader
  * supported parameters:
- *  color - color to fill-in areas with values, url encoded '#ffffff' format or digits only 'ffffff', default "#d2eb00"
- *  ctrlColor - whether to allow color modification, 1 or 0, default 1
- *  ctrlThreshold - whether to allow threshold modification, 1 or 0, default 1
- *  ctrlOpacity - whether to allow opacity modification, 1 or 0, default 1
+ *  color - for more details, see @WebGLModule.UIControls color UI type
+ *  threshold - for more details, see @WebGLModule.UIControls number UI type
+ *  opacity - for more details, see @WebGLModule.UIControls color UI type
+ *
  *  inverse - low values are high opacities instead of high values, 1 or 0, default 0
  *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
  *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
@@ -29,32 +29,37 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "Heatmap";
     }
 
-    constructor(options) {
-        super(options);
+    static description() {
+        return "data values encoded in color/opacity";
+    }
 
-        if (options.hasOwnProperty("color")) {
-            this._defaultColor = this.toRGBShaderColorFromString(options["color"], [210/255, 235/255, 0]);
-        } else {
-            this._defaultColor = [210/255, 235/255, 0];
-        }
+    constructor(id, options) {
+        super(id, options);
 
-        //default true
-        this._allowColorChange = this.isFlagOrMissing(options["ctrlColor"]);
-        this._allowThresholdChange = this.isFlagOrMissing(options["ctrlThreshold"]);
-        this._allowOpacityChange = this.isFlagOrMissing(options["ctrlOpacity"]);
         //default false
+        //todo reimplement as UI controls (by default hidden)...?
         this._invertOpacity = this.isFlag(options["inverse"]);
-        this._defaultThresholdValue = this._invertOpacity ? "100" : "1";
         this._logScale = this.isFlag(options["logScale"]);
         this._logScaleMax = options.hasOwnProperty("logScaleMax") ?
             this.toShaderFloatString(options["logScaleMax"], 1, 2) : "1.0";
+
+        //We support three controls
+        this.color = WebGLModule.UIControls.build(this, "color",
+            options.color, {type: "color", default: "#fff700", title: "Color: "},
+            (type, instance) => type === "vec3");
+        this.threshold = WebGLModule.UIControls.build(this, "threshold",
+            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
+            (type, instance) => type === "float");
+        this.opacity = WebGLModule.UIControls.build(this, "opacity",
+            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
+            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
         return `
-uniform float threshold_${this.uid};
-uniform float opacity_${this.uid};
-uniform vec3 color_${this.uid};
+${this.color.define()}
+${this.threshold.define()}
+${this.opacity.define()}
 `;
     }
 
@@ -63,12 +68,12 @@ uniform vec3 color_${this.uid};
         let compareAgainst, alpha;
         if (this._logScale) {
             compareAgainst = `float normalized_${this.uid} = (log2(${this._logScaleMax} + data${this.uid}) - log2(${this._logScaleMax}))/(log2(${this._logScaleMax}+1.0)-log2(${this._logScaleMax}));`;
-            comparison = `normalized_${this.uid} ${comparison} threshold_${this.uid}`;
-            alpha = (this._invertOpacity ? `(1.0 - normalized_${this.uid})` : `normalized_${this.uid}`) + ` * opacity_${this.uid}`;
+            comparison = `normalized_${this.uid} ${comparison} ${this.threshold.sample()}`;
+            alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - normalized_${this.uid})` : `normalized_${this.uid}`);
         } else {
             compareAgainst = "";
-            comparison = `data${this.uid} ${comparison} threshold_${this.uid}`;
-            alpha = (this._invertOpacity ? `(1.0 - data${this.uid})` : `data${this.uid}`) + ` * opacity_${this.uid}`;
+            comparison = `data${this.uid} ${comparison} ${this.threshold.sample()}`;
+            alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - data${this.uid})` : `data${this.uid}`);
         }
         let compareConst = this._invertOpacity ? "< 0.98" : " > 0.02";
 
@@ -76,67 +81,44 @@ uniform vec3 color_${this.uid};
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
     ${compareAgainst}
     if(data${this.uid} ${compareConst} && ${comparison}){
-        show(vec4(color_${this.uid}, ${alpha}));
+        show(vec4(${this.color.sample()}, ${alpha}));
     }
 `;
     }
 
     glDrawing(program, dimension, gl) {
-        gl.uniform1f(this.threshold_loc, this.threshold / 100.0);
-        gl.uniform1f(this.opacity_loc, this.opacity);
-        gl.uniform3fv(this.color_loc, this.color);
+        this.color.glDrawing(program, dimension, gl);
+        this.threshold.glDrawing(program, dimension, gl);
+        this.opacity.glDrawing(program, dimension, gl);
     }
 
     glLoaded(program, gl) {
-        this.threshold_loc = gl.getUniformLocation(program, `threshold_${this.uid}`);
-        this.opacity_loc = gl.getUniformLocation(program, `opacity_${this.uid}`);
-        this.color_loc = gl.getUniformLocation(program, `color_${this.uid}`);
+        this.color.glLoaded(program, gl);
+        this.threshold.glLoaded(program, gl);
+        this.opacity.glLoaded(program, gl);
     }
 
     init() {
-        this.twoElementInit("threshold",
-            `#threshold-${this.uid}`,
-            `#threshold-slider-${this.uid}`,
-            this._defaultThresholdValue,
-            v => Math.max(Math.min(v, 100), 1)
-        );
-
-        this.simpleControlInit("opacity",
-            `#opacity-${this.uid}`,
-            1
-        );
-
-        const _this = this;
-        function colorChange(e) {
-            let col = $(e.target).val();
-            _this.color = _this.toRGBShaderColorFromString(col, _this._defaultColor);
-            _this.storeProperty('color', _this.color);
-            _this.invalidate();
-        }
-        let colpicker = $(`#color-${this.uid}`);
-        this.color = this.loadProperty('color', this._defaultColor);
-        colpicker.val("#" + Math.round(this.color[0] * 255).toString(16).padStart(2, "0") + Math.round(this.color[1] * 255).toString(16).padStart(2, "0") +  Math.round(this.color[2] * 255).toString(16).padStart(2, "0"));
-        colpicker.change(colorChange);
+        this.color.init();
+        this.threshold.init();
+        this.opacity.init();
     }
 
     htmlControls() {
-        let html = "";
-        if (this._allowColorChange) {
-            html += `<span> Color:</span><input type="color" id="color-${this.uid}" class="form-control input-sm"><br>`;
-        }
-
-        if (this._allowOpacityChange) {
-            html += `<span> Opacity:</span><input type="range" id="opacity-${this.uid}" min="0" max="1" step="0.1"><br>`;
-        }
-
-        if (this._allowThresholdChange) {
-            let directionRange = this._invertOpacity ? 'style="direction: rtl"' : "";
-            html += `<span> Threshold:</span><input type="range" id="threshold-slider-${this.uid}" 
-class="with-direct-input" min="1" max="100" ${directionRange} step="1">
-<input class="form-control input-sm" style="max-width:60px;" type="number" id="threshold-${this.uid}"><br>`;
-        }
-        return html;
+        return [
+            this.color.toHtml(true),
+            this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl" : ""),
+            this.threshold.toHtml(true)
+        ].join("");
     }
-}
+
+    supports() {
+        return {
+            color: "vec3",
+            opacity: "float",
+            threshold: "float",
+        }
+    }
+};
 
 WebGLModule.ShaderMediator.registerLayer(WebGLModule.HeatmapLayer);

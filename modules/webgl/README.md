@@ -52,12 +52,12 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
 - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - [0]`name` - name of the layer: displayed to the user
-    - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
+    - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` (used when the data should be used in different shader); can be also one of custom-defined ones 
     - [R]`visible` -  `1` or `0`, whether by default the data layer is visible
     - [R]`dataReferences` - indices **array** to the `data` array
         - shaders can then reference `data` items using index to the `dataReferences` array
         - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
-    - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
+    - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set
 
 #### Data settings
 Data must be loaded with compliance to the indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)

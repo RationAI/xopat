@@ -409,7 +409,12 @@ experiment is '${params.experimentId}'.`);
                         type: "heatmap",
                         visible: "1",
                         dataReferences: [0],
-                        params: {ctrlOpacity: 0}
+                        params: {
+                            opacity: {
+                                visible: false
+                            }
+
+                        }
                     }
                 }
             },
@@ -423,7 +428,9 @@ experiment is '${params.experimentId}'.`);
                         visible: "1",
                         dataReferences: [0],
                         params: {
-                            ctrlOpacity: 0,
+                            opacity: {
+                                visible: false
+                            },
                             logScale: 1,
                             logScaleMax: 0.6
                         }
@@ -439,7 +446,11 @@ experiment is '${params.experimentId}'.`);
                         type: "bipolar-heatmap",
                         visible: "1",
                         dataReferences: [0],
-                        params: {ctrlOpacity: 0}
+                        params: {
+                            opacity: {
+                                visible: false
+                            }
+                        }
                     }
                 }
             },
@@ -453,7 +464,9 @@ experiment is '${params.experimentId}'.`);
                         visible: "1",
                         dataReferences: [0],
                         params: {
-                            ctrlOpacity: 0,
+                            opacity: {
+                                visible: false
+                            },
                             logScale: 1,
                             logScaleMax: 0.6
                         }

@@ -140,7 +140,7 @@ const isPrevented = (element, cls) => {
         }
     }
     return isParent;
-}
+};
 
 function handleDrag(item) {
     const selectedItem = item.target,
@@ -186,6 +186,7 @@ function changeVisualisationLayer(self, layerId) {
     let factoryClass = WebGLModule.ShaderMediator.getClass(type);
     if (factoryClass !== undefined) {
         let viz = currentVisualisation();
+        self.dataset.title = factoryClass.name();
         if (viz.shaders.hasOwnProperty(layerId)) {
             viz.shaders[layerId].type = type;
             seaGL.reorder(null); //force to re-build

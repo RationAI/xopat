@@ -5,12 +5,10 @@
  * $_GET/$_POST expected parameters:
  *  index - unique number in the compiled shader
  * $_GET/$_POST supported parameters:
- *  color - color to fill-in areas with values, url encoded '#ffffff' format or digits only 'ffffff', default "#d2eb00"
- *  ctrlColor - whether to allow color modification, 1 or 0, default 1
- *  ctrlThreshold - whether to allow threshold modification, 1 or 0, default 1
- *  ctrlOpacity - whether to allow opacity modification, 1 or 0, default 1
- *  edgeThickness
- *  ctrlEdgeThickness
+ *  color - for more details, see @WebGLModule.UIControls color UI type
+ *  edgeThickness - for more details, see @WebGLModule.UIControls number UI type
+ *  threshold - for more details, see @WebGLModule.UIControls number UI type
+ *  opacity - for more details, see @WebGLModule.UIControls number UI type
  */
 WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
 
@@ -22,44 +20,51 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         return "Edges";
     }
 
-    constructor(options) {
-        super(options);
+    static description() {
+        return "highlights edges at threshold values";
+    }
 
-        if (options.hasOwnProperty("color")) {
-            this._color = this.toRGBShaderColorFromString(options["color"], [210/255, 235/255, 0]);
-        } else {
-            this._color = [210/255, 235/255, 0];
-        }
-        //default true
-        this._allowColorChange = this.isFlagOrMissing(options["ctrlColor"]);
-        this._allowThresholdChange = this.isFlagOrMissing(options["ctrlThreshold"]);
-        this._allowOpacityChange = this.isFlagOrMissing(options["ctrlOpacity"]);
-        this._allowEdgeThicknessChange = this.isFlagOrMissing(options["ctrlEdgeThickness"]);
+    constructor(id, options) {
+        super(id, options);
+
+        //We support three controls
+        this.color = WebGLModule.UIControls.build(this, "color",
+            options.color, {type: "color", default: "#fff700", title: "Color: "},
+            (type, instance) => type === "vec3");
+        this.threshold = WebGLModule.UIControls.build(this, "threshold",
+            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
+            (type, instance) => type === "float");
+        this.edgeThickness = WebGLModule.UIControls.build(this, "edgeThickness",
+            options.edgeThickness, {type: "range", default: "1", min: "0.5", max: "3", step: "0.1", title: "Edge thickness: "},
+            (type, instance) => type === "float");
+        this.opacity = WebGLModule.UIControls.build(this, "opacity",
+            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
+            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
         return `
-uniform float threshold_${this.uid};
-uniform float opacity_${this.uid};
-uniform float edge_thickness_${this.uid};
-uniform vec3 color_${this.uid};
+${this.threshold.define()}
+${this.opacity.define()}
+${this.edgeThickness.define()}
+${this.color.define()}
 
 //todo try replace with step function
 float clipToThresholdf_${this.uid}(float value) {
     //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > threshold_${this.uid} || close(value, threshold_${this.uid}))) return 1.0;
+    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample()} || close(value, ${this.threshold.sample()}))) return 1.0;
     return 0.0;
 }
 
 //todo try replace with step function
 int clipToThresholdi_${this.uid}(float value) {
      //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > threshold_${this.uid} || close(value, threshold_${this.uid}))) return 1;
+    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample()} || close(value, ${this.threshold.sample()}))) return 1;
     return 0;
 }
 
 vec4 getBorder_${this.uid}() {
-    float dist = edge_thickness_${this.uid} * sqrt(zoom_level) * 0.005;
+    float dist = ${this.edgeThickness.sample("sqrt(zoom_level) * 0.005 + 0.008")};
     float mid = ${this.sampleChannel('tile_texture_coords')};
     float u = ${this.sampleChannel('vec2(tile_texture_coords.x - dist, tile_texture_coords.y)')};
     float b = ${this.sampleChannel('vec2(tile_texture_coords.x + dist, tile_texture_coords.y)')}; 
@@ -80,9 +85,9 @@ vec4 getBorder_${this.uid}() {
                 clipToThresholdi_${this.uid}(r);
     
     if(counter == 2 || counter == 3) {  //two or three points hit the region
-        return vec4(color_${this.uid}, 1.0); //border
+        return vec4(${this.color.sample()}, 1.0); //border
     } else if ((dx < -0.5 || dy < -0.5)) {
-        return vec4(color_${this.uid} * 0.7, .7); //inner border
+        return vec4(${this.color.sample("0.7")}, .7); //inner border
     } 
     return vec4(.0, .0, .0, .0);
 }
@@ -91,77 +96,50 @@ vec4 getBorder_${this.uid}() {
 
     getFragmentShaderExecution() {
         return `
-    vec4 border_${this.uid} =  getBorder_${this.uid}();
-    show(vec4(border_${this.uid}.rgb, border_${this.uid}.a * opacity_${this.uid}));
+    if (${this.threshold.sample()} > 1e-6) {
+        vec4 border_${this.uid} = getBorder_${this.uid}();
+        show(vec4(border_${this.uid}.rgb, border_${this.uid}.a * ${this.opacity.sample()}));   
+    }
 `;
     }
-    
+
     glDrawing(program, dimension, gl) {
-        gl.uniform1f(this.threshold_loc, this.threshold / 100.0);
-        gl.uniform1f(this.opacity_loc, this.opacity);
-        gl.uniform3fv(this.color_loc, this.color);
-        gl.uniform1f(this.thickness_loc, this.edgeThickness);
+        this.color.glDrawing(program, dimension, gl);
+        this.opacity.glDrawing(program, dimension, gl);
+        this.threshold.glDrawing(program, dimension, gl);
+        this.edgeThickness.glDrawing(program, dimension, gl);
     }
 
     glLoaded(program, gl) {
-        this.threshold_loc = gl.getUniformLocation(program, `threshold_${this.uid}`);
-        this.opacity_loc = gl.getUniformLocation(program, `opacity_${this.uid}`);
-        this.color_loc = gl.getUniformLocation(program, `color_${this.uid}`);
-        this.thickness_loc = gl.getUniformLocation(program, `edge_thickness_${this.uid}`);
+        this.color.glLoaded(program, gl);
+        this.opacity.glLoaded(program, gl);
+        this.threshold.glLoaded(program, gl);
+        this.edgeThickness.glLoaded(program, gl);
     }
 
     init() {
-        this.twoElementInit("threshold",
-            `#threshold-${this.uid}`,
-            `#threshold-slider-${this.uid}`,
-            1,
-            v => Math.max(Math.min(v, 100), 1)
-        );
-
-        this.simpleControlInit("edgeThickness",
-            `#thickness-${this.uid}`,
-            1
-        );
-
-        this.simpleControlInit("opacity",
-            `#opacity-${this.uid}`,
-            1
-        );
-
-        let _this = this;
-        function colorChange(e) {
-            let col = $(e.target).val();
-            _this.color = _this.toRGBShaderColorFromString(col, _this._color);
-            _this.storeProperty('color', _this.color);
-            _this.invalidate();
-        }
-        let colpicker = $(`#color-${this.uid}`);
-        this.color = this.loadProperty('color', this._color);
-        colpicker.val("#" + Math.round(this.color[0] * 255).toString(16).padStart(2, "0") + Math.round(this.color[1] * 255).toString(16).padStart(2, "0") +  Math.round(this.color[2] * 255).toString(16).padStart(2, "0"));
-        colpicker.change(colorChange);
+        this.color.init();
+        this.opacity.init();
+        this.threshold.init();
+        this.edgeThickness.init();
     }
 
     htmlControls() {
-        let html = "";
-        if (this._allowColorChange) {
-            html += `<span> Color:</span><input type="color" id="color-${this.uid}" class="form-control input-sm"><br>`;
-        }
+        return [
+            this.color.toHtml(true),
+            this.opacity.toHtml(true),
+            this.threshold.toHtml(true),
+            this.edgeThickness.toHtml(true)
+        ].join("");
+    }
 
-        if (this._allowEdgeThicknessChange) {
-            html += `<span> Edge Thickness:</span><input type="range" id="thickness-${this.uid}" min="0.5" max="3" step="0.1"><br>`;
+    supports() {
+        return {
+            color: "vec3",
+            opacity: "float",
+            threshold: "float",
+            edgeThickness: "float"
         }
-
-        if (this._allowOpacityChange) {
-            html += `<span> Opacity:</span><input type="range" id="opacity-${this.uid}" min="0" max="1" step="0.1"><br>`;
-        }
-
-        if (this._allowThresholdChange) {
-            let directionRange = this._invertOpacity ? 'style="direction: rtl"' : "";
-            html += `<span> Threshold:</span><input type="range" id="threshold-slider-${this.uid}" 
-class="with-direct-input" min="1" max="100" ${directionRange} step="1">
-<input class="form-control input-sm" style="max-width:60px;" type="number" id="threshold-${this.uid}"><br>`;
-        }
-        return html;
     }
 };
 

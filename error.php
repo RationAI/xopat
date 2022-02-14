@@ -36,10 +36,10 @@ session_destroy();
 
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
-    <div id="system-message-title" class="f2-light text-center clearfix"></div>
+    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
+    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
-    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
 
     <button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button">Back to experiments</button>
 
@@ -70,9 +70,9 @@ session_destroy();
             this.msgContainer.addClass("d-none");
             this.screenContainer.removeClass("disabled");
         }
-    }
+    };
 
-    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>`);
+    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>` || "No details provided.");
 </script>
 </body>
 </html>

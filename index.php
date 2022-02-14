@@ -150,6 +150,15 @@ foreach ($PLUGINS as $_ => $plugin) {
     }
 }
 
+//make sure all modules required by other modules are loaded
+foreach ($MODULES as $_ => $mod) {
+    if ($mod->loaded) {
+        foreach ($mod->requires as $__ => $requirement) {
+            $MODULES[$requirement]->loaded = true;
+        }
+    }
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -164,6 +173,22 @@ foreach ($PLUGINS as $_ => $plugin) {
     Possible external dependency
     <link href="https://unpkg.com/@primer/css@^16.0.0/dist/primer.css" rel="stylesheet" />
     -->
+
+    <!--Remember WARNS/ERRORS to be able to export-->
+    <script type="text/javascript">
+        console.defaultError = console.error.bind(console);
+        console.savedLogs = [];
+        console.error = function(){
+            console.defaultError.apply(console, arguments);
+            console.savedLogs.push(Array.from(arguments));
+        };
+
+        console.defaultWarn = console.warn.bind(console);
+        console.warn = function(){
+            console.defaultWarn.apply(console, arguments);
+            console.savedLogs.push(Array.from(arguments));
+        };
+    </script>
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
@@ -224,6 +249,10 @@ foreach ($PLUGINS as $_ => $plugin) {
 
 foreach ($MODULES as $_ => $mod) {
     if ($mod->loaded) {
+        //add module style sheet if exists
+        if (file_exists(MODULES . "/" . $mod->directory . "/style.css")) {
+            echo "<link rel=\"stylesheet\" href=\"" . MODULES . "/" . $mod->directory . "/style.css?v=$version\">\n";
+        }
         foreach ($mod->includes as $__ => $file) {
             echo "    <script src=\"" . MODULES . "/" . $mod->directory . "/$file?v=$version\"></script>\n";
         }
@@ -244,6 +273,7 @@ foreach ($MODULES as $_ => $mod) {
 <div id="system-message" class="d-none system-container">
     <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
+    <div class="text-small text-center"> [ if you want to report a problem, please include exported file ] </div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 </div>
@@ -265,11 +295,21 @@ foreach ($MODULES as $_ => $mod) {
 
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 40px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;">
         <span id="main-panel-hide" class="material-icons pointer" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
-        <div id="navigator-container" class="inner-panel position-absolute right-0 top-0" style="width: 400px;">
-            <div id="panel-navigator" class="inner-panel" style=" height: 300px; width: 100%;"></div>
+        <div id="navigator-container" class="inner-panel top-0 left-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
+            <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
+                <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
+            </div>
+            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick=" let self = $(this);
+ if (self.hasClass('pressed')) {
+    self.removeClass('pressed');
+    self.parent().removeClass('color-shadow-medium position-fixed');
+ } else {
+    self.parent().addClass('color-shadow-medium position-fixed');
+    self.addClass('pressed');
+ }
+"> push_pin </span>
         </div>
-        <!--Height of navigator = margn top of this div + padding-->
-        <div id="general-controls" class="inner-panel d-flex" style="margin-top: 320px;">
+        <div id="general-controls" class="inner-panel d-flex">
             <!--TODO export also these values? -->
 <?php
 
@@ -318,7 +358,7 @@ if ($layerVisible) {
                     <div>
     
                         <span id="shaders-pin" class="material-icons pointer inline-pin $pinClass" onclick="let jqSelf = $(this); pinClick(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`"> push_pin </span>
+                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`"> push_pin </span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
@@ -399,6 +439,7 @@ EOF;
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
+        ajaxHeaders: <?php echo json_encode((object)COMMON_HEADERS); ?>,
         splitHashDataForPost: true,
         //todo maybe do not set for chrome?
         subPixelRoundingForTransparency: OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
@@ -445,7 +486,7 @@ EOF;
                 $("#viewer-container").removeClass("disabled");
                 $('#main-panel').css('right', '0px');
             }
-            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/';
+            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/';
         },
 
         add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
@@ -716,6 +757,7 @@ if ($layerVisible) {
   <meta charset="utf-8"><title>Visualisation export</title>
 </head>
 <body>
+<div>Errors (if any): <pre>${JSON.stringify(console.savedLogs)}</pre></div>
 ${constructExportVisualisationForm()}
 </body></html>`;
         let output = new Blob([doc], { type: 'text/html' });
@@ -915,6 +957,11 @@ if ($layerVisible) {
             viewer.viewport.zoomTo(setup.params.viewport.zoomLevel);
         }
 
+        if (window.innerHeight < 630) {
+            $("#navigator-pin").click();
+            $("#main-panel-hide").click();
+        }
+
         window.onerror = function(message, source, lineno, colno, error) {
             Dialogs.show(message, 10000, Dialogs.MSG_ERR);
             return false;
@@ -922,7 +969,7 @@ if ($layerVisible) {
 
         if (DisplayError.active) {
             $("#viewer-container").addClass("disabled"); //preventive
-            return;
+            return; //actually valid, PHP can attach code below this
         }
 
 <?php

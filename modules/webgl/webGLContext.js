@@ -141,7 +141,16 @@ WebGLModule.WebGLImplementation = class {
     toCanvas(program, currentVisualisation, imageElement, tileDimension, zoomLevel, pixelSize) {
         console.error("::toCanvas() must be implemented!");
     }
-}
+
+    /**
+     * Code to be included only once, required by given shader type (keys are considered global)
+     * @param type shader type
+     * @returns {object} global-scope code used by the shader in <key: code> format
+     */
+    globalCodeRequiredByShaderType(type) {
+        return WebGLModule.ShaderMediator.getClass(type).__globalIncludes;
+    }
+};
 
 WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
@@ -241,8 +250,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
                     index++;
                 }
             }
-
-        }
+        };
         this.texture.init();
     }
 
@@ -256,15 +264,13 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
     generateVisualisation(order, visualisation, withHtml) {
         var definition = "", execution = "", samplers = "", html = "",
-            _this = this, usableShaders = 0, simultaneouslyVisible = 0;
+            _this = this, usableShaders = 0, simultaneouslyVisible = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
             let layer = visualisation.shaders[dataId];
             layer.rendering = false;
 
-            if (layer.type == "none") {
-                //this data is meant for other shader to use, skip
-            } else if (layer.error) {
+            if (layer.error) {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name, layer.error, dataId, false, layer, false) + html;
                 console.warn(layer.error, layer["desc"]);
 
@@ -278,6 +284,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
                     visible = true;
                     layer.rendering = true;
                     simultaneouslyVisible++;
+                    $.extend(globalScopeCode, _this.globalCodeRequiredByShaderType(layer.type))
                 }
 
                 //reverse order append to show first the last drawn element (top)
@@ -324,14 +331,15 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
         return {
             vertex_shader: this.getVertexShader(),
-            fragment_shader: this.getFragmentShader(samplers, definition, execution),
+            fragment_shader: this.getFragmentShader(samplers, definition, execution, globalScopeCode),
             html: html,
             usableShaders: usableShaders,
             dataUrls: this.context._dataSources
         };
     }
 
-    getFragmentShader(samplers, definition, execution,) {
+    getFragmentShader(samplers, definition, execution, globalScopeCode) {
+
         return `
 precision mediump float;
 uniform float pixel_size_in_fragments;
@@ -351,6 +359,8 @@ void show(vec4 color) {
     float t = color.a + gl_FragColor.a - color.a*gl_FragColor.a;
     gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
 }
+
+${Object.values(globalScopeCode).join("\n")}
 
 ${definition}
 
@@ -428,6 +438,9 @@ void main() {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
+        //TODO with glsl 1 (and same probably on 2) any error get stuck here --> AVOID USING if
+        //problem TODO fix this
+
         // Set Attributes for GLSL
         this._att.map(function (x) {
             gl.enableVertexAttribArray(x.slice(0, 1));
@@ -447,7 +460,7 @@ void main() {
 
         return gl.canvas;
     }
-}
+};
 
 
 WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
@@ -518,7 +531,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
     }
 
     generateVisualisation(order, visualisation, withHtml) {
-        var definition = "", execution = "", html = "", _this = this, usableShaders = 0;
+        var definition = "", execution = "", html = "", _this = this, usableShaders = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
             let layer = visualisation.shaders[dataId];
@@ -540,6 +553,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                     execution += layer._renderContext.getFragmentShaderExecution();
                     layer.rendering = true;
                     visible = true;
+                    $.extend(globalScopeCode, _this.globalCodeRequiredByShaderType(layer.type))
                 }
 
                 //reverse order append to show first the last drawn element (top)
@@ -586,7 +600,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
 
         return {
             vertex_shader: this.getVertexShader(),
-            fragment_shader: this.getFragmentShader(definition, execution, this.context._dataSourceMapping),
+            fragment_shader: this.getFragmentShader(definition, execution, this.context._dataSourceMapping, globalScopeCode),
             html: html,
             usableShaders: usableShaders,
             dataUrls: this.context._dataSources
@@ -597,7 +611,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         return `texture(vis_data_sampler_array, vec3(${textureCoords}, _vis_data_sampler_array_indices[${dataIndex}]))`;
     }
 
-    getFragmentShader(definition, execution, indicesOfImages) {
+    getFragmentShader(definition, execution, indicesOfImages, globalScopeCode) {
         return `#version 300 es
 precision mediump float;
 precision mediump sampler2DArray;
@@ -623,6 +637,8 @@ void show(vec4 color) {
     float t = color.a + final_color.a - color.a*final_color.a;
     final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
 }
+
+${Object.values(globalScopeCode).join("\n")}
         
 ${definition}
         
@@ -696,5 +712,5 @@ void main() {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         return gl.canvas;
     }
-}
+};
 

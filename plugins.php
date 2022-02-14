@@ -12,6 +12,7 @@ foreach (array_diff(scandir(PLUGINS), array('..', '.')) as $_=>$dir) {
         foreach ($data->modules as $modId) {
             if (!isset($MODULES[$modId])) {
                 $data->error = "The plugin requires unknown module.";
+                break;
             }
         }
         $PLUGINS[$data->id] = $data;

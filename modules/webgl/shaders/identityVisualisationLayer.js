@@ -13,8 +13,12 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "Identity";
     }
 
-    constructor(options) {
-        super(options);
+    static description() {
+        return "shows the data AS-IS";
+    }
+
+    constructor(id, options) {
+        super(id, options);
     }
 
     getFragmentShaderExecution() {
@@ -22,6 +26,6 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         show(${this.sample('tile_texture_coords')});
 `;
     }
-}
+};
 
 WebGLModule.ShaderMediator.registerLayer(WebGLModule.IdentityLayer);

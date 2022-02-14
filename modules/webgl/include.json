@@ -3,14 +3,15 @@
     "name": "WebGL rendering module",
     "includes" : [
         "webGLWrapper.js",
+        "colorBrewer.js",
         "visualisationLayer.js",
         "shaders/bipolarHeatmapVisualisationLayer.js",
         "shaders/edgeVisualisationLayer.js",
         "shaders/heatmapVisualisationLayer.js",
+        "shaders/colormapVisualisationLayer.js",
         "shaders/identityVisualisationLayer.js",
-        "shaders/noneVisualisationLayer.js",
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],
-    "requires": []
+    "requires": ["nouislider"]
 }

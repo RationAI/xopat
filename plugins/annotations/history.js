@@ -168,7 +168,10 @@ window.addEventListener("beforeunload", (e) => {
     _syncLoad: function() {
         let _this = this;
         this._context.canvasObjects().some(o => {
-            if (!isNaN(o.incrementId) && o.presetID) {
+            if (o.presetID) { //todo works with presents only, plugins might want to add even non-preset stuff... predicate? flag?
+                if (!o.incrementId || isNaN(o.incrementId)) {
+                    o.incrementId = _this._autoIncrement++;
+                }
                 let preset = this._presets.getPreset(o.presetID);
                 if (preset) {
                     if (typeof o.fill === 'string') {
@@ -283,8 +286,7 @@ window.addEventListener("beforeunload", (e) => {
         }
 
         if (!object.hasOwnProperty("incrementId")) {
-            object.incrementId = this._autoIncrement;
-            this._autoIncrement++;
+            object.incrementId = this._autoIncrement++;
         }
 
         const _this = this;

@@ -27,37 +27,38 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "Bi-polar Heatmap";
     }
 
-    constructor(options) {
-        super(options);
+    static description() {
+        return "TODO: remove in the future";
+    }
 
-        if (options.hasOwnProperty("colorHigh")) {
-            this._defaultHigh = this.toRGBShaderColorFromString(options["colorHigh"], [1, 0, 0]);
-        } else {
-            this._defaultHigh = [1, 0, 0];
-        }
+    constructor(id, options) {
+        super(id, options);
 
-        if (options.hasOwnProperty("colorLow")) {
-            this._defaultLow = this.toRGBShaderColorFromString(options["colorLow"], [124/255, 252/255, 0]);
-        } else {
-            this._defaultLow = [124/255, 252/255, 0];
-        }
-
-        //default true
-        this._allowColorChange = this.isFlagOrMissing(options["ctrlColor"]);
-        this._allowThresholdChange = this.isFlagOrMissing(options["ctrlThreshold"]);
-        this._allowOpacityChange = this.isFlagOrMissing(options["ctrlOpacity"]);
-        //default false
+        //todo reimplement as UI controls (by default hidden)...?
         this._logScale = this.isFlag(options["logScale"]);
         this._logScaleMax = options.hasOwnProperty("logScaleMax") ?
             this.toShaderFloatString(options["logScaleMax"], 1, 2) : "1.0";
+
+        this.colorHigh = WebGLModule.UIControls.build(this, "colorHigh",
+            options.colorHigh, {type: "color", default: "#fff700", title: "Color High: "},
+            (type, instance) => type === "vec3");
+        this.colorLow = WebGLModule.UIControls.build(this, "colorLow",
+            options.colorLow, {type: "color", default: "#fff700", title: "Color Low: "},
+            (type, instance) => type === "vec3");
+        this.threshold = WebGLModule.UIControls.build(this, "threshold",
+            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
+            (type, instance) => type === "float");
+        this.opacity = WebGLModule.UIControls.build(this, "opacity",
+            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
+            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
         return `
-uniform float threshold_${this.uid};
-uniform float opacity_${this.uid};
-uniform vec3 colorHigh_${this.uid};
-uniform vec3 colorLow_${this.uid};
+${this.colorHigh.define()}
+${this.colorLow.define()}
+${this.threshold.define()}
+${this.opacity.define()}
 `;
     }
 
@@ -74,14 +75,14 @@ uniform vec3 colorLow_${this.uid};
         if (data_${this.uid} < .5) { 
             float value_${this.uid} = 1.0 - data_${this.uid} * 2.0;
             ${compareAgainst}
-            if (value_${this.uid} > threshold_${this.uid}) {
-                show(vec4( colorLow_${this.uid} , value_${this.uid} * opacity_${this.uid}));
+            if (value_${this.uid} > ${this.threshold.sample()}) {
+                show(vec4( ${this.colorLow.sample()} , value_${this.uid} * ${this.opacity.sample()}));
             }
         } else {  
             float value_${this.uid} = (data_${this.uid} - 0.5) * 2.0;
             ${compareAgainst}
-            if (value_${this.uid} > threshold_${this.uid}) {
-                show(vec4( colorHigh_${this.uid} , value_${this.uid} * opacity_${this.uid}));
+            if (value_${this.uid} > ${this.threshold.sample()}) {
+                show(vec4( ${this.colorHigh.sample()} , value_${this.uid} * ${this.opacity.sample()}));
             }
         }
     }        
@@ -89,74 +90,43 @@ uniform vec3 colorLow_${this.uid};
     }
 
     glDrawing(program, dimension, gl) {
-        gl.uniform1f(this.threshold_loc, this.threshold / 100.0);
-        gl.uniform1f(this.opacity_loc, this.opacity);
-        gl.uniform3fv(this.colorHigh_loc, this.colorHigh);
-        gl.uniform3fv(this.colorLow_loc, this.colorLow);
+        this.colorHigh.glDrawing(program, dimension, gl);
+        this.colorLow.glDrawing(program, dimension, gl);
+        this.threshold.glDrawing(program, dimension, gl);
+        this.opacity .glDrawing(program, dimension, gl);
     }
 
     glLoaded(program, gl) {
-        this.threshold_loc = gl.getUniformLocation(program, `threshold_${this.uid}`);
-        this.opacity_loc = gl.getUniformLocation(program, `opacity_${this.uid}`);
-        this.colorHigh_loc = gl.getUniformLocation(program, `colorHigh_${this.uid}`);
-        this.colorLow_loc = gl.getUniformLocation(program, `colorLow_${this.uid}`);
+        this.colorHigh.glLoaded(program, gl);
+        this.colorLow.glLoaded(program, gl);
+        this.threshold.glLoaded(program, gl);
+        this.opacity .glLoaded(program, gl);
     }
 
     init() {
-        this.twoElementInit("threshold",
-            `#threshold-${this.uid}`,
-            `#threshold-slider-${this.uid}`,
-            1,
-            v => Math.max(Math.min(v, 100), 1)
-        );
-
-        this.simpleControlInit("opacity",
-            `#opacity-${this.uid}`,
-            1
-        );
-
-        const _this = this;
-        function colorHighChange(e) {
-            let col = $(e.target).val();
-            _this.colorHigh = _this.toRGBShaderColorFromString(col, _this._defaultHigh);
-            _this.storeProperty('colorHigh', _this.colorHigh);
-            _this.invalidate();
-        }
-        let colpicker = $(`#color-high-${this.uid}`);
-        this.colorHigh = this.loadProperty('colorHigh', this._defaultHigh);
-        colpicker.val("#" + Math.round(this.colorHigh[0] * 255).toString(16).padStart(2, "0") + Math.round(this.colorHigh[1] * 255).toString(16).padStart(2, "0") +  Math.round(this.colorHigh[2] * 255).toString(16).padStart(2, "0"));
-        colpicker.change(colorHighChange);
-        function colorLowChange(e) {
-            let col = $(e.target).val();
-            _this.colorLow = _this.toRGBShaderColorFromString(col, _this._defaultLow);
-            _this.storeProperty('colorLow', _this.colorLow);
-            _this.invalidate();
-        }
-        colpicker = $(`#color-low-${this.uid}`);
-        this.colorLow = this.loadProperty('colorLow', this._defaultLow);
-        colpicker.val("#" + Math.round(this.colorLow[0] * 255).toString(16).padStart(2, "0") + Math.round(this.colorLow[1] * 255).toString(16).padStart(2, "0") +  Math.round(this.colorLow[2] * 255).toString(16).padStart(2, "0"));
-        colpicker.change(colorLowChange);
+        this.colorHigh.init();
+        this.colorLow.init();
+        this.threshold.init();
+        this.opacity .init();
     }
 
     htmlControls() {
-        let html = "";
-        if (this._allowColorChange) {
-            html += `<span> High values:</span><input type="color" id="color-high-${this.uid}" class="form-control input-sm"><br>
-<span> Low values:</span><input type="color" id="color-low-${this.uid}" class="form-control input-sm"><br>`;
-        }
-
-        if (this._allowOpacityChange) {
-            html += `<span> Opacity:</span><input type="range" id="opacity-${this.uid}" min="0" max="1" step="0.1"><br>`;
-        }
-
-        if (this._allowThresholdChange) {
-            let directionRange = this._invertOpacity ? 'style="direction: rtl"' : "";
-            html += `<span> Threshold:</span><input type="range" id="threshold-slider-${this.uid}" 
-class="with-direct-input" min="1" max="100" ${directionRange} step="1">
-<input class="form-control input-sm" style="max-width:60px;" type="number" id="threshold-${this.uid}"><br>`;
-        }
-        return html;
+        return [
+            this.colorHigh.toHtml(true),
+            this.colorLow.toHtml(true),
+            this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl" : ""),
+            this.threshold.toHtml(true)
+        ].join("");
     }
-}
+
+    supports() {
+        return {
+            colorHigh: "vec3",
+            colorLow: "vec3",
+            opacity: "float",
+            threshold: "float",
+        }
+    }
+};
 
 WebGLModule.ShaderMediator.registerLayer(WebGLModule.BipolarHeatmapLayer);

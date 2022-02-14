@@ -4,14 +4,28 @@
 <head>
   <meta charset="utf-8">
   <title>Visualisation User Setup</title>
-
   <link rel="stylesheet" href="./external/primer_css.css">
-  
+  <script src="./shader_input_gui.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+<?php
 
-  <!-- jquery -->
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+include_once("config.php");
+include_once("modules.php");
 
+$webglPath = "";
+
+foreach ($MODULES as $id => $mod) {
+    if ($id == "webgl") {
+        $webglPath = MODULES . "/" . $mod->directory;
+        foreach ($mod->includes as $__ => $file) {
+            echo "    <script src=\"" .$webglPath . "/$file?v=$version\"></script>\n";
+        }
+    }
+}
+
+?>
+    <script src="shader_input_gui.js"></script>
 </head>
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
@@ -23,8 +37,6 @@
 <p> The data you requested has no visualisation goal. Below, you can specify how to show the data yourself. </p>
 
 <?php
-
-include_once("dynamic_shaders/defined.php");
 
 function hasKey($array, $key) {
   return isset($array[$key]) && $array[$key];
@@ -57,32 +69,7 @@ echo <<<EOF
 <br><h3 class="d-inline-block">Experiment:</h3> $experiment
 EOF;
 
-$shader_selections = array();
-$inputs = array();
-
-
-foreach ($shaders as $name=>$filename) {
- 
-  //html parts inner part must be an argument: data ID
-  $shader_selections[$name] = [
-    "<div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'  onclick=\"selectShaderPart(this, '$name', '$filename', '",
-    "');\"><img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='dynamic_shaders/$filename.png'><p class='f3-light mb-0'>$name</p><p style='max-width: 150px;'>{$descriptions[$name]}</p></div>"
-  ];
-
-  $params = array();
-  foreach($options[$name] as $option=>$settings) {
-    $params[$option] = [
-        "<div class='d-flex'><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' class='position-relative'><input style='direction:ltr; max-width:70px;' class='form-control input-sm mr-2' type='{$htmlInputTypes[$settings[0]]}' $settings[1] onchange=\"setValue(this, '$option', '$settings[0]', '",
-        "');\" ></span ><span class='flex-1' > Option <code > $option</code > - {$paramDescriptions[$option]}</span ></div >"
-    ];
-  }
-  $inputs[$name] = (object)$params;
-}
-
-
 //javascript will handle the parameter selection
-$inputs_json = json_encode((object)$inputs);
-$shaders_json = json_encode((object)$shader_selections);
 $layer = explode(",", $layer);
 
 $i = 0;
@@ -101,7 +88,7 @@ if ($i == 0) {
         print_r($_POST, true));
 }
 
-$path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
+$path = VISUALISATION_ROOT_ABS_PATH;
 ?>
 
 <br>
@@ -110,7 +97,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
     <input type="hidden" name="ignoreCookiesCache" id="ignoreCookiesCache" value='1'>
 
     <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp;
-   
+
 </form><br>
       <p class='f3-light mt-4'>OR</p> <label for="import-settings" class="btn">Load saved setup</label>
       <input type="file" name="import-settings" id="import-settings" onchange="importSettings(event, this)" class="d-none">
@@ -150,8 +137,46 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         }]
     };
     var bgImage = '<?php echo $image; ?>';
-    var SHADERS = <?php echo $shaders_json; ?>;
-    var PARAMS = <?php echo $inputs_json; ?>;
+    var SHADERS = {};
+    var PARAMS = {};
+
+    for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
+        let id = shader.type();
+
+        if (id === "none") continue;
+
+        SHADERS[id] = [
+`<div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'
+onclick="selectShaderPart(this, '${id}', '`,
+`');\"><img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='<?php echo $webglPath; ?>/shaders/${id}.png'>
+<p class='f3-light mb-0'>${shader.name()}</p><p style='max-width: 150px;'>${shader.description()}</p></div>`
+        ];
+
+        PARAMS[id] = {};
+        let controls = PredefinedShaderControlParameters.shaderMapping[id];
+        if (!controls) {
+            console.warn("Unknown parameters for shader " + id);
+            continue;
+        }
+
+        for(let option in controls) {
+          //  if (controls.hasOwnProperty(option)) {
+                PARAMS[id][option] = {
+                    html: PredefinedShaderControlParameters[option],
+                    type: option
+                };
+
+
+//                     [
+//                     `<div class='d-flex'><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'
+// class='position-relative'><input style='direction:ltr; max-width:70px;' class='form-control input-sm mr-2'
+// type='${htmlInputTypes[$settings[0]]}' ${settings[1]} onchange="setValue(this, '${option}', '${settings[0]}', '`,
+//                     `');" ></span><span class='flex-1' > Option <code> ${option}</code > - ${paramDescriptions[$option]}</span ></div >`
+//                 ];
+         //   }
+        }
+    }
+
     var LAYERS = <?php echo json_encode(array_reverse($layer)); ?>;
     var setShader = null;
 
@@ -178,20 +203,19 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         return id;
     }
 
-    function selectShaderPart(self, name, filename, dataID) {
+    function selectShaderPart(self, name, dataID) {
         let node = self.parentNode.parentNode.lastChild;
         self.parentNode.childNodes.forEach(child => {
             child.classList.remove("color-border-warning");
         });
 
         if (!user_settings.visualizations[0].shaders[dataID]) {
-            let shaderObject = {
+            user_settings.visualizations[0].shaders[dataID] = {
                 type: name,
                 visible: "1",
                 dataReferences: [user_settings.data.length],
                 params: {}
             };
-            user_settings.visualizations[0].shaders[dataID] = shaderObject;
             user_settings.data.push(dataID);
         } else {
             let shaderObject = user_settings.visualizations[0].shaders[dataID];
@@ -207,7 +231,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
             node.innerHTML = "<p class='f3-light mt-2 mb-1'>" + name + " shader - Advanced Options</p>";
 
             for (let [key, value] of Object.entries(PARAMS[name])) {
-                node.innerHTML += `${value[0]}${dataID}${value[1]}`;
+                node.innerHTML += value.html.form(`setValue(this, '${key}', '${value.type}', '${dataID}')`);//`${value[0]}${dataID}${value[1]}`;
             }
         }
         self.classList.add("color-border-warning");
@@ -251,7 +275,7 @@ $path = "https://" . $_SERVER['HTTP_HOST'].dirname($_SERVER['SCRIPT_NAME']);
         downloader.click();
         URL.revokeObjectURL(downloadURL);
     }
-    
+
     function importSettings(event, self) {
         let file = event.target.files[0];
         if (!file) return;

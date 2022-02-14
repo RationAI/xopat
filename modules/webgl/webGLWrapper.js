@@ -17,7 +17,7 @@ class WebGLModule {
         this.htmlControlsId = null;
         this.htmlShaderPartHeader = function (title, html, dataId, isVisible, layer, isControllable = true) {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
-        }
+        };
         this.resetCallback = function () { };
         //called once a visualisation is compiled and linked (might not happen)
         this.visualisationReady = function(i, visualisation) { }
@@ -27,11 +27,11 @@ class WebGLModule {
         //called when exception (usually some missing function) occurs
         this.onError = function(error) {
             console.warn("An error has occurred:", error.error, error.desc);
-        }
+        };
         //called when key functionality fails
         this.onFatalError = function (error) {
             console.error(error["error"], error["desc"]);
-        }
+        };
 
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Incoming Values ///////////////////////////////////////////////////
@@ -428,7 +428,7 @@ class WebGLModule {
             script.onerror = e => {
                 //Just ignore it, only log into the console.
                 console.error("Failed to interpret downloaded shader layer script: ", url, "Ignoring this script...");
-            }
+            };
             document.body.appendChild(script);
         }).catch(e => {
             console.error("Failed to download and initialize shader " + url, e);
@@ -467,12 +467,13 @@ class WebGLModule {
             console.warn("Skipping layer " + layer.name);
             return;
         }
-        layer._renderContext = new ShaderFactoryClass(layer.params);
         layer.index = idx;
+        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params);
 
-        layer._renderContext._setContextVisualisationLayer(layer, `${this.uniqueId}${layer.index}`, this);
+        layer._renderContext._setContextVisualisationLayer(layer);
         layer._renderContext._setWebglContext(this.webGLImplementation);
         layer._renderContext._setResetCallback(this.resetCallback);
+        layer._renderContext.ready();
     }
 
     _updateRequiredDataSources(vis) {
@@ -573,8 +574,8 @@ class WebGLModule {
             !useShader(gl, program, vis._built["fragment_shader"], 'FRAGMENT_SHADER')) {
             err("Unable to use this visualisation.",
                 "Compilation of shader failed. For more information, see logs in the console.");
-            console.warn("VERTEX SHADER", vis._built["vertex_shader"]);
-            console.warn("FRAGMENT SHADER", vis._built["fragment_shader"]);
+            console.warn("VERTEX SHADER\n", this._numberLines(vis._built["vertex_shader"]));
+            console.warn("FRAGMENT SHADER\n",this._numberLines( vis._built["fragment_shader"]));
         } else {
             gl.linkProgram(program);
             if (!ok('Program', 'LINK', program)) {
@@ -582,6 +583,12 @@ class WebGLModule {
                     "Linking of shader failed. For more information, see logs in the console.");
             }
         }
+        console.log("FRAGMENT SHADER\n",this._numberLines( vis._built["fragment_shader"]));
         this.visualisationReady(idx, vis);
+    }
+
+    _numberLines(str) {
+        //https://stackoverflow.com/questions/49714971/how-to-add-line-numbers-to-beginning-of-each-line-in-string-in-javascript
+        return str.split('\n').map((line, index) => `${index + 1} ${line}`).join('\n')
     }
 }
