@@ -20,8 +20,9 @@ WebGLModule.ColorBrewer = {
         singlehue: ["Blues", "Greens", "Greys", "Oranges", "Purples", "Reds"],
         diverging: ["BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "Spectral"],
         cyclic: ["Twilight", "TwilightShift"],
-        qualitative: ["Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", "Turbo"]
+        qualitative: ["Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", "Turbo"],
     }, Parula: {
+        2: ["#12beb9", "#f9fb15"],
         3: ["#3e26a8", "#12beb9", "#f9fb15"],
         4: ["#3e26a8", "#2797eb", "#81cc59", "#f9fb15"],
         5: ["#3e26a8", "#347afd", "#12beb9", "#c8c129", "#f9fb15"],
@@ -29,6 +30,7 @@ WebGLModule.ColorBrewer = {
         7: ["#3e26a8", "#475bf9", "#2797eb", "#12beb9", "#81cc59", "#fcbb3e", "#f9fb15"],
         8: ["#3e26a8", "#4852f4", "#2e87f7", "#12b1d6", "#37c897", "#abc739", "#fec338", "#f9fb15"],
     }, Winter: {
+        2: ["#0080bf", "#00ff80"],
         3: ["#0000ff", "#0080bf", "#00ff80"],
         4: ["#0000ff", "#0055d5", "#00aaaa", "#00ff80"],
         5: ["#0000ff", "#0040df", "#0080bf", "#00bf9f", "#00ff80"],
@@ -36,6 +38,7 @@ WebGLModule.ColorBrewer = {
         7: ["#0000ff", "#002bea", "#0055d5", "#0080bf", "#00aaaa", "#00d595", "#00ff80"],
         8: ["#0000ff", "#0024ed", "#0049db", "#006dc8", "#0092b6", "#00b6a4", "#00db92", "#00ff80"],
     }, Turbo: {
+        2: ["#a3fd3c", "#7a0403"],
         3: ["#30123b", "#a3fd3c", "#7a0403"],
         4: ["#30123b", "#1ae4b6", "#faba39", "#7a0403"],
         5: ["#30123b", "#29bbec", "#a3fd3c", "#fb8022", "#7a0403"],
@@ -43,6 +46,7 @@ WebGLModule.ColorBrewer = {
         7: ["#30123b", "#4686fa", "#1ae4b6", "#a3fd3c", "#faba39", "#e4460b", "#7a0403"],
         8: ["#30123b", "#4777ef", "#1ccfd5", "#62fc6b", "#d1e935", "#fe9b2d", "#da3907", "#7a0403"],
     }, Hot: {
+        2: ["#ff0000", "#ffff00"],
         3: ["#ff0000", "#ffff00", "#ffffff"],
         4: ["#ff0000", "#ffff00", "#ffff80", "#ffffff"],
         5: ["#ff0000", "#ffff00", "#ffff55", "#ffffaa", "#ffffff"],
@@ -50,6 +54,7 @@ WebGLModule.ColorBrewer = {
         7: ["#800000", "#ff0000", "#ff8000", "#ffff00", "#ffff55", "#ffffaa", "#ffffff"],
         8: ["#550000", "#aa0000", "#ff0000", "#ff5500", "#ffaa00", "#ffff00", "#ffff80", "#ffffff"],
     }, Inferno: {
+        2: ["#bc3754", "#fcffa4"],
         3: ["#000004", "#bc3754", "#fcffa4"],
         4: ["#000004", "#781c6d", "#ed6925", "#fcffa4"],
         5: ["#000004", "#57106e", "#bc3754", "#f98e09", "#fcffa4"],
@@ -61,6 +66,7 @@ WebGLModule.ColorBrewer = {
         11: ["#000004", "#160b39", "#420a68", "#6a176e", "#932667", "#bc3754", "#dd513a", "#f37819", "#fca50a", "#f6d746", "#fcffa4"],
         12: ["#000004", "#140b34", "#390963", "#5f136e", "#85216b", "#a92e5e", "#cb4149", "#e65d2f", "#f78410", "#fcae12", "#f5db4c", "#fcffa4"],
     }, Magma: {
+        2: ["#b73779", "#fcfdbf"],
         3: ["#000004", "#b73779", "#fcfdbf"],
         4: ["#000004", "#721f81", "#f1605d", "#fcfdbf"],
         5: ["#000004", "#51127c", "#b73779", "#fc8961", "#fcfdbf"],
@@ -72,6 +78,7 @@ WebGLModule.ColorBrewer = {
         11: ["#000004", "#140e36", "#3b0f70", "#641a80", "#8c2981", "#b73779", "#de4968", "#f7705c", "#fe9f6d", "#fecf92", "#fcfdbf"],
         12: ["#000004", "#120d31", "#331067", "#59157e", "#7e2482", "#a3307e", "#c83e73", "#e95462", "#fa7d5e", "#fea973", "#fed395", "#fcfdbf"],
     }, Twilight: {
+        2: ["#2f1436", "#e2d9e2"], //does not make sense...
         3: ["#e2d9e2", "#2f1436", "#e2d9e2"],
         4: ["#e2d9e2", "#5e43a5", "#8e2c50", "#e2d9e2"],
         5: ["#e2d9e2", "#6276ba", "#2f1436", "#b25652", "#e2d9e2"],
@@ -83,6 +90,7 @@ WebGLModule.ColorBrewer = {
         11: ["#e2d9e2", "#a6bfca", "#6d90c0", "#5f58b0", "#531e7c", "#2f1436", "#64194b", "#9f3c50", "#c0755e", "#d0b39e", "#e2d9e2"],
         12: ["#e2d9e2", "#adc3cd", "#759ac1", "#6068b6", "#5b3196", "#3e1150", "#41123d", "#7b2150", "#a94950", "#c48065", "#d2b7a5", "#e2d9e2"],
     }, TwilightShift: {
+        2: ["#301437", "#e2d9e2"], //does not make sense...
         3: ["#e2d9e2", "#301437", "#e2d9e2"],
         4: ["#e2d9e2", "#8d2b50", "#5e45a6", "#e2d9e2"],
         5: ["#e2d9e2", "#b25652", "#301437", "#6276ba", "#e2d9e2"],
@@ -94,6 +102,7 @@ WebGLModule.ColorBrewer = {
         11: ["#e2d9e2", "#d0b29c", "#c0745d", "#9e3b50", "#63184b", "#301437", "#541e7e", "#5f59b1", "#6e91c0", "#a7c0cb", "#e2d9e2"],
         12: ["#e2d9e2", "#d2b7a5", "#c48065", "#a94950", "#7b2150", "#41123d", "#3e1150", "#5b3196", "#6068b6", "#759ac1", "#adc3cd", "#e2d9e2"],
     }, Plasma: {
+        2: ["#cc4778", "#f0f921"],
         3: ["#0d0887", "#cc4778", "#f0f921"],
         4: ["#0d0887", "#9c179e", "#ed7953", "#f0f921"],
         5: ["#0d0887", "#7e03a8", "#cc4778", "#f89540", "#f0f921"],
@@ -105,6 +114,7 @@ WebGLModule.ColorBrewer = {
         11: ["#0d0887", "#41049d", "#6a00a8", "#8f0da4", "#b12a90", "#cc4778", "#e16462", "#f2844b", "#fca636", "#fcce25", "#f0f921"],
         12: ["#0d0887", "#3e049c", "#6300a7", "#8606a6", "#a62098", "#c03a83", "#d5546e", "#e76f5a", "#f68d45", "#fdae32", "#fcd225", "#f0f921"],
     }, YlGn: {
+        2: ["#f7fcb9", "#31a354"],
         3: ["#f7fcb9", "#addd8e", "#31a354"],
         4: ["#ffffcc", "#c2e699", "#78c679", "#238443"],
         5: ["#ffffcc", "#c2e699", "#78c679", "#31a354", "#006837"],
@@ -113,6 +123,7 @@ WebGLModule.ColorBrewer = {
         8: ["#ffffe5", "#f7fcb9", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#238443", "#005a32"],
         9: ["#ffffe5", "#f7fcb9", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#238443", "#006837", "#004529"]
     }, YlGnBu: {
+        2: ["#edf8b1", "#2c7fb8"],
         3: ["#edf8b1", "#7fcdbb", "#2c7fb8"],
         4: ["#ffffcc", "#a1dab4", "#41b6c4", "#225ea8"],
         5: ["#ffffcc", "#a1dab4", "#41b6c4", "#2c7fb8", "#253494"],
@@ -121,6 +132,7 @@ WebGLModule.ColorBrewer = {
         8: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#0c2c84"],
         9: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#253494", "#081d58"]
     }, GnBu: {
+        2: ["#e0f3db", "#43a2ca"],
         3: ["#e0f3db", "#a8ddb5", "#43a2ca"],
         4: ["#f0f9e8", "#bae4bc", "#7bccc4", "#2b8cbe"],
         5: ["#f0f9e8", "#bae4bc", "#7bccc4", "#43a2ca", "#0868ac"],
@@ -129,6 +141,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4", "#4eb3d3", "#2b8cbe", "#08589e"],
         9: ["#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4", "#4eb3d3", "#2b8cbe", "#0868ac", "#084081"]
     }, BuGn: {
+        2: ["#e5f5f9", "#2ca25f"],
         3: ["#e5f5f9", "#99d8c9", "#2ca25f"],
         4: ["#edf8fb", "#b2e2e2", "#66c2a4", "#238b45"],
         5: ["#edf8fb", "#b2e2e2", "#66c2a4", "#2ca25f", "#006d2c"],
@@ -137,6 +150,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7fcfd", "#e5f5f9", "#ccece6", "#99d8c9", "#66c2a4", "#41ae76", "#238b45", "#005824"],
         9: ["#f7fcfd", "#e5f5f9", "#ccece6", "#99d8c9", "#66c2a4", "#41ae76", "#238b45", "#006d2c", "#00441b"]
     }, PuBuGn: {
+        2: ["#ece2f0", "#1c9099"],
         3: ["#ece2f0", "#a6bddb", "#1c9099"],
         4: ["#f6eff7", "#bdc9e1", "#67a9cf", "#02818a"],
         5: ["#f6eff7", "#bdc9e1", "#67a9cf", "#1c9099", "#016c59"],
@@ -144,15 +158,8 @@ WebGLModule.ColorBrewer = {
         7: ["#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016450"],
         8: ["#fff7fb", "#ece2f0", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016450"],
         9: ["#fff7fb", "#ece2f0", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016c59", "#014636"]
-    }, PuBu: {
-        3: ["#ece7f2", "#a6bddb", "#2b8cbe"],
-        4: ["#f1eef6", "#bdc9e1", "#74a9cf", "#0570b0"],
-        5: ["#f1eef6", "#bdc9e1", "#74a9cf", "#2b8cbe", "#045a8d"],
-        6: ["#f1eef6", "#d0d1e6", "#a6bddb", "#74a9cf", "#2b8cbe", "#045a8d"],
-        7: ["#f1eef6", "#d0d1e6", "#a6bddb", "#74a9cf", "#3690c0", "#0570b0", "#034e7b"],
-        8: ["#fff7fb", "#ece7f2", "#d0d1e6", "#a6bddb", "#74a9cf", "#3690c0", "#0570b0", "#034e7b"],
-        9: ["#fff7fb", "#ece7f2", "#d0d1e6", "#a6bddb", "#74a9cf", "#3690c0", "#0570b0", "#045a8d", "#023858"]
     }, BuPu: {
+        2: ["#e0ecf4", "#8856a7"],
         3: ["#e0ecf4", "#9ebcda", "#8856a7"],
         4: ["#edf8fb", "#b3cde3", "#8c96c6", "#88419d"],
         5: ["#edf8fb", "#b3cde3", "#8c96c6", "#8856a7", "#810f7c"],
@@ -161,6 +168,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7fcfd", "#e0ecf4", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#6e016b"],
         9: ["#f7fcfd", "#e0ecf4", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#810f7c", "#4d004b"]
     }, RdPu: {
+        2: ["#fde0dd", "#c51b8a"],
         3: ["#fde0dd", "#fa9fb5", "#c51b8a"],
         4: ["#feebe2", "#fbb4b9", "#f768a1", "#ae017e"],
         5: ["#feebe2", "#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"],
@@ -169,6 +177,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177"],
         9: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177", "#49006a"]
     }, PuRd: {
+        2: ["#e7e1ef", "#dd1c77"],
         3: ["#e7e1ef", "#c994c7", "#dd1c77"],
         4: ["#f1eef6", "#d7b5d8", "#df65b0", "#ce1256"],
         5: ["#f1eef6", "#d7b5d8", "#df65b0", "#dd1c77", "#980043"],
@@ -177,6 +186,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#df65b0", "#e7298a", "#ce1256", "#91003f"],
         9: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#df65b0", "#e7298a", "#ce1256", "#980043", "#67001f"]
     }, OrRd: {
+        2: ["#fee8c8", "#e34a33"],
         3: ["#fee8c8", "#fdbb84", "#e34a33"],
         4: ["#fef0d9", "#fdcc8a", "#fc8d59", "#d7301f"],
         5: ["#fef0d9", "#fdcc8a", "#fc8d59", "#e34a33", "#b30000"],
@@ -185,6 +195,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548", "#d7301f", "#990000"],
         9: ["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548", "#d7301f", "#b30000", "#7f0000"]
     }, YlOrRd: {
+        2: ["#ffeda0", "#f03b20"],
         3: ["#ffeda0", "#feb24c", "#f03b20"],
         4: ["#ffffb2", "#fecc5c", "#fd8d3c", "#e31a1c"],
         5: ["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"],
@@ -193,6 +204,7 @@ WebGLModule.ColorBrewer = {
         8: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#b10026"],
         9: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#bd0026", "#800026"]
     }, YlOrBr: {
+        2: ["#fff7bc", "#d95f0e"],
         3: ["#fff7bc", "#fec44f", "#d95f0e"],
         4: ["#ffffd4", "#fed98e", "#fe9929", "#cc4c02"],
         5: ["#ffffd4", "#fed98e", "#fe9929", "#d95f0e", "#993404"],
@@ -201,6 +213,7 @@ WebGLModule.ColorBrewer = {
         8: ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#8c2d04"],
         9: ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#993404", "#662506"]
     }, Purples: {
+        2: ["#efedf5", "#756bb1"],
         3: ["#efedf5", "#bcbddc", "#756bb1"],
         4: ["#f2f0f7", "#cbc9e2", "#9e9ac8", "#6a51a3"],
         5: ["#f2f0f7", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"],
@@ -209,6 +222,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fcfbfd", "#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#4a1486"],
         9: ["#fcfbfd", "#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#54278f", "#3f007d"]
     }, Blues: {
+        2: ["#deebf7", "#3182bd"],
         3: ["#deebf7", "#9ecae1", "#3182bd"],
         4: ["#eff3ff", "#bdd7e7", "#6baed6", "#2171b5"],
         5: ["#eff3ff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"],
@@ -217,6 +231,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"],
         9: ["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"]
     }, Greens: {
+        2: ["#e5f5e0", "#31a354"],
         3: ["#e5f5e0", "#a1d99b", "#31a354"],
         4: ["#edf8e9", "#bae4b3", "#74c476", "#238b45"],
         5: ["#edf8e9", "#bae4b3", "#74c476", "#31a354", "#006d2c"],
@@ -225,6 +240,7 @@ WebGLModule.ColorBrewer = {
         8: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#005a32"],
         9: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"]
     }, Oranges: {
+        2: ["#fee6ce", "#e6550d"],
         3: ["#fee6ce", "#fdae6b", "#e6550d"],
         4: ["#feedde", "#fdbe85", "#fd8d3c", "#d94701"],
         5: ["#feedde", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"],
@@ -233,6 +249,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fff5eb", "#fee6ce", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#8c2d04"],
         9: ["#fff5eb", "#fee6ce", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#a63603", "#7f2704"]
     }, Reds: {
+        2: ["#fee0d2", "#de2d26"],
         3: ["#fee0d2", "#fc9272", "#de2d26"],
         4: ["#fee5d9", "#fcae91", "#fb6a4a", "#cb181d"],
         5: ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"],
@@ -241,6 +258,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#99000d"],
         9: ["#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#a50f15", "#67000d"]
     }, Greys: {
+        2: ["#f0f0f0", "#636363"],
         3: ["#f0f0f0", "#bdbdbd", "#636363"],
         4: ["#f7f7f7", "#cccccc", "#969696", "#525252"],
         5: ["#f7f7f7", "#cccccc", "#969696", "#636363", "#252525"],
@@ -249,6 +267,7 @@ WebGLModule.ColorBrewer = {
         8: ["#ffffff", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525"],
         9: ["#ffffff", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525", "#000000"]
     }, PuOr: {
+        2: ["#f1a340", "#998ec3"],
         3: ["#f1a340", "#f7f7f7", "#998ec3"],
         4: ["#e66101", "#fdb863", "#b2abd2", "#5e3c99"],
         5: ["#e66101", "#fdb863", "#f7f7f7", "#b2abd2", "#5e3c99"],
@@ -259,6 +278,7 @@ WebGLModule.ColorBrewer = {
         10: ["#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6", "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"],
         11: ["#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6", "#f7f7f7", "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"]
     }, BrBG: {
+        2: ["#d8b365", "#5ab4ac"],
         3: ["#d8b365", "#f5f5f5", "#5ab4ac"],
         4: ["#a6611a", "#dfc27d", "#80cdc1", "#018571"],
         5: ["#a6611a", "#dfc27d", "#f5f5f5", "#80cdc1", "#018571"],
@@ -269,6 +289,7 @@ WebGLModule.ColorBrewer = {
         10: ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"],
         11: ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#f5f5f5", "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"]
     }, PRGn: {
+        2: ["#af8dc3", "#7fbf7b"],
         3: ["#af8dc3", "#f7f7f7", "#7fbf7b"],
         4: ["#7b3294", "#c2a5cf", "#a6dba0", "#008837"],
         5: ["#7b3294", "#c2a5cf", "#f7f7f7", "#a6dba0", "#008837"],
@@ -279,6 +300,7 @@ WebGLModule.ColorBrewer = {
         10: ["#40004b", "#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837", "#00441b"],
         11: ["#40004b", "#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#f7f7f7", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837", "#00441b"]
     }, PiYG: {
+        2: ["#e9a3c9", "#a1d76a"],
         3: ["#e9a3c9", "#f7f7f7", "#a1d76a"],
         4: ["#d01c8b", "#f1b6da", "#b8e186", "#4dac26"],
         5: ["#d01c8b", "#f1b6da", "#f7f7f7", "#b8e186", "#4dac26"],
@@ -289,6 +311,7 @@ WebGLModule.ColorBrewer = {
         10: ["#8e0152", "#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221", "#276419"],
         11: ["#8e0152", "#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#f7f7f7", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221", "#276419"]
     }, RdBu: {
+        2: ["#ef8a62", "#67a9cf"],
         3: ["#ef8a62", "#f7f7f7", "#67a9cf"],
         4: ["#ca0020", "#f4a582", "#92c5de", "#0571b0"],
         5: ["#ca0020", "#f4a582", "#f7f7f7", "#92c5de", "#0571b0"],
@@ -299,6 +322,7 @@ WebGLModule.ColorBrewer = {
         10: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac", "#053061"],
         11: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#f7f7f7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac", "#053061"]
     }, RdGy: {
+        2: ["#ef8a62", "#999999"],
         3: ["#ef8a62", "#ffffff", "#999999"],
         4: ["#ca0020", "#f4a582", "#bababa", "#404040"],
         5: ["#ca0020", "#f4a582", "#ffffff", "#bababa", "#404040"],
@@ -309,6 +333,7 @@ WebGLModule.ColorBrewer = {
         10: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#e0e0e0", "#bababa", "#878787", "#4d4d4d", "#1a1a1a"],
         11: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#ffffff", "#e0e0e0", "#bababa", "#878787", "#4d4d4d", "#1a1a1a"]
     }, RdYlBu: {
+        2: ["#fc8d59", "#91bfdb"],
         3: ["#fc8d59", "#ffffbf", "#91bfdb"],
         4: ["#d7191c", "#fdae61", "#abd9e9", "#2c7bb6"],
         5: ["#d7191c", "#fdae61", "#ffffbf", "#abd9e9", "#2c7bb6"],
@@ -319,6 +344,7 @@ WebGLModule.ColorBrewer = {
         10: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee090", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"],
         11: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee090", "#ffffbf", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"]
     }, Spectral: {
+        2: ["#fc8d59", "#99d594"],
         3: ["#fc8d59", "#ffffbf", "#99d594"],
         4: ["#d7191c", "#fdae61", "#abdda4", "#2b83ba"],
         5: ["#d7191c", "#fdae61", "#ffffbf", "#abdda4", "#2b83ba"],
@@ -329,6 +355,7 @@ WebGLModule.ColorBrewer = {
         10: ["#9e0142", "#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#e6f598", "#abdda4", "#66c2a5", "#3288bd", "#5e4fa2"],
         11: ["#9e0142", "#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#e6f598", "#abdda4", "#66c2a5", "#3288bd", "#5e4fa2"]
     }, RdYlGn: {
+        2: ["#fc8d59", "#91cf60"],
         3: ["#fc8d59", "#ffffbf", "#91cf60"],
         4: ["#d7191c", "#fdae61", "#a6d96a", "#1a9641"],
         5: ["#d7191c", "#fdae61", "#ffffbf", "#a6d96a", "#1a9641"],
@@ -339,6 +366,7 @@ WebGLModule.ColorBrewer = {
         10: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"],
         11: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"]
     }, Accent: {
+        2: ["#7fc97f", "#beaed4"],
         3: ["#7fc97f", "#beaed4", "#fdc086"],
         4: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99"],
         5: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0"],
@@ -346,6 +374,7 @@ WebGLModule.ColorBrewer = {
         7: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17"],
         8: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17", "#666666"]
     }, Dark2: {
+        3: ["#1b9e77", "#d95f02"],
         3: ["#1b9e77", "#d95f02", "#7570b3"],
         4: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"],
         5: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e"],
@@ -353,6 +382,7 @@ WebGLModule.ColorBrewer = {
         7: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d"],
         8: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"]
     }, Paired: {
+        2: ["#a6cee3", "#1f78b4"],
         3: ["#a6cee3", "#1f78b4", "#b2df8a"],
         4: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c"],
         5: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99"],
@@ -364,6 +394,7 @@ WebGLModule.ColorBrewer = {
         11: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99"],
         12: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928"]
     }, Pastel1: {
+        2: ["#fbb4ae", "#ccebc5"],
         3: ["#fbb4ae", "#b3cde3", "#ccebc5"],
         4: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4"],
         5: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6"],
@@ -372,6 +403,7 @@ WebGLModule.ColorBrewer = {
         8: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc", "#e5d8bd", "#fddaec"],
         9: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc", "#e5d8bd", "#fddaec", "#f2f2f2"]
     }, Pastel2: {
+        2: ["#b3e2cd", "#cbd5e8"],
         3: ["#b3e2cd", "#fdcdac", "#cbd5e8"],
         4: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4"],
         5: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9"],
@@ -379,6 +411,7 @@ WebGLModule.ColorBrewer = {
         7: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9", "#fff2ae", "#f1e2cc"],
         8: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9", "#fff2ae", "#f1e2cc", "#cccccc"]
     }, Set1: {
+        2: ["#e41a1c", "#377eb8"],
         3: ["#e41a1c", "#377eb8", "#4daf4a"],
         4: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"],
         5: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00"],
@@ -387,6 +420,7 @@ WebGLModule.ColorBrewer = {
         8: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628", "#f781bf"],
         9: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628", "#f781bf", "#999999"]
     }, Set2: {
+        2: ["#66c2a5", "#fc8d62"],
         3: ["#66c2a5", "#fc8d62", "#8da0cb"],
         4: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3"],
         5: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854"],
@@ -394,6 +428,7 @@ WebGLModule.ColorBrewer = {
         7: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494"],
         8: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3"]
     }, Set3: {
+        2: ["#8dd3c7", "#ffffb3"],
         3: ["#8dd3c7", "#ffffb3", "#bebada"],
         4: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072"],
         5: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3"],

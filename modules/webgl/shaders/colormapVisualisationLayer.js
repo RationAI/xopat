@@ -49,7 +49,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         this.supportConnect = (!options.color || !options.color.type || options.color.type === "colormap")
             && (!options.threshold || !options.threshold.type || options.threshold.type === "advanced_slider");
 
-        if (this.supportConnect && this.color.continuous === false) {
+        if (this.supportConnect) {
             this.connect = WebGLModule.UIControls.build(this, "connects",
                 options.connect, {type: "bool", visible: false, title: "Breaks mapping: ", default: false},
                 (type, instance) => type === "bool");
@@ -126,7 +126,7 @@ ${this.opacity.define()}
                 }
             }, true);
             this.connect.on('connects', function (raw, encoded, ctx) {
-                _this.color.setSteps(_this.connect.raw ? _this.threshold.raw : undefined);
+                _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] : undefined);
             }, true);
             this.connect.init();
         } else {

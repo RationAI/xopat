@@ -58,9 +58,32 @@ WebGLModule.VisualisationLayer = class {
             this.__channel = options.__channel;
         }
 
-        //todo this is valid only for one-channel shaders
-        if (!["r", "g", "b", "a"].some(ch => this.__channel === ch, this)) {
+        if (!this.__channel
+            || typeof this.__channel !== "string"
+            || WebGLModule.VisualisationLayer.__chanPattern.exec(this.__channel) === null) {
+
             this.__channel = "r";
+        }
+
+        if (this.__channel.length > 1) {
+            console.warn("Shader will sample more dimensions - no such shader is " +
+                "present in default ones: make sure this is a custom implementation.");
+        }
+
+        //gamma coercion
+        if (options.hasOwnProperty("gamma")) {
+//             let channels = "float";
+//             if ()
+//             this.includeGlobalCode("gamma", `
+// gamma_correct(
+//             `);
+            //glsl should work also with vec3 + float or vec3 / float, not sure though :D :D
+            let coeff = this.toShaderFloatString(options.gamma, "0.5");
+            this.__scalePrefix = `(log(${coeff} + `;
+            this.__scaleSuffix = `) - log(${coeff})) / (log(${coeff}+1.0)-log(${coeff}))`;
+        } else {
+            this.__scalePrefix = "";
+            this.__scaleSuffix = "";
         }
     }
 
@@ -186,50 +209,71 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * Apply global filters on value
+     * @param {string} value GLSL code string, value to filter
+     * @return {string} filtered value (GLSL oneliner without ';')
+     */
+    filter(value) {
+        return `${this.__scalePrefix}${value}${this.__scaleSuffix}`;
+    }
+
+    /**
      * Alias for sampleReferenced(textureCoords, 0)
      * @param {string} textureCoords valid GLSL vec2 object as string
+     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
      * @return {string} code for appropriate texture sampling within the shader
      */
-    sample(textureCoords) {
-        return this.sampleReferenced(textureCoords, 0);
+    sample(textureCoords, raw=false) {
+        return this.sampleReferenced(textureCoords, 0, raw);
     }
 
     /**
      * Alias for sampleChannelReferenced(textureCoords, 0)
      * @param {string} textureCoords valid GLSL vec2 object as string
+     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
      * @return {string} code for appropriate texture sampling within the shader,
      *                  where only one channel is extracted
      */
-    sampleChannel(textureCoords) {
-        return this.sampleChannelReferenced(textureCoords, 0);
+    sampleChannel(textureCoords, raw=false) {
+        return this.sampleChannelReferenced(textureCoords, 0, raw);
     }
 
     /**
      * Return code for appropriate sampling of the texture bound to this shader
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
+     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
      * @return {string} code for appropriate texture sampling within the shader or vec4(.0) if
      *                  the reference is not valid
      */
-    sampleReferenced(textureCoords, otherDataIndex) {
+    sampleReferenced(textureCoords, otherDataIndex, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
         if (otherDataIndex >= refs.length) {
             return 'vec4(0.0)';
         }
-
-        return this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords);
+        let sampled = this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords);
+        if (raw) return sampled;
+        return this.filter(sampled);
     }
 
     /**
      * Sample only one channel (which is defined in options)
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
+     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
      * @return {string} code for appropriate texture sampling within the shader,
      *                  where only one channel is extracted or float with zero value if
      *                  the reference is not valid
      */
-    sampleChannelReferenced(textureCoords, otherDataIndex) {
-        return `${this.sampleReferenced(textureCoords, otherDataIndex)}.${this.__channel}`;
+    sampleChannelReferenced(textureCoords, otherDataIndex, raw=false) {
+        //code duplicity due to slight optimization - scale on float rather than vec4
+        let refs = this.__visualisationLayer.dataReferences;
+        if (otherDataIndex >= refs.length) {
+            return 'vec4(0.0)';
+        }
+        let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${this.__channel}`;
+        if (raw) return sampled;
+        return this.filter(sampled);
     }
 
     /**
@@ -267,6 +311,7 @@ WebGLModule.VisualisationLayer = class {
     ////////////////////////////////////
 
     static __globalIncludes = {};
+    static __chanPattern = new RegExp('[rgbxyzuvw]+');
 
     _setContextVisualisationLayer(visualisationLayer) {
         this.__visualisationLayer = visualisationLayer;
@@ -633,7 +678,7 @@ WebGLModule.UIControls.IControl = class {
      * see this.context.includeGlobalCode(...)
      * @param {string} ratio openGL float value/variable, ratio used to interpolate the user-defined parameter
      *        note that shaders extending this interface might extend supported types to be more flexible
-     *        (e.g. support 'undefined' to
+     *        (e.g. support 'undefined' to avoid passing every time "1.0" if you want to just get that value)
      */
     sample(ratio) {
         throw "WebGLModule.UIControls.IControl::sample() must be implemented.";
@@ -851,19 +896,19 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
     }
 
     get supports() {
-        return this._c1.defaults();
+        return this._c1.supports();
     }
 
     get type() {
-        return this._c1.glType;
+        return this._c1.type;
     }
 
     get raw() {
-        return this._c1.value;
+        return this._c1.raw;
     }
 
     get encoded() {
-        return this._c1.encodedValue;
+        return this._c1.encoded;
     }
 };
 WebGLModule.UIControls.registerClass("range-input", WebGLModule.UIControls.SliderWithInput);
@@ -876,9 +921,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         $.extend(this.params, params);
 
         this.parser = WebGLModule.UIControls.getUiElement("color").decode;
-        this.continuous = !Array.isArray(this.params.steps) && this.params.steps < 1;
-        if (this.continuous) {
-            this.params.steps = 8;
+        if (this.params.continuous) {
             this.cssGradient = this._continuousCssFromPallete;
         } else {
             this.cssGradient = this._discreteCssFromPallete;
@@ -928,6 +971,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             let node = $(`#${this.id}`);
             node.css("background", this.cssGradient(this.pallete));
             this._setPallete(this.pallete);
+
             let schemas = [];
             for (let pallete of WebGLModule.ColorBrewer.schemeGroups[this.params.mode]) { //todo need to do this building after init(...)
                 schemas.push(`<option value="${pallete}">${pallete}</option>`);
@@ -935,13 +979,17 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             node.html(schemas.join(""));
             node.val(this.value);
             node.change(updater);
+        } else {
+            //be careful with what the DOM elements contains or not if not visible...
+            let existsNode = document.getElementById(this.id);
+            if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
         }
     }
 
     setSteps(steps) {
         this.steps = steps || this.params.steps;
         if (! Array.isArray(this.steps)) {
-            if (this.steps < 3) this.steps = 3;
+            if (this.steps < 2) this.steps = 2;
             if (this.steps > this.MAX_SAMPLES) this.steps = this.MAX_SAMPLES;
             this.maxSteps = this.steps;
             let step = 1.0 / this.maxSteps;
@@ -1008,38 +1056,16 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.visible) return "";
-
-        // let temp = [];
-        // if (this.params.modeSelectable) {
-        //     temp.push(`<select id="${id}_mode">`);
-        //     for (let mode in WebGLModule.ColorBrewer.schemeGroups) {
-        //         let selected = mode === this.params.mode ? "selected" : "";
-        //         temp.push(`<option value="${mode}" ${selected}>${mode}</option>`)
-        //     }
-        //     temp.push(`</select>`);
-        // }
+        //no visible still needs to inform the user about used colormap, do not allow interaction though
+        if (!this.params.visible) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-readable" 
+style="width: 60%;">${this.params.default}</div>`;
 
         if (!WebGLModule.ColorBrewer.hasOwnProperty(this.params.pallete)) {
             this.params.pallete = "OrRd";
         }
 
-        if (this.continuous) {
-            return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-readable" 
+        return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-readable" 
 style="width: 60%;"></select><br>`;
-        } else { //discrete
-            // let width = 350 / this.params.steps;
-            //
-            // let joins = [];
-            // for (let i = 0; i < this.params.steps; i++) {
-            //     let selected = mode === this.params.scheme ? "selected" : "";
-            //     joins.push(`<option value="${mode}" ${selected}>${mode}</option>`)
-            // }
-            //
-            // return `<select id="${this.id}">${schemas.join("")}</select>`;
-            return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-readable" 
-style="width: 60%;"></select><br>`;
-        }
     }
 
     define() {
@@ -1053,16 +1079,17 @@ uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN];`;
 
     sample(ratio) {
         if (!ratio) return "ERROR colormap requires sample(ratio) argument!";
-        return `sample_colormap(${ratio}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.continuous})`;
+        return `sample_colormap(${ratio}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.params.continuous})`;
     }
 
     get supports() {
         return {
-            steps: -1, //continuous
+            steps: 3,
             default: "YlOrRd",
             mode: "sequential",
             visible: true,
-            title: "Colormap"
+            title: "Colormap",
+            continuous: false,
         };
     }
 
@@ -1312,3 +1339,25 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
     }
 };
 WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.AdvancedSlider);
+
+WebGLModule.UIControls.LocalizeColorMap = class extends WebGLModule.UIControls.ColorMap {
+
+    constructor(context, name, webGLVariableName, params) {
+        $.extend(true, params.col, );
+        super(context, name, webGLVariableName, WebGLModule.UIControls.LocalizeColorMap.redefineParams(params));
+    }
+
+    static redefineParams(params) {
+        if (!params.hasOwnProperty("color")) params.color = {};
+        if (!params.hasOwnProperty("threshold")) params.threshold = {};
+        params.color.type = "colormap";
+        params.threshold.type = "advanced_slider";
+        params.color.default = params.color.default || "Set1";
+        params.color.mode = "quantitative";
+        params.color.visible = false;
+        params.color.title = params.color.title || "Localized: ";
+
+        //todo maybe adjust steps/mask for threshold
+    }
+};
+WebGLModule.UIControls.registerClass("localize_colormap", WebGLModule.UIControls.LocalizeColorMap);

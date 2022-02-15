@@ -20,10 +20,10 @@ class WebGLModule {
         };
         this.resetCallback = function () { };
         //called once a visualisation is compiled and linked (might not happen)
-        this.visualisationReady = function(i, visualisation) { }
+        this.visualisationReady = function(i, visualisation) { };
         //called once a visualisation is switched to (including first run)
-        this.visualisationInUse = function(visualisation) { }
-        this.visualisationChanged = function(oldVis, newVis) { }
+        this.visualisationInUse = function(visualisation) { };
+        this.visualisationChanged = function(oldVis, newVis) { };
         //called when exception (usually some missing function) occurs
         this.onError = function(error) {
             console.warn("An error has occurred:", error.error, error.desc);
@@ -199,27 +199,63 @@ class WebGLModule {
             imageElement, tileDimension, zoomLevel, pixelSize);
     }
 
+    /**
+     * Whether the webgl module renders UI
+     * @return {boolean|boolean}
+     */
     supportsHtmlControls() {
         return typeof this.htmlControlsId === "string" && this.htmlControlsId.length > 0;
     }
 
-    static eachValidVisualizationLayer(vis, callback) {
+    /**
+     * Execute call on each visualization layer with no errors
+     * @param {object} vis current visualisation setup context
+     * @param {function} callback call to execute
+     * @param {function} onFail handle exception during execition
+     * @return {boolean} true if no exception occured
+     */
+    static eachValidVisualizationLayer(vis, callback,
+                                       onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {
         let shaders = vis.shaders;
+        let noError = true;
         for (let key in shaders) {
             if (shaders.hasOwnProperty(key) && !shaders[key].hasOwnProperty("error")) {
-                callback(shaders[key]);
+                try {
+                    callback(shaders[key]);
+                } catch (e) {
+                    if (!onFail) throw e;
+                    onFail(shaders[key], e);
+                    noError = false;
+                }
             }
         }
+        return noError;
     }
 
-    static eachValidVisibleVisualizationLayer(vis, callback) {
+    /**
+     * Execute call on each _visible_ visualization layer with no errors
+     * @param {object} vis current visualisation setup context
+     * @param {function} callback call to execute
+     * @param {function} onFail handle exception during execition
+     * @return {boolean} true if no exception occured
+     */
+    static eachValidVisibleVisualizationLayer(vis, callback,
+                                              onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {
         let shaders = vis.shaders;
+        let noError = true;
         for (let key in shaders) {
             //rendering == true means no error
             if (shaders.hasOwnProperty(key) && shaders[key].rendering) {
-                callback(shaders[key]);
+                try {
+                    callback(shaders[key]);
+                } catch (e) {
+                    if (!onFail) throw e;
+                    onFail(shaders[key], e);
+                    noError = false;
+                }
             }
         }
+        return noError;
     }
 
     /////////////////////////////////////////////////////////////////////////////////////
@@ -325,7 +361,7 @@ class WebGLModule {
      * invoked (e.g. some uniform variables changed)
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
-    _forceSwitchShader(i) {
+    _forceSwitchShader(i, reset=true) {
         if (isNaN(i) || i === null || i === undefined) i = this._program;
 
         if (i >= this._visualisations.length) {
@@ -352,7 +388,10 @@ class WebGLModule {
         } else {
             this.running = true;
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
-            this._loadScript(i, this._program);
+            if (!this._loadScript(i, this._program)) { //todo set visible on each false so that no fail occurs?
+                if (!reset) throw "Could not build visualization";
+                return this._forceSwitchShader(i, false); //force reset in errors
+            }
             this._toBuffers(this._programs[i], target);
         }
     }
@@ -363,7 +402,7 @@ class WebGLModule {
     }
 
     _loadScript(visId) {
-        WebGLModule.eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
+        return WebGLModule.eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
     }
 
     _buildFailed(visualisation, error) {

@@ -34,11 +34,6 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
     constructor(id, options) {
         super(id, options);
 
-        //todo reimplement as UI controls (by default hidden)...?
-        this._logScale = this.isFlag(options["logScale"]);
-        this._logScaleMax = options.hasOwnProperty("logScaleMax") ?
-            this.toShaderFloatString(options["logScaleMax"], 1, 2) : "1.0";
-
         this.colorHigh = WebGLModule.UIControls.build(this, "colorHigh",
             options.colorHigh, {type: "color", default: "#fff700", title: "Color High: "},
             (type, instance) => type === "vec3");
@@ -63,26 +58,19 @@ ${this.opacity.define()}
     }
 
     getFragmentShaderExecution() {
-        let compareAgainst;
-        if (this._logScale) {
-            compareAgainst = `value_${this.uid} = (log2(${this._logScaleMax} + value_${this.uid}) - log2(${this._logScaleMax}))/(log2(${this._logScaleMax}+1.0)-log2(${this._logScaleMax}));`;
-        } else {
-            compareAgainst = "";
-        }
+        let varname = `data_${this.uid}`;
         return `
-    float data_${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    if (!close(data_${this.uid}, .5)) {
-        if (data_${this.uid} < .5) { 
-            float value_${this.uid} = 1.0 - data_${this.uid} * 2.0;
-            ${compareAgainst}
-            if (value_${this.uid} > ${this.threshold.sample()}) {
-                show(vec4( ${this.colorLow.sample()} , value_${this.uid} * ${this.opacity.sample()}));
+    float ${varname} = ${this.sampleChannel('tile_texture_coords', true)};
+    if (!close(${varname}, .5)) {
+        if (${varname} < .5) { 
+            ${varname} = ${this.filter(`1.0 - ${varname} * 2.0`)};
+            if (${varname} > ${this.threshold.sample()}) {
+                show(vec4( ${this.colorLow.sample()}, ${varname} * ${this.opacity.sample()}));
             }
         } else {  
-            float value_${this.uid} = (data_${this.uid} - 0.5) * 2.0;
-            ${compareAgainst}
-            if (value_${this.uid} > ${this.threshold.sample()}) {
-                show(vec4( ${this.colorHigh.sample()} , value_${this.uid} * ${this.opacity.sample()}));
+            ${varname} = ${this.filter(`(${varname} - 0.5) * 2.0`)};
+            if (${varname} > ${this.threshold.sample()}) {
+                show(vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()}));
             }
         }
     }        
@@ -100,14 +88,14 @@ ${this.opacity.define()}
         this.colorHigh.glLoaded(program, gl);
         this.colorLow.glLoaded(program, gl);
         this.threshold.glLoaded(program, gl);
-        this.opacity .glLoaded(program, gl);
+        this.opacity.glLoaded(program, gl);
     }
 
     init() {
         this.colorHigh.init();
         this.colorLow.init();
         this.threshold.init();
-        this.opacity .init();
+        this.opacity.init();
     }
 
     htmlControls() {

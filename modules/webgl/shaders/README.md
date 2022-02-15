@@ -50,6 +50,20 @@ Parameters are fully dependent on the shader you use. If our policy is kept then
  to instantiate them
  - instantiated controls can tell you all their supported values using `self.supports` and their GLSL type `self.type`
 
+#### shader-specific inherited parameters
+There are parameters common to all shaders and define how the layer is treated. Such parameters are specified **directly in**
+params field (such as custom 'color' in the example above):
+ - `channel` - a shader might work only with grayscale values - in that case, it's preferred when the shader uses `sampleChannel()`
+ to respect this value (if set): then, the shader samples the channel given in this parameter
+    - e.g. if `params.channel = "rrr"` the shader will sample the `RED` channel three times and obtain `vec3`
+ - `gamma` - a gamma correction value (float), no correction is performed if the value is not set
+
+#### control wide-supported parameters
+Each control should support three parameters:
+ - `title`: name of the control
+ - `visible`: whether the user should be allowed to interact with the control (note it still might be visible, maybe rename the variable to _interactive_)
+ - `default`: default value (need not to be necessarily true, however, with simple controls it is advantageous since controls switching will use the same default value)
+
 ### class `VisualisationLayer`
 There are several features available for you: things that will make your coding easier. Basic `identity` shader can look
 really simple!
@@ -125,6 +139,12 @@ And a member function to sample a texture appropriately:
 There are helper functions available so that it is easier to create more advanced, controllable shaders. You can
 expect the object of the constructor to contain anything you wish to receive (e.g. flags, default values...). You can
 rely on the following functions:
+- reading pixel values
+    - `filter(value)` does not really read a value, but applies post-processing common to the layer
+    - `sample(textureCoords, raw=false)` - sample `vec4` with (raw=false) or without post-processing
+    - `sampleChannel(textureCoords, raw=false)` - sample custom channel with (raw=false) or without post-processing
+    - `sampleReferenced(textureCoords, otherDataIndex, raw=false)` - sample `otherDataIndex`th texture (refer to the layer data indices) with (raw=false) or without post-processing
+    - `sampleChannelReferenced(textureCoords, otherDataIndex, raw=false)` - sample custom channel of `otherDataIndex`th texture (refer to the layer data indices) with (raw=false) or without post-processing
 - parsing (not only the input) data
     - `isFlag(value)` - check if value in the input parameters can be interpreted as boolean true, default `false`
     - `isFlagOrMissing(value)` - same as above, interpreted as 'true' if missing

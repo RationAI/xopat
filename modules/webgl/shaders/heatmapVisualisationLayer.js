@@ -39,9 +39,6 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         //default false
         //todo reimplement as UI controls (by default hidden)...?
         this._invertOpacity = this.isFlag(options["inverse"]);
-        this._logScale = this.isFlag(options["logScale"]);
-        this._logScaleMax = options.hasOwnProperty("logScaleMax") ?
-            this.toShaderFloatString(options["logScaleMax"], 1, 2) : "1.0";
 
         //We support three controls
         this.color = WebGLModule.UIControls.build(this, "color",
@@ -64,22 +61,12 @@ ${this.opacity.define()}
     }
 
     getFragmentShaderExecution() {
-        let comparison = this._invertOpacity ? "<=" : ">=";
-        let compareAgainst, alpha;
-        if (this._logScale) {
-            compareAgainst = `float normalized_${this.uid} = (log2(${this._logScaleMax} + data${this.uid}) - log2(${this._logScaleMax}))/(log2(${this._logScaleMax}+1.0)-log2(${this._logScaleMax}));`;
-            comparison = `normalized_${this.uid} ${comparison} ${this.threshold.sample()}`;
-            alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - normalized_${this.uid})` : `normalized_${this.uid}`);
-        } else {
-            compareAgainst = "";
-            comparison = `data${this.uid} ${comparison} ${this.threshold.sample()}`;
-            alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - data${this.uid})` : `data${this.uid}`);
-        }
+        let comparison = `data${this.uid} ${this._invertOpacity ? "<=" : ">="} ${this.threshold.sample()}`;
+        let alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - data${this.uid})` : `data${this.uid}`);
         let compareConst = this._invertOpacity ? "< 0.98" : " > 0.02";
 
         return `
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    ${compareAgainst}
     if(data${this.uid} ${compareConst} && ${comparison}){
         show(vec4(${this.color.sample()}, ${alpha}));
     }
