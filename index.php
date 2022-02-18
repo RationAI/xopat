@@ -358,7 +358,7 @@ if ($layerVisible) {
                     <div>
     
                         <span id="shaders-pin" class="material-icons pointer inline-pin $pinClass" onclick="let jqSelf = $(this); pinClick(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`"> push_pin </span>
+                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/`"> push_pin </span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
@@ -500,7 +500,7 @@ EOF;
                 $("#viewer-container").removeClass("disabled");
                 $('#main-panel').css('right', '0px');
             }
-            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/';
+            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
         },
 
         add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
@@ -1024,7 +1024,7 @@ if ($firstTimeVisited) {
             }
         });
         plugins = remember ? plugins.join(',') : "";
-        document.cookie = `plugins=${plugins}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=Strict; path=/`;
+        document.cookie = `plugins=${plugins}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/`;
         $("body").append(constructExportVisualisationForm(formData, false));
     }
 
