@@ -36,6 +36,11 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
     constructor(id, options) {
         super(id, options);
 
+        //force colormap, no other parameter is meaningful
+        if (typeof options.color === "object") {
+            options.color.type = "colormap";
+        }
+
         //We support three controls
         this.color = WebGLModule.UIControls.build(this, "color",
             options.color, {type: "colormap"}, (type, instance) => type === "vec3");
@@ -51,7 +56,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
         if (this.supportConnect) {
             this.connect = WebGLModule.UIControls.build(this, "connects",
-                options.connect, {type: "bool", visible: false, title: "Breaks mapping: ", default: false},
+                options.connect, {type: "bool", interactive: false, title: "Breaks mapping: ", default: false},
                 (type, instance) => type === "bool");
         } else {
             console.log("ColorMap: cannot connect controls.");
@@ -67,30 +72,10 @@ ${this.opacity.define()}
     }
 
     getFragmentShaderExecution() {
-//         let comparison, compareAgainst, ratio;
-//         if (this._logScale) {
-//             compareAgainst = `float normalized_${this.uid} = (log2(${this._logScaleMax} + data${this.uid}) - log2(${this._logScaleMax}))/(log2(${this._logScaleMax}+1.0)-log2(${this._logScaleMax}));`;
-//             comparison = `normalized_${this.uid} >= ${this.threshold.sample("0.01")}`;
-//             ratio = `normalized_${this.uid}`;
-//         } else {
-//             compareAgainst = "";
-//             comparison = `data${this.uid} >= ${this.threshold.sample("0.01")}`;
-//             ratio = `data${this.uid}`;
-//         }
-//         let compareConst = " > 0.02";
-//
-//         return `
-//     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-//     ${compareAgainst}
-//     if(data${this.uid} ${compareConst} && ${comparison}){
-//         show(vec4(${this.color.sample(ratio)}, ${this.opacity.sample()}));
-//     }
-// `;
         let ratio = `data${this.uid}`;
         return `
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    show(vec4(${this.color.sample(ratio)}, step(0.05, ${this.threshold.sample(ratio)}) * ${this.opacity.sample()}));
-    
+    ${this.render(`vec4(${this.color.sample(ratio)}, step(0.05, ${this.threshold.sample(ratio)}) * ${this.opacity.sample()})`)}
 `;
     }
 
@@ -122,7 +107,7 @@ ${this.opacity.define()}
         if (this.supportConnect) {
             this.threshold.on('threshold', function (raw, encoded, ctx) {
                 if (_this.connect.raw) { //if YES
-                    _this.color.setSteps(raw);
+                    _this.color.setSteps([...raw, 1]);
                 }
             }, true);
             this.connect.on('connects', function (raw, encoded, ctx) {

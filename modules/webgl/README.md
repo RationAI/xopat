@@ -20,6 +20,7 @@ Constructors of both `OpenSeadragonGL` and `WebGLModule` accept `options` argume
 - `options.visualisationChanged(oldVis, newVis)` function called when visualisation goals are switched between
 - `options.onError(error)` called when exception (usually some missing function) occurs and the visualization is somewhat able to continue
 - `options.onFatalError(error)` called when key functionality fails and the module is probably unusable
+- `options.debug` - boolean, outputs debug information if true 
 
 Constructor of `OpenSeadragonGL` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
 this module is going to be used on the given OSD TileSource post-processing. 
@@ -40,8 +41,19 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                    "type": "color", 
                    "visible": "1", 
                    "dataSources": [1],
+                   "fixed": false,
                    "params": { 
-                      "color": "#fa0058"
+                          "color": "#fa0058", //shader-dependent parameter, set as {default: value} if not an object
+                          "opacity": { //shader-dependent parameter
+                                 "default": 50,
+                                 "type": "range", //show as a slider
+                                 "min": 0,
+                                 "max": 100,
+                                 "title": "Opacity: ",
+                                 "interactive": true
+                          }, 
+                          "gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
+                          "channel": "b"  //global parameter, sample channel 'b' from the image
                    }
             }
       }
@@ -57,8 +69,11 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
     - [R]`dataReferences` - indices **array** to the `data` array
         - shaders can then reference `data` items using index to the `dataReferences` array
         - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
-    - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set
-
+    - [O]`fixed` - whether the user is allowed to change the visualisation (rendering mode, type...)
+    - [O]`params` - special parameters for defined shader type (see corresponding shader), shader should define fault vaules values that are used if not set
+        - no keys in `params` field should be required
+        - some parameters are global, see more detailed description in `shaders/README.md`
+        
 #### Data settings
 Data must be loaded with compliance to the indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
 - the module will automatically extract an ordered subset of the given data in the order in which it expects the data to arrive
@@ -76,6 +91,9 @@ An example of valid custom shader source declaration (object(s) passed to `addCu
 - [R]`url` - url where to fetch the shader implementation
 - [0]`headers` - arbitrary headers
 - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
+
+**Note that** some field names starting with `use_` within `[layer].params` are reserved. Do not name
+your parameters like this. For more detailed info and guidelines on writing shaders, see `shaders/README.md`.
 
 
 

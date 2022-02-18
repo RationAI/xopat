@@ -36,11 +36,9 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     constructor(id, options) {
         super(id, options);
 
-        //default false
-        //todo reimplement as UI controls (by default hidden)...?
-        this._invertOpacity = this.isFlag(options["inverse"]);
-
-        //We support three controls
+        this.inverse = WebGLModule.UIControls.build(this, "inverse",
+            options.inverse, {type: "bool", default: false, title: "Invert: "},
+            (type, instance) => type === "bool");
         this.color = WebGLModule.UIControls.build(this, "color",
             options.color, {type: "color", default: "#fff700", title: "Color: "},
             (type, instance) => type === "vec3");
@@ -57,18 +55,16 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
 ${this.color.define()}
 ${this.threshold.define()}
 ${this.opacity.define()}
+${this.inverse.define()}
 `;
     }
 
     getFragmentShaderExecution() {
-        let comparison = `data${this.uid} ${this._invertOpacity ? "<=" : ">="} ${this.threshold.sample()}`;
-        let alpha = this.opacity.sample(this._invertOpacity ? `(1.0 - data${this.uid})` : `data${this.uid}`);
-        let compareConst = this._invertOpacity ? "< 0.98" : " > 0.02";
-
         return `
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    if(data${this.uid} ${compareConst} && ${comparison}){
-        show(vec4(${this.color.sample()}, ${alpha}));
+    if (${this.inverse.sample()}) data${this.uid} = 1.0 - data${this.uid};
+    if(data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample()}){
+        ${this.render(`vec4(${this.color.sample()}, data${this.uid}) * ${this.opacity.sample()}`)}
     }
 `;
     }
@@ -77,25 +73,29 @@ ${this.opacity.define()}
         this.color.glDrawing(program, dimension, gl);
         this.threshold.glDrawing(program, dimension, gl);
         this.opacity.glDrawing(program, dimension, gl);
+        this.inverse.glDrawing(program, dimension, gl);
     }
 
     glLoaded(program, gl) {
         this.color.glLoaded(program, gl);
         this.threshold.glLoaded(program, gl);
         this.opacity.glLoaded(program, gl);
+        this.inverse.glLoaded(program, gl);
     }
 
     init() {
         this.color.init();
         this.threshold.init();
         this.opacity.init();
+        this.inverse.init();
     }
 
     htmlControls() {
         return [
             this.color.toHtml(true),
             this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl" : ""),
-            this.threshold.toHtml(true)
+            this.threshold.toHtml(true),
+            this.inverse.toHtml(true)
         ].join("");
     }
 
@@ -104,6 +104,7 @@ ${this.opacity.define()}
             color: "vec3",
             opacity: "float",
             threshold: "float",
+            inverse: "bool"
         }
     }
 };

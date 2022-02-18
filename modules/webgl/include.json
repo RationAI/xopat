@@ -3,12 +3,14 @@
     "name": "WebGL rendering module",
     "includes" : [
         "webGLWrapper.js",
+        "interface.js",
         "colorBrewer.js",
         "visualisationLayer.js",
         "shaders/bipolarHeatmapVisualisationLayer.js",
         "shaders/edgeVisualisationLayer.js",
         "shaders/heatmapVisualisationLayer.js",
         "shaders/colormapVisualisationLayer.js",
+        "shaders/codingVisualisationLayer.js",
         "shaders/identityVisualisationLayer.js",
         "webGLContext.js",
         "webGLToOSDBridge.js"

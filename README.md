@@ -88,6 +88,7 @@ Then, based on the presence of `visualisation` the user is
                 "shader_id_1": { 
                     "name": "Advanced visualisation layer",
                     "type": "new_type", 
+                    "fixed": false,
                     "visible": "1", 
                     "dataReferences": [2, 0],
                     "params": { }
@@ -115,12 +116,14 @@ re-used. The module is closely described in `./webgl/` folder.
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
-    - [O]`experimentId` - this visualisation-dependent parameter, not really important (unless used by some plugins)
+    - [O]`experimentId` - our usecase-dependent parameter, not really important (unless used by some plugins)
     - [O]`visualizationProtocol` - see protocol construction below
+    - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`viewport` - where to focus
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom
-- [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it)
+- [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it), elements
+of this list are essentially given to the construction of the protocol)
 - [R]`background` - defines what images compose the **image part**, at least one element must be present
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [0]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
@@ -137,8 +140,9 @@ We will use [R] for required and [O] for optional parameters.
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
         - [0]`name` - name of the layer: displayed to the user
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
-        - [R]`visible` -  `1` or `0`, whether by default the data layer is visible
+        - [R]`visible` -  `1` or `0`, `true` of `false`, whether by default the data layer is visible
         - [R]`dataReferences` - indices **array** to the `data` array
+        - [O]`fixed` - if `false`, user is able to change the visualisation style, default `true`
             - shaders can then reference `data` items using index to the `dataReferences` array
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid

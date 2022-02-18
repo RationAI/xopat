@@ -350,7 +350,7 @@ if ($layerVisible) {
     $pinClass = $opened ? "pressed" : "";
     $shadersSettingsClass = $opened ? "force-visible" : "";
     echo <<<EOF
-          <div id="panel-shaders" class="inner-panel" >
+          <div id="panel-shaders" class="inner-panel">
     
                 <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
     
@@ -368,6 +368,8 @@ if ($layerVisible) {
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
                             <!--populated with options for a given image data -->
                     </div>
+                    
+                    <div id="blending-equation"></div>
                 </div>
             </div>
 EOF;

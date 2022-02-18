@@ -15,7 +15,7 @@ OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
     let _this  = this;
     webGLWrapperParams.resetCallback = function () {
         _this.redraw(_this.refresh);
-    }
+    };
 
     this.refresh = -1;
 
@@ -32,7 +32,7 @@ OpenSeadragonGL.prototype = {
     setLayerIndex: function(idx) {
         this.refresh = idx;
     },
-    
+
     /**
      * Runs a callback on each visualisation goal
      * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
@@ -48,7 +48,7 @@ OpenSeadragonGL.prototype = {
     currentVisualisation: function() {
         return this.webGLWrapper.currentVisualisation();
     },
-    
+
     /**
      * Set program shaders. Just forwards the call to webGLWrapper, for easier access.
      * @param {object} visualisation - objects that define the visualisation (see Readme)
@@ -171,19 +171,19 @@ OpenSeadragonGL.prototype = {
         this.openSD.clearControls().buttons.buttons.push(new OpenSeadragon.Button(terms));
         var toolbar = new OpenSeadragon.ButtonGroup({buttons: this.openSD.buttons.buttons});
         this.openSD.addControl(toolbar.element,{anchor: OpenSeadragon.ControlAnchor.TOP_LEFT});
-    },        
+    },
 
     //////////////////////////////////////////////////////////////////////////////
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
 
 
-    init: function(openSeaDragonInstance) {  
+    init: function(openSeaDragonInstance) {
         this.openSD = openSeaDragonInstance;
         if (!this._shadersLoaded) {
             this.loadShaders();
         }
-    
+
         var tileLoaded = this._tileLoaded.bind(this);
         var tileDrawing = this._tileDrawing.bind(this);
 
@@ -192,12 +192,12 @@ OpenSeadragonGL.prototype = {
 
         this.openSD.navigator.addHandler('tile-drawing', tileDrawing);
         this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
-         
+
         let _this = this;
         this.openSD.addHandler('open', function(e) {
             _this.webGLWrapper.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
         });
- 
+
         return this;
     },
 
@@ -207,12 +207,12 @@ OpenSeadragonGL.prototype = {
 
         if (!this.useEvaluator || this.useEvaluator(e)) {
             e.tile.webglRefresh = 0; // -> will draw immediatelly
-            e.tile.origData = e.image;    
-            
+            e.tile.origData = e.image;
+
             //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement( 'canvas' )
             canvas.width = e.tile.sourceBounds.width;
-            canvas.height = e.tile.sourceBounds.height; 
+            canvas.height = e.tile.sourceBounds.height;
             e.tile.context2D = canvas.getContext('2d');
             delete e.image;
         }
@@ -231,7 +231,7 @@ OpenSeadragonGL.prototype = {
 
             var output = this.webGLWrapper.processImage(e.tile.origData, e.tile.sourceBounds, this.openSD.viewport.getZoom(), dx);
 
-            // Note: you can comment out clearing if you don't use transparency 
+            // Note: you can comment out clearing if you don't use transparency
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
         }

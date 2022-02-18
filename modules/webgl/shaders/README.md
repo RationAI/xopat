@@ -1,25 +1,43 @@
-# Dynamic shader building  [NEEDS UPDATES]
+# Dynamic shader building
 
 The visualisation setup is used to instantiate to JavaScript shader layer classes.
 ````JSON
 [{    
       "name": "A visualisation setup 1",
+      "data": ["image1", "image2"],
+      "background": [
+            {
+                 "dataReference": 0,
+                 "lossless": false
+            }
+      ],
       "params": {}, 
       "shaderSources" : [
             {
-                   "url": "http://my-shader-url.com/customShader.js",
-                   "headers": {},
-                   "typedef": "new_type"
+                 "url": "http://my-shader-url.com/customShader.js",
+                 "headers": {},
+                 "typedef": "new_type"
             }
       ],
       "shaders": {
             "path/to/probability/layer.tif": {
-                   "name": "Probability layer",
-                   "type": "heatmap", 
-                   "visible": "1", 
-                   "params": { 
-                      "color": "#fa0058"
-                   }
+                  "name": "Probability layer",
+                  "type": "heatmap", 
+                  "visible": "1", 
+                  "dataReference": [0],
+                  "params": { 
+                          "color": "#fa0058", //shader-dependent parameter, set as {default: value} if not an object
+                          "opacity": { //shader-dependent parameter
+                                 "default": 50,
+                                 "type": "range", //show as a slider
+                                 "min": 0,
+                                 "max": 100,
+                                 "title": "Opacity: ",
+                                 "interactive": true
+                          }, 
+                          "gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
+                          "channel": "b"  //global parameter, sample channel 'b' from the image
+                  }
             }
       }
 }]
@@ -38,7 +56,7 @@ Furthermore:
     - `MyNewShaderLayer` class must not collide with existing classes in the global namespace
     - `type()` return value can overwrite already existing implementations (e.g. `heatmap`), the latter registered class is used
     - `type` in `shaders` `JSON` must refer to existing registered shader classes only (registered under `type()` return value)
-
+- parameter names starting with `use_` are **reserved**
 ### params
 Parameters are fully dependent on the shader you use. If our policy is kept then
  - it is a `<key>:<value>` mapping where
@@ -53,15 +71,19 @@ Parameters are fully dependent on the shader you use. If our policy is kept then
 #### shader-specific inherited parameters
 There are parameters common to all shaders and define how the layer is treated. Such parameters are specified **directly in**
 params field (such as custom 'color' in the example above):
- - `channel` - a shader might work only with grayscale values - in that case, it's preferred when the shader uses `sampleChannel()`
+ - `use_channel` - a shader might work only with grayscale values - in that case, it's preferred when the shader uses `sampleChannel()`
  to respect this value (if set): then, the shader samples the channel given in this parameter
     - e.g. if `params.channel = "rrr"` the shader will sample the `RED` channel three times and obtain `vec3`
- - `gamma` - a gamma correction value (float), no correction is performed if the value is not set
+
+And the following filters, where no action is performed if the value is not set. The order of definition in the params sets the order of application.    
+ - `use_gamma` - a gamma scale applied on the intensities, 
+ - `use_exposure` - remapping intensities onto
+ - `use_logscale` - logarithm scale applied on the intensities (safer version of gamma when arg > 1 used)
 
 #### control wide-supported parameters
 Each control should support three parameters:
  - `title`: name of the control
- - `visible`: whether the user should be allowed to interact with the control (note it still might be visible, maybe rename the variable to _interactive_)
+ - `interactive`: whether the user should be allowed to interact with the control (usually provides no HTML if no interactive)
  - `default`: default value (need not to be necessarily true, however, with simple controls it is advantageous since controls switching will use the same default value)
 
 ### class `VisualisationLayer`
@@ -82,7 +104,7 @@ class IdentityVisualisationLayer extends VisualisationLayer {
     getFragmentShaderExecution() {
         //use 'tile_texture_coords' predefined GLSL variable
         return `
-        show(${this.sample('tile_texture_coords')}); 
+    ${this.render(this.sample('tile_texture_coords'))}
 `;
     }
 }
@@ -99,7 +121,7 @@ insertion is possible
 - COMPLY TO OUT ADJUSTMENTS
     - specify code to define in `getFragmentShaderDefinition`
     - specify code to execute in `getFragmentShaderExecution` (possibly use stuff from the former)
-    - output final color using `void show( vec4 )` function
+    - render your `vec4` output using code returned by `this.render(...)` function
 - WORK CAREFULLY WITH UI CONTROLS, preferably use existing ones
 
 #### Writing the Layer Class
@@ -160,36 +182,8 @@ rely on the following functions:
 - pre-defined user controls (more on controls later)
 
 #### Global functions and variables - GLSL
-In fragment shader (`$execution` and `$definition`), there are several global functions and variables available. Example of really simple _identity_ shader:
+In fragment shader (`$execution` and `$definition`), there are several global functions and variables available.
 
-`````js
-/**
- * Identity shader
- */
-MyIdentityLayer = class extends WebGLModule.VisualisationLayer {
-
-    static type() {
-        return "identity";
-    }
-
-    static name() {
-        return "Identity";
-    }
-
-    constructor(options) {
-        super(options);
-    }
-
-    getFragmentShaderExecution() {
-        return `
-        show(${this.sample('tile_texture_coords')});
-`;
-    }
-};
-
-WebGLModule.ShaderMediator.registerLayer(MyIdentityLayer);
-
-`````
 Shader in WebGL 2.0 is then composed in this manner: (you can see the **global** stuff here)
 ````glsl
 uniform float pixel_size_in_fragments;  //how many fragments add up to one pixel on screen
@@ -205,11 +199,16 @@ bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
 
-//output any color using show(...) that provides correct blending   
-void show(vec4 color) {
-    if (close(color.a, 0.0)) return;
-    float t = color.a + final_color.a - color.a*final_color.a;
-    final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
+//do not use directly, call render(...) javascript function to decide for correct code for you
+ void show(vec4 color) {
+     if (close(color.a, 0.0)) return;
+     float t = color.a + final_color.a - color.a*final_color.a;
+     final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
+ }
+
+//do not use directly, call render(...) javascript function to decide for correct code for you
+void blend(vec4 color) {
+    blend_equation(final_color, color); //can be user-defined
 }
 
 //here is placed all global-scope code, only once       
@@ -227,12 +226,10 @@ void main() {
 ````
 
 You can see which global variables and functions are available. The resulting color from `execution` must be set using
-`show(...)`. TODO possible boost: The performance can be enhanced in reverse-order rendering if the first `show(...)` call uses alpha
-of `1`, the rest of the shader execution can be aborted. This is visualisator-independent and now considered pointless.
-
+code returned by the inherited `this.render(...)` function which has single string parameter, GLSL code that evaluates to `vec4`.
 For more complex examples, see scripts themselves. 
 
-### User Controls within your shaders
+### User Controls within your shaderssk
 You have all API calls you need to implement your own UI controls. However, there is another available
 hierarchy of UIControls that allow you to integrate even advanced UI interactively. The way
 how you define the controls affects what the shader constructor parameter `options` should contain.
@@ -250,6 +247,8 @@ how you define the controls affects what the shader constructor parameter `optio
     - such controls then can be also used within other shaders
     - using same control name as different shader with a custom control type that is not registered might make
     the other shader look for it and fail in doing so
+    - ensure that the GLSL uniform is provided with value between 0 and 1 (standardize)
+       - if possible, of course not true for integer or boolean for example
  - follow strictly shader life cycle to manage your controls
     - `control.define()` will give you full code to include your uniform variable in the shader
     - `control.sample(ratio)` will give you a one-liner code (without `;`) to use anywhere you like
@@ -257,6 +256,9 @@ how you define the controls affects what the shader constructor parameter `optio
         - `float data = 3.0; float x = ${this.opacity.sample("data * .5 + 2)};` is perfectly valid, unless used inside main(...) due to namespace collisions,
         remember your shader(part) can run several times within one (shader)script
     - `glLoaded, glDrawing, init, toHtml` functions to map onto your shader lifecycle
+ - **controls are mapped to 0-1 range**
+    - to unify controls output, all values of an uniforms sent to GPU with rational part should be mapped to 0-1 interval range
+    - this means your shader should assume the input in GLSL will be between 0 and 1 and can rescale it as it sees fit
  - sync controls using `control.on(name, callback)` and clear them using `control.off(name)` 
     - only one callback can be registered for each name
     - you defined `name` when creating the control, the control will notify you if its value was modified

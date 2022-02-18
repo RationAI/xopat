@@ -264,6 +264,17 @@ class WebGLModule {
     /////////////////////////////////////////////////////////////////////////////////////
 
     /**
+     * For easy initialization, do both in once call.
+     * For separate initialization (prepare|init), see functions below.
+     */
+    prepareAndInit() {
+        let _this = this;
+        this.prepare(() => {
+            _this.init(1, 1);
+        });
+    }
+
+    /**
      * Function to JSON.stringify replacer
      * @param key key to the value
      * @param value value to be exported
@@ -333,11 +344,21 @@ class WebGLModule {
         this.ready();
     }
 
-    prepareAndInit() {
-        let _this = this;
-        this.prepare(() => {
-            _this.init(1, 1);
-        });
+    /**
+     * Supported are two modes: show and blend
+     * show is the default option, stacking layers by generalized alpha blending
+     * blend is a custom alternative, default is a mask (remove background where foreground.a > 0.001)
+     *
+     * vec4 my_blend(vec4 foreground, vec4 background) {
+     *      <<code>> //here goes your blending code
+     * }
+     *
+     * @param code GLSL code to blend - must return vec4() and can use
+     * two variables: background, foreground
+     */
+    changeBlending(code) {
+        this.webGLImplementation.setBlendEquation(code);
+        this.rebuildVisualisation();
     }
 
     //////////////////////////////////////////////////////////////////////////////
@@ -379,6 +400,7 @@ class WebGLModule {
         this._program = i;
         if (target.hasOwnProperty("error")) {
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
+            this._loadScript(i, this._program);
             this.running = false;
             if (this._visualisations.length < 2) {
                 this.onFatalError(target); //considered fatal as there is no valid goal
@@ -490,10 +512,6 @@ class WebGLModule {
             vis._built = {};
         }
 
-        if (vis.hasOwnProperty("error")) {
-            vis._built.html = "Invalid visualisation.";
-            return;
-        }
         this._updateRequiredDataSources(vis);
         this._processVisualisation(vis, idx);
         return idx;
@@ -511,7 +529,7 @@ class WebGLModule {
 
         layer._renderContext._setContextVisualisationLayer(layer);
         layer._renderContext._setWebglContext(this.webGLImplementation);
-        layer._renderContext._setResetCallback(this.resetCallback);
+        layer._renderContext._setResetCallback(this.resetCallback, this.rebuildVisualisation.bind(this, undefined));
         layer._renderContext.ready();
     }
 
@@ -542,7 +560,7 @@ class WebGLModule {
         let gl = this.gl,
             ok = function (kind, status, value, sh) {
                 if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
-                    console.log((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
+                    console.error((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
                     return false;
                 }
                 return true;
@@ -620,9 +638,12 @@ class WebGLModule {
             if (!ok('Program', 'LINK', program)) {
                 err("Unable to use this visualisation.",
                     "Linking of shader failed. For more information, see logs in the console.");
+            } else {
+                if (this.debug) {
+                    console.debug("FRAGMENT SHADER\n",this._numberLines( vis._built["fragment_shader"]));
+                }
             }
         }
-        console.log("FRAGMENT SHADER\n",this._numberLines( vis._built["fragment_shader"]));
         this.visualisationReady(idx, vis);
     }
 

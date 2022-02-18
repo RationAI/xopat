@@ -5,6 +5,7 @@ seaGL = new OpenSeadragonGL({
     htmlControlsId: "data-layer-options",
     // authorization: "<?php echo AUTH_HEADERS ?>", //todo necessary?
     htmlShaderPartHeader: createHTMLLayerControls,
+    debug: setup.params.debug,
     ready: function() {
         var i = 0;
         let select = $("#shaders");
@@ -17,6 +18,17 @@ seaGL = new OpenSeadragonGL({
             }
             i++;
         });
+
+        if (setup.params.customBlending) {
+            let blend = $("#blending-equation");
+            blend.html(`
+<span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
+<textarea id="custom-blend-equation-code" class="form-control blob-code-inner" style="width: calc(100% - 20px); margin-left: 20px; 
+display: block; resize: vertical;">//some simple placeholder:\nreturn foreground;</textarea>
+<span class="blob-code"><span class="blob-code-inner">}</span></span>
+<button class="btn" onclick="seaGL.webGLWrapper.changeBlending($('#custom-blend-equation-code').val());seaGL.redraw();"
+style="float: right;">Set blending</button>`);
+        }
     },
     visualisationInUse: function(visualisation) {
         enableDragSort("data-layer-options");
@@ -199,10 +211,25 @@ function changeVisualisationLayer(self, layerId) {
     _this.html("");
 }
 
-function createHTMLLayerControls(title, html, dataId, isVisible, layer, isControllable) {
+function changeModeOfLayer(self, layerId) {
+    let viz = currentVisualisation();
+    if (viz.shaders.hasOwnProperty(layerId)) {
+        let useBlend = viz.shaders[layerId].params.use_mode === "blend"; //todo remporary since we have now only two modes
+        viz.shaders[layerId].params.use_mode = useBlend ? "show" : "blend";
+        viz.shaders[layerId].error = "force_rebuild"; //error will force reset
+        seaGL.reorder(null); //force to re-build
+    } else {
+        console.error("Invalid layer: bad initialization?");
+    }
+}
+
+function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
+    let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);
     let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
-    let checked = isVisible ? 'checked' : '';
-    let disabled = isControllable ? '' : 'disabled';
+    let modeChange = fixed ? "" : `<span class="material-icons pointer" 
+id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "blend" ? "" : "filter: opacity(0.2);"}" 
+onclick="changeModeOfLayer(this, '${dataId}')" title="Mask layers below">payments</span>`;
+
     let availableShaders = "";
     for (let available of WebGLModule.ShaderMediator.availableShaders()) {
         let selected = available.type() === layer.type ? " selected" : "";
@@ -211,13 +238,16 @@ function createHTMLLayerControls(title, html, dataId, isVisible, layer, isContro
 
     return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
             <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${checked} ${disabled} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
+              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''} 
+${wasErrorWhenLoading ? '' : 'disabled'} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
               &emsp;${title}
-                <span class="material-icons position-absolute right-5" style="width: 10%;">swap_vert</span>
-                <div class="position-absolute right-0 d-inline-block" id="label-render-type" style="cursor: pointer;">
+              <div class="d-inline-block" id="label-render-type" style="cursor: pointer; float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="change-render-type" onchange="changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control">${availableShaders}</select>
+                  <select id="change-render-type" ${fixed ? "disabled" : ""} 
+onchange="changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control">${availableShaders}</select>
                 </div>
+                ${modeChange}
+                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
             </div>
             <div class="non-draggable">${html}</div>
             </div>`;

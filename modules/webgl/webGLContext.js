@@ -22,7 +22,7 @@ WebGLModule.GlContextFactory = class {
                 return new WebGLModule.WebGL_2_0(wrapper, glContext);
             }
         }
-    }
+    };
 
     /**
      * Register custom WebGL renderers
@@ -72,7 +72,7 @@ WebGLModule.GlContextFactory = class {
         }
         throw "No context available for GlContextFactory to init.";
     }
-}
+};
 
 /**
  * @interface WebGLImplementation
@@ -80,6 +80,14 @@ WebGLModule.GlContextFactory = class {
  * on various GLSL versions
  */
 WebGLModule.WebGLImplementation = class {
+
+    /**
+     * Set default blending to be MASK
+     */
+    constructor() {
+        this.glslBlendCode = "return background * 1.0 - step(0.001, foreground.a);";
+    }
+
     /**
      * @return {string} WebGL version used
      */
@@ -96,6 +104,15 @@ WebGLModule.WebGLImplementation = class {
      */
     getTextureSamplingCode(order, textureCoords) {
         console.error("::getTextureSamplingCode() must be implemented!");
+    }
+
+    /**
+     * Get GLSL texture XY dimension
+     * @param {string} order order number in the shader, available in vis.shaders[id].index
+     * @return {string} vec2
+     */
+    getTextureDimensionXY(order) {
+        console.error("::getTextureDimensionXY() must be implemented!");
     }
 
     /**
@@ -149,6 +166,24 @@ WebGLModule.WebGLImplementation = class {
      */
     globalCodeRequiredByShaderType(type) {
         return WebGLModule.ShaderMediator.getClass(type).__globalIncludes;
+    }
+
+    /**
+     * Blend equation sent from the outside, must be respected
+     * @param glslCode code for blending, using two variables: 'foreground', 'background'
+     *
+     * The shader context must define the following:
+     *
+     * vec4 some_blending_name_etc(in vec4 background, in vec4 foreground) {
+     *     << glslCode >>
+     * }
+     *
+     * void blend(vec4 input) { //must be called blend, API
+     *     <<use some_blending_name_etc() to blend input onto output color of the shader>>
+     * }
+     */
+    setBlendEquation(glslCode) {
+        this.glslBlendCode = glslCode;
     }
 };
 
@@ -258,6 +293,10 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         return "1.0";
     }
 
+    getTextureDimensionXY(dataIndex) {
+        return `u_tile_size`; //hope its okay :D
+    }
+
     getTextureSamplingCode(dataIndex, textureCoords) {
         return `texture2D(vis_data_sampler_${dataIndex}, ${textureCoords})`;
     }
@@ -360,15 +399,20 @@ void show(vec4 color) {
     gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
 }
 
+vec4 blend_equation(in vec4 foreground, in vec4 background) {
+${this.glslBlendCode}
+}
+
+void blend(vec4 foreground) {
+    gl_FragColor = blend_equation(foreground, gl_FragColor);
+}
+
+
 ${Object.values(globalScopeCode).join("\n")}
 
 ${definition}
 
 void main() {
-    //gl_FragColor = vec4(1., 1., 1., 0.);
-    //gl_FragColor = vec4(tile_texture_coords, 0., 1.);
-    //gl_FragColor = texture2D(vis_data_sampler_2, tile_texture_coords);
-    //return;
     ${execution}
 }
 `;
@@ -607,6 +651,10 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         };
     }
 
+    getTextureDimensionXY(dataIndex) {
+        return `vec2(textureSize(vis_data_sampler_array))`;
+    }
+
     getTextureSamplingCode(dataIndex, textureCoords) {
         return `texture(vis_data_sampler_array, vec3(${textureCoords}, _vis_data_sampler_array_indices[${dataIndex}]))`;
     }
@@ -637,6 +685,15 @@ void show(vec4 color) {
     float t = color.a + final_color.a - color.a*final_color.a;
     final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
 }
+
+vec4 blend_equation(in vec4 foreground, in vec4 background) {
+${this.glslBlendCode}
+}
+
+void blend(vec4 foreground) {
+    final_color = blend_equation(foreground, final_color);
+}
+
 
 ${Object.values(globalScopeCode).join("\n")}
         

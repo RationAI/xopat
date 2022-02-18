@@ -54,8 +54,8 @@ WebGLModule.VisualisationLayer = class {
      */
     constructor(id, options) {
         this.uid = id;
-        if (options.hasOwnProperty("channel")) {
-            this.__channel = options.__channel;
+        if (options.hasOwnProperty("use_channel")) {
+            this.__channel = options.use_channel;
         }
 
         if (!this.__channel
@@ -70,21 +70,27 @@ WebGLModule.VisualisationLayer = class {
                 "present in default ones: make sure this is a custom implementation.");
         }
 
-        //gamma coercion
-        if (options.hasOwnProperty("gamma")) {
-//             let channels = "float";
-//             if ()
-//             this.includeGlobalCode("gamma", `
-// gamma_correct(
-//             `);
-            //glsl should work also with vec3 + float or vec3 / float, not sure though :D :D
-            let coeff = this.toShaderFloatString(options.gamma, "0.5");
-            this.__scalePrefix = `(log(${coeff} + `;
-            this.__scaleSuffix = `) - log(${coeff})) / (log(${coeff}+1.0)-log(${coeff}))`;
-        } else {
-            this.__scalePrefix = "";
-            this.__scaleSuffix = "";
+        this.__mode = "show";
+        if (options.hasOwnProperty("use_mode")) {
+            if (options["use_mode"] === "blend") {
+                this.__mode = "blend";
+            }
         }
+
+        //parse filters
+        this.__scalePrefix = [];
+        this.__scaleSuffix = [];
+        let THIS = WebGLModule.VisualisationLayer;
+        for (let key in options) {
+            if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
+                let value = options[key];
+                let filter = THIS.filters[key](this.toShaderFloatString(value, "1.0"));
+                this.__scalePrefix.push(filter[0]);
+                this.__scaleSuffix.push(filter[1]);
+            }
+        }
+        this.__scalePrefix = this.__scalePrefix.join("");
+        this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
     }
 
     /**
@@ -169,6 +175,17 @@ WebGLModule.VisualisationLayer = class {
     ////////// AVAILABLE API ///////////
     ////////////////////////////////////
 
+    //add your filters here if you want... function that takes parameter (number)
+    //and returns prefix and suffix to compute oneliner filter
+    //should start as 'use_[name]' for namespace collision avoidance (params object)
+    //expression should be wrapped in parenthesses for safety: ["(....(", ")....)"] in the middle the
+    // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
+    static filters = {
+        use_gamma: (x) => ["pow(", `, 1.0 / ${x})`],
+        use_exposure: (x) => ["(1.0 - exp(-(", `)* ${x}))`],
+        use_logscale: (x) => [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`]
+    };
+
     /**
      * Include GLSL shader code on global scope
      * (e.g. define function that is repeatedly used)
@@ -196,16 +213,11 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Evaluates option flag, e.g. any value that indicates boolean 'true'
-     * @param {*} value value to interpret
-     * @return {boolean} true if the value is considered boolean 'true'
+     * Add your shader part result
+     * @param {string} output, GLSL code to output from the shader, output must be a vec4
      */
-    isFlag(value) {
-        return value == "1" || value == true || value == "true";
-    }
-
-    isFlagOrMissing(value) {
-        return value === undefined || this.isFlag(value);
+    render(output) {
+        return `${this.__mode}(${output});`;
     }
 
     /**
@@ -220,33 +232,11 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Alias for sampleReferenced(textureCoords, 0)
      * @param {string} textureCoords valid GLSL vec2 object as string
+     * @param {number} otherDataIndex index of the data in self.dataReference JSON array
      * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
      * @return {string} code for appropriate texture sampling within the shader
      */
-    sample(textureCoords, raw=false) {
-        return this.sampleReferenced(textureCoords, 0, raw);
-    }
-
-    /**
-     * Alias for sampleChannelReferenced(textureCoords, 0)
-     * @param {string} textureCoords valid GLSL vec2 object as string
-     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
-     * @return {string} code for appropriate texture sampling within the shader,
-     *                  where only one channel is extracted
-     */
-    sampleChannel(textureCoords, raw=false) {
-        return this.sampleChannelReferenced(textureCoords, 0, raw);
-    }
-
-    /**
-     * Return code for appropriate sampling of the texture bound to this shader
-     * @param {string} textureCoords valid GLSL vec2 object as string
-     * @param {number} otherDataIndex index of the data in self.dataReference JSON array
-     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
-     * @return {string} code for appropriate texture sampling within the shader or vec4(.0) if
-     *                  the reference is not valid
-     */
-    sampleReferenced(textureCoords, otherDataIndex, raw=false) {
+    sample(textureCoords, otherDataIndex=0, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
         if (otherDataIndex >= refs.length) {
             return 'vec4(0.0)';
@@ -265,15 +255,33 @@ WebGLModule.VisualisationLayer = class {
      *                  where only one channel is extracted or float with zero value if
      *                  the reference is not valid
      */
-    sampleChannelReferenced(textureCoords, otherDataIndex, raw=false) {
-        //code duplicity due to slight optimization - scale on float rather than vec4
+    sampleChannel(textureCoords, otherDataIndex=0, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
         if (otherDataIndex >= refs.length) {
-            return 'vec4(0.0)';
+            switch (this.__channel.length) {
+                case 1: return ".0";
+                case 2: return "vec2(.0)";
+                case 3: return "vec3(.0)";
+                default:
+                    return 'vec4(0.0)';
+            }
         }
         let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${this.__channel}`;
         if (raw) return sampled;
         return this.filter(sampled);
+    }
+
+    /**
+     * Get texture size
+     * @param {number} index index of the data in self.dataReference JSON array
+     * @return {string} vec2 GLSL value with width and height of the texture
+     */
+    textureSize(index=0) {
+        let refs = this.__visualisationLayer.dataReferences;
+        if (index >= refs.length) {
+            return 'vec2(0.0)';
+        }
+        return this.webglContext.getTextureDimensionXY(refs[index]);
     }
 
     /**
@@ -285,7 +293,7 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Load value
+     * Load value, useful for controls value caching
      * @param name value name
      * @param defaultValue default value if no stored value available
      * @return stored value or default value
@@ -298,12 +306,33 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Store value
+     * Evaluates option flag, e.g. any value that indicates boolean 'true'
+     * @param {*} value value to interpret
+     * @return {boolean} true if the value is considered boolean 'true'
+     */
+    isFlag(value) {
+        return value == "1" || value == true || value == "true";
+    }
+
+    isFlagOrMissing(value) {
+        return value === undefined || this.isFlag(value);
+    }
+
+    /**
+     * Store value, useful for controls value caching
      * @param name value name
      * @param value value
      */
     storeProperty(name, value) {
         this.__visualisationLayer.cache[name] = value;
+    }
+
+    /**
+     * Get the mode we operate in
+     * @return {string} mode
+     */
+    get mode() {
+        return this.__mode;
     }
 
     ////////////////////////////////////
@@ -321,8 +350,10 @@ WebGLModule.VisualisationLayer = class {
         this.webglContext = webglContext;
     }
 
-    _setResetCallback(reset) {
+    _setResetCallback(reset, rebuild) {
         this.invalidate = reset;
+        //use with care... (that's why it has more difficult name)
+        this.build_shaders = rebuild;
     }
 };
 
@@ -429,7 +460,7 @@ WebGLModule.UIControls = class {
     static register(type, uiElement) {
         function check(el, prop, desc) {
             if (!el.hasOwnProperty(prop)) {
-                console.warn(`Skipping UI control '${prop}': missing ${desc}.`);
+                console.warn(`Skipping UI control '${type}' due to '${prop}': missing ${desc}.`);
                 return false;
             }
             return true;
@@ -457,12 +488,13 @@ WebGLModule.UIControls = class {
     static registerClass(type, cls) {
         function check(el, prop, desc) {
             if (!el.hasOwnProperty(prop)) {
-                console.warn(`Skipping UI control '${prop}': missing implementation of ${desc}.`);
+                console.warn(`Skipping UI control '${type}' due to '${prop}': missing implementation of ${desc}.`);
                 return false;
             }
             return true;
         }
 
+        //todo does not work for subchildren...
         if (check(cls.prototype, "init", "init(webGLVariableName):void")
             && check(cls.prototype, "glDrawing", " glDrawing(program, dimension, gl):void")
             && check(cls.prototype, "glLoaded", "glLoaded(program, gl):void")
@@ -490,7 +522,7 @@ WebGLModule.UIControls = class {
     static _items = {
         number: {
             defaults: function () {
-                return {title: "Number", visible: true, default: 0, min: 0, max: 100, step: 1};
+                return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -511,7 +543,7 @@ step="${params.step}" type="number" id="${uniqueId}">`;
 
         range: {
             defaults: function () {
-                return {title: "Range", visible: true, default: 0, min: 0, max: 100, step: 1};
+                return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -532,7 +564,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
 
         color: {
             defaults: function () {
-                return { title: "Color", visible: true, default: "#fff900" };
+                return { title: "Color", interactive: true, default: "#fff900" };
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -561,7 +593,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
 
         bool: {
             defaults: function () {
-                return { title: "Checkbox", visible: true, default: "true" };
+                return { title: "Checkbox", interactive: true, default: "true" };
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -586,13 +618,13 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
     static _buildFallback(newType, originalType, context, name, params, defaultParams, requiredType) {
         //repeated check when building object from type
 
-        params.visible = false;
+        params.interactive = false;
         if (originalType === newType) { //if default and new equal, fail - recursion will not help
             console.error(`Invalid parameter in shader '${params.type}': the parameter could not be built.`);
             return undefined;
         } else { //otherwise try to build with originalType (default)
             params.type = originalType;
-            console.warn("Incompatible UI control type '"+newType+"': making the input invisible.");
+            console.warn("Incompatible UI control type '"+newType+"': making the input non-interactive.");
             return this.build(context, name, params, defaultParams, requiredType);
         }
     }
@@ -656,7 +688,7 @@ WebGLModule.UIControls.IControl = class {
     /**
      * Get the UI HTML controls
      *  - these can be referenced in this.init(...)
-     *  - should respect this.params.visible attribute and return empty string if not visible
+     *  - should respect this.params.interactive attribute and return non-interactive output if interactive=false
      *      - don't forget to no to work with DOM elements in init(...) in this case
      */
     toHtml(breakLine=true, controlCss="") {
@@ -685,7 +717,7 @@ WebGLModule.UIControls.IControl = class {
     }
 
     /**
-     * Parameters supported by this UI component, should contain at least 'visible' and 'default'
+     * Parameters supported by this UI component, should contain at least 'interactive', 'title' and 'default'
      * @return {object} name => default value mapping
      */
     get supports() {
@@ -787,7 +819,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         this.encodedValue = this.context.loadProperty(this.name, this.params.default);
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
-        if (this.params.visible) {
+        if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 _this.encodedValue = $(e.target).val();
@@ -811,7 +843,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.visible) return "";
+        if (!this.params.interactive) return "";
         return this.component.html(this.id, this.params, `style="${controlCss}"`)
             + (breakLine ? "<br>" : "");
     }
@@ -821,6 +853,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     }
 
     sample(ratio) {
+        //TODO INVALID!!!! * not valid on all types, e.g. bool
         if (!ratio) return this.webGLVariableName;
         return `${this.webGLVariableName} * ${ratio}`;
     }
@@ -881,7 +914,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this._c1.params.visible) return "";
+        if (!this._c1.params.interactive) return "";
         return `<div ${controlCss}>${this._c1.toHtml(false, 'style="width: 48%;"')}
         ${this._c2.toHtml(false, 'style="width: 12%;"')}</div>
         ${breakLine ? "<br>" : ""}`;
@@ -920,6 +953,8 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         this.MAX_SAMPLES = 12;
         $.extend(this.params, params);
 
+        this.params.steps = Math.max(Math.round(this.params.steps), 2);
+
         this.parser = WebGLModule.UIControls.getUiElement("color").decode;
         if (this.params.continuous) {
             this.cssGradient = this._continuousCssFromPallete;
@@ -955,7 +990,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
         }
         this.pallete = WebGLModule.ColorBrewer[this.value][this.maxSteps];
 
-        if (this.params.visible) {
+        if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 let self = $(e.target),
@@ -980,7 +1015,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             node.val(this.value);
             node.change(updater);
         } else {
-            //be careful with what the DOM elements contains or not if not visible...
+            //be careful with what the DOM elements contains or not if not interactive...
             let existsNode = document.getElementById(this.id);
             if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
         }
@@ -1056,8 +1091,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     toHtml(breakLine=true, controlCss="") {
-        //no visible still needs to inform the user about used colormap, do not allow interaction though
-        if (!this.params.visible) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-readable" 
+        if (!this.params.interactive) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-readable" 
 style="width: 60%;">${this.params.default}</div>`;
 
         if (!WebGLModule.ColorBrewer.hasOwnProperty(this.params.pallete)) {
@@ -1087,7 +1121,7 @@ uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN];`;
             steps: 3,
             default: "YlOrRd",
             mode: "sequential",
-            visible: true,
+            interactive: true,
             title: "Colormap",
             continuous: false,
         };
@@ -1157,6 +1191,10 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
         this.connects = this.value.map(_ => true); this.connects.push(true); //intervals have +1 elems
         for (let i = size; i <  this.MAX_SLIDERS+1; i++) this.mask.push(-1);
 
+        if (this.params.step && this.params.step < 1) delete this.params.step;
+
+        let limit =  this.value.length < 2 ? undefined : this.params.max;
+
         let format = this.params.max < 10 ? {
             to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 1 }),
             from: v => Number.parseFloat(v)
@@ -1165,7 +1203,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
             from: v => Number.parseFloat(v)
         };
 
-        if (this.params.visible) {
+        if (this.params.interactive) {
             const _this = this;
             let container = document.getElementById(this.id);
             noUiSlider.create(container, {
@@ -1176,7 +1214,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 step: _this.params.step,
                 start: _this.value,
                 margin: _this.params.minGap,
-                limit: _this.params.max,
+                limit: limit,
                 connect: _this.connects,
                 direction: 'ltr',
                 orientation: 'horizontal',
@@ -1291,7 +1329,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.visible) return "";
+        if (!this.params.interactive) return "";
         return `<span style="height: 54px;">${this.params.title}: </span><div id="${this.id}" style="height: 9px; 
 margin-left: 5px; width: 60%; display: inline-block"></div>`;
     }
@@ -1314,14 +1352,14 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
         return {
             default: [0.2, 0.8],
             mask: [1, 0, 1],
-            visible: true,
+            interactive: true,
             maskOnly: false,
             invertMask: true,
             title: "Threshold",
             min: 0,
             max: 1,
             minGap: 0.05,
-            step: undefined,
+            step: -1,
             pips: {
                 mode: 'positions',
                 values: [0, 20, 40, 50, 60, 80, 90, 100],
@@ -1340,24 +1378,284 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
 };
 WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.AdvancedSlider);
 
-WebGLModule.UIControls.LocalizeColorMap = class extends WebGLModule.UIControls.ColorMap {
+// WebGLModule.UIControls.LocalizeColorMap = class extends WebGLModule.UIControls.ColorMap {
+//
+//     constructor(context, name, webGLVariableName, params) {
+//         $.extend(true, params.col, );
+//         super(context, name, webGLVariableName, WebGLModule.UIControls.LocalizeColorMap.redefineParams(params));
+//     }
+//
+//     static redefineParams(params) {
+//         if (!params.hasOwnProperty("color")) params.color = {};
+//         if (!params.hasOwnProperty("threshold")) params.threshold = {};
+//         params.color.type = "colormap";
+//         params.threshold.type = "advanced_slider";
+//         params.color.default = params.color.default || "Set1";
+//         params.color.mode = "quantitative";
+//         params.color.interactive = false;
+//         params.color.title = params.color.title || "Localized: ";
+//
+//         //todo maybe adjust steps/mask for threshold
+//     }
+// };
+// WebGLModule.UIControls.registerClass("localize_colormap", WebGLModule.UIControls.LocalizeColorMap);
+//
+//
+// /**
+//  * Kernel filter applied onto texture
+//  * @type {WebGLModule.UIControls.Kernel}
+//  */
+// WebGLModule.UIControls.Kernel = class extends WebGLModule.UIControls.IControl {
+//     constructor(context, name, webGLVariableName, params) {
+//         super(context, name, webGLVariableName);
+//
+//         this.params = this.supports;
+//         $.extend(this.params, params);
+//
+//         if (this.params.width < 3) throw "Invalid kernel width < 3.";
+//         if (this.params.height < 3) throw "Invalid kernel height < 3.";
+//
+//         this.DX = Math.round(this.params.width);
+//         this.DY = Math.round(this.params.height);
+//     }
+//
+//     init() {
+//         this.value = this.context.loadProperty(this.name, this.params.default);
+//         if (!Array.isArray(this.value) || this.value.length !== this.width*this.height) {
+//             console.warn("Invalid kernel.");
+//             this.value = new Array(this.width*this.height);
+//             this.value.fill(1/this.width*this.height);
+//         }
+//         this.encodedValue = JSON.stringify(this.value);
+//
+//         if (this.params.interactive) {
+//             const _this = this;
+//             let updater = function(e) {
+//                 let self = $(e.target),
+//                     selected = self.val();
+//                 try {
+//                     _this.value = JSON.parse(selected);
+//                     _this.encodedValue = selected;
+//                     self.css('border', 'none');
+//                     _this.context.storeProperty(_this.name, _this.value);
+//                     _this.changed(_this.name, _this.value, _this.encodedValue, _this);
+//                     _this.context.invalidate();
+//                 } catch (e) {
+//                     self.css('border', 'red 1px solid');
+//                 }
+//             };
+//             let node = $(`#${this.id}`);
+//             node.val(this.encodedValue);
+//             node.change(updater);
+//         }
+//     }
+//
+//     glDrawing(program, dimension, gl) {
+//         gl.uniform1fv(this.kernel_gluint, Float32Array.from(this.value));
+//     }
+//
+//     glLoaded(program, gl) {
+//         this.kernel_gluint = gl.getUniformLocation(program, this.webGLVariableName + "[0]");
+//     }
+//
+//     toHtml(breakLine=true, controlCss="") {
+//         if (!this.params.interactive) return "";
+//         return `<span style="height: 54px;">${this.params.title}: </span><br><textarea id="${this.id}" style="height: 90px;
+//  width: 100%;" placeholder="Enter kernel as JSON array, row-order stored."></textarea>`;
+//     }
+//
+//     define() {
+//         let dxLow = this.DX % 2 == 0 ? this.DX/2-1 : (this.DX-1) / 2;
+//         let dyLow = this.DY % 2 == 0 ? this.DY/2-1 : (this.DY-1) / 2;
+//
+//         return `uniform float ${this.webGLVariableName}[${this.DX*this.DY}];
+// float filter_${this.context.uid}_kernel(in vec2 coords, in float kernel[${this.DX}*${this.DY}]) {
+//    vec2 stepSize = 1.0 / ${this.context.textureSize()};
+//    float result = .0;
+//    for (int i = -${dxLow}/2; i<${Math.floor(this.DX/2)}; i++) {
+//        for (int j = -${dyLow}/2; j<${Math.floor(this.DY/2)}; j++) {
+//            vec2 sampleCoord = vec2(coords.x + float(i)*stepSize.x, coords.y + float(j)*stepSize.y);
+//            result += kernel[i*${this.DY}+j] * ${this.context.sampleChannel("sampleCoord")};
+//        }
+//    }
+//    return result;
+// }`;
+//     }
+//
+//     get type() {
+//         return "float";
+//     }
+//
+//     sample(ratio) {
+//         if (typeof ratio !== "string") ratio = "tile_texture_coords";
+//         return `filter_${this.context.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
+//     }
+//
+//     get supports() {
+//         return {
+//             default: [1/273, 4/273, 7/273, 4/273, 1/273,
+//                 4/273, 16/273, 26/273, 16/273, 4/273,
+//                 7/273, 26/273, 41/273, 26/273, 7/273,
+//                 4/273, 16/273, 26/273, 16/273, 4/273,
+//                 1/273, 4/273, 7/273, 4/273, 1/273,
+//             ],
+//             width: 5,
+//             height: 5,
+//             interactive: true,
+//             title: "Applied kernel:"
+//         };
+//     }
+//
+//     get raw() {
+//         return this.value;
+//     }
+//
+//     get encoded() {
+//         return this.encodedValues;
+//     }
+// };
+// WebGLModule.UIControls.registerClass("kernel", WebGLModule.UIControls.Kernel);
 
-    constructor(context, name, webGLVariableName, params) {
-        $.extend(true, params.col, );
-        super(context, name, webGLVariableName, WebGLModule.UIControls.LocalizeColorMap.redefineParams(params));
+WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
+        constructor(context, name, webGLVariableName, params) {
+        super(context, name, webGLVariableName);
+
+        this.params = this.supports;
+        $.extend(this.params, params);
     }
 
-    static redefineParams(params) {
-        if (!params.hasOwnProperty("color")) params.color = {};
-        if (!params.hasOwnProperty("threshold")) params.threshold = {};
-        params.color.type = "colormap";
-        params.threshold.type = "advanced_slider";
-        params.color.default = params.color.default || "Set1";
-        params.color.mode = "quantitative";
-        params.color.visible = false;
-        params.color.title = params.color.title || "Localized: ";
+    init() {
+        this.value = this.context.loadProperty(this.name, this.params.default);
 
-        //todo maybe adjust steps/mask for threshold
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target);
+                _this.value = self.val();
+                _this.context.storeProperty(_this.name, _this.value);
+                _this.changed(_this.name, _this.value, _this.value, _this);
+            };
+            let node = $(`#${this.id}`);
+            node.val(this.value);
+            node.change(updater);
+        } else {
+            let node = $(`#${this.id}`);
+            node.val(this.value);
+        }
+    }
+
+    glDrawing(program, dimension, gl) {
+        //do nothing
+    }
+
+    glLoaded(program, gl) {
+        //do nothing
+    }
+
+    toHtml(breakLine=true, controlCss="") {
+        let disabled = this.params.interactive ? "" : "disabled";
+        let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
+        return `${title}<textarea id="${this.id}" class="form-control" 
+style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled} placeholder="${this.params.placeholder}"></textarea>`;
+    }
+
+    define() {
+        return "";
+    }
+
+    get type() {
+        return "text";
+    }
+
+    sample(ratio=undefined) {
+        return this.value;
+    }
+
+    get supports() {
+        return {
+            default: "",
+            placeholder: "",
+            interactive: true,
+            title: "Text:"
+        };
+    }
+
+    get raw() {
+        return this.value;
+    }
+
+    get encoded() {
+        return this.value;
     }
 };
-WebGLModule.UIControls.registerClass("localize_colormap", WebGLModule.UIControls.LocalizeColorMap);
+WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextArea);
+
+WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
+    constructor(context, name, webGLVariableName, params) {
+        super(context, name, webGLVariableName);
+
+        this.params = this.supports;
+        $.extend(this.params, params);
+    }
+
+    init() {
+        this.value = this.context.loadProperty(this.name, this.params.default);
+
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                _this.value++;
+                _this.changed(_this.name, _this.value, _this.value, _this);
+            };
+            let node = $(`#${this.id}`);
+            node.html(this.params.title);
+            node.click(updater);
+        } else {
+            let node = $(`#${this.id}`);
+            node.html(this.params.title);
+        }
+    }
+
+    glDrawing(program, dimension, gl) {
+        //do nothing
+    }
+
+    glLoaded(program, gl) {
+        //do nothing
+    }
+
+    toHtml(breakLine=true, controlCss="") {
+        let disabled = this.params.interactive ? "" : "disabled";
+        return `<button id="${this.id}" style="float: right;" class="btn"
+${disabled}></button><br style="clear: both;">`;
+    }
+
+    define() {
+        return "";
+    }
+
+    get type() {
+        return "action";
+    }
+
+    sample(ratio=undefined) {
+        return "";
+    }
+
+    get supports() {
+        return {
+            default: 0, //counts clicks
+            interactive: true,
+            title: "Button"
+        };
+    }
+
+    get raw() {
+        return this.value;
+    }
+
+    get encoded() {
+        return this.value;
+    }
+};
+WebGLModule.UIControls.registerClass("button", WebGLModule.UIControls.Button);

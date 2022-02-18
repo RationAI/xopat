@@ -60,17 +60,17 @@ ${this.opacity.define()}
     getFragmentShaderExecution() {
         let varname = `data_${this.uid}`;
         return `
-    float ${varname} = ${this.sampleChannel('tile_texture_coords', true)};
+    float ${varname} = ${this.sampleChannel('tile_texture_coords', 0, true)};
     if (!close(${varname}, .5)) {
         if (${varname} < .5) { 
             ${varname} = ${this.filter(`1.0 - ${varname} * 2.0`)};
             if (${varname} > ${this.threshold.sample()}) {
-                show(vec4( ${this.colorLow.sample()}, ${varname} * ${this.opacity.sample()}));
+                ${this.render(`vec4( ${this.colorLow.sample()}, ${varname} * ${this.opacity.sample()})`)}
             }
         } else {  
             ${varname} = ${this.filter(`(${varname} - 0.5) * 2.0`)};
             if (${varname} > ${this.threshold.sample()}) {
-                show(vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()}));
+                ${this.render(`vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()})`)}
             }
         }
     }        
