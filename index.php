@@ -414,13 +414,25 @@ EOF;
         }
     };
 
-    //preventive error message, that will be discarded on the full initialization
+    //preventive error message, that will be discarded after the full initialization
     window.onerror = function (message, file, line, col, error) {
         if (DisplayError.active) return false;
         DisplayError.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
         return false;
     };
+
+    function preventDirtyClose(e) {
+        e.preventDefault();
+        e.returnValue = "";
+        if (this.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+    }
+
+    if (window.addEventListener) {
+        window.addEventListener('beforeunload', preventDirtyClose, true);
+    } else if (window.attachEvent) {
+        window.attachEvent('onbeforeunload', preventDirtyClose);
+    }
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -617,41 +629,42 @@ echo ");"; //end of Tutorials.add(...
         this.lastScroll = this.currentScroll; //Set last scroll to now
     });
 
-    document.addEventListener('keydown', (e) => {
-        let zoom = null,
-            bounds = viewer.viewport.getBounds(),
-            speed = 0.3;
-        switch (e.key) {
-            case "Down": // IE/Edge specific value
-            case "ArrowDown":
-                bounds.y += speed*bounds.height;
-                break;
-            case "Up": // IE/Edge specific value
-            case "ArrowUp":
-                bounds.y -= speed*bounds.height;
-                break;
-            case "Left": // IE/Edge specific value
-            case "ArrowLeft":
-                bounds.x -= speed*bounds.width;
-                break;
-            case "Right": // IE/Edge specific value
-            case "ArrowRight":
-                bounds.x += speed*bounds.width;
-                break;
-            case "+":
-                zoom = viewer.viewport.getZoom();
-                viewer.viewport.zoomTo(zoom + zoom * speed * 3);
-                return;
-            case "-":
-                zoom = viewer.viewport.getZoom();
-                viewer.viewport.zoomTo(zoom - zoom * speed * 2);
-                return;
-            default:
-                return; // Quit when this doesn't handle the key event.
-        }
-        viewer.viewport.fitBounds(bounds);
-    });
-
+    if (!setup.params.preventNavigationShorcuts) {
+        document.addEventListener('keydown', (e) => {
+            let zoom = null,
+                bounds = viewer.viewport.getBounds(),
+                speed = 0.3;
+            switch (e.key) {
+                case "Down": // IE/Edge specific value
+                case "ArrowDown":
+                    bounds.y += speed*bounds.height;
+                    break;
+                case "Up": // IE/Edge specific value
+                case "ArrowUp":
+                    bounds.y -= speed*bounds.height;
+                    break;
+                case "Left": // IE/Edge specific value
+                case "ArrowLeft":
+                    bounds.x -= speed*bounds.width;
+                    break;
+                case "Right": // IE/Edge specific value
+                case "ArrowRight":
+                    bounds.x += speed*bounds.width;
+                    break;
+                case "+":
+                    zoom = viewer.viewport.getZoom();
+                    viewer.viewport.zoomTo(zoom + zoom * speed * 3);
+                    return;
+                case "-":
+                    zoom = viewer.viewport.getZoom();
+                    viewer.viewport.zoomTo(zoom - zoom * speed * 2);
+                    return;
+                default:
+                    return; // Quit when this doesn't handle the key event.
+            }
+            viewer.viewport.fitBounds(bounds);
+        });
+    }
 
     /*---------------------------------------------------------*/
     /*------------ MAIN PANEL JS ------------------------------*/
@@ -769,6 +782,7 @@ ${constructExportVisualisationForm()}
         downloader.download = "export.html";
         downloader.click();
         URL.revokeObjectURL(downloadURL);
+        setup.dirty = false;
     }
 </script>
 
@@ -831,6 +845,7 @@ if ($layerVisible) {
                 pluginRoot.append(html);
             }
         },
+        setDirty: () => {setup.dirty = true;},
         dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,

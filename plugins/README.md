@@ -69,6 +69,7 @@ This global variable contains a lot of useful references, functions require you 
     - if a plugin is loaded, you will find the plugin instance under `PLUGIN.each["pluginId"].instance`
     - there are all variables from plugin's `include.json` file
     - `loaded` and `permaLoaded` properties that indicate whether the plugin was loaded without or with `GET` respectively 
+- `setDirty()` that makes the application to prevent from accidental closing, unless it ahs been exported
 
 #### `registerPlugin(PluginRootClass)`
 This function will register the plugin and initialize it. It will make sure that

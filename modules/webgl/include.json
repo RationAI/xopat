@@ -3,9 +3,9 @@
     "name": "WebGL rendering module",
     "includes" : [
         "webGLWrapper.js",
-        "interface.js",
         "colorBrewer.js",
         "visualisationLayer.js",
+        "advancedControls.js",
         "shaders/bipolarHeatmapVisualisationLayer.js",
         "shaders/edgeVisualisationLayer.js",
         "shaders/heatmapVisualisationLayer.js",

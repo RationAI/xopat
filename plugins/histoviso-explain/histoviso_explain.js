@@ -411,7 +411,7 @@ experiment is '${params.experimentId}'.`);
                         dataReferences: [0],
                         params: {
                             opacity: {
-                                visible: false
+                                interactive: false
                             }
 
                         }
@@ -429,10 +429,9 @@ experiment is '${params.experimentId}'.`);
                         dataReferences: [0],
                         params: {
                             opacity: {
-                                visible: false
+                                interactive: false
                             },
-                            logScale: 1,
-                            logScaleMax: 0.6
+                            use_logscale: 0.4,
                         }
                     }
                 }
@@ -448,7 +447,7 @@ experiment is '${params.experimentId}'.`);
                         dataReferences: [0],
                         params: {
                             opacity: {
-                                visible: false
+                                interactive: false
                             }
                         }
                     }
@@ -465,10 +464,9 @@ experiment is '${params.experimentId}'.`);
                         dataReferences: [0],
                         params: {
                             opacity: {
-                                visible: false
+                                interactive: false
                             },
-                            logScale: 1,
-                            logScaleMax: 0.6
+                            use_logscale: 0.4,
                         }
                     }
                 }

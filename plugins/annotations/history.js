@@ -42,7 +42,7 @@ id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 <span id="history-sync" class="material-icons pointer" onclick="opener.${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
-onclick="if (opener.${this._context.id}.disabledInteraction) return;opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
+onclick="if (opener.${this._context.id}.disabledInteraction) return; window.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 <div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
 <script>
@@ -187,6 +187,7 @@ window.addEventListener("beforeunload", (e) => {
     },
 
     push: function (newObject, previous = null) {
+        PLUGINS.setDirty();
         if (newObject) {
             this._addToBoard(newObject);
         }

@@ -36,16 +36,12 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
     constructor(id, options) {
         super(id, options);
 
-        //force colormap, no other parameter is meaningful
-        if (typeof options.color === "object") {
-            options.color.type = "colormap";
-        }
 
         //We support three controls
         this.color = WebGLModule.UIControls.build(this, "color",
-            options.color, {type: "colormap"}, (type, instance) => type === "vec3");
+            options.color, {}, (type, instance) => type === "vec3", {type: "colormap"});
         this.threshold = WebGLModule.UIControls.build(this, "threshold",
-            options.threshold, {type: "advanced_slider"}, (type, instance) => type === "float");
+            options.threshold, {}, (type, instance) => type === "float", {type: "advanced_slider"});
         this.opacity = WebGLModule.UIControls.build(this, "opacity",
             options.opacity, {type: "range", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "}, (type, instance) => type === "float");
 

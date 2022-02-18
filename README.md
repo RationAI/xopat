@@ -119,6 +119,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`experimentId` - our usecase-dependent parameter, not really important (unless used by some plugins)
     - [O]`visualizationProtocol` - see protocol construction below
     - [O]`customBlending` - allow to program custom blending, default `false`
+    - [O]`preventNavigationShorcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
     - [O]`viewport` - where to focus
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom

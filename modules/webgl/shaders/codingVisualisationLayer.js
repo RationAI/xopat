@@ -38,12 +38,12 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
 
     getFragmentShaderDefinition() {
         //todo fix this, not really reading the vaule from the control
-        return this._detDefaultFSDefine();
+        return this._getUpdatedDefineHints();
     }
 
     getFragmentShaderExecution() {
         //todo fix this, not really reading the vaule from the control
-        return this._getUpdatedHints();
+        return this._getUpdatedExecHints();
     }
 
     glDrawing(program, dimension, gl) {
@@ -67,7 +67,8 @@ vec3 myFunction(in int param1, out float param2, inout bool param3) {
     param2 = float(param1); //retype param1 into param 2
     param3 = !param3; //invert param3
     return vec4(1.0).rgg; //return vec3 channels r and twice g of vec4 (swizzling) 
-}*/`
+}*/
+`;
     }
 
     _getDefaultFSExecute() {
@@ -83,15 +84,28 @@ float filtered = ${this.filter("0.123456")};
             
 --- what textures can I use?
 TODO show textures
-*/`
+*/
+`;
     }
 
-    _getUpdatedHints() {
-        let defined = this.loadProperty("fs_execute", "");
-        if (!defined) return this._getDefaultFSExecute();
+    _getUpdatedDefineHints() {
+        let defined = this.loadProperty("fs_define", "");
+        if (!defined) return this.showHints ? this._detDefaultFSDefine() : "";
 
-        defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._getDefaultFSExecute() : "");
-        return defined;
+        if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
+            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._detDefaultFSDefine() : "");
+        }
+        return (this.showHints ? this._detDefaultFSDefine() : "") + defined;
+    }
+
+    _getUpdatedExecHints() {
+        let defined = this.loadProperty("fs_execute", "");
+        if (!defined) return this.showHints ? this._getDefaultFSExecute() : "";
+
+        if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
+            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._getDefaultFSExecute() : "");
+        }
+        return (this.showHints ? this._getDefaultFSExecute() : "") + defined;
     }
 
     init() {
@@ -99,12 +113,16 @@ TODO show textures
         this.hints.init();
         this.hints.on('hints', function (raw, encoded, ctx)  {
             _this.showHints = raw === 1;
-            _this.storeProperty("fs_execute", _this._getUpdatedHints());
+            _this.storeProperty("fs_execute", _this._getUpdatedExecHints());
+            _this.storeProperty("fs_define", _this._getUpdatedDefineHints());
             _this.fs_execute.init();
+            _this.fs_define.init();
         });
+        this.showHints = this.hints.raw === 1;
 
+        this.storeProperty("fs_define", this._getUpdatedDefineHints());
         this.fs_define.init();
-        this.storeProperty("fs_execute", this._getUpdatedHints());
+        this.storeProperty("fs_execute", this._getUpdatedExecHints());
         this.fs_execute.init();
         this.submit.init();
         this.submit.on('submit', function (raw, encoded, ctx)  {

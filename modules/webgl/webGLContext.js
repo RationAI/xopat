@@ -407,7 +407,6 @@ void blend(vec4 foreground) {
     gl_FragColor = blend_equation(foreground, gl_FragColor);
 }
 
-
 ${Object.values(globalScopeCode).join("\n")}
 
 ${definition}
