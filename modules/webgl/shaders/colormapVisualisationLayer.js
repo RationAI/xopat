@@ -33,30 +33,31 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color scale";
     }
 
+    static defaultControls() {
+        return {
+            color: {
+                default: {}, //todo define some
+                accepts: (type, instance) => type === "vec3",
+                required: {type: "colormap"}
+            },
+            threshold: {
+                default: {},
+                accepts: (type, instance) => type === "float",
+                required: {type: "advanced_slider"}
+            },
+            opacity: {
+                default: {type: "range", default: 1, min: "0", max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            },
+            connect : {
+                default: {type: "bool", interactive: true, title: "Breaks mapping: ", default: false},
+                accepts:  (type, instance) => type === "bool"
+            }
+        };
+    }
+
     constructor(id, options) {
         super(id, options);
-
-
-        //We support three controls
-        this.color = WebGLModule.UIControls.build(this, "color",
-            options.color, {}, (type, instance) => type === "vec3", {type: "colormap"});
-        this.threshold = WebGLModule.UIControls.build(this, "threshold",
-            options.threshold, {}, (type, instance) => type === "float", {type: "advanced_slider"});
-        this.opacity = WebGLModule.UIControls.build(this, "opacity",
-            options.opacity, {type: "range", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "}, (type, instance) => type === "float");
-
-        //lets break some encapsulation
-        //connect supported only if these controls used
-        this.supportConnect = (!options.color || !options.color.type || options.color.type === "colormap")
-            && (!options.threshold || !options.threshold.type || options.threshold.type === "advanced_slider");
-
-        if (this.supportConnect) {
-            this.connect = WebGLModule.UIControls.build(this, "connects",
-                options.connect, {type: "bool", interactive: false, title: "Breaks mapping: ", default: false},
-                (type, instance) => type === "bool");
-        } else {
-            console.log("ColorMap: cannot connect controls.");
-        }
     }
 
     getFragmentShaderDefinition() {
@@ -89,48 +90,34 @@ ${this.opacity.define()}
 
     init() {
         this.color.init();
-
-        if (this.supportConnect) {
-            let steps = this.color.steps.filter(x => x >= 0);
-            steps.splice(steps.length-1, 1); //last element is 1 not a break
-            this.threshold.params.default = steps;
-            this.storeProperty('threshold', steps);
-        }
+        let steps = this.color.steps.filter(x => x >= 0);
+        steps.splice(steps.length-1, 1); //last element is 1 not a break
+        this.threshold.params.default = steps;
+        this.storeProperty('threshold', steps);
         this.threshold.init();
         this.opacity.init();
 
         const _this = this;
-        if (this.supportConnect) {
-            this.threshold.on('threshold', function (raw, encoded, ctx) {
-                if (_this.connect.raw) { //if YES
-                    _this.color.setSteps([...raw, 1]);
-                }
-            }, true);
-            this.connect.on('connects', function (raw, encoded, ctx) {
-                _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] : undefined);
-            }, true);
-            this.connect.init();
-        } else {
-            this.threshold.off('threshold');
-        }
+
+        this.threshold.on('threshold', function (raw, encoded, ctx) {
+            if (_this.connect.raw) { //if YES
+                _this.color.setSteps([...raw, 1]);
+            }
+        }, true);
+        this.connect.on('connects', function (raw, encoded, ctx) {
+            _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] : undefined);
+           // _this.invalidate(); todo does not update?
+        }, true);
+        this.connect.init();
     }
 
     htmlControls() {
         return [
             this.color.toHtml(true),
             this.threshold.toHtml(true),
-            (this.supportConnect ? this.connect.toHtml(true) : ""),
+            this.connect.toHtml(true),
             this.opacity.toHtml(true)
         ].join("");
-    }
-
-    supports() {
-        return {
-            color: "vec3",
-            opacity: "float",
-            threshold: "float",
-            connect: "bool",
-        }
     }
 };
 

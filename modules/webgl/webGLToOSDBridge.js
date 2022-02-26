@@ -22,9 +22,16 @@ OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
     this.webGLWrapper = new WebGLModule(webGLWrapperParams);
     this.upToDateTStamp = Date.now();
     this._shadersLoaded = false;
+    this._dataProblems = [];
+    this.uid = OpenSeadragonGL.getUniqueId();
+    _this.loaded = false;
 
     //todo instead bind this to specific drawing policy on a tilesource
     this.useEvaluator = useEvaluator;
+};
+
+OpenSeadragonGL.getUniqueId = function() {
+    return (Date.now()).toString(36);
 };
 
 OpenSeadragonGL.prototype = {
@@ -72,8 +79,21 @@ OpenSeadragonGL.prototype = {
             console.warn("Invalid action: visualisations have been already loaded.")
             return false;
         }
-        this.webGLWrapper.addData(...data);
+        this.imageData = data;
         return true;
+    },
+
+    /**
+     * Set whether data is invalid at given index
+     * @param index index of data
+     * @param isInvalid true if invalid
+     */
+    setInvalidDataAt: function(index, isInvalid) {
+        if (index >= this._dataSources.length) {
+            console.warn("Invalid index for data: " + index);
+            return;
+        }
+        this._dataProblems[index] = isInvalid;
     },
 
     /**
@@ -91,7 +111,7 @@ OpenSeadragonGL.prototype = {
      */
     loadShaders: function(onPrepared=function(){}) {
         if (this._shadersLoaded) return;
-        this.webGLWrapper.prepare(onPrepared);
+        this.webGLWrapper.prepare(this.imageData, onPrepared);
         this._shadersLoaded = true;
     },
 
@@ -173,13 +193,33 @@ OpenSeadragonGL.prototype = {
         this.openSD.addControl(toolbar.element,{anchor: OpenSeadragon.ControlAnchor.TOP_LEFT});
     },
 
+    refreshMissingSources: function() {
+        //inspect
+        let programIdx = this.webGLWrapper.getCurrentProgramIndex(),
+            curVis = this.webGLWrapper._visualisations[programIdx],
+            tileSource =  this.openSD.world.getItemAt(this.refresh).source;
+        layersLoop: for (let lId in curVis.shaders) {
+            if (!curVis.shaders.hasOwnProperty(lId)) continue;
+            let layer = curVis.shaders[lId];
+            layer.missingDataSources = false;
+            for (let id of layer.dataReferences) {
+                //todo hardcoded reading of values of particular implementation, maybe check whether array and then treat as array
+               //todo also displayRects might not exist -> just do not inspect in that case?
+                if (!tileSource.displayRects[id] || tileSource.displayRects[id].Width == 0 || tileSource.displayRects.Height == 0) {
+                    layer.missingDataSources = true;
+                    continue layersLoop;
+                }
+            }
+        }
+    },
+
     //////////////////////////////////////////////////////////////////////////////
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
 
-
-    init: function(openSeaDragonInstance) {
+    init: function(openSeaDragonInstance, layerLoaded=()=>{}) {
         this.openSD = openSeaDragonInstance;
+
         if (!this._shadersLoaded) {
             this.loadShaders();
         }
@@ -195,22 +235,29 @@ OpenSeadragonGL.prototype = {
 
         let _this = this;
         this.openSD.addHandler('open', function(e) {
-            _this.webGLWrapper.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
+            if (!_this.loaded && e.eventSource.world.getItemAt(_this.refresh) !== undefined) {
+                _this.loaded = true;
+                _this.webGLWrapper.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
+                layerLoaded();
+            }
         });
 
         return this;
     },
+
+
 
     _tileLoaded: function(e) {
 
         if (! e.image) return;
 
         if (!this.useEvaluator || this.useEvaluator(e)) {
+            e.tile.webglId = this.uid;
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             e.tile.origData = e.image;
 
             //necessary, the tile is re-drawn upon re-zooming, store the output
-            var canvas = document.createElement( 'canvas' )
+            var canvas = document.createElement('canvas');
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height;
             e.tile.context2D = canvas.getContext('2d');
@@ -219,9 +266,9 @@ OpenSeadragonGL.prototype = {
     },
 
     _tileDrawing: function(e) {
+        if (e.tile.webglId !== this.uid) return;
         if (e.tile.webglRefresh <= this.upToDateTStamp) {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
-
 
             let imageTileSource = PLUGINS.imageLayer();
             let dx = imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
@@ -236,4 +283,4 @@ OpenSeadragonGL.prototype = {
             e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
         }
     }
-}
+};

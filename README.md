@@ -89,14 +89,14 @@ Then, based on the presence of `visualisation` the user is
                     "name": "Advanced visualisation layer",
                     "type": "new_type", 
                     "fixed": false,
-                    "visible": "1", 
+                    "visible": 1, 
                     "dataReferences": [2, 0],
                     "params": { }
                 },
                 "another_shader_id": {
                     "name": "Probability layer",
                     "type": "edge", 
-                    "visible": "1", 
+                    "visible": 1, 
                     "dataReferences": [1],
                     "params": { 
                         "color": "#fa0058"

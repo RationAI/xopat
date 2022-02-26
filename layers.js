@@ -27,7 +27,7 @@ seaGL = new OpenSeadragonGL({
 display: block; resize: vertical;">//some simple placeholder:\nreturn foreground;</textarea>
 <span class="blob-code"><span class="blob-code-inner">}</span></span>
 <button class="btn" onclick="seaGL.webGLWrapper.changeBlending($('#custom-blend-equation-code').val());seaGL.redraw();"
-style="float: right;">Set blending</button>`);
+style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> Set blending</button>`);
         }
     },
     visualisationInUse: function(visualisation) {
@@ -75,7 +75,7 @@ style="float: right;">Set blending</button>`);
         DisplayError.show(error.error, error.desc);
     },
 }, function (e) {
-    return e.tiledImage.source.postData;
+    return e.tiledImage.source.postData; //todo rather find out which tilesource it belongs to
 });
 
 //Set visualisations
@@ -192,6 +192,8 @@ function shaderPartToogleOnOff(self) {
     seaGL.reorder(null);
 }
 
+
+
 function changeVisualisationLayer(self, layerId) {
     let _this = $(self),
         type = _this.val();
@@ -200,6 +202,15 @@ function changeVisualisationLayer(self, layerId) {
         let viz = currentVisualisation();
         self.dataset.title = factoryClass.name();
         if (viz.shaders.hasOwnProperty(layerId)) {
+            let shaderPart = viz.shaders[layerId];
+
+            //preserve parameters for the original type
+            shaderPart[`__${shaderPart.type}_params`] = shaderPart.params;
+            if (!shaderPart.hasOwnProperty(`__${type}_params`)) {
+                shaderPart[`__${type}_params`] = {};
+            }
+            shaderPart.params = shaderPart[`__${type}_params`];
+
             viz.shaders[layerId].type = type;
             seaGL.reorder(null); //force to re-build
         } else {
@@ -223,12 +234,26 @@ function changeModeOfLayer(self, layerId) {
     }
 }
 
+function updateUIForMissingSources() {
+    //todo debug
+    // seaGL.refreshMissingSources();
+    // let layers = seaGL.currentVisualisation().shaders;
+    // for (let key in layers) {
+    //     if (layers.hasOwnProperty(key) && layers[key].missingDataSources) {
+    //         let layer = $(`#${key}-shader-part`);
+    //         layer.find("input")[0].attr("disabled", true);
+    //     }
+    // }
+}
+
 function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
     let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);
     let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
     let modeChange = fixed ? "" : `<span class="material-icons pointer" 
-id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "blend" ? "" : "filter: opacity(0.2);"}" 
-onclick="changeModeOfLayer(this, '${dataId}')" title="Mask layers below">payments</span>`;
+id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "blend" ? "" : "color: var(--color-icon-tertiary);"}" 
+onclick="changeModeOfLayer(this, '${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
+
+    wasErrorWhenLoading = wasErrorWhenLoading || layer.missingDataSources;
 
     let availableShaders = "";
     for (let available of WebGLModule.ShaderMediator.availableShaders()) {
@@ -236,14 +261,14 @@ onclick="changeModeOfLayer(this, '${dataId}')" title="Mask layers below">payment
         availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
     }
 
-    return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" ${style}>
+    return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''} 
 ${wasErrorWhenLoading ? '' : 'disabled'} data-id="${dataId}" onchange="shaderPartToogleOnOff(this);">
               &emsp;${title}
-              <div class="d-inline-block" id="label-render-type" style="cursor: pointer; float: right;">
+              <div class="d-inline-block label-render-type" style="cursor: pointer; float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="change-render-type" ${fixed ? "disabled" : ""} 
+                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""} 
 onchange="changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control">${availableShaders}</select>
                 </div>
                 ${modeChange}

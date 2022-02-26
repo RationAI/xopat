@@ -47,6 +47,20 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * Declare supported controls by a particular shader
+     * each controls is automatically created for the shader
+     * and this[controlId] instance set
+     * @return {object} controlId => {
+     *     default: {type: <>, title: <>, interactive: true|false...},
+           accepts: (type, instance) => <>,
+           required: {type: <> ...} [OPTIONAL]
+     * }
+     */
+    static defaultControls() {
+        return {};
+    }
+
+    /**
      * Global supported options
      * @param id unique ID among all webgl instances and shaders
      * @param options
@@ -91,6 +105,7 @@ WebGLModule.VisualisationLayer = class {
         }
         this.__scalePrefix = this.__scalePrefix.join("");
         this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
+        this._buildControls(options);
     }
 
     /**
@@ -160,15 +175,6 @@ WebGLModule.VisualisationLayer = class {
      */
     htmlControls() {
         return "";
-    }
-
-    /**
-     * Declare supported controls by a particular shader
-     * @return {object} name => glType (string, what is the expected output type in shader
-     * when sampling that particular input value)
-     */
-    supports() {
-        return {};
     }
 
     ////////////////////////////////////
@@ -299,10 +305,20 @@ WebGLModule.VisualisationLayer = class {
      * @return stored value or default value
      */
     loadProperty(name, defaultValue) {
-        if (this.__visualisationLayer.cache.hasOwnProperty(name)) {
-            return this.__visualisationLayer.cache[name];
+        let selfType = this.constructor.type();
+        if (this.__visualisationLayer.cache[selfType].hasOwnProperty(name)) {
+            return this.__visualisationLayer.cache[selfType][name];
         }
         return defaultValue;
+    }
+
+    /**
+     * Store value, useful for controls value caching
+     * @param name value name
+     * @param value value
+     */
+    storeProperty(name, value) {
+        this.__visualisationLayer.cache[this.constructor.type()][name] = value;
     }
 
     /**
@@ -319,20 +335,19 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Store value, useful for controls value caching
-     * @param name value name
-     * @param value value
-     */
-    storeProperty(name, value) {
-        this.__visualisationLayer.cache[name] = value;
-    }
-
-    /**
      * Get the mode we operate in
      * @return {string} mode
      */
     get mode() {
         return this.__mode;
+    }
+
+    /**
+     * Returns number of textures available to this shader
+     * @return {number} number of textures available
+     */
+    get texturesCount() {
+        return this.__visualisationLayer.dataReferences.length;
     }
 
     ////////////////////////////////////
@@ -342,8 +357,23 @@ WebGLModule.VisualisationLayer = class {
     static __globalIncludes = {};
     static __chanPattern = new RegExp('[rgbxyzuvw]+');
 
+    _buildControls(options) {
+        let controls = this.constructor.defaultControls();
+        for (let control in controls) {
+            if (controls.hasOwnProperty(control)) {
+                let buildContext = controls[control];
+                this[control] = WebGLModule.UIControls.build(this, control, options[control],
+                    buildContext.default, buildContext.accepts, buildContext.required)
+            }
+        }
+    }
+
     _setContextVisualisationLayer(visualisationLayer) {
         this.__visualisationLayer = visualisationLayer;
+        if (!this.__visualisationLayer.hasOwnProperty("cache")) this.__visualisationLayer.cache = {};
+        if (!this.__visualisationLayer.cache.hasOwnProperty(this.constructor.type())) {
+            this.__visualisationLayer.cache[this.constructor.type()] = {};
+        }
     }
 
     _setWebglContext(webglContext) {
@@ -418,7 +448,7 @@ WebGLModule.UIControls = class {
      * @param {object} requiredParams parameters that override anything sent by user or present by defaultParams
      * @return {WebGLModule.UIControls.IControl}
      */
-    static build(context, name, params={}, defaultParams={}, accepts=() => true, requiredParams={}) {
+    static build(context, name, params, defaultParams={}, accepts=() => true, requiredParams={}) {
         //if not an object, but a value: make it the default one
         if (!(typeof params === 'object')) {
             params = {default: params};

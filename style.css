@@ -118,12 +118,11 @@
     transform: scale(1.05);
 }
 
-#label-render-type:hover > label {
-    display: none !important;
-}
-
-#label-render-type:hover > select {
+.label-render-type:hover > select {
     display: inline-block !important;
+    position: absolute;
+    top: 0;
+    right: 0;
 }
 
 /*stolen from github sourcecode page (flash.scss)*/

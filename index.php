@@ -72,6 +72,7 @@ propertyExists($parsedParams, "data", "No image data available.",
     "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
     print_r($parsedParams, true));
 
+//todo make background voluntary parameter
 propertyExists($parsedParams, "background", "No data available.",
     "JSON parametrization of the visualiser requires <i>background</i> object: a dictionary of data interpretation. This field is missing.",
     print_r($parsedParams, true));
@@ -385,7 +386,7 @@ EOF;
         <span id="add-plugins" onclick="showAvailablePlugins();" title="Add plugins to the visualisation"><span class="material-icons pointer">extension</span>Plugins</span>&emsp;
         <span id="global-help" onclick="Tutorials.show();" title="Show tutorials"><span class="material-icons pointer">school</span>Tutorial</span>&emsp;
     </div>
-</div>
+    </div>
 
 <!-- DEFAULT SETUP SCRIPTING -->
 <script type="text/javascript">
@@ -472,6 +473,7 @@ EOF;
         "return " + (setup.params.visualizationProtocol || "`${path}#DeepZoomExt=${data.join(',')}.dzi`"));
 
     //index of the layer composed of shaders, last one or not present (-1)
+    //todo unsafe if some image did not load? investigate! find how to get desired tilesource type instead...
     let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
 
     // Tutorial functionality
@@ -803,10 +805,12 @@ if ($layerVisible) {
 <?php
 if ($layerVisible) {
     echo "        hasLayers: true,
-                  seaGL: seaGL,";
+                  seaGL: seaGL,
+                  dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),";
 } else {
     echo "        hasLayers: false,
-                  seaGL: null,";
+                  seaGL: null,
+                  dataLayer: null,";
 }
 ?>
         addTutorial: Tutorials.add.bind(Tutorials),
@@ -845,8 +849,9 @@ if ($layerVisible) {
                 pluginRoot.append(html);
             }
         },
+        params: setup.params,
+        imageSources: setup.data,
         setDirty: () => {setup.dirty = true;},
-        dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,
         _exportHandlers: []
@@ -854,6 +859,7 @@ if ($layerVisible) {
 
     var _registeredPlugins = [];
 
+    //todo make this PLUGINS.register(..)
     function registerPlugin(PluginClass) {
         if (_registeredPlugins === undefined) {
             console.error("Plugins has already been loaded.");
@@ -894,7 +900,9 @@ if ($layerVisible) {
         return imageFilePath.substr(begin, imageFilePath.length - begin - 4);
     }
 
-    viewer.addHandler('open', function() {
+    //todo remove this handler after execution
+    function fireTheVisualization() {
+        viewer.removeHandler('open', fireTheVisualization);
         let i = 0;
         let largestWidth = 0, selectedImageLayer = 0;
         let imageNode = $("#image-layer-options");
@@ -930,14 +938,19 @@ onchange="viewer.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
 
             let layerWorldItem = viewer.world.getItemAt(layerIDX);
             let activeVis = setup.visualizations[activeVisualization];
-            if (activeVis.hasOwnProperty("lossless") && activeVis.lossless && layerWorldItem) {
-                layerWorldItem.source.fileFormat = "png";
+            if (layerWorldItem) {
+                if (activeVis.hasOwnProperty("lossless") && activeVis.lossless) {
+                    layerWorldItem.source.fileFormat = "png"; //todo on visualization change reflect also lossless?!
+                }
+                layerWorldItem.source.greyscale = (setup.params.hasOwnProperty("grayscale") && setup.params.grayscale) ?
+                    "/greyscale" : "";
             }
-<?php
-if ($layerVisible) {
-    echo "            seaGL.setLayerIndex(layerIDX);";
-}
-?>
+
+            <?php
+            if ($layerVisible) {
+                echo "            seaGL.setLayerIndex(layerIDX);";
+            }
+            ?>
         }
 
         _registeredPlugins.forEach(plugin => {
@@ -968,8 +981,8 @@ if ($layerVisible) {
         _registeredPlugins = undefined;
 
         if (setup.params.hasOwnProperty("viewport")
-                && setup.params.viewport.hasOwnProperty("point")
-                && setup.params.viewport.hasOwnProperty("zoomLevel")) {
+            && setup.params.viewport.hasOwnProperty("point")
+            && setup.params.viewport.hasOwnProperty("zoomLevel")) {
             viewer.viewport.panTo(setup.params.viewport.point);
             viewer.viewport.zoomTo(setup.params.viewport.zoomLevel);
         }
@@ -986,15 +999,15 @@ if ($layerVisible) {
 
         if (DisplayError.active) {
             $("#viewer-container").addClass("disabled"); //preventive
-            return; //actually valid, PHP can attach code below this
+            return;
         }
-
-<?php
-if ($firstTimeVisited) {
-    echo "        setTimeout(_ => Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
-}
-?>
-    });
+        <?php
+        if ($firstTimeVisited) {
+            echo "        setTimeout(_ => Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
+        }
+        ?>
+    }
+    viewer.addHandler('open', fireTheVisualization);
 
     function showAvailablePlugins() {
         let content = "<input type='checkbox' class='form-control position-absolute top-1 right-2' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-5' for='remember-plugin-selection'>remember selection</label><br>";
@@ -1065,8 +1078,9 @@ if ($layerVisible) {
         toOpen.push(visualizationUrlMaker("$srvLayers", activeData));
         viewer.open(toOpen);
     });
-    seaGL.init(viewer);
+    seaGL.init(viewer, updateUIForMissingSources);
 
+    //todo better error system :(
     viewer.addHandler('open-failed', function(e) {
         let sources = []; //todo create valid urls again
         DisplayError.show("No valid images.", `We were unable to open provided image sources. 
@@ -1084,14 +1098,12 @@ EOF;
     /*----- Init without layers (layers.js) -------------------*/
     /*---------------------------------------------------------*/
 
-    (function() {
-         let toOpen = setup.background.map(value => {
-            const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
-            //todo absolute path? dynamic using php?
-            return urlmaker("$srvImages", setup.data[value.dataReference]);
-        }).reverse(); 
-        viewer.open(toOpen);
-    })();
+    viewer.open(setup.background.map(value => {
+        const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
+        //todo absolute path? dynamic using php?
+        return urlmaker("$srvImages", setup.data[value.dataReference]);
+    }).reverse());
+
 </script>
 EOF;
 }

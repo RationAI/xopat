@@ -1356,7 +1356,6 @@ class AutoObjectCreationStrategy {
             }
         });
         this.tileFailure = false;
-        this._renderEngine.addData("undefined");
         this._renderEngine.addVisualisation({
             shaders: {
                 _ : {
@@ -1367,7 +1366,7 @@ class AutoObjectCreationStrategy {
             }
         });
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
-        this._renderEngine.prepareAndInit();
+        this._renderEngine.prepareAndInit(PLUGINS.seaGL.dataImageSources());
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
         this._readingIndex = 0;
@@ -1446,8 +1445,6 @@ class AutoObjectCreationStrategy {
                 }
             }
         }
-        //todo still unclear API
-        this._renderEngine.setData(...PLUGINS.seaGL.dataImageSources());
         this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
 
         this._currentPixelSize = this.pixelSize();

@@ -75,6 +75,8 @@ $.ExtendedDziTileSource = function( options ) {
 
     $.TileSource.apply( this, [ options ] );
 
+    if (!this.fileFormat) this.fileFormat = ".jpg";
+    if (!this.greyscale) this.greyscale = "";
 };
 
 $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends OpenSeadragon.ExtendedDziTileSource.prototype */{
@@ -126,7 +128,6 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                 options.queryParams = '';
             }
         }
-
         return options;
     },
 
@@ -137,7 +138,8 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} y
      */
     getTileUrl: function( level, x, y ) {
-        return this.postData ? `${this.tilesUrl}${this.queryParams}` : `${this.tilesUrl}${level}/${x}_${y}.${this.fileFormat}${this.queryParams}`;
+        return this.postData ? `${this.tilesUrl}${this.queryParams}`
+            : `${this.tilesUrl}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}${this.queryParams}`;
     },
 
     /**
@@ -168,7 +170,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @return {string || null} post data to send with tile configuration request
      */
     getTilePostData: function(level, x, y) {
-        return this.postData ? `${this.postData}${level}/${x}_${y}.${this.fileFormat}` : null;
+        return this.postData ? `${this.postData}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
     },
 
 
@@ -297,16 +299,16 @@ function configureFromXML( tileSource, xmlDoc ){
                 }
             };
 
-            dispRectNodes = root.getElementsByTagName("DisplayRect" );
+            dispRectNodes = root.getElementsByTagName("DisplayRect");
             if (dispRectNodes === undefined) {
-                dispRectNodes = root.getElementsByTagNameNS(ns, "DisplayRect" )[ 0 ];
+                dispRectNodes = root.getElementsByTagNameNS(ns, "DisplayRect")[ 0 ];
             }
 
             for ( i = 0; i < dispRectNodes.length; i++ ) {
                 dispRectNode = dispRectNodes[ i ];
-                rectNode     = dispRectNode.getElementsByTagName("Rect" )[ 0 ];
+                rectNode     = dispRectNode.getElementsByTagName("Rect")[ 0 ];
                 if (rectNode === undefined) {
-                    rectNode = dispRectNode.getElementsByTagNameNS(ns, "Rect" )[ 0 ];
+                    rectNode = dispRectNode.getElementsByTagNameNS(ns,  "Rect")[ 0 ];
                 }
 
                 displayRects.push({

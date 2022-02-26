@@ -1112,7 +1112,7 @@ class StateFreeFormTool extends AnnotationState {
 			this.context.modifyTool.setModeAdd(true);
 			return false; //we do not reject this mode, just change the behaviour
 		}
-		return e.key === "Shift" && !e.altKey && !e.ctrlKey;
+		return e.key === "Shift";
 	}
 }
 

@@ -17,15 +17,22 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "shows the data AS-IS";
     }
 
+    // static defaultControls() {
+    //     return {
+    //         kernel: {
+    //             default: {type: "kernel"},
+    //             accepts: (type, instance) => type === "float"
+    //         }
+    //     };
+    // }
+
     constructor(id, options) {
         super(id, options);
-
-        this.kernel = WebGLModule.UIControls.build(this, "kernel", options.kernel,
-            {type: 'kernel'}, (type, cls) => type === "float");
     }
 
     getFragmentShaderDefinition() {
-        return this.kernel.define();
+//        return this.kernel.define();
+        return "";
     }
 
     getFragmentShaderExecution() {

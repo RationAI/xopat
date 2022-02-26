@@ -10,40 +10,55 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
     }
 
     static name() {
-        return "Coding (DIY)";
+        return "GLSL Code";
     }
 
     static description() {
         return "use GLSL to display anything you want";
     }
 
+    static defaultControls() {
+        return {
+            fs_define: {
+                default: {type: 'text_area', title: false,
+                    placeholder: "Input GLSL that is not executed: define functions/globals.",
+                    default: this._getDefaultFSDefine()},
+                accepts: (type, instance) => type === "text"
+            },
+            fs_execute: {
+                default: {type: 'text_area', title: false, placeholder: "Input GLSL into main() - executed.", default: "\n//no output\nreturn vec4(0);"},
+                accepts: (type, instance) => type === "text"
+            },
+            hints: {
+                default: {type: "bool", default: true, title: "Show hints"},
+                accepts: (type, instance) => type === "bool"
+            },
+            submit : {
+                default: {type: "button", title: "Render"},
+                accepts:  (type, instance) => type === "action"
+            }
+        };
+    }
+
     constructor(id, options) {
         super(id, options);
-
-        this.fs_define = WebGLModule.UIControls.build(this, "fs_define", options.fs_define,
-            {type: 'text_area', title: false, placeholder: "Input GLSL that is not executed: define functions/globals.",
-            default: this._detDefaultFSDefine()},
-            (type, cls) => type === "text");
-        this.fs_execute = WebGLModule.UIControls.build(this, "fs_execute", options.fs_execute,
-            {type: 'text_area', title: false, placeholder: "Input GLSL into main() - executed.", default: "\n//no output"},
-            (type, cls) => type === "text");
-
-        this.hints = WebGLModule.UIControls.build(this, "hints", options.hints, {type: "bool", default: true, title: "Show hints"},
-            (type, cls) => type === "bool");
-        this.submit = WebGLModule.UIControls.build(this, "submit", options.submit, {type: "button", title: "Render"},
-            (type, cls) => type === "action");
-
-        this.firstRun = true;
     }
 
     getFragmentShaderDefinition() {
-        //todo fix this, not really reading the vaule from the control
-        return this._getUpdatedDefineHints();
+        //todo fix this, not really reading the value from the control
+        return `
+${this._getUpdatedDefineHints()}
+
+vec4 render_${this.uid}() {
+    ${this._getUpdatedExecHints()}
+}
+`;
     }
 
     getFragmentShaderExecution() {
-        //todo fix this, not really reading the vaule from the control
-        return this._getUpdatedExecHints();
+        return `
+    ${this.render(`render_${this.uid}()`)}
+        `;
     }
 
     glDrawing(program, dimension, gl) {
@@ -60,47 +75,45 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
         this.fs_execute.glLoaded(program, gl);
     }
 
-    _detDefaultFSDefine() {
+    static _getDefaultFSDefine() {
         return `// note that these have no unique name - commended out so that no collision occurs if multiple layers of code loaded
 /*float myValue = 0.3;
 vec3 myFunction(in int param1, out float param2, inout bool param3) {
     param2 = float(param1); //retype param1 into param 2
     param3 = !param3; //invert param3
     return vec4(1.0).rgg; //return vec3 channels r and twice g of vec4 (swizzling) 
-}*/
-`;
+}*/`;
     }
 
     _getDefaultFSExecute() {
+        let textures = [];
+        for (let i = 0; i < this.texturesCount; i++) {
+            textures.push(this.sample('tile_texture_coords', i, true))
+        }
         return `/*Some hints:
---- how do I sample texture?
-${this.sample('tile_texture_coords', 0, true)};
+--- how do I sample texture? which textures are available?
+(note this might not work across different machines)
+${textures.join("\n")};
 
---- how should I output color? (note: show() or blend())
-${this.render("vec4(1.0)")};
-
---- what filters are requested on this layer? (note: value used is 0.123456)
-float filtered = ${this.filter("0.123456")};
-            
---- what textures can I use?
-TODO show textures
-*/
-`;
+--- what filters are requested on this layer? (note: value used is 0.123456
+and the filters -if any- are applied on that number)
+float filtered = ${this.filter("0.123456")}; 
+*/`;
     }
 
     _getUpdatedDefineHints() {
         let defined = this.loadProperty("fs_define", "");
-        if (!defined) return this.showHints ? this._detDefaultFSDefine() : "";
+        if (!defined) return this.showHints ? this.constructor._getDefaultFSDefine() : "";
 
         if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
-            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._detDefaultFSDefine() : "");
+            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this.constructor._getDefaultFSDefine() : "");
         }
-        return (this.showHints ? this._detDefaultFSDefine() : "") + defined;
+        return (this.showHints ? this.constructor._getDefaultFSDefine() : "") + defined;
     }
 
     _getUpdatedExecHints() {
         let defined = this.loadProperty("fs_execute", "");
-        if (!defined) return this.showHints ? this._getDefaultFSExecute() : "";
+        if (!defined) return (this.showHints ? this._getDefaultFSExecute() : "") + "\nreturn vec4(.0);";
 
         if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
             return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._getDefaultFSExecute() : "");
@@ -135,18 +148,12 @@ TODO show textures
         return [
             '<span class="blob-code"><span class="blob-code-inner pl-0">//here you can define GLSL</span></span>',
             this.fs_define.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;height: 170px;"),
-            '<span class="blob-code"><span class="blob-code-inner pl-0">void main() {</span></span>',
+            '<span class="blob-code"><span class="blob-code-inner pl-0">vec4 render() {</span></span>',
             this.fs_execute.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;margin-left:5px;display: block; height: 170px;"),
             '<span class="blob-code"><span class="blob-code-inner pl-0">}</span></span><br>',
             this.hints.toHtml(false),
             this.submit.toHtml()
         ].join("");
-    }
-
-    supports() {
-        return {
-           //todo
-        }
     }
 
     //escaped: \/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/

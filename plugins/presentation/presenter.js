@@ -7,6 +7,9 @@ class Presenter {
         this._maxIdx = 0;
         this._steps = [];
         this._currentStep = null;
+    }
+
+    openSeadragonReady() {
 
         //controlPanelId is incomming parameter, defines where to add HTML
         PLUGINS.appendToMainMenuExtended("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
@@ -57,6 +60,17 @@ class Presenter {
 
         this._container = $("#playback-timeline");
         this._playBtn = $("#presenter-play-icon");
+
+        PLUGINS.addPostExport("presentation-keyframes", this.exportJSON.bind(this), this.id);
+        let importedJson = PLUGINS.postData["presentation-keyframes"];
+        if (importedJson) {
+            try {
+                this.importJSON(JSON.parse(importedJson));
+            } catch (e) {
+                console.warn(e);
+                PLUGINS.dialog.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, PLUGINS.dialog.MSG_ERR);
+            }
+        }
 
         let _this = this;
         document.addEventListener("keydown", function(e) {
@@ -210,8 +224,29 @@ class Presenter {
         // view.zoomSpring.springStiffness = this._zoomSpringStiffness;
     }
 
+    exportJSON() {
+        return JSON.stringify(this._steps);
+    }
+
+    importJSON(json) {
+        this._idx = 0;
+        this._maxIdx = 0;
+        this._steps = [];
+        this._currentStep = null;
+        this._container.html("");
+
+        for (let i = 0; i < json.length; i++) {
+            if (!json[i]) continue;
+            //recreate 'classes'
+            json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
+            json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
+
+            this._addRecord(json[i], json[i].delay, json[i].animationTime, json[i].springStiffness);
+        }
+    }
+
     export() {
-        let output = new Blob([JSON.stringify(this._steps)], { type: 'text/plain' });
+        let output = new Blob([this.exportJSON()], { type: 'text/plain' });
         let downloadURL = window.URL.createObjectURL(output);
         var downloader = document.getElementById("export-recording");
         downloader.href = downloadURL;
@@ -224,25 +259,8 @@ class Presenter {
         let file = event.target.files[0];
         if (!file) return;
         let fileReader = new FileReader();
-        let _this = this;
-        fileReader.onload = function(e) {
-
-            let json = JSON.parse(e.target.result);
-            _this._idx = 0;
-            _this._maxIdx = 0;
-            _this._steps = [];
-            _this._currentStep = null;
-            _this._container.html("");
-
-            for (let i = 0; i < json.length; i++) {
-                if (!json[i]) continue;
-                //recreate 'classes'
-                json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
-                json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
-
-                _this._addRecord(json[i], json[i].delay, json[i].animationTime, json[i].springStiffness);
-            }
-        }
+        const _this = this;
+        fileReader.onload = e => _this.importJSON(JSON.parse(e.target.result));
         fileReader.readAsText(file);
     }
 

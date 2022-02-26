@@ -33,21 +33,29 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color/opacity";
     }
 
+    static defaultControls() {
+        return {
+            color: {
+                default: {type: "color", default: "#fff700", title: "Color: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            opacity: {
+                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            },
+            inverse: {
+                default: {type: "bool", default: false, title: "Invert: "},
+                accepts: (type, instance) => type === "bool"
+            }
+        };
+    }
+
     constructor(id, options) {
         super(id, options);
-
-        this.inverse = WebGLModule.UIControls.build(this, "inverse",
-            options.inverse, {type: "bool", default: false, title: "Invert: "},
-            (type, instance) => type === "bool");
-        this.color = WebGLModule.UIControls.build(this, "color",
-            options.color, {type: "color", default: "#fff700", title: "Color: "},
-            (type, instance) => type === "vec3");
-        this.threshold = WebGLModule.UIControls.build(this, "threshold",
-            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
-            (type, instance) => type === "float");
-        this.opacity = WebGLModule.UIControls.build(this, "opacity",
-            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
-            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
@@ -93,19 +101,10 @@ ${this.inverse.define()}
     htmlControls() {
         return [
             this.color.toHtml(true),
-            this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl" : ""),
-            this.threshold.toHtml(true),
+            this.opacity.toHtml(true),
+            this.threshold.toHtml(false),
             this.inverse.toHtml(true)
         ].join("");
-    }
-
-    supports() {
-        return {
-            color: "vec3",
-            opacity: "float",
-            threshold: "float",
-            inverse: "bool"
-        }
     }
 };
 

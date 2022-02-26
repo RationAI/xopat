@@ -24,22 +24,29 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         return "highlights edges at threshold values";
     }
 
+    static defaultControls() {
+        return {
+            color: {
+                default: {type: "color", default: "#fff700", title: "Color: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            edgeThickness: {
+                default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
+                accepts: (type, instance) => type === "float"
+            },
+            opacity: {
+                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            }
+        };
+    }
+
     constructor(id, options) {
         super(id, options);
-
-        //We support three controls
-        this.color = WebGLModule.UIControls.build(this, "color",
-            options.color, {type: "color", default: "#fff700", title: "Color: "},
-            (type, instance) => type === "vec3");
-        this.threshold = WebGLModule.UIControls.build(this, "threshold",
-            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
-            (type, instance) => type === "float");
-        this.edgeThickness = WebGLModule.UIControls.build(this, "edgeThickness",
-            options.edgeThickness, {type: "range", default: "1", min: "0.5", max: "3", step: "0.1", title: "Edge thickness: "},
-            (type, instance) => type === "float");
-        this.opacity = WebGLModule.UIControls.build(this, "opacity",
-            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
-            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
@@ -131,15 +138,6 @@ vec4 getBorder_${this.uid}() {
             this.threshold.toHtml(true),
             this.edgeThickness.toHtml(true)
         ].join("");
-    }
-
-    supports() {
-        return {
-            color: "vec3",
-            opacity: "float",
-            threshold: "float",
-            edgeThickness: "float"
-        }
     }
 };
 

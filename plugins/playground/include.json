@@ -1,0 +1,12 @@
+{
+    "id": "playground",
+    "name": "Online Python Playground",
+    "includes" : [
+        "playground.js",
+        "ppprotocol.js"
+    ],
+    "flag": "playground",
+    "public": false,
+    "requires": [],
+    "modules": ["webgl"]
+}

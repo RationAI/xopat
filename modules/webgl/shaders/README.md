@@ -278,7 +278,7 @@ how you define the controls affects what the shader constructor parameter `optio
 One might want to combine multiple data into one visualisation (shader) part. To do so:
 - Define all data ID's you access in the shader setup using `dataReference` array
 
-Having data set-up like this (and sent to the webgl module using `addData(...)` in the right order),
+Having data set-up like this (and sent to the webgl module using `setup([<the data>], ...)` in the right order),
 ```json
 "data": ["image1", "image2", "image3", "image4"]
 ```

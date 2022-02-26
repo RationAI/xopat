@@ -9,7 +9,10 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 <?php
+echo "<h1>Not yet updated for the newest version.</h1>";
 
+
+exit;
 include_once("config.php");
 include_once("modules.php");
 
@@ -142,8 +145,6 @@ $path = VISUALISATION_ROOT_ABS_PATH;
 
     for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
         let id = shader.type();
-
-        if (id === "none") continue;
 
         SHADERS[id] = [
 `<div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'

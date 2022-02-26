@@ -66,6 +66,7 @@ class WebGLModule {
 
         this._visualisations = [];
         this._dataSources = [];
+        this._dataProblems = [];
         this._origDataSources = [];
         this._customShaders = [];
         this._programs = {};
@@ -89,19 +90,6 @@ class WebGLModule {
             this._visualisations.push(vis);
         }
         return true;
-    }
-
-    /**
-     * @param {string} dataSources data sources identifiers (e.g. paths)
-     * todo move to init or prepare and enable set with re-initialization only
-     */
-    addData(...dataSources) {
-        this._origDataSources.push(...dataSources);
-    }
-
-    setData(...dataSources) {
-        this._origDataSources = dataSources;
-        this._updateRequiredDataSources(this._visualisations[this._program]);
     }
 
     /**
@@ -267,9 +255,9 @@ class WebGLModule {
      * For easy initialization, do both in once call.
      * For separate initialization (prepare|init), see functions below.
      */
-    prepareAndInit() {
+    prepareAndInit(dataSources) {
         let _this = this;
-        this.prepare(() => {
+        this.prepare(dataSources, () => {
             _this.init(1, 1);
         });
     }
@@ -292,10 +280,11 @@ class WebGLModule {
      * The idea is to open the protocol for OSD in onPrepared.
      * Shaders are fetched from `visualisation.url` parameter.
      *
+     * @param {[string]} dataSources id's of data such that server can understand which image to send (usually paths)
      * @param {number} visIndex index of the initial visualisation
      * @param {function} onPrepared callback to execute after succesfull preparing.
      */
-    prepare(onPrepared, visIndex=0) {
+    prepare(dataSources, onPrepared, visIndex=0) {
         if (this._prepared) {
             console.error("Already prepared!");
             return;
@@ -307,17 +296,26 @@ class WebGLModule {
                 desc: "::prepare() called with no visualisation set."});
             return;
         }
+        this._origDataSources = dataSources;
         this._program = visIndex;
 
         this._prepared = true;
-        if (this._program >= this._visualisations.length) this._program = 0;
+        this.getCurrentProgramIndex(); //resets index
 
-        this._downloadRequiredShaderFactories(this._customShaders).
-        then(
-            this._visualisationToProgram.bind(this, this._visualisations[this._program], this._program)).
-        then(
+        this._downloadRequiredShaderFactories(this._customShaders).then(
+            this._visualisationToProgram.bind(this, this._visualisations[this._program], this._program)
+        ).then(
             onPrepared
         );
+    }
+
+    /**
+     * Get current program, reset if invalid
+     * @return {number} program index
+     */
+    getCurrentProgramIndex() {
+        if (this._program < 0 || this._program >= this._visualisations.length) this._program = 0;
+        return this._program;
     }
 
     /**
@@ -582,8 +580,6 @@ class WebGLModule {
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key],
                         ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
-
-                    if (!layer.hasOwnProperty("cache")) layer.cache = {};
                     this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
                 }
             }

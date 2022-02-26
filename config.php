@@ -19,7 +19,7 @@ define('MODULES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . MODULES);
 define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS);
 
 //application data
-define('VERSION', "1.0.1");
+define('VERSION', "1.1.0");
 
 //PRODUCTION
 define('SERVED_IMAGES', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images

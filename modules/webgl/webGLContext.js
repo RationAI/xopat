@@ -448,7 +448,7 @@ void main() {
         var count = 4;
 
         // Get uniform term
-        gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.height, gl.canvas.width);
+        gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.width, gl.canvas.height);
 
         // Get attribute terms
         this._att = [this.pos, this.tile_pos].map(function (name, number) {
@@ -555,12 +555,12 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                 gl.texImage3D(
                     gl.TEXTURE_2D_ARRAY,
                     0,
-                    gl.RGBA,
+                    gl.R8,
                     tileBounds.width,
                     tileBounds.height,
                     NUM_IMAGES,
                     0,
-                    gl.RGBA,
+                    gl.RED,
                     gl.UNSIGNED_BYTE,
                     image
                 );

@@ -5,8 +5,7 @@
   <meta charset="utf-8">
   <title>Visualisation Developer Setup</title>
 
-  <link rel="stylesheet" href="./external/primer_css.css">
-  
+  <link rel="stylesheet" href="./external/primer_css.css"><script src="./shader_input_gui.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
@@ -24,31 +23,20 @@
 <?php
 
 include_once("config.php");
-include_once("dynamic_shaders/defined.php");
+include_once("modules.php");
 
+$webglPath = "";
+
+foreach ($MODULES as $id => $mod) {
+    if ($id == "webgl") {
+        $webglPath = MODULES . "/" . $mod->directory;
+        foreach ($mod->includes as $__ => $file) {
+            echo "    <script src=\"" .$webglPath . "/$file?v=$version\"></script>\n";
+        }
+    }
+}
 function hasKey($array, $key) {
   return isset($array[$key]) && $array[$key];
-}
-
-$shader_selections = array();
-$inputs = array();
-
-foreach ($shaders as $name=>$filename) {
-    //html parts inner part must be an argument: data ID
-    $shader_selections[$name] =
-        "<div class='d-flex'>
-<div style='min-width: 150px'>
-<p class='f3-light mb-0'>$name</p><p style='max-width: 150px;'>{$descriptions[$name]}</p></div>
-<div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>
-<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='dynamic_shaders/$filename.png'></div><div>";
-
-
-    foreach($options[$name] as $option=>$settings) {
-        $shader_selections[$name] .= "<div>
-<span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' class='position-relative'>
-<span class='flex-1'>Option <code>$option</code> - {$paramDescriptions[$option]}</span></div>";
-    }
-    $shader_selections[$name] .= "</div></div><br>";
 }
 
 ?>
@@ -64,7 +52,8 @@ foreach ($shaders as $name=>$filename) {
 ">
 {
     "params": {
-        "experimentId": "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69"
+        "experimentId": "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69",
+        "customBlending": true
     },
     "data": [],
     "background": [
@@ -87,8 +76,9 @@ foreach ($shaders as $name=>$filename) {
             "shaders": {
                 "shader_id_1": {
                     "name": "Layer 1",
-                    "type": "none",
-                    "visible": "1",
+                    "type": "identity",
+                    "visible": 1,
+                    "fixed": false,
                     "dataReferences": [],
                     "params": { }
                 }
@@ -103,29 +93,15 @@ foreach ($shaders as $name=>$filename) {
       </form>
 
           <br><br>
-          <div><h3>Available shaders and their parameters</h3><br>
-
-              <?php
-              foreach ($shader_selections as $_ => $html) {
-                  echo $html;
-              }
-              ?>
-
-
-          </div>
-          <br><br>
-
-
+          <div id="documentation"></div>
       </div>
-
   </div>
-
 </div>
 
 
-
-
 <script type="text/javascript">
+
+    PredefinedShaderControlParameters.printShadersAndParams("documentation");
 
     $(document).off('submit');
 

@@ -28,24 +28,32 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
     }
 
     static description() {
-        return "TODO: remove in the future";
+        return "values are of two categories, smallest considered in the middle";
+    }
+
+    static defaultControls() {
+        return {
+            colorHigh: {
+                default: {type: "color", default: "#ff1000", title: "Color High: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            colorLow: {
+                default: {type: "color", default: "#01ff00", title: "Color Low: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            opacity: {
+                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            }
+        };
     }
 
     constructor(id, options) {
         super(id, options);
-
-        this.colorHigh = WebGLModule.UIControls.build(this, "colorHigh",
-            options.colorHigh, {type: "color", default: "#fff700", title: "Color High: "},
-            (type, instance) => type === "vec3");
-        this.colorLow = WebGLModule.UIControls.build(this, "colorLow",
-            options.colorLow, {type: "color", default: "#fff700", title: "Color Low: "},
-            (type, instance) => type === "vec3");
-        this.threshold = WebGLModule.UIControls.build(this, "threshold",
-            options.threshold, {type: "range-input", default: "1", min: "1", max: "100", step: "1", title: "Threshold: "},
-            (type, instance) => type === "float");
-        this.opacity = WebGLModule.UIControls.build(this, "opacity",
-            options.opacity, {type: "number", default: "1", min: "0", max: "1", step: "0.1", title: "Opacity: "},
-            (type, instance) => type === "float");
     }
 
     getFragmentShaderDefinition() {
@@ -105,15 +113,6 @@ ${this.opacity.define()}
             this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl" : ""),
             this.threshold.toHtml(true)
         ].join("");
-    }
-
-    supports() {
-        return {
-            colorHigh: "vec3",
-            colorLow: "vec3",
-            opacity: "float",
-            threshold: "float",
-        }
     }
 };
 

@@ -473,9 +473,7 @@ experiment is '${params.experimentId}'.`);
             }
         );
 
-        this.viaGL.addData("__automaticaly_generated_data");
-
-        this.viaGL.prepare(() => {
+        this.viaGL.prepare(["_not_used_"], () => {
             _this.viaGL.init(1, 1);
             this._ownRenderer.setContext(_this.viaGL, _this);
             this._ownExplorer.setContext(_this);

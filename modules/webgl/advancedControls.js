@@ -52,7 +52,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
     }
 
     get supports() {
-        return this._c1.supports();
+        return this._c1.supports;
     }
 
     get type() {
@@ -67,7 +67,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         return this._c1.encoded;
     }
 };
-WebGLModule.UIControls.registerClass("range-input", WebGLModule.UIControls.SliderWithInput);
+WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.SliderWithInput);
 
 WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
@@ -476,7 +476,7 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
             default: [0.2, 0.8],
             mask: [1, 0, 1],
             interactive: true,
-            maskOnly: false,
+            maskOnly: true,
             invertMask: true,
             title: "Threshold",
             min: 0,

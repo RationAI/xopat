@@ -95,33 +95,55 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
         }
     },
 
-    shaderMapping: {
-        "bipolar-heatmap": {
-            "colorHigh": "color",
-            "colorLow": "color",
-            "threshold": "float",
-            "opacity": "float",
-            //todo some input only
-            "logScale": "bool",
-            "logScaleMax": "float"
-        },
-        "heatmap": {
-            "color": "color",
-            "threshold": "float",
-            "opacity": "float",
-            //todo some input only
-            "logScale": "bool",
-            "logScaleMax": "float",
-            "inverse": "bool"
-        },
-        "edge": {
-            "color": "color",
-            "threshold": "float",
-            "opacity": "float",
-            "edgeThickness": "float"
-        },
-        "identity": {
-            //todo opacity?
+    printShadersAndParams: function(id) {
+        let node = document.getElementById(id);
+        let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
+
+        let uicontrols = {};
+        let types = WebGLModule.UIControls.types();
+        let fallbackLayer = new WebGLModule.IdentityLayer("id", {});
+        for (let type of types) {
+            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
+            let glType = ctrl.type;
+            ctrl.name = type;
+            if (!uicontrols.hasOwnProperty(glType)) uicontrols[glType] = [];
+            uicontrols[glType].push(ctrl);
         }
+
+        for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
+            let id = shader.type();
+
+            html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
+                shader.name(), "</p><p style='max-width: 150px;'>", shader.description(),
+                "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
+                "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
+                shader.type(),".png'></div><div>");
+
+            let controls = shader.prototype.supports();
+            for (let control in controls) {
+                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+                    "class='position-relative'><span class='flex-1'>Control <code>",
+                    control, "</code> | Supports: ", uicontrols[controls[control]].map(t => t.name).join(", ") ,"</span></span></div>");
+            }
+            html.push("</div></div><br>");
+        }
+        html.push("</div><br><div><h3>Available controls and their parameters</h3><br>");
+
+        for (let type in uicontrols) {
+            html.push("<div><h4>Type <code>", type, "</code></h4>");
+            for (let ctrl of uicontrols[type]) {
+                html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
+                    ctrl.name,
+                    "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
+                    "</div><div>");
+
+                html.push("<div><pre>", JSON.stringify(ctrl.supports, null, 4) ,"</pre></div>");
+                html.push("</div></div><br>");
+            }
+            html.push("</div>");
+        }
+
+        html.push("</div>");
+        node.innerHTML = html.join("");
     }
 };
