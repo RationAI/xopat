@@ -10,7 +10,7 @@ and each goal can define arbitrary amount of layers to render into the output ca
 (downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
 in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
 
-Constructors of both `OpenSeadragonGL` and `WebGLModule` accept `options` argument
+Constructors of both `OpenSeadragonToGLBridge` and `WebGLModule` accept `options` argument
 - `options.ready()` function called once the visualisation is prepared to render, for the first time only
 - `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
 - `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function for custom UI html controls (ignored if `htmlControlsId` not set)
@@ -20,9 +20,11 @@ Constructors of both `OpenSeadragonGL` and `WebGLModule` accept `options` argume
 - `options.visualisationChanged(oldVis, newVis)` function called when visualisation goals are switched between
 - `options.onError(error)` called when exception (usually some missing function) occurs and the visualization is somewhat able to continue
 - `options.onFatalError(error)` called when key functionality fails and the module is probably unusable
-- `options.debug` - boolean, outputs debug information if true 
+- `options.debug` - boolean, outputs debug information if true
+- `options.uniqueId` - unique identifier, **must be defined if multiple WebGLModules are running** (note: can be left out for one of them), can contain
+only `[A-Za-z0-9_]*` (can be empty, only numbers and letters with no diacritics or `_`) 
 
-Constructor of `OpenSeadragonGL` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
+Constructor of `OpenSeadragonToGLBridge` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
 this module is going to be used on the given OSD TileSource post-processing. 
 
 ### Setting up the visualisation
@@ -52,7 +54,7 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                                  "title": "Opacity: ",
                                  "interactive": true
                           }, 
-                          "gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
+                          "use_gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
                           "channel": "b"  //global parameter, sample channel 'b' from the image
                    }
             }
@@ -75,7 +77,7 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
         - some parameters are global, see more detailed description in `shaders/README.md`
         
 #### Data settings
-Data must be loaded with compliance to the indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
+Data must be loaded in compliance with indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
 - the module will automatically extract an ordered subset of the given data in the order in which it expects the data to arrive
 - see `WebGlWrapper.getSources()`
 
@@ -100,7 +102,7 @@ your parameters like this. For more detailed info and guidelines on writing shad
 ### webGLToOSDBridge.js
 Binding of WebGLModule to OpenSeadragon. The API is docummented in the code. A recommended use is:
 ```js
-var seaGL = new OpenSeadragonGL({...}, drawingEvent => {return true;});
+var seaGL = new OpenSeadragonToGLBridge({...}, drawingEvent => {return true;});
 var osd = new OpenSeadragon({...}); //init OSD without specifying the TileSources to load - delay the initialization
 
 //load shaders now
@@ -108,7 +110,8 @@ seaGL.loadShaders(function() {
     //fire OpenSeadragon initialization after WebGLModule finished and the rendering can begin
     osd.open(...);
 });
-seaGL.init(osd); //calls seaGL.loadShaders(...) if not performed manually
+//init bridge before OSD 'open' event ocurred
+seaGL.initBeforeOpen(osd); //calls seaGL.loadShaders(...) if not performed manually
 ```
 
 ### webGLWrapper.js

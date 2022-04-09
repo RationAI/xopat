@@ -1,11 +1,12 @@
 {
     "id": "automatic_presentation",
     "name": "Recording and playback of presentation",
+    "author": "Jirka Horák",
+    "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, focus emphasis or application testing.",
+    "icon": "",
     "includes" : [
         "presenter.js"
     ],
-    "flag": "presentation",
     "requires": [],
-    "public": true,
     "modules": []
 }

@@ -6,6 +6,7 @@ if (version_compare(phpversion(), '7.1', '<')) {
 
 require_once("config.php");
 require_once("plugins.php");
+$version = VERSION;
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
@@ -31,6 +32,8 @@ function throwFatalError($title, $description, $details) {
 
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
+ *
+ * todo rather use default visualization setup...
  */
 
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
@@ -88,16 +91,18 @@ foreach ($parsedParams->background as $bg) {
             "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
     }
 }
-if (!isset($parsedParams->params)) {
-    $parsedParams->params = (object)array();
-}
 if (!isset($parsedParams->shaderSources)) {
-    $parsedParams->shaderSources  = array();
+    $parsedParams->shaderSources = array();
 }
 
 $layerVisible = isset($parsedParams->visualizations);
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = !isset($_COOKIE["shadersPin"]);
+
+if (!isset($parsedParams->plugins)) {
+    $parsedParams->plugins = (object)array();
+}
+
 if ($layerVisible) {
 
     foreach ($parsedParams->visualizations as $visualisationTarget) {
@@ -128,31 +133,40 @@ if ($layerVisible) {
     $MODULES["webgl"]->loaded = true;
 }
 
-$visualisation = json_encode($parsedParams);
-$cookieCache = json_encode($cookieCache);
-$version = VERSION;
-
 /**
  * Plugins+Modules loading: load required parts of the application
  */
-
 $pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
 foreach ($PLUGINS as $_ => $plugin) {
-    //plugin is loaded if flag not specified or if flag set and no error in the plugin occurred
+    if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
+        $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
+    }
+
+    $hasParams = isset($parsedParams->plugins->{$plugin->id});
     $plugin->loaded = !isset($plugin->error) &&
-        (!isset($plugin->flag) || isFlagInProtocols($plugin->flag) || in_array($plugin->flag, $pluginsInCookies));
-    $plugin->permaLoaded = $plugin->loaded && isset($_GET[$plugin->flag]) && $_GET[$plugin->flag] == "true";
+        (isset($parsedParams->plugins->{$plugin->id}) || in_array($plugin->id, $pluginsInCookies));
 
     //make sure all modules required by plugins are also loaded
     if ($plugin->loaded) {
+        if (!$hasParams) {
+            $parsedParams->plugins->{$plugin->id} = (object)array();
+        }
         foreach ($plugin->modules as $modId) {
             $MODULES[$modId]->loaded = true;
         }
     }
 }
 
+$visualisation = json_encode($parsedParams);
+$cookieCache = json_encode($cookieCache);
+$protoLayers = LAYERS_DEFAULT_PROTOCOL;
+$cookie_setup = JS_COOKIE_SETUP;
+
 //make sure all modules required by other modules are loaded
 foreach ($MODULES as $_ => $mod) {
+    if (file_exists(MODULES_FOLDER . "/" . $mod->directory . "/style.css")) {
+        $mod->styleSheet = MODULES_FOLDER . "/" . $mod->directory . "/style.css?v=$version";
+    }
     if ($mod->loaded) {
         foreach ($mod->requires as $__ => $requirement) {
             $MODULES[$requirement]->loaded = true;
@@ -162,7 +176,7 @@ foreach ($MODULES as $_ => $mod) {
 
 ?>
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<html lang="en" dir="ltr" data-light-theme="light">
 
 <head>
     <meta charset="utf-8">
@@ -217,7 +231,6 @@ foreach ($MODULES as $_ => $mod) {
     <script src="./osd_debug/src/drawer.js"></script>
 
     <script src="./osd_debug/src/dzitilesource.js"></script>
-    <script src="./osd_debug/src/dziexttilesource.js?v=$version"></script>
     <script src="./osd_debug/src/fullscreen.js"></script>
     <script src="./osd_debug/src/iiiftilesource.js"></script>
     <script src="./osd_debug/src/imagetilesource.js"></script>
@@ -239,32 +252,40 @@ foreach ($MODULES as $_ => $mod) {
     <script src="./osd_debug/src/world.js"></script>
     <script src="./osd_debug/src/zoomifytilesource.js"></script>
 
+    <!--Extensions/modifications-->
+    <script src="./external/dziexttilesource.js?v=$version"></script>
+    <script src="./external/osd_tools.js?v=$version"></script>
+    <script src="./external/scalebar.js?v=$version"></script>
+
     <!--Tutorials-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
     <link rel="stylesheet" href="./external/enjoyhint.css">
     <script src="./external/enjoyhint.min.js"></script>
 
-    <!--Modules-->
-<?php
+    <!--UI Classes-->
+    <?php require_once ("ui_components.php"); ?>
 
-foreach ($MODULES as $_ => $mod) {
-    if ($mod->loaded) {
-        //add module style sheet if exists
-        if (file_exists(MODULES . "/" . $mod->directory . "/style.css")) {
-            echo "<link rel=\"stylesheet\" href=\"" . MODULES . "/" . $mod->directory . "/style.css?v=$version\">\n";
-        }
-        foreach ($mod->includes as $__ => $file) {
-            echo "    <script src=\"" . MODULES . "/" . $mod->directory . "/$file?v=$version\"></script>\n";
+    <!--Modules-->
+    <?php
+
+    foreach ($MODULES as $_ => $mod) {
+        if ($mod->loaded) {
+            //add module style sheet if exists
+            if (isset($mod->styleSheet)) {
+                echo "<link rel=\"stylesheet\" href=\"$mod->styleSheet\" type='text/css'>\n";
+            }
+            foreach ($mod->includes as $__ => $file) {
+                echo "    <script src=\"" . MODULES_FOLDER . "/" . $mod->directory . "/$file?v=$version\"></script>\n";
+            }
         }
     }
-}
 
-?>
+    ?>
 
 </head>
 
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="overflow: hidden;">
+<body style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
     <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
@@ -286,21 +307,21 @@ foreach ($MODULES as $_ => $mod) {
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
-    <br><br><button class="btn" onclick="Tutorials.hide();">Exit</button>
+    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();">Exit</button>
 </div>
 
 <!-- Main Panel -->
-<span id="main-panel-show" class="material-icons pointer" onclick="$('#main-panel').css('right', 0);">chevron_left</span>
+<span id="main-panel-show" class="material-icons pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
-<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; width: 400px;" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; background: var(--color-bg-primary); width: 400px;">
 
-    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 40px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;">
-        <span id="main-panel-hide" class="material-icons pointer" onclick="$('#main-panel').css('right', '-400px');">chevron_right</span>
+    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
+        <span id="main-panel-hide" class="material-icons pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
         <div id="navigator-container" class="inner-panel top-0 left-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
             <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
-            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick=" let self = $(this);
+            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick="let self = $(this);
  if (self.hasClass('pressed')) {
     self.removeClass('pressed');
     self.parent().removeClass('color-shadow-medium position-fixed');
@@ -310,31 +331,32 @@ foreach ($MODULES as $_ => $mod) {
  }
 "> push_pin </span>
         </div>
-        <div id="general-controls" class="inner-panel d-flex">
+        <div id="general-controls" class="inner-panel inner-panel-visible d-flex">
             <!--TODO export also these values? -->
-<?php
+            <?php
 
-//if only one data layer visible, show as checkbox, else add Images menu
-if ($layerVisible && $singleBgImage) {
-    echo <<<EOF
-            <label for="global-opacity">Layer Opacity: &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 150px;">&emsp;
+            //if only one data layer visible, show as checkbox, else add Images menu
+            if ($layerVisible && $singleBgImage) {
+                echo <<<EOF
+            <label for="global-opacity">Layer Opacity &nbsp;</label>
+            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 120px;">&emsp;
             <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
             <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
-                   onchange="viewer.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                   onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+            <span class="material-icons pointer ml-2" onclick="APPLICATION_CONTEXT.UTILITIES.clone()" title="Clone and synchronize">sync_alt</span>
         </div><!--end of general controls-->
 EOF;
-} else {
-    if ($layerVisible) {
-        echo '<label for="global-opacity">Layer Opacity: &nbsp;</label>
+            } else {
+                if ($layerVisible) {
+                    echo '<label for="global-opacity">Layer Opacity: &nbsp;</label>
             <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;';
-    }
-    echo <<<EOF
+                }
+                echo <<<EOF
         </div> <!--end of general controls-->
         <div id="panel-images" class="inner-panel">   
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
-                        <span id="images-pin" class="material-icons pointer inline-pin" onclick="pinClick($(this), $(this).parents().eq(1).children().eq(1));"> push_pin </span>
+                        <span id="images-pin" class="material-icons pointer inline-arrow" onclick="APPLICATION_CONTEXT.UTILITIES.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
                         <h3 class="d-inline-block">Images</h3>
                     </div>
    
@@ -344,13 +366,13 @@ EOF;
                 </div>
            </div>
 EOF;
-}
+            }
 
-if ($layerVisible) {
-    $opened = $firstTimeVisited || $_COOKIE["shadersPin"] == "true";
-    $pinClass = $opened ? "pressed" : "";
-    $shadersSettingsClass = $opened ? "force-visible" : "";
-    echo <<<EOF
+            if ($layerVisible) {
+                $opened = $firstTimeVisited || $_COOKIE["shadersPin"] == "true";
+                $pinClass = $opened ? "pressed" : "";
+                $shadersSettingsClass = $opened ? "force-visible" : "";
+                echo <<<EOF
           <div id="panel-shaders" class="inner-panel">
     
                 <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
@@ -358,12 +380,12 @@ if ($layerVisible) {
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
     
-                        <span id="shaders-pin" class="material-icons pointer inline-pin $pinClass" onclick="let jqSelf = $(this); pinClick(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/`"> push_pin </span>
+                        <span id="shaders-pin" class="material-icons pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); APPLICATION_CONTEXT.UTILITIES.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="makeCacheSnapshot();">repeat_on</span>
+                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot();">repeat_on</span>
                     </div>
     
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
@@ -374,66 +396,127 @@ if ($layerVisible) {
                 </div>
             </div>
 EOF;
-}
+            }
+            ?>
+            <!-- Appended controls for other plugins -->
+        </div>
+
+        <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer bg-opacity fixed-bg-opacity" style="width: 400px;">
+            <span id="copy-url" class="pl-1" onclick="APPLICATION_CONTEXT.UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1 pointer" style="font-size: 22px;">link</span>URL</span>
+            <span id="global-export" class="pl-1" onclick="APPLICATION_CONTEXT.UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1 pointer" style="font-size: 22px;">download</span>Export</span>
+            <a style="display:none;" id="export-visualisation"></a> &emsp;
+            <span id="add-plugins" class="pl-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1 pointer" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
+            <span id="global-help" class="pl-1" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
+            <span id="settings" class="p-0 material-icons" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>&emsp;
+        </div>
+    </div>
+
+    <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
+    <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
+<?php
+    include_once ("user_interface.php");
 ?>
-        <!-- Appended controls for other plugins -->
-    </div>
 
-    <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer" style="width: 400px; background: #787878cf;">
-        <span id="copy-url" class="pl-2" onclick="copyHashUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pointer">link</span>Get link</span>
-        <span id="global-export" class="pl-2" onclick="exportVisualisation();" title="Export visualisation together with plugins data"><span class="material-icons pointer">download</span>Export</span>
-        <a style="display:none;" id="export-visualisation"></a> &emsp;
-        <span id="add-plugins" onclick="showAvailablePlugins();" title="Add plugins to the visualisation"><span class="material-icons pointer">extension</span>Plugins</span>&emsp;
-        <span id="global-help" onclick="Tutorials.show();" title="Show tutorials"><span class="material-icons pointer">school</span>Tutorial</span>&emsp;
-    </div>
-    </div>
+    <!-- APPLICATION -->
+    <script type="text/javascript">
 
-<!-- DEFAULT SETUP SCRIPTING -->
-<script type="text/javascript">
+(function (window) {
+    let setup = <?php echo $visualisation ?>;
+    //default parameters not extended by setup.params (would bloat link files)
+    setup.params = setup.params || {};
 
-    /*---------------------------------------------------------*/
-    /*------------ System error messenger ---------------------*/
-    /*---------------------------------------------------------*/
-
-    var DisplayError = {
-        active: false,
-
-        show: function(title, description, withHiddenMenu=false) {
-            Tutorials._hideImpl(false); //preventive
-            $("#system-message-title").html(title);
-            $("#system-message-details").html(description);
-            $("#system-message").removeClass("d-none");
-            $("#viewer-container").addClass("disabled");
-            if (withHiddenMenu) $("#main-panel").css("right", "-400px");
-            this.active = true;
+    window.APPLICATION_CONTEXT = {
+        shadersCache: <?php echo $cookieCache ?>,
+        setup: setup,
+        //here are all parameters supported by the core visualization
+        defaultParams: {
+            visualizationProtocol: "<?php echo $protoLayers?>",
+            customBlending: false,
+            debugMode: false,
+            webglDebugMode: false,
+            scaleBar: true,
+            activeVisualizationIndex: 0,
+            preventNavigationShortcuts: false,
+            permaLoadPlugins: true,
+            theme: "auto"
         },
-
-        hide: function() {
-            $("#system-message").addClass("d-none");
-            $("#viewer-container").removeClass("disabled");
-            this.active = false;
+        imageLayer: _ => undefined, //largest background image
+        layersAvailable: false, //default
+        settingsMenuId: "app-settings",
+        pluginsMenuId: "app-plugins",
+        getOption: function (name) {
+            return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] : this.defaultParams[name];
         }
+    };
+
+    //https://github.com/mrdoob/stats.js
+    if (setup.params.debugMode) {
+        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='external/stats.js';document.head.appendChild(script);})()
+    }
+
+    window.HTTPError = class extends Error {
+        constructor(message, response) {
+            super();
+            this.message = message;
+            this.code = response;
+        }
+    };
+
+    window.PLUGINS = {
+        addTutorial: USER_INTERFACE.Tutorials.add.bind(USER_INTERFACE.Tutorials),
+        addPostExport: function(name, valueHandler, pluginId) {
+            this._exportHandlers.push({name: name, call: valueHandler, pluginId: pluginId});
+        },
+        addHtml: function(containerId, html, pluginId, selector="body") {
+            $(selector).append(html);
+            $(`#${containerId}`).addClass(`${pluginId}-plugin-root`);
+        },
+        fetchJSON: async function(url, postData=null) {
+            let method = postData ? "POST" : "GET",
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                };
+            const response = await fetch(url, {
+                method: method,
+                mode: 'cors',
+                cache: 'no-cache',
+                credentials: 'same-origin',
+                headers: headers,
+                body: postData ? JSON.stringify(postData) : null
+            });
+
+            if (response.status < 200 || response.status > 299) {
+                return response.text().then(text => {
+                    throw new HTTPError(`Server returned ${response.status}: ${text}`, response);
+                });
+            }
+            return response.json();
+        },
+        setParams(id, params) {
+            APPLICATION_CONTEXT.setup.plugins[id] = params;
+        },
+        imageSources: setup.data,
+        setDirty: () => {setup.dirty = true;}, //todo change not reflected..
+        postData: <?php echo json_encode($_POST)?>,
+        each: <?php echo json_encode((object)$PLUGINS)?>,
+        _exportHandlers: []
     };
 
     //preventive error message, that will be discarded after the full initialization
     window.onerror = function (message, file, line, col, error) {
-        if (DisplayError.active) return false;
-        DisplayError.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
+        let ErrUI = USER_INTERFACE.Errors;
+        if (ErrUI.active) return false;
+        ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
         return false;
     };
 
-    function preventDirtyClose(e) {
-        e.preventDefault();
-        e.returnValue = "";
-        if (this.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
-    }
+    /*---------------------------------------------------------*/
+    /*------------ Initialization of UI -----------------------*/
+    /*---------------------------------------------------------*/
 
-    if (window.addEventListener) {
-        window.addEventListener('beforeunload', preventDirtyClose, true);
-    } else if (window.attachEvent) {
-        window.attachEvent('onbeforeunload', preventDirtyClose);
-    }
+    USER_INTERFACE.AdvancedMenu._build();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -445,7 +528,7 @@ EOF;
     }
 
     // Initialize viewer - OpenSeadragon
-    var viewer = OpenSeadragon({
+    window.VIEWER = OpenSeadragon({
         id: "osd",
         prefixUrl: "osd/images/",
         showNavigator: true,
@@ -456,90 +539,37 @@ EOF;
         loadTilesWithAjax : true,
         ajaxHeaders: <?php echo json_encode((object)COMMON_HEADERS); ?>,
         splitHashDataForPost: true,
-        //todo maybe do not set for chrome?
-        subPixelRoundingForTransparency: OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-        // debugMode:  true,
+        subPixelRoundingForTransparency:
+            navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
+                OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
+                OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
+        debugMode: setup.params.debugMode,
     });
-    viewer.gestureSettingsMouse.clickToZoom = false;
+    VIEWER.gestureSettingsMouse.clickToZoom = false;
+    VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
+
+    if (!setup.params.hasOwnProperty("scaleBar") || setup.params.scaleBar) {
+        VIEWER.scalebar({
+            pixelsPerMeter: 1e6, //todo from metadata!!!
+            sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
+            stayInsideImage: false,
+            location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+            xOffset: 5,
+            yOffset: 10,
+            // color: "var(--color-text-primary)",
+            // fontColor: "var(--color-text-primary)",
+            backgroundColor: "rgba(255, 255, 255, 0.5)",
+            fontSize: "small",
+            barThickness: 2
+        });
+    }
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of Visualisation ------------*/
     /*---------------------------------------------------------*/
 
-    var shadersCache = <?php echo $cookieCache ?>;
-    var setup = <?php echo $visualisation ?>;
-    var activeVisualization = 0; //todo dynamic?
-    const visualizationUrlMaker = new Function("path,data",
-        "return " + (setup.params.visualizationProtocol || "`${path}#DeepZoomExt=${data.join(',')}.dzi`"));
-
-    //index of the layer composed of shaders, last one or not present (-1)
-    //todo unsafe if some image did not load? investigate! find how to get desired tilesource type instead...
-    let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
-
-    // Tutorial functionality
-    var Tutorials = {
-        tutorials: $("#tutorials"),
-        steps: [],
-        prerequisites: [],
-
-        show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
-            if (DisplayError.active) return;
-
-            $("#tutorials-container").removeClass("d-none");
-            $("#viewer-container").addClass("disabled");
-            $("#tutorials-title").html(title);
-            $("#tutorials-description").html(description);
-            $('#main-panel').css('right', '-400px');
-        },
-
-        hide: function() {
-            this._hideImpl(true);
-        },
-
-        _hideImpl: function(reflectGUIChange) {
-            $("#tutorials-container").addClass("d-none");
-            if (reflectGUIChange) {
-                $("#viewer-container").removeClass("disabled");
-                $('#main-panel').css('right', '0px');
-            }
-            document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
-        },
-
-        add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
-            if (!icon) icon = "school";
-            plugidId = plugidId ? `${plugidId}-plugin-root` : "";
-            this.tutorials.append(`
-          <div class='d-inline-block px-2 py-2 m-1 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="Tutorials.run(${this.steps.length});">
-          <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
-            this.steps.push(steps);
-            this.prerequisites.push(prerequisites);
-        },
-
-        run: function(index) {
-            if (index >= this.steps.length || index < 0) return;
-            $('#main-panel').css('right', '0px');
-
-
-            //reset plugins visibility
-            $(".plugins-pin").each(function() {
-                let pin = $(this);
-                let container = pin.parents().eq(1).children().eq(2);
-                pin.removeClass('pressed');
-                container.removeClass('force-visible');
-            });
-            //do prerequisite setup if necessary
-            if(this.prerequisites[index]) this.prerequisites[index]();
-            let enjoyhintInstance = new EnjoyHint({});
-            enjoyhintInstance.set(this.steps[index]);
-            this.hide();
-            enjoyhintInstance.run();
-        }
-    };
-
-    <?php
-
-echo <<<EOF
-    Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
+    <?php echo <<<EOF
+    window.USER_INTERFACE.Tutorials.add("", "Basic functionality", "learn how the visualiser works", "foundation", [ {
     'next #viewer-container' : 'You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.'
 },{
         'next #main-panel' : 'On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.',
@@ -548,24 +578,24 @@ echo <<<EOF
 },
 EOF;
 
-if ($singleBgImage && $layerVisible) {
-    echo '{
+    if ($singleBgImage && $layerVisible) {
+        echo '{
         \'next #general-controls\' : \'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.<br>You can control the data layer opacity here.\'
 },';
-} else {
-    echo '{
+    } else {
+        echo '{
         \'next #panel-images\' : \'There are several background images available: <br> you can turn them on/off or blend using an opacity slider.\'
         
 },';
-    if ($layerVisible) {
-        echo '{
+        if ($layerVisible) {
+            echo '{
         \'next #general-controls\' : \'The data layer opacity atop background images can be controlled here.\'
 },';
+        }
     }
-}
 
-if ($layerVisible) {
-    echo '{
+    if ($layerVisible) {
+        echo '{
         \'next #panel-shaders\' : \'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be conrolled here.\'
 }, {
         \'click #shaders-pin\' : \'Click on the pin to set <br>this controls subpanel to be always visible.\'
@@ -574,16 +604,16 @@ if ($layerVisible) {
 }, {
         \'next #data-layer-options\' : \'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.\'
 },';
-}
+    }
 
-echo <<<EOF
+    echo <<<EOF
 {
         'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
 }]
 EOF; //end of the first argument of Tutorials.add()
 
-if ($layerVisible) {
-    echo <<<EOF
+    if ($layerVisible) {
+        echo <<<EOF
 , function() {
     //prerequisite - pin in default state
     let pin = $("#shaders-pin");
@@ -592,21 +622,72 @@ if ($layerVisible) {
     container.removeClass('force-visible');
 }
 EOF;
-}
-echo ");"; //end of Tutorials.add(...
+    }
+    echo ");"; //end of Tutorials.add(...
     ?>
 
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
         let val = $(this).val();
-        viewer.world.getItemAt(layerIDX).setOpacity(val);
+        window.VIEWER.world.getItemAt(window.VIEWER).setOpacity(val);
+    });
+
+
+    $(VIEWER.element).on('contextmenu', function (event) {
+        event.preventDefault();
+    });
+
+    /**
+     * Focusing all key press events and forwarding to OSD
+     * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
+     */
+    let focusOnViewer = true;
+    VIEWER.addHandler('canvas-enter', function () {
+        focusOnViewer = true;
+    });
+    VIEWER.addHandler('canvas-exit', function () {
+        focusOnViewer = false;
+    });
+    document.addEventListener('keydown', function (e) {
+        e.focusCanvas = focusOnViewer;
+        VIEWER.raiseEvent('key-down', e);
+    });
+    document.addEventListener('keyup', function (e) {
+        e.focusCanvas = focusOnViewer;
+        VIEWER.raiseEvent('key-up', e);
+    });
+    //todo register tile-load-failed and count invalid requests and if > 5 remove tile automatically...
+
+    let failCount = new WeakMap();
+    VIEWER.addHandler('tile-load-failed', function(e) {
+        if (e.message === "Image load aborted") return;
+        let index = VIEWER.world.getIndexOfItem(e.tiledImage);
+        let failed = failCount[index];
+        if (!failed || failed != e.tiledImage) {
+            failCount[index] = e.tiledImage;
+            e.tiledImage._failedCount = 1;
+        } else {
+            let d = e.time - e.tiledImage._failedDate;
+            if (d < 500) {
+                e.tiledImage._failedCount++;
+            } else {
+                e.tiledImage._failedCount = 1;
+            }
+            if (e.tiledImage._failedCount > 5) {
+                e.tiledImage._failedCount = 1;
+                //todo docs
+                e.worldIndex = index;
+                VIEWER.raiseEvent('tiled-image-problematic', e);
+            }
+        }
+        e.tiledImage._failedDate = e.time;
     });
 
     /**
      * From https://github.com/openseadragon/openseadragon/issues/1690
      * brings better zooming behaviour
      */
-    viewer.addHandler("canvas-scroll", function (event) {
+    window.VIEWER.addHandler("canvas-scroll", function() {
         if (typeof this.scrollNum == 'undefined') {
             this.scrollNum = 0;
         }
@@ -621,72 +702,83 @@ echo ");"; //end of Tutorials.add(...
             this.scrollNum++;
         } else {
             this.scrollNum = 0;
-            viewer.zoomPerScroll = 1.2;
+            VIEWER.zoomPerScroll = 1.2;
         }
 
-        if (this.scrollNum > 2 && viewer.zoomPerScroll <= 2.5) {
-            viewer.zoomPerScroll += 0.2;
+        if (this.scrollNum > 2 && VIEWER.zoomPerScroll <= 2.5) {
+            VIEWER.zoomPerScroll += 0.2;
         }
 
         this.lastScroll = this.currentScroll; //Set last scroll to now
     });
 
-    if (!setup.params.preventNavigationShorcuts) {
-        document.addEventListener('keydown', (e) => {
+    if (!setup.params.preventNavigationShortcuts) {
+        function adjustBounds(speedX, speedY) {
+            let bounds = VIEWER.viewport.getBounds();
+            bounds.x += speedX*bounds.width;
+            bounds.y += speedY*bounds.height;
+            VIEWER.viewport.fitBounds(bounds);
+        }
+
+        //todo article!!! also acceleration!
+        VIEWER.addHandler('key-up', function(e) {
+            if (!e.focusCanvas) return;
             let zoom = null,
-                bounds = viewer.viewport.getBounds(),
                 speed = 0.3;
             switch (e.key) {
                 case "Down": // IE/Edge specific value
                 case "ArrowDown":
-                    bounds.y += speed*bounds.height;
+                    adjustBounds(0, speed);
                     break;
                 case "Up": // IE/Edge specific value
                 case "ArrowUp":
-                    bounds.y -= speed*bounds.height;
+                    adjustBounds(0, -speed);
                     break;
                 case "Left": // IE/Edge specific value
                 case "ArrowLeft":
-                    bounds.x -= speed*bounds.width;
+                    adjustBounds(-speed, 0);
                     break;
                 case "Right": // IE/Edge specific value
                 case "ArrowRight":
-                    bounds.x += speed*bounds.width;
+                    adjustBounds(speed, 0);
                     break;
                 case "+":
-                    zoom = viewer.viewport.getZoom();
-                    viewer.viewport.zoomTo(zoom + zoom * speed * 3);
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
                     return;
                 case "-":
-                    zoom = viewer.viewport.getZoom();
-                    viewer.viewport.zoomTo(zoom - zoom * speed * 2);
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
                     return;
                 default:
                     return; // Quit when this doesn't handle the key event.
             }
-            viewer.viewport.fitBounds(bounds);
         });
     }
 
-    /*---------------------------------------------------------*/
-    /*------------ MAIN PANEL JS ------------------------------*/
-    /*---------------------------------------------------------*/
-
-    function pinClick(jQSelf, jQTargetParent) {
-        if (jQTargetParent.hasClass('force-visible')) {
-            jQTargetParent.removeClass('force-visible');
-            jQSelf.removeClass('pressed');
-        } else {
-            jQSelf.addClass('pressed');
-            jQTargetParent.addClass('force-visible');
-        }
-    }
+    //TODO return prevention from closing and disable only if refreshed via API
 
     /*---------------------------------------------------------*/
     /*------------ EXPORTING ----------------------------------*/
     /*---------------------------------------------------------*/
 
-    function constructExportVisualisationForm(customAttributes="", includeCurrentPlugins=true) {
+    function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined) {
+        //reconstruct active plugins
+        let pluginsData = APPLICATION_CONTEXT.setup.plugins;
+        let plugins = PLUGINS.each;
+        let includeEvaluator = includedPluginsList ?
+            p => includedPluginsList.includes(p) :
+            p => plugins[p].loaded;
+
+        for (let plugin in plugins) {
+            if (!plugins.hasOwnProperty(plugin)) continue;
+            if (!includeEvaluator(plugin)) {
+                delete pluginsData[plugin];
+            } else if (!pluginsData.hasOwnProperty(plugin)) {
+                pluginsData[plugin] = {};
+            }
+        }
+
         let form = `
       <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
@@ -695,30 +787,15 @@ echo ");"; //end of Tutorials.add(...
       </form>
       <script type="text/javascript">
 <?php
-     if ($layerVisible) {
-         //we need to safely stringify setup (which has been modified by the webgl module)
-         echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer)}\`;";
-     } else {
-         echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(setup)}\`;";
-     }
-?>
+        if ($layerVisible) {
+            //we need to safely stringify setup (which has been modified by the webgl module)
+            echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(APPLICATION_CONTEXT.setup, VIEWER.bridge.webGLEngine.jsonReplacer)}\`;";
+        } else {
+            echo "document.getElementById(\"visualisation\").value = \`\${JSON.stringify(APPLICATION_CONTEXT.setup)}\`;";
+        }
+        ?>
         var form = document.getElementById("redirect");
         var node;`;
-        if (includeCurrentPlugins) {
-            <?php
-            foreach ($PLUGINS as $_ => $plugin) {
-                if ($plugin->loaded) {
-                    echo <<<EOF
-form += `node = document.createElement("input");
-node.setAttribute("type", "hidden");
-node.setAttribute("name", '$plugin->flag');
-node.setAttribute("value", '1');
-form.appendChild(node);`;
-EOF;
-                }
-            }
-            ?>
-        }
 
         for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
             let toExport = PLUGINS._exportHandlers[i];
@@ -726,8 +803,8 @@ EOF;
                 let value = toExport.call();
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", '${toExport.name}');
-node.setAttribute("value", '${value}');
+node.setAttribute("name", \`${toExport.name}\`);
+node.setAttribute("value", \`${value}\`);
 form.appendChild(node);`;
             }
         }
@@ -736,182 +813,277 @@ form.appendChild(node);`;
 form.submit();<\/script>`;
     }
 
-    function copyHashUrlToClipboard() {
-        let baseUrl = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
-
-        let oldViewport = setup.params.viewport;
-        setup.params.viewport = {
-            zoomLevel: viewer.viewport.getZoom(),
-            point: viewer.viewport.getCenter()
-        };
-<?php
-if ($layerVisible) {
-    //we need to safely stringify setup (which has been modified by the webgl module)
-    echo "        let postData = JSON.stringify(setup, seaGL.webGLWrapper.jsonReplacer) + '|';";
-} else {
-    echo "        let postData = JSON.stringify(setup) + '|';";
-}
-?>
-        setup.params.viewport = oldViewport;
-        Object.values(PLUGINS.each).forEach(plugin => {
-            if (plugin.loaded) {
-                postData += plugin.flag + "|";
+    window.APPLICATION_CONTEXT.UTILITIES = {
+        clickMenuHeader: function(jQSelf, jQTargetParent) {
+            if (jQTargetParent.hasClass('force-visible')) {
+                jQTargetParent.removeClass('force-visible');
+                jQSelf.removeClass('opened');
+            } else {
+                jQSelf.addClass('opened');
+                jQTargetParent.addClass('force-visible');
             }
-        });
+        },
 
-        let $temp = $("<input>");
-        $("body").append($temp);
-        $temp.val(baseUrl + encodeURIComponent(postData)).select();
-        document.execCommand("copy");
-        $temp.remove();
-        Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
-    }
+        updateTheme: function() {
+            let theme = APPLICATION_CONTEXT.getOption("theme");
+            if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultParams.theme;
+            if (theme === "dark_dimmed") {
+                document.documentElement.dataset['darkTheme'] = "dark_dimmed";
+                document.documentElement.dataset['colorMode'] = "dark";
 
-    function exportVisualisation() {
-        let doc = `<!DOCTYPE html>
+            } else {
+                document.documentElement.dataset['darkTheme'] = "dark";
+                document.documentElement.dataset['colorMode'] = theme;
+            }
+        },
+
+        getForm: constructExportVisualisationForm,
+
+        copyUrlToClipboard: function () {
+            let baseUrl = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
+
+            let oldViewport = setup.params.viewport;
+            setup.params.viewport = {
+                zoomLevel: VIEWER.viewport.getZoom(),
+                point: VIEWER.viewport.getCenter()
+            };
+            <?php
+            //todo move this to layers.php somehow
+            if ($layerVisible) {
+                //we need to safely stringify setup (which has been modified by the webgl module)
+                echo "        let postData = JSON.stringify(setup, VIEWER.bridge.webGLEngine.jsonReplacer);";
+            } else {
+                echo "        let postData = JSON.stringify(setup);";
+            }
+            ?>
+            setup.params.viewport = oldViewport;
+
+            let $temp = $("<input>");
+            $("body").append($temp);
+            $temp.val(baseUrl + encodeURIComponent(postData)).select();
+            document.execCommand("copy");
+            $temp.remove();
+            Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
+        },
+
+        export: function () {
+            let oldViewport = setup.params.viewport;
+            setup.params.viewport = {
+                zoomLevel: VIEWER.viewport.getZoom(),
+                point: VIEWER.viewport.getCenter()
+            };
+            let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
-<head>
-  <meta charset="utf-8"><title>Visualisation export</title>
-</head>
+<head><meta charset="utf-8"><title>Visualisation export</title></head>
 <body>
 <div>Errors (if any): <pre>${JSON.stringify(console.savedLogs)}</pre></div>
 ${constructExportVisualisationForm()}
 </body></html>`;
-        let output = new Blob([doc], { type: 'text/html' });
-        let downloadURL = window.URL.createObjectURL(output);
-        var downloader = document.getElementById("export-visualisation");
-        downloader.href = downloadURL;
-        downloader.download = "export.html";
-        downloader.click();
-        URL.revokeObjectURL(downloadURL);
-        setup.dirty = false;
-    }
-</script>
+            setup.params.viewport = oldViewport;
+            let output = new Blob([doc], { type: 'text/html' });
+            let downloadURL = window.URL.createObjectURL(output);
+            var downloader = document.getElementById("export-visualisation");
+            downloader.href = downloadURL;
+            downloader.download = "export.html";
+            downloader.click();
+            URL.revokeObjectURL(downloadURL);
+            setup.dirty = false;
+        },
 
-<?php
-require_once ("dialogs.php");
-if ($layerVisible) {
-    echo "<script src=\"layers.js?v=$version\" type=\"text/javascript\"></script>";
-}
-?>
-
-<script type="text/javascript">
-    /*---------------------------------------------------------*/
-    /*------------ PLUGINS ------------------------------------*/
-    /*---------------------------------------------------------*/
-
-    var PLUGINS = {
-        osd: viewer,
-<?php
-if ($layerVisible) {
-    echo "        hasLayers: true,
-                  seaGL: seaGL,
-                  dataLayer: viewer.world.getItemAt.bind(viewer.world, layerIDX),";
-} else {
-    echo "        hasLayers: false,
-                  seaGL: null,
-                  dataLayer: null,";
-}
-?>
-        addTutorial: Tutorials.add.bind(Tutorials),
-        dialog: Dialogs,
-        appendToMainMenu: function(title, titleHtml, html, id, pluginId) {
-            $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div><h3 class="d-inline-block h3" style="padding-left: 35px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
-        },
-        replaceInMainMenu: function(title, titleHtml, html, id, pluginId) {
-            $(`.${pluginId}-plugin-root`).remove();
-            this.appendToMainMenu(title, titleHtml, html, id, pluginId);
-        },
-        appendToMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
-            $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-        <span class="material-icons inline-pin plugins-pin pointer" id="${id}-pin" onclick="pinClick($(this), $(this).parent().parent().children().eq(2));"> push_pin </span>
-        <h3 class="d-inline-block h3">${title}&emsp;</h3>${titleHtml}
-        </div>
-        <div>
-        ${html}
-        </div><div class='inner-panel-hidden'>${hiddenHtml}</div></div>`);
-        },
-        replaceInMainMenuExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
-            $(`.${pluginId}-plugin-root`).remove();
-            this.appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
-        },
-        appendToMainMenuRaw: function(html, id, pluginId) {
-            $("#main-panel-content").append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root">${html}</div>`);
-        },
-        addPostExport: function(name, valueHandler, pluginId) {
-            this._exportHandlers.push({name: name, call: valueHandler, pluginId: pluginId});
-        },
-        addHtml: function(html, pluginId) {
-            let pluginRoot = $(`#${pluginId}-plugin-root`);
-            if (pluginRoot.length <= 0){
-                pluginRoot = $("body").append(`<div id="${pluginId}-plugin-root">${html}</div>`);
-            } else {
-                pluginRoot.append(html);
-            }
-        },
-        params: setup.params,
-        imageSources: setup.data,
-        setDirty: () => {setup.dirty = true;},
-        postData: <?php echo json_encode($_POST)?>,
-        each: <?php echo json_encode((object)$PLUGINS)?>,
-        _exportHandlers: []
-    };
-
-    var _registeredPlugins = [];
-
-    //todo make this PLUGINS.register(..)
-    function registerPlugin(PluginClass) {
-        if (_registeredPlugins === undefined) {
-            console.error("Plugins has already been loaded.");
-            return;
-        }
-        try {
-            var plugin = new PluginClass();
-        } catch (e) {
-            if (!PluginClass.identifier) {
-                console.warn("Plugin registered with no static identifier!", PluginClass);
+        clone: function () {
+            if (window.opener) {
                 return;
             }
-            let id = PluginClass.identifier;
 
-            console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
-            PLUGINS.each[id].loaded = false;
-            PLUGINS.each[id].permaLoaded = false;
-            PLUGINS.each[id].error = e;
-            $(`.${id}-plugin-root`).remove();
-            return;
+            let ctx = Dialogs.getModalContext('synchronized-view');
+            if (ctx) {
+                ctx.window.focus();
+                return;
+            }
+            let x = window.innerWidth / 2, y = window.innerHeight;
+            window.resizeTo(x, y);
+            Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
+                constructExportVisualisationForm(), `width=${x},height=${y}`);
         }
-        if (PluginClass.identifier !== plugin.id) {
-            console.warn("Plugin.identifier should equal to the plugin instance.id!", PluginClass);
-        }
-        if (plugin.id !== PLUGINS.each[plugin.id].id) {
-            console.warn(`Plugin ${PluginClass} has invalid ID set. It must equal to the id defined in include.json`, plugin);
-            return;
-        }
-        PLUGINS.each[plugin.id].instance = plugin;
-        window[plugin.id] = plugin;
-        if (OpenSeadragon.isFunction(plugin["openSeadragonReady"])) {
-            _registeredPlugins.push(plugin);
-        }
+    };
+})(window);
+    </script>
+
+    <?php
+    if ($layerVisible) {
+        include_once("layers.php");
     }
+    ?>
+
+    <script type="text/javascript">
+        /*---------------------------------------------------------*/
+        /*------------ PLUGINS ------------------------------------*/
+        /*---------------------------------------------------------*/
+(function (window) {
+    var registeredPlugins = [];
+    var MODULES = <?php echo json_encode((object)$MODULES) ?>;
+    var LOADING_PLUGIN = false;
+
+    function showPluginError(id, e) {
+        if (!e) {
+            $(`#error-plugin-${id}`).html("");
+            $(`#load-plugin-${id}`).html("");
+            return;
+        }
+        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">This plugin has been automatically
+removed: there was an error. <br><code>[${e}]</code></div>`);
+
+        //todo reload must refrehs VINDOW or plugins must declare themselves only unlsess they are not declared!!!
+        //if (!window.plugin) window.plugin = ...!!!!
+        $(`#load-plugin-${id}`).html(`<button disabled class="btn">Failed</button>`);
+
+        Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}<b> has been removed: there was an error.`,
+            4000, Dialogs.MSG_ERR);
+    }
+
+    function cleanUpScripts(id) {
+        $(`#script-section-${id}`).remove();
+        LOADING_PLUGIN = false;
+    }
+
+    function cleanUpPlugin(id, e="Unknown error") {
+        delete PLUGINS.each[id].instance;
+        delete window[id];
+        PLUGINS.each[id].loaded = false;
+        PLUGINS.each[id].error = e;
+
+        let removalIndices = [];
+        for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
+            if (PLUGINS._exportHandlers[i].pluginId === id) {
+                removalIndices.push(i);
+            }
+        }
+        //removed in backward pass to always access valid indices
+        for (let j = removalIndices.length-1; j >= 0; j--) {
+            PLUGINS._exportHandlers.splice(removalIndices[j], 1);
+        }
+
+        showPluginError(id, e);
+        $(`.${id}-plugin-root`).remove();
+        cleanUpScripts(id);
+    }
+
+    function instantiatePlugin(id, PluginClass) {
+        if (!id) {
+            console.warn("Plugin registered with no id defined!", id);
+            return;
+        }
+
+        try {
+            let parameters = APPLICATION_CONTEXT.setup.plugins[id];
+            if (!parameters) {
+                parameters = {};
+                APPLICATION_CONTEXT.setup.plugins[id] = parameters;
+            }
+            var plugin = new PluginClass(id, parameters);
+        } catch (e) {
+            console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
+            cleanUpPlugin(id, e);
+            return;
+        }
+
+        if (plugin.id !== id) plugin.id = id; //silently set
+        if (window[plugin.id]) {
+            console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, window[id]);
+            Dialogs.show(`Plugin ${plugin.name} could not be loaded: please, contact administrator.`, 7000, Dialogs.MSG_WARN);
+            cleanUpPlugin(plugin.id);
+            return;
+        }
+
+        PLUGINS.each[id].instance = plugin;
+        window[id] = plugin;
+        showPluginError(id, null);
+        return plugin;
+    }
+
+    function initializePlugin(plugin) {
+        try {
+            plugin.pluginReady();
+            return true;
+        } catch (e) {
+            console.warn(`Failed to initialize plugin ${plugin}.`, e);
+            cleanUpPlugin(plugin.id, e);
+        }
+        return false;
+    }
+
+    /**
+     * Load a script at runtime. Plugin is REMOVED from the viewer
+     * if the script is faulty
+     * (todo maybe do not be so sctrict and just delete that plugin..? but remember this is used by online plugin integration)
+     * todo rewrite using promises
+     * @param pluginId plugin that uses particular script
+     * @param src script URL
+     * @param onload function to call on success
+     */
+    PLUGINS.attachScript = function(pluginId, src, onload) {
+        let container = document.getElementById(`script-section-${pluginId}`);
+        if (!container) {
+            $("body").append(`<div id="script-section-${pluginId}"></div>`);
+            container = document.getElementById(`script-section-${pluginId}`);
+        }
+        let script = document.createElement("script");
+        script.async = false;
+
+        let errHandler = function (e) {
+            window.onerror = null;
+            if (LOADING_PLUGIN) {
+                cleanUpPlugin(pluginId, e);
+            } else {
+                cleanUpScripts(pluginId);
+            }
+        };
+
+        script.onload = function () {
+            window.onerror = null;
+            onload();
+        };
+        script.onerror = errHandler;
+        window.onerror = errHandler;
+        script.src = src;
+        container.append(script);
+        return true;
+    };
+
+    /**
+     * Register plugin. Plugin is instantiated and embedded into the viewer.
+     * @param id plugin id, should be unique in the system and match the id value in includes.json
+     * @param PluginClass class/class-like-function to register (not an instance!)
+     */
+    PLUGINS.register = function(id, PluginClass) {
+        let plugin = instantiatePlugin(id, PluginClass);
+
+        if (!plugin) return;
+
+        if (registeredPlugins !== undefined) {
+            if (plugin && OpenSeadragon.isFunction(plugin["pluginReady"])) {
+                registeredPlugins.push(plugin);
+            }
+        } //else do not initialize plugin, wait untill all files loaded dynamically
+    };
 
     function fileNameOf(imageFilePath) {
         let begin = imageFilePath.lastIndexOf('/')+1;
         return imageFilePath.substr(begin, imageFilePath.length - begin - 4);
     }
 
-    //todo remove this handler after execution
     function fireTheVisualization() {
-        viewer.removeHandler('open', fireTheVisualization);
+        window.VIEWER.removeHandler('open', fireTheVisualization);
         let i = 0;
         let largestWidth = 0, selectedImageLayer = 0;
         let imageNode = $("#image-layer-options");
+        let setup = APPLICATION_CONTEXT.setup;
         //image-layer-options can be missing --> populate menu only if exists
         if (imageNode) {
             //reverse order menu since we load images in reverse order
             for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
                 let image = setup.background[revidx];
-                let worldItem = viewer.world.getItemAt(i);
+                let worldItem =  window.VIEWER.world.getItemAt(i);
                 if (image.hasOwnProperty("lossless") && image.lossless) {
                     worldItem.source.fileFormat = "png";
                 }
@@ -922,191 +1094,273 @@ if ($layerVisible) {
                 }
                 imageNode.prepend(`
 <div class="h5 pl-3 py-1 position-relative"><input type="checkbox" checked class="form-control"
-onchange="viewer.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">Image
-${fileNameOf(setup.data[image.dataReference])}<input type="range" min="0" max="1" value="1" step="0.1"
-onchange="viewer.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));"></div>`);
+onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">Image
+${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])}<input type="range" min="0" max="1" value="1" step="0.1"
+onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));"></div>`);
                 i++;
             }
         }
-        PLUGINS.imageLayer = viewer.world.getItemAt.bind(viewer.world, selectedImageLayer);
+        //the viewer scales differently-sized layers sich that the biggest rules the visualization
+        //this is the largest image layer
+        //todo consider also data layers...?
+        VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
+        VIEWER.tools.referencedTileSource = VIEWER.world.getItemAt.bind(window.VIEWER.world, selectedImageLayer);
 
+        let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
         if (layerIDX !== -1) {
             if (layerIDX !== i) {
                 console.warn("Invalid initialization: layer index should be ", i);
                 layerIDX = i;
             }
 
-            let layerWorldItem = viewer.world.getItemAt(layerIDX);
-            let activeVis = setup.visualizations[activeVisualization];
+            let layerWorldItem =  window.VIEWER.world.getItemAt(layerIDX);
             if (layerWorldItem) {
-                if (activeVis.hasOwnProperty("lossless") && activeVis.lossless) {
+                let activeVis = setup.visualizations[setup.activeVisualizationIndex];
+                if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless) {
                     layerWorldItem.source.fileFormat = "png"; //todo on visualization change reflect also lossless?!
                 }
-                layerWorldItem.source.greyscale = (setup.params.hasOwnProperty("grayscale") && setup.params.grayscale) ?
-                    "/greyscale" : "";
+                layerWorldItem.source.greyscale = (APPLICATION_CONTEXT.setup.params.hasOwnProperty("grayscale")
+                    && APPLICATION_CONTEXT.setup.params.grayscale) ? "/greyscale" : "";
             }
 
             <?php
             if ($layerVisible) {
-                echo "            seaGL.setLayerIndex(layerIDX);";
+                echo "            VIEWER.bridge.addLayer(layerIDX);";
             }
             ?>
         }
 
-        _registeredPlugins.forEach(plugin => {
-            try {
-                plugin.openSeadragonReady()
-            } catch (e) {
-                console.warn(`Failed to initialize plugin ${plugin}.`, e);
-                delete PLUGINS.each[plugin.id].instance;
-                delete window[plugin.id];
-                PLUGINS.each[plugin.id].loaded = false;
-                PLUGINS.each[plugin.id].permaLoaded = false;
-                PLUGINS.each[plugin.id].error = e;
-
-                let removalIndices = [];
-                for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
-                    if (PLUGINS._exportHandlers[i].pluginId === plugin.id) {
-                        removalIndices.push(i);
-                    }
-                }
-                //removed in backward pass to always access valid indices
-                for (let j = removalIndices.length-1; j >= 0; j--) {
-                    PLUGINS._exportHandlers.splice(removalIndices[j], 1);
-                }
-                //remove any plugin HTML
-                $(`.${plugin.id}-plugin-root`).remove();
-            }
-        });
-        _registeredPlugins = undefined;
+        //Notify plugins OpenSeadragon is ready
+        registeredPlugins.forEach(plugin => initializePlugin(plugin));
+        registeredPlugins = undefined;
 
         if (setup.params.hasOwnProperty("viewport")
             && setup.params.viewport.hasOwnProperty("point")
             && setup.params.viewport.hasOwnProperty("zoomLevel")) {
-            viewer.viewport.panTo(setup.params.viewport.point);
-            viewer.viewport.zoomTo(setup.params.viewport.zoomLevel);
+            window.VIEWER.viewport.panTo(setup.params.viewport.point, true);
+            window.VIEWER.viewport.zoomTo(setup.params.viewport.zoomLevel, null, true);
         }
 
         if (window.innerHeight < 630) {
             $("#navigator-pin").click();
-            $("#main-panel-hide").click();
+            USER_INTERFACE.MainMenu.close();
         }
 
-        window.onerror = function(message, source, lineno, colno, error) {
-            Dialogs.show(message, 10000, Dialogs.MSG_ERR);
-            return false;
-        };
+        window.onerror = null;
 
-        if (DisplayError.active) {
+        if (window.opener && window.opener.VIEWER) {
+            OpenSeadragon.Tools.link( window.VIEWER, window.opener.VIEWER);
+        }
+
+        if (USER_INTERFACE.Errors.active) {
             $("#viewer-container").addClass("disabled"); //preventive
             return;
         }
         <?php
         if ($firstTimeVisited) {
-            echo "        setTimeout(_ => Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
+            echo "        setTimeout(_ => USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
         }
         ?>
     }
-    viewer.addHandler('open', fireTheVisualization);
+    window.VIEWER.addHandler('open', fireTheVisualization);
 
-    function showAvailablePlugins() {
-        let content = "<input type='checkbox' class='form-control position-absolute top-1 right-2' checked id='remember-plugin-selection'><label class='position-absolute top-0 right-5' for='remember-plugin-selection'>remember selection</label><br>";
-        Object.values(PLUGINS.each).forEach(plugin => {
-            let dependency = "";
-            if (plugin.requires) {
-                dependency = `onchange="let otherNode = document.getElementById('select-plugin-${plugin.requires}'); if (otherNode && this.checked) {otherNode.checked = true; otherNode.disabled = true;} else if (otherNode) {otherNode.disabled = false;}"`;
-            }
-
-            let checked = plugin.loaded ? "checked" : "";
-            let disabled = plugin.permaLoaded ? "disabled" : "";
-            let problematic = plugin.error ? `<span class='material-icons pointer' style='font-size: initial; color: var( --color-icon-danger)' title='This plugin has been automatically removed: there was an error. [${plugin.error}]'>warning</span>`: "";
-            content += `<input class="form-control" id="select-plugin-${plugin.id}" type="checkbox" ${dependency} value="${plugin.flag}" ${checked} ${disabled}>&emsp;<label for="select-plugin-${plugin.id}">${problematic}${plugin.name}</label><br>`;
-        });
-
-        Dialogs.showCustom("load-plugins", "Add plugins", content + "<br>",
-            `<button onclick="loadWithPlugins(document.getElementById('remember-plugin-selection'));" class="btn position-absolute bottom-2 right-4">Load with selected</button>`, {allowClose: true});
-    }
-
-    function loadWithPlugins(remember=false) {
-        let formData = "",
-            plugins = [];
-        Object.values(PLUGINS.each).forEach(plugin => {
-            if (document.getElementById(`select-plugin-${plugin.id}`).checked) {
-                formData += `<input type="hidden" name="${plugin.flag}" value="1">`;
-                plugins.push(plugin.flag);
-            }
-        });
-        plugins = remember ? plugins.join(',') : "";
-        document.cookie = `plugins=${plugins}; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/`;
-        $("body").append(constructExportVisualisationForm(formData, false));
-    }
-
-</script>
-<!-- PLUGINS -->
-<?php
-foreach ($PLUGINS as $_ => $plugin) {
-    if ($plugin->loaded) {
-        //add plugin style sheet if exists
-        if (file_exists(PLUGINS . "/" . $plugin->directory . "/style.css")) {
-            echo "<link rel=\"stylesheet\" href=\"" . PLUGINS . "/" . $plugin->directory . "/style.css?v=$version\">\n";
-        }
-        //add plugin includes
-        foreach ($plugin->includes as $__ => $file) {
-            echo "<script src=\"" . PLUGINS . "/" . $plugin->directory . "/$file?v=$version\"></script>\n";
+    function chainLoad(id, sources, index, onSuccess, folder='<?php echo PLUGINS_FOLDER ?>') {
+        if (index >= sources.includes.length) {
+            onSuccess();
+        } else {
+            PLUGINS.attachScript(id,
+                `${folder}/${sources.directory}/${sources.includes[index]}?v=<?php echo $version?>`,
+                _ => chainLoad(id, sources, index+1, onSuccess, folder));
         }
     }
-}
 
-$srvImages = SERVED_IMAGES;
-$srvLayers = SERVED_LAYERS;
+    function chainLoadModules(moduleList, index, onSuccess) {
+        if (index >= moduleList.length) {
+            onSuccess();
+            return;
+        }
+        let module = MODULES[moduleList[index]];
+        if (!module || module.loaded) {
+            chainLoadModules(moduleList, index+1, onSuccess);
+            return;
+        }
 
-if ($layerVisible) {
-    echo <<<EOF
+        function loadSelf() {
+            //load self files and continue loading from modulelist
+            chainLoad(module.id + "-module", module, 0,
+                function() {
+                    if (module.styleSheet) {  //load css if necessary
+                        $('head').append(`<link rel='stylesheet' href='${module.styleSheet}' type='text/css'/>`);
+                    }
+                    module.loaded = true;
+                    chainLoadModules(moduleList, index+1, onSuccess);
+                }, '<?php echo MODULES_FOLDER ?>');
+        }
+
+        //first dependencies, then self
+        chainLoadModules(module.requires || [], 0, loadSelf);
+    }
+
+    /**
+     * Load modules at runtime
+     * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+     * @param onload function to call on successful finish
+     * @param ids all modules id to be loaded (rest parameter syntax)
+     */
+    APPLICATION_CONTEXT.UTILITIES.loadModules = function(onload=_=>{}, ...ids) {
+        LOADING_PLUGIN = false;
+        chainLoadModules(ids, 0, onload);
+    };
+
+    /**
+     * Load a plugin at runtime
+     * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+     * @param id plugin to load
+     * @param onload function to call on successful finish
+     */
+    APPLICATION_CONTEXT.UTILITIES.loadPlugin = function(id, onload=_=>{}) {
+        let meta = PLUGINS.each[id];
+        if (!meta || meta.loaded || meta.instance) return;
+        if (window.hasOwnProperty(id)) {
+            Dialogs.show("Could not load the plugin.", 5000, Dialogs.MSG_ERR);
+            return;
+        }
+        if (!Array.isArray(meta.includes)) {
+            Dialogs.show("The selected plugin is corrupted.", 5000, Dialogs.MSG_ERR);
+            return;
+        }
+
+        let successLoaded = function() {
+            LOADING_PLUGIN = false;
+            //loaded after page load: TODO be cautious...
+            if (!initializePlugin(PLUGINS.each[id].instance)) return;
+            Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}<b> has been loaded.`, 2500, Dialogs.MSG_INFO);
+
+            if (meta.styleSheet) {  //load css if necessary
+                $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+            }
+            meta.loaded = true;
+            if (APPLICATION_CONTEXT.getOption("permaLoadPlugins")) {
+                let plugins = new URLSearchParams(document.cookie.replaceAll("; ","&")).get("plugins");
+                document.cookie = `plugins=${plugins + "," + meta.id}; <?php echo JS_COOKIE_SETUP ?>`;
+            }
+            onload();
+        };
+        LOADING_PLUGIN = true;
+        //todo does not load plugin.requires - disable feature?
+        chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
+    };
+
+    //TODO not working
+    // function preventDirtyClose(e) {
+    //     e.preventDefault();
+    //         if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+    //
+    //     if ( window.history.replaceState ) {
+    //         window.history.replaceState( null, null, window.location.href );
+    //     }
+    //
+    //
+    //     window.location = window.location.href;
+    //     return;
+    // }
+    //
+    // if (window.addEventListener) {
+    //     window.addEventListener('beforeunload', preventDirtyClose, true);
+    // } else if (window.attachEvent) {
+    //     window.attachEvent('onbeforeunload', preventDirtyClose);
+    // }
+
+    /**
+     * Refresh current page with all plugins and their data if export API used
+     * @param formData additional HTML to add to the refresh FORM
+     * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
+     */
+    APPLICATION_CONTEXT.UTILITIES.refreshPage = function(formData="", includedPluginsList=undefined) {
+        if (APPLICATION_CONTEXT.setup.dirty) {
+            Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="APPLICATION_CONTEXT.UTILITIES.export();" class='pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.setup.dirty = false; APPLICATION_CONTEXT.UTILITIES.refreshPage();" class='pointer'>Reload now.</a>.`,
+                15000, Dialogs.MSG_WARN);
+            return;
+        }
+
+        //todo not working
+        // if (window.removeEventListener) {
+        //     window.removeEventListener('beforeunload', preventDirtyClose, true);
+        // } else if (window.detachEvent) {
+        //     window.detachEvent('onbeforeunload', preventDirtyClose);
+        // }
+        $("body").append(APPLICATION_CONTEXT.UTILITIES.getForm(formData, includedPluginsList));
+    };
+})(window);
+    </script>
+    <!-- PLUGINS -->
+    <?php
+    foreach ($PLUGINS as $_ => $plugin) {
+        if ($plugin->loaded) {
+            echo "<div id='script-section-{$plugin->id}'>";
+            //add plugin style sheet if exists
+            if (isset($plugin->styleSheet)) {
+                echo "<link rel=\"stylesheet\" href=\"{$plugin->styleSheet}\">\n";
+            }
+            //add plugin includes
+            foreach ($plugin->includes as $__ => $file) {
+                echo "<script src=\"" . PLUGINS_FOLDER . "/" . $plugin->directory . "/$file?v=$version\"></script>\n";
+            }
+            echo "</div>";
+        }
+    }
+
+    $srvImages = BG_TILE_SERVER;
+    $srvLayers = LAYERS_TILE_SERVER;
+    $protoImages = BG_DEFAULT_PROTOCOL;
+
+    if ($layerVisible) {
+        echo <<<EOF
 <script type="text/javascript">
 
     /*---------------------------------------------------------*/
     /*----- Init with layers (variables from layers.js) -------*/
     /*---------------------------------------------------------*/
 
-    seaGL.loadShaders(function() {
-        activeData = seaGL.dataImageSources(); 
+    VIEWER.bridge.loadShaders(function() {
+        let activeData = VIEWER.bridge.dataImageSources(); 
         //reverse order: last opened IMAGE is the first visible
-        let toOpen = setup.background.map(value => {
-            const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
-            return urlmaker("$srvImages", setup.data[value.dataReference]);
+        let toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
+            const urlmaker = new Function("path,data", "return " + (value.protocol || "$protoImages"));
+            return urlmaker("$srvImages", APPLICATION_CONTEXT.setup.data[value.dataReference]);
         }).reverse();
-        toOpen.push(visualizationUrlMaker("$srvLayers", activeData));
-        viewer.open(toOpen);
+        toOpen.push(VIEWER.bridge.urlMaker("$srvLayers", activeData));
+        window.VIEWER.open(toOpen);
     });
-    seaGL.init(viewer, updateUIForMissingSources);
+    VIEWER.bridge.initBeforeOpen( window.VIEWER, APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources);
 
     //todo better error system :(
-    viewer.addHandler('open-failed', function(e) {
+     window.VIEWER.addHandler('open-failed', function(e) {
         let sources = []; //todo create valid urls again
-        DisplayError.show("No valid images.", `We were unable to open provided image sources. 
+        USER_INTERFACE.Errors.show("No valid images.", `We were unable to open provided image sources. 
 Url's are probably invalid. <br><code>\${sources.join(", ")}</code>`, true);
     });
 
 </script>
 EOF;
 
-} else {
-    echo <<<EOF
+    } else {
+        echo <<<EOF
 <script type="text/javascript">
 
     /*---------------------------------------------------------*/
     /*----- Init without layers (layers.js) -------------------*/
     /*---------------------------------------------------------*/
 
-    viewer.open(setup.background.map(value => {
-        const urlmaker = new Function("path,data", "return " + (value.protocol || "`\${path}?Deepzoom=\${data}.dzi`"));
+     window.VIEWER.open(setup.background.map(value => {
+        const urlmaker = new Function("path,data", "return " + (value.protocol || $protoImages));
         //todo absolute path? dynamic using php?
-        return urlmaker("$srvImages", setup.data[value.dataReference]);
+        return urlmaker("$srvImages", APPLICATION_CONTEXT.setup.data[value.dataReference]);
     }).reverse());
 
 </script>
 EOF;
-}
-?>
+    }
+    ?>
 </body>
 </html>

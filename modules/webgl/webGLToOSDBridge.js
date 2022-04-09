@@ -5,39 +5,130 @@
 * Based on OpenSeadragonGL plugin
 * https://github.com/thejohnhoffer/viaWebGL
 *
-* TODO: THIS is probably going to be a OSD drawing strategy class..
-*  merge this class into webglWrapper
+* NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... TODO revise API
 *
+* TODO: create OSD wrapper more tightly connected, revise the API...
 */
 
-//todo layerIndex replace with tileSource itself
-OpenSeadragonGL = function(webGLWrapperParams, useEvaluator) {
+OpenSeadragonToGLBridge = function(webGLEngine, mode="cache") {
     let _this  = this;
-    webGLWrapperParams.resetCallback = function () {
-        _this.redraw(_this.refresh);
-    };
-
-    this.refresh = -1;
-
-    this.webGLWrapper = new WebGLModule(webGLWrapperParams);
+    webGLEngine.resetCallback = _ => _this.redraw();
+    this._disabled = true; //so that first enable call is executed
+    this.webGLEngine = webGLEngine;
     this.upToDateTStamp = Date.now();
-    this._shadersLoaded = false;
-    this._dataProblems = [];
-    this.uid = OpenSeadragonGL.getUniqueId();
-    _this.loaded = false;
 
-    //todo instead bind this to specific drawing policy on a tilesource
-    this.useEvaluator = useEvaluator;
+    if (mode !== "cache") {
+        this.uid = OpenSeadragonToGLBridge.getUniqueId();
+    }
+    this._rendering = new WeakMap();
 };
 
-OpenSeadragonGL.getUniqueId = function() {
+OpenSeadragonToGLBridge.getUniqueId = function() {
     return (Date.now()).toString(36);
 };
 
-OpenSeadragonGL.prototype = {
+OpenSeadragonToGLBridge.prototype = {
 
-    setLayerIndex: function(idx) {
-        this.refresh = idx;
+    addLayer: function(idx) {
+        let existing = this._rendering[idx];
+        let layer = this.openSD.world.getItemAt(idx);
+        if (existing) {
+            if (existing == layer) return;
+            else this.removeLayer(idx);
+        }
+
+        if (!this.uid) {
+            const _context = this;
+            let source = layer.source;
+            source.__cached_createTileCache = source.createTileCache;
+            source.createTileCache = function(data, tile) {
+                //dirty but we need to always say 'YES'
+                tile._hasTransparencyChannel = function () {
+                    return true;
+                };
+
+                this._data = data;
+                this._dim = tile.sourceBounds;
+                this._dim.width = Math.max(this._dim.width,1);
+                this._dim.height = Math.max(this._dim.height,1);
+            };
+
+            source.__cached_destroyTileCache = source.destroyTileCache;
+            source.destroyTileCache = function() {
+                this._data = null;
+                this._renderedContext = null;
+            };
+
+            source.__cached_getTileCacheData = source.getTileCacheData;
+            source.getTileCacheData = function() {
+                return this._data;
+            };
+
+            source.__cached_tileDataToRenderedContext = source.tileDataToRenderedContext;
+            source.tileDataToRenderedContext = function () {
+                if (!this._renderedContext) {
+                    this.webglRefresh = 0;
+                    var canvas = document.createElement('canvas');
+                    canvas.width = this._dim.width;
+                    canvas.height = this._dim.height;
+                    this._renderedContext = canvas.getContext('2d');
+                }
+
+                if (this.webglRefresh <= _context.upToDateTStamp) {
+                    this.webglRefresh = _context.upToDateTStamp + 1;
+
+                    //todo keep?
+                    _context.webGLEngine.setDimensions(this._dim.width, this._dim.height);
+
+                    // Render a webGL canvas to an input canvas using cached version
+                    var output = _context.webGLEngine.processImage(this._data, this._dim,
+                        _context.openSD.viewport.getZoom(), _context.imagePixelSizeOnScreen());
+
+                    // Note: you can comment out clearing if you don't use transparency
+                    this._renderedContext.clearRect(0, 0, this._dim.width, this._dim.height);
+                    this._renderedContext.drawImage(output == null ? this._data : output, 0, 0,
+                        this._dim.width, this._dim.height);
+                }
+                return this._renderedContext;
+            };
+        }
+        this._rendering[idx] = layer;
+    },
+
+    hasImageAssigned: function(tiledImage) {
+        for (let key in this._rendering) {
+            if (this._rendering[key] == tiledImage) return true;
+        }
+        return false;
+    },
+
+    removeLayer: function(idx) {
+        if (!this.uid) {
+            let source = this._rendering[idx];
+            if (!source || !source.source) return;
+            source = source.source;
+            source.createTileCache = source.__cached_createTileCache;
+            delete source.__cached_createTileCache;
+            source.destroyTileCache = source.__cached_destroyTileCache;
+            delete source.__cached_destroyTileCache;
+            source.getTileCacheData = source.__cached_getTileCacheData;
+            delete source.__cached_getTileCacheData;
+            source.tileDataToRenderedContext = source.__cached_tileDataToRenderedContext;
+            delete source.__cached_tileDataToRenderedContext;
+        }
+        delete this._rendering[idx];
+    },
+
+    disabled() {
+        return this._disabled;
+    },
+
+    //todo better policy, support for multiple
+    getTiledImage: function() {
+        for (let key in this._rendering) {
+            return this._rendering[key];
+        }
+        return undefined;
     },
 
     /**
@@ -45,7 +136,7 @@ OpenSeadragonGL.prototype = {
      * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
      */
     foreachVisualisation: function(call) {
-        this.webGLWrapper.foreachVisualisation(call);
+        this.webGLEngine.foreachVisualisation(call);
     },
 
     /**
@@ -53,20 +144,20 @@ OpenSeadragonGL.prototype = {
      * @returns current visualisaiton goal object
      */
     currentVisualisation: function() {
-        return this.webGLWrapper.currentVisualisation();
+        return this.webGLEngine.currentVisualisation();
     },
 
     /**
-     * Set program shaders. Just forwards the call to webGLWrapper, for easier access.
+     * Set program shaders. Just forwards the call to webGLEngine, for easier access.
      * @param {object} visualisation - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      */
     addVisualisation: function(...visualisation) {
-        if (this._shadersLoaded) {
-            console.warn("Invalid action: visualisations have been already loaded.")
+        if (this.webGLEngine.isPrepared) {
+            console.warn("Invalid action: visualisations have been already loaded.");
             return false;
         }
-        return this.webGLWrapper.addVisualisation(...visualisation);
+        return this.webGLEngine.addVisualisation(...visualisation);
     },
 
     /**
@@ -75,8 +166,8 @@ OpenSeadragonGL.prototype = {
      * @return {boolean} true if loaded successfully
      */
     addData: function(...data) {
-        if (this._shadersLoaded) {
-            console.warn("Invalid action: visualisations have been already loaded.")
+        if (this.webGLEngine.isPrepared) {
+            console.warn("Invalid action: visualisations have been already loaded.");
             return false;
         }
         this.imageData = data;
@@ -84,24 +175,11 @@ OpenSeadragonGL.prototype = {
     },
 
     /**
-     * Set whether data is invalid at given index
-     * @param index index of data
-     * @param isInvalid true if invalid
-     */
-    setInvalidDataAt: function(index, isInvalid) {
-        if (index >= this._dataSources.length) {
-            console.warn("Invalid index for data: " + index);
-            return;
-        }
-        this._dataProblems[index] = isInvalid;
-    },
-
-    /**
      * Change visualisation in use
      * @param {number} visIdx index of the visualisation
      */
     switchVisualisation: function(visIdx) {
-        this.webGLWrapper.switchVisualisation(visIdx);
+        this.webGLEngine.switchVisualisation(visIdx);
     },
 
     /**
@@ -110,46 +188,33 @@ OpenSeadragonGL.prototype = {
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */
     loadShaders: function(onPrepared=function(){}) {
-        if (this._shadersLoaded) return;
-        this.webGLWrapper.prepare(this.imageData, onPrepared);
-        this._shadersLoaded = true;
+        if (this.webGLEngine.isPrepared) return;
+        this.webGLEngine.prepare(this.imageData, onPrepared);
     },
 
     /**
-     * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLWrapper.shaderGenerator
+     * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLEngine.shaderGenerator
      * @param {array} order array of strings that refer to ID's in the visualisation data (pyramidal tiff paths in our case)
      */
     reorder: function(order) {
         if (!Array.isArray(order)) {
-            this.webGLWrapper.rebuildVisualisation(null);
+            this.webGLEngine.rebuildVisualisation(null);
         } else {
-            //webGLWrapper rendering is first in order: first drawn, last in order: last drawn (atop)
-            this.webGLWrapper.rebuildVisualisation(order.reverse());
+            //webGLEngine rendering is first in order: first drawn, last in order: last drawn (atop)
+            this.webGLEngine.rebuildVisualisation(order.reverse());
         }
         this.redraw();
     },
 
     /**
-     * TODO bad design
      * Redraw the scene using cached images.
      */
     redraw: function() {
-        var imageTile = this.openSD.world.getItemAt(this.refresh);
-
-        if (!imageTile) {
-            alert("The layer data is not available. This error user notification will be implemented later.");
-            return;
-            //todo somehow notify the user that the data is missing...
-        }
+        // var imageTile = this.getTiledImage();
+        // if (!imageTile) return;
 
         // Raise tstamp to force redraw
         this.upToDateTStamp = Date.now();
-
-        imageTile._drawer.context.clearRect(0, 0, imageTile._drawer.context.canvas.width, imageTile._drawer.context.canvas.height);
-
-        let imageTileNav = this.openSD.navigator.world.getItemAt(this.refresh);
-        imageTileNav._drawer.context.clearRect(0, 0, imageTileNav._drawer.context.canvas.width, imageTileNav._drawer.context.canvas.height);
-
         this.openSD.world.draw();
         this.openSD.navigator.world.draw();
     },
@@ -159,11 +224,11 @@ OpenSeadragonGL.prototype = {
      * @return {Array} array of keys from 'shaders' parameter of the current visualisation goal
      */
     dataImageSources: function() {
-        return this.webGLWrapper.getSources();
+        return this.webGLEngine.getSources();
     },
 
     activeShaderIndex: function() {
-        return this.webGLWrapper._program;
+        return this.webGLEngine._program;
     },
 
     /**
@@ -171,33 +236,14 @@ OpenSeadragonGL.prototype = {
      * @returns webGL context
      */
     GL: function() {
-        return this.webGLWrapper.gl;
-    },
-
-    // Add your own button to OSD controls
-    button: function(terms) {
-        var name = terms.name || 'tool';
-        var prefix = terms.prefix || this.openSD.prefixUrl;
-        if (!terms.hasOwnProperty('onClick')){
-            console.error("The specified button does not have 'onClick' property and will do nothing. Removed.")
-            return;
-        }
-        terms.onClick = terms.onClick.bind(this);
-        terms.srcRest = terms.srcRest || prefix+name+'_rest.png';
-        terms.srcHover = terms.srcHover || prefix+name+'_hover.png';
-        terms.srcDown = terms.srcDown || prefix+name+'_pressed.png';
-        terms.srcGroup = terms.srcGroup || prefix+name+'_grouphover.png';
-        // Replace the current controls with the same controls plus a new button
-        this.openSD.clearControls().buttons.buttons.push(new OpenSeadragon.Button(terms));
-        var toolbar = new OpenSeadragon.ButtonGroup({buttons: this.openSD.buttons.buttons});
-        this.openSD.addControl(toolbar.element,{anchor: OpenSeadragon.ControlAnchor.TOP_LEFT});
+        return this.webGLEngine.gl;
     },
 
     refreshMissingSources: function() {
-        //inspect
-        let programIdx = this.webGLWrapper.getCurrentProgramIndex(),
-            curVis = this.webGLWrapper._visualisations[programIdx],
-            tileSource =  this.openSD.world.getItemAt(this.refresh).source;
+        //todo remove
+        let programIdx = this.webGLEngine.getCurrentProgramIndex(),
+            curVis = this.webGLEngine._visualisations[programIdx],
+            tileSource =  this.openSD.world.getItemAt(1).source;
         layersLoop: for (let lId in curVis.shaders) {
             if (!curVis.shaders.hasOwnProperty(lId)) continue;
             let layer = curVis.shaders[lId];
@@ -213,55 +259,137 @@ OpenSeadragonGL.prototype = {
         }
     },
 
+    /**
+     * Initialize the bridge between OSD and WebGL rendering once 'open' event happens
+     * unlike the WebGL's init() can (and should) be called immediately after preparation (loadShaders)
+     * - awaits the OSD opening
+     *
+     * @param openSeaDragonInstance OSD viewer instance to bind to
+     * @param layerLoaded
+     * @return {OpenSeadragonToGLBridge}
+     */
+    initBeforeOpen: function(openSeaDragonInstance, layerLoaded=()=>{}) {
+        if (this.webGLEngine.isInitialized) return this;
+        this._initSelf(openSeaDragonInstance);
+
+        let _this = this;
+        let handler = function(e) {
+            function init() {
+                _this.webGLEngine.init();
+                layerLoaded();
+                _this.openSD.removeHandler('open', handler);
+            }
+
+            if (!_this.webGLEngine.isPrepared) _this.loadShaders(init);
+            else init();
+        };
+
+        this.openSD.addHandler('open', handler);
+        return this;
+    },
+
+    /**
+     * Initialize the bridge between OSD and WebGL immediately
+     * like the WebGL's init() must be called once WebGL.prepare() finished
+     *
+     * @param openSeaDragonInstance OSD viewer instance to bind to
+     */
+    initAfterOpen: function(openSeaDragonInstance) {
+        if (this.webGLEngine.isInitialized) return this;
+
+        const _this = this;
+        function init() {
+            _this._initSelf(openSeaDragonInstance);
+            _this.webGLEngine.init();
+        }
+        if (!this.webGLEngine.isPrepared) this.loadShaders(init);
+        else init();
+        return this;
+    },
+
+    /**
+     * Reset the WebGL module, so that different initialization can be performed
+     */
+    reset: function() {
+        this.webGLEngine.reset();
+    },
+
     //////////////////////////////////////////////////////////////////////////////
     ///////////// YOU PROBABLY DON'T WANT TO READ/CHANGE FUNCTIONS BELOW
     //////////////////////////////////////////////////////////////////////////////
 
-    init: function(openSeaDragonInstance, layerLoaded=()=>{}) {
+    _initSelf: function(openSeaDragonInstance) {
         this.openSD = openSeaDragonInstance;
 
         if (!this._shadersLoaded) {
             this.loadShaders();
+            this._shadersLoaded = true;
         }
 
-        var tileLoaded = this._tileLoaded.bind(this);
-        var tileDrawing = this._tileDrawing.bind(this);
+        //todo?
+        // openSeaDragonInstance.addHandler('remove-item', function (e) {
+        //
+        // });
 
-        this.openSD.addHandler('tile-drawing', tileDrawing);
-        this.openSD.addHandler('tile-loaded', tileLoaded);
-
-        this.openSD.navigator.addHandler('tile-drawing', tileDrawing);
-        this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
-
-        let _this = this;
-        this.openSD.addHandler('open', function(e) {
-            if (!_this.loaded && e.eventSource.world.getItemAt(_this.refresh) !== undefined) {
-                _this.loaded = true;
-                _this.webGLWrapper.init(_this.openSD.source.getTileWidth(),_this.openSD.source.getTileWidth());
-                layerLoaded();
+        //if not set manually
+        if (!this.imagePixelSizeOnScreen) {
+            //if we have OSD TOOLs to-be plugin (?), use it
+            if (openSeaDragonInstance.hasOwnProperty("tools")) {
+                this.imagePixelSizeOnScreen =
+                    openSeaDragonInstance.tools.imagePixelSizeOnScreen.bind(openSeaDragonInstance.tools);
+            } else {
+                //just some placeholder
+                console.error("OpenSeadragon has no Tool extension with 'imagePixelSizeOnScreen' function and this " +
+                    "function was not assigned to the bridge instance: pixel ratio difference will be always 1.");
+                this.imagePixelSizeOnScreen = _ => 1;
             }
-        });
+        }
 
-        return this;
+        if (this.uid) { //not a cached version
+            let tileLoaded = this._tileLoaded.bind(this);
+            let tileDrawing = this._tileDrawing.bind(this);
+
+            //todo allow option binding to main viewer only?
+            this.enable = function () {
+                if (!this._disabled) return;
+                this._disabled = false;
+                this.openSD.addHandler('tile-drawing', tileDrawing);
+                this.openSD.addHandler('tile-loaded', tileLoaded);
+                this.openSD.navigator.addHandler('tile-drawing', tileDrawing);
+                this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
+            };
+
+            this.disable = function () {
+                if (this._disabled) return;
+                this._disabled = true;
+                this.openSD.removeHandler('tile-drawing', tileDrawing);
+                this.openSD.removeHandler('tile-loaded', tileLoaded);
+                this.openSD.navigator.removeHandler('tile-drawing', tileDrawing);
+                this.openSD.navigator.removeHandler('tile-loaded', tileLoaded);
+            };
+            this.enable();
+        } else {
+            this.enable = this.disable = function () {
+                console.error("Not yet implemented");
+            };
+            this._disabled = false;
+        }
     },
 
-
-
     _tileLoaded: function(e) {
-
         if (! e.image) return;
 
-        if (!this.useEvaluator || this.useEvaluator(e)) {
+        //todo does not work on navigator
+        if (this.hasImageAssigned(e.tiledImage) && !e.tile.webglId) {
             e.tile.webglId = this.uid;
             e.tile.webglRefresh = 0; // -> will draw immediatelly
-            e.tile.origData = e.image;
+            //todo try using OSD image cache instead
 
             //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement('canvas');
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height;
             e.tile.context2D = canvas.getContext('2d');
-            delete e.image;
         }
     },
 
@@ -270,17 +398,19 @@ OpenSeadragonGL.prototype = {
         if (e.tile.webglRefresh <= this.upToDateTStamp) {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
 
-            let imageTileSource = PLUGINS.imageLayer();
-            let dx = imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-                imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+            //todo might not be necessary
+            this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
+
+            let imageData = e.tile.image || e.tile.cacheImageRecord.getImage();
 
             // Render a webGL canvas to an input canvas using cached version
-
-            var output = this.webGLWrapper.processImage(e.tile.origData, e.tile.sourceBounds, this.openSD.viewport.getZoom(), dx);
+            let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
+                this.openSD.viewport.getZoom(), this.imagePixelSizeOnScreen());
 
             // Note: you can comment out clearing if you don't use transparency
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
-            e.rendered.drawImage(output == null? e.tile.origData : output, 0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
+            e.rendered.drawImage(output == null? imageData : output, 0, 0,
+                e.tile.sourceBounds.width, e.tile.sourceBounds.height);
         }
     }
 };

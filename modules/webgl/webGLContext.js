@@ -55,22 +55,27 @@ WebGLModule.GlContextFactory = class {
             throw "Invalid WebGL context initialization: no version specified!";
         }
         const canvas = document.createElement('canvas');
-        let gl;
 
         for (let version of versions) {
             if (!WebGLModule.GlContextFactory._GL_MAKERS.hasOwnProperty(version)) {
                 console.warn("WebGL context initialization: unsupported version. Skipping.", version);
                 continue;
             }
-            let maker = WebGLModule.GlContextFactory._GL_MAKERS[version];
-            gl = maker.glContext(canvas);
-            if (gl) {
-                wrapper.gl = gl;
-                wrapper.webGLImplementation = maker.webGLImplementation(wrapper, gl);
+            if (this._makerInit(canvas, WebGLModule.GlContextFactory._GL_MAKERS[version], wrapper)) {
                 return;
             }
         }
         throw "No context available for GlContextFactory to init.";
+    }
+
+    static _makerInit(canvas, maker, wrapper) {
+        let gl = maker.glContext(canvas);
+        if (gl) {
+            wrapper.gl = gl;
+            wrapper.webGLImplementation = maker.webGLImplementation(wrapper, gl);
+            return true;
+        }
+        return false;
     }
 };
 
@@ -85,7 +90,7 @@ WebGLModule.WebGLImplementation = class {
      * Set default blending to be MASK
      */
     constructor() {
-        this.glslBlendCode = "return background * 1.0 - step(0.001, foreground.a);";
+        this.glslBlendCode = "return background * (1.0 - step(0.001, foreground.a));";
     }
 
     /**
@@ -239,7 +244,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
                 //just load all images and let shaders reference them...
                 for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
-                    if (this.context._dataSourceMapping[i] === -1) {
+                    if (this.context._dataSourceMapping[i] < 0) {
                         continue;
                     }
                     if (index >= NUM_IMAGES) {
@@ -565,7 +570,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                     image
                 );
             }
-        }
+        };
         this.texture.init(gl);
     }
 
@@ -766,6 +771,87 @@ void main() {
         this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, gl);
         // Draw three points (obtained from gl_VertexID from a static array in vertex shader)
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        return gl.canvas;
+    }
+};
+
+/**Not a part of API, static functionality to process polygons**/
+WebGLModule.RasterizerContext = class {
+    constructor(context, gl) {
+        this.context = context;
+        this.gl = gl;
+    }
+
+    toBuffers(program) {
+        if (!this.context.running) return;
+
+        let context = this.context,
+            gl = this.gl;
+
+        gl.useProgram(program);
+
+        // Vertices
+        this.positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+
+        // Indices
+        this.indexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+
+
+        this.positionLocation = gl.getAttribLocation(program, "vertex");
+
+        gl.enableVertexAttribArray(this.positionLocation);
+        gl.vertexAttribPointer(
+            this.positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+        this.resolutionLocation = gl.getUniformLocation(program, "resolution");
+        this.colorPosition = gl.getUniformLocation(program, "color");
+    }
+
+    vs() {
+        return `
+attribute vec2 vertex;
+uniform vec2 resolution;
+
+void main() {
+   vec2 zeroToOne = vertex / resolution;
+   // convert from 0->1 to 0->2
+   vec2 zeroToTwo = zeroToOne * 2.0;
+   // convert from 0->2 to -1->+1 (clipspace)
+   vec2 clipSpace = zeroToTwo - 1.0;
+   gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+}
+        
+        `;
+    }
+
+    fs() {
+        return `
+precision mediump float;
+uniform vec4 color;
+void main() {
+   gl_FragColor = color;
+}
+        `;
+    }
+
+
+
+
+    toCanvas(program, vertices, color, indices) {
+        if (!this.context.running) return;
+        // Allow for custom drawing in webGL and possibly avoid using webGL at all
+
+        let context = this.context,
+            gl = this.gl;
+
+        //todo blending!!!!!
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+        gl.uniform4fv(this.colorPosition, color);
+
+        gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
         return gl.canvas;
     }
 };

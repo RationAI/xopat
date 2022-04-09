@@ -1,18 +1,19 @@
 {
     "id": "openseadragon_image_annotations",
     "name": "Annotations",
-    "description": "A plugin for annotation creation and management.",
+    "author": "Jirka Horák",
+    "description": "A plugin for ROI creation and management.",
+    "icon": "",
     "includes" : [
         "ext/greiner-hormann.min.js",
-        "ext/point-in-polygon.js",
         "ext/hull.js",
+        "osd_fabric_annotation.js",
         "objects.js",
         "free_form_tool.js",
-        "history.js",
-        "osd_fabric_annotation.js"
+        "history.js"
     ],
-    "flag": "annotations",
-    "public": true,
     "requires": [],
-    "modules": ["webgl", "fabricjs"]
+    "modules": ["webgl", "fabricjs"],
+
+    "server": "/iipsrv.fcgi"
 }

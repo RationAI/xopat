@@ -33,38 +33,27 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color/opacity";
     }
 
-    static defaultControls() {
-        return {
-            color: {
-                default: {type: "color", default: "#fff700", title: "Color: "},
-                accepts: (type, instance) => type === "vec3"
-            },
-            threshold: {
-                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
-                accepts: (type, instance) => type === "float"
-            },
-            opacity: {
-                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-                accepts: (type, instance) => type === "float"
-            },
-            inverse: {
-                default: {type: "bool", default: false, title: "Invert: "},
-                accepts: (type, instance) => type === "bool"
-            }
-        };
-    }
+    static defaultControls = {
+        color: {
+            default: {type: "color", default: "#fff700", title: "Color: "},
+            accepts: (type, instance) => type === "vec3"
+        },
+        threshold: {
+            default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+            accepts: (type, instance) => type === "float"
+        },
+        opacity: {
+            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+            accepts: (type, instance) => type === "float"
+        },
+        inverse: {
+            default: {type: "bool", default: false, title: "Invert: "},
+            accepts: (type, instance) => type === "bool"
+        }
+    };
 
     constructor(id, options) {
         super(id, options);
-    }
-
-    getFragmentShaderDefinition() {
-        return `
-${this.color.define()}
-${this.threshold.define()}
-${this.opacity.define()}
-${this.inverse.define()}
-`;
     }
 
     getFragmentShaderExecution() {
@@ -72,39 +61,9 @@ ${this.inverse.define()}
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
     if (${this.inverse.sample()}) data${this.uid} = 1.0 - data${this.uid};
     if(data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample()}){
-        ${this.render(`vec4(${this.color.sample()}, data${this.uid}) * ${this.opacity.sample()}`)}
+        ${this.render(`vec4(${this.color.sample()}, data${this.uid} * ${this.opacity.sample()})`)}
     }
 `;
-    }
-
-    glDrawing(program, dimension, gl) {
-        this.color.glDrawing(program, dimension, gl);
-        this.threshold.glDrawing(program, dimension, gl);
-        this.opacity.glDrawing(program, dimension, gl);
-        this.inverse.glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        this.color.glLoaded(program, gl);
-        this.threshold.glLoaded(program, gl);
-        this.opacity.glLoaded(program, gl);
-        this.inverse.glLoaded(program, gl);
-    }
-
-    init() {
-        this.color.init();
-        this.threshold.init();
-        this.opacity.init();
-        this.inverse.init();
-    }
-
-    htmlControls() {
-        return [
-            this.color.toHtml(true),
-            this.opacity.toHtml(true),
-            this.threshold.toHtml(false),
-            this.inverse.toHtml(true)
-        ].join("");
     }
 };
 

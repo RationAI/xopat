@@ -1,23 +1,22 @@
-History = function (selfName, context, presetManager) {
-    this._globalSelf = `${context.id}['${selfName}']`;
-    this._buffer = [];
-    this._buffidx = 0;
-    this.BUFFER_LENGTH = null;
-    this._lastValidIndex = -1;
-    this._autoIncrement = 0;
-    this._boardSelected = null;
-    this._context = context;
-    this._presets = presetManager;
-    this.containerId = "bord-for-annotations";
-};
+OSDAnnotations.History = class {
+    constructor(selfName, context, presetManager) {
+        this._globalSelf = `${context.id}['${selfName}']`;
+        this._buffer = [];
+        this._buffidx = 0;
+        this.BUFFER_LENGTH = null;
+        this._lastValidIndex = -1;
+        this._autoIncrement = 0;
+        this._boardSelected = null;
+        this._context = context;
+        this._presets = presetManager;
+        this.containerId = "bord-for-annotations";
+    }
 
-History.prototype = {
-
-    init: function (historySize = 30) {
+    init(historySize = 30) {
         this.BUFFER_LENGTH = historySize;
-    },
+    }
 
-    openHistoryWindow: function() {
+    openHistoryWindow() {
         let ctx = this.winContext(true);
         if (ctx) {
             ctx.window.focus();
@@ -31,7 +30,7 @@ History.prototype = {
         let undoCss = this._context.canvasObjects().length > 0 ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
-        PLUGINS.dialog.showCustomModal(this.containerId, "Annotations Board",
+        Dialogs.showCustomModal(this.containerId, "Annotations Board",
             `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
 <span id="history-undo" class="material-icons pointer" style="${undoCss}" 
 onclick="opener.${this._globalSelf}.back()" id="history-undo">undo</span>
@@ -73,18 +72,18 @@ window.addEventListener("beforeunload", (e) => {
 }, false);
 
 </script>`);
-    },
+    }
 
-    winContext: function(required=false) {
-        return PLUGINS.dialog.getModalContext(this.containerId);
-    },
+    winContext(required=false) {
+        return Dialogs.getModalContext(this.containerId);
+    }
 
-    back: function () {
+    back() {
         if (this._context.disabledInteraction) return;
 
         const _this = this;
         if (this._buffer[this._buffidx]) {
-            this._performSwap(this._context.canvas(),
+            this._performSwap(this._context.canvas,
                 this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward)
 
             //this._bufferLastRemoved = this._buffer[this._buffidx];
@@ -107,15 +106,15 @@ window.addEventListener("beforeunload", (e) => {
         this._performAtJQNode("history-undo", node => node.css("color",
             _this._buffer[_this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
         );
-    },
+    }
 
-    redo: function () {
+    redo() {
         if (this._context.disabledInteraction) return;
 
         if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
-            this._performSwap(this._context.canvas(),
+            this._performSwap(this._context.canvas,
                 this._buffer[this._buffidx].forward, this._buffer[this._buffidx].back);
 
             const _this = this;
@@ -126,22 +125,22 @@ window.addEventListener("beforeunload", (e) => {
 
             this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         }
-    },
+    }
 
-    _performAtJQNode: function(id, callback) {
+    _performAtJQNode(id, callback) {
         let ctx = this.winContext();
         if (ctx) {
             callback($(ctx.document.getElementById(id)));
         }
-    },
+    }
 
-    _getJQNode: function(id) {
+    _getJQNode(id) {
         let ctx = this.winContext();
         if (!ctx)  return undefined;
         return $(ctx.document.getElementById(id));
-    },
+    }
 
-    refresh: function() {
+    refresh() {
         if (this._context.disabledInteraction) return;
 
         this._performAtJQNode("annotation-logs", node => node.html(""));
@@ -152,9 +151,9 @@ window.addEventListener("beforeunload", (e) => {
             }
             return false;
         });
-    },
+    }
 
-    sync: function() {
+    sync() {
         if (this._context.disabledInteraction) return;
 
         if (!confirm("This will overwrite all properties of all existing annotations - " +
@@ -162,10 +161,10 @@ window.addEventListener("beforeunload", (e) => {
         this._performAtJQNode("annotation-logs", node => node.html(""));
         this._syncLoad();
         //todo change in color not propagated, set dirty?
-        this._context.canvas().renderAll();
-    },
+        this._context.canvas.renderAll();
+    }
 
-    _syncLoad: function() {
+    _syncLoad() {
         let _this = this;
         this._context.canvasObjects().some(o => {
             if (o.presetID) { //todo works with presents only, plugins might want to add even non-preset stuff... predicate? flag?
@@ -184,12 +183,13 @@ window.addEventListener("beforeunload", (e) => {
             }
             return false;
         });
-    },
+    }
 
-    push: function (newObject, previous = null) {
+    push(newObject, previous = null) {
         PLUGINS.setDirty();
         if (newObject) {
             this._addToBoard(newObject);
+            this.highlight(newObject);
         }
 
         if (previous) {
@@ -205,9 +205,9 @@ window.addEventListener("beforeunload", (e) => {
 
         this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-tertiary)"));
-    },
+    }
 
-    highlight: function (object) {
+    highlight(object) {
         let board = this._getJQNode("annotation-logs");
         if (this._boardSelected && board) {
             board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
@@ -221,45 +221,49 @@ window.addEventListener("beforeunload", (e) => {
             });
         }
         this._boardSelected = object;
-    },
+    }
 
-    isOngoingEditOf: function(ofObject) {
+    isOngoingEditOf(ofObject) {
         return this._editSelection && this._editSelection.incrementId === ofObject.incrementId;
-    },
+    }
 
-    setOnGoingEditObject: function(obj) {
+    setOnGoingEditObject(obj) {
         this._editSelection.target = obj;
-    },
+    }
 
-    _focus: function (cx, cy, objectId = null) {
+    _focus(cx, cy, objectId = null) {
         cx = Number.parseFloat(cx);
         cy = Number.parseFloat(cy);
         if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
 
-        let target = PLUGINS.imageLayer().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+        let target = VIEWER.tools.referencedTileSource().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
         if (objectId !== null) {
             let targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
-                this._context.canvas().setActiveObject(targetObj);
+                this._context.canvas.setActiveObject(targetObj);
             }
         }
-        PLUGINS.osd.viewport.panTo(target);
-        PLUGINS.osd.viewport.applyConstraints();
-    },
+        VIEWER.viewport.panTo(target);
+        VIEWER.viewport.applyConstraints();
+    }
 
-    _updateBoardText: function (object, text) {
+    _updateBoardText(object, text) {
         //console.log(text);
         if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
         this._performAtJQNode("annotation-logs", node =>
             node.find(`#log-object-${object.incrementId} span.desc`).html(text));
-    },
+    }
 
-    _removeFromBoard: function (object) {
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    _removeFromBoard(object) {
         this._performAtJQNode("annotation-logs", node =>
             node.children(`#log-object-${object.incrementId}`).remove());
-    },
+    }
 
-    _setControlsVisuallyEnabled: function(enabled) {
+    _setControlsVisuallyEnabled(enabled) {
         let ctx = this.winContext();
         if (ctx) {
             let header = ctx.document.getElementById(this.containerId + "-header");
@@ -273,10 +277,9 @@ window.addEventListener("beforeunload", (e) => {
                 header.style.filter = "contrast(0.5)";
             }
         }
+    }
 
-    },
-
-    _addToBoard: function (object) {
+    _addToBoard(object) {
         let desc, icon;
         if (!object.hasOwnProperty("comment") || object.comment.length < 1) {
             desc = this._getObjectDefaultDescription(object);
@@ -300,8 +303,7 @@ onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.i
 style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
 <span class="material-icons pointer" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { opener.${_this._globalSelf}._boardItemSave(); }">edit</span></div>`));
-    },
-
+    }
 
     _boardItemEdit(self, objectId) {
         if (this._editSelection) {
@@ -320,7 +322,7 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
             incrementId: objectId,
             self: self
         }
-    } ,
+    }
 
     _boardItemSave(switches=false) {
         if (!this._editSelection) return;
@@ -352,35 +354,35 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
             this._context.enableInteraction(true);
         }
         this._editSelection = undefined;
-    } ,
+    }
 
-    _getObjectDefaultDescription: function (object) {
+    _getObjectDefaultDescription(object) {
         let factory = this._context.getAnnotationObjectFactory(object.type);
         if (factory !== undefined) {
             return factory.getDescription(object);
         }
         return undefined;
-    },
+    }
 
-    _getObjectDefaultIcon: function (object) {
+    _getObjectDefaultIcon(object) {
         let factory = this._context.getAnnotationObjectFactory(object.type);
         if (factory !== undefined) {
             return factory.getIcon();
         }
         return "question_mark";
-    },
+    }
 
-    _performSwap: async function (canvas, toAdd, toRemove) {
+    async _performSwap(canvas, toAdd, toRemove) {
         if (toRemove) {
             let center = toRemove.getCenterPoint();
             this._focus(center.x, center.y);
-            await OSDAnnotations.sleep(150); //let user to orient where canvas moved before deleting the element
+            await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
 
             if (toAdd) {
                 canvas.add(toAdd);
-                this._context.canvas().setActiveObject(toAdd);
+                this._context.canvas.setActiveObject(toAdd);
                 this._addToBoard(toAdd);
             }
             canvas.renderAll();
@@ -388,15 +390,15 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
         } else if (toAdd) {
             let center = toAdd.getCenterPoint();
             this._focus(center.x, center.y);
-            await OSDAnnotations.sleep(150); //let user to orient where canvas moved before deleting the element
+            await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
-            this._context.canvas().setActiveObject(toAdd);
+            this._context.canvas.setActiveObject(toAdd);
             canvas.renderAll();
             this._addToBoard(toAdd);
         }
-    },
+    }
 
-    _findObjectOnCanvasById: function (id) {
+    _findObjectOnCanvasById(id) {
         //todo fabric.js should have some way how to avoid linear iteration over all objects...
         let target = null;
         this._context.canvasObjects().some(o => {
@@ -408,4 +410,4 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
         });
         return target;
     }
-}
+};

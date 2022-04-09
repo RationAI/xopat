@@ -50,15 +50,17 @@ WebGLModule.VisualisationLayer = class {
      * Declare supported controls by a particular shader
      * each controls is automatically created for the shader
      * and this[controlId] instance set
-     * @return {object} controlId => {
-     *     default: {type: <>, title: <>, interactive: true|false...},
-           accepts: (type, instance) => <>,
-           required: {type: <> ...} [OPTIONAL]
+     * structure:
+     * {
+     *     controlId => {
+               default: {type: <>, title: <>, interactive: true|false...},
+               accepts: (type, instance) => <>,
+               required: {type: <> ...} [OPTIONAL]
+     *     }, ...
      * }
      */
-    static defaultControls() {
-        return {};
-    }
+    static defaultControls = {
+    };
 
     /**
      * Global supported options
@@ -90,21 +92,7 @@ WebGLModule.VisualisationLayer = class {
                 this.__mode = "blend";
             }
         }
-
-        //parse filters
-        this.__scalePrefix = [];
-        this.__scaleSuffix = [];
-        let THIS = WebGLModule.VisualisationLayer;
-        for (let key in options) {
-            if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
-                let value = options[key];
-                let filter = THIS.filters[key](this.toShaderFloatString(value, "1.0"));
-                this.__scalePrefix.push(filter[0]);
-                this.__scaleSuffix.push(filter[1]);
-            }
-        }
-        this.__scalePrefix = this.__scalePrefix.join("");
-        this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
+        this.setFilters(options);
         this._buildControls(options);
     }
 
@@ -115,7 +103,9 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Code placed outside fragment shader's main(...), default none.
+     * Code placed outside fragment shader's main(...).
+     * By default, it includes all definitions of
+     * controls you defined in defaultControls
      *
      *  NOTE THAT ANY VARIABLE NAME
      *  WITHIN THE GLOBAL SPACE MUST BE
@@ -126,7 +116,14 @@ WebGLModule.VisualisationLayer = class {
      *
      */
     getFragmentShaderDefinition() {
-        return "";
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                html.push(this[control].define());
+            }
+        }
+        return html.join("\n");
     }
 
     /**
@@ -151,6 +148,13 @@ WebGLModule.VisualisationLayer = class {
      * @param gl WebGL Context
      */
     glDrawing(program, dimension, gl) {
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                this[control].glDrawing(program, dimension, gl);
+            }
+        }
     }
 
     /**
@@ -159,6 +163,13 @@ WebGLModule.VisualisationLayer = class {
      * @param gl WebGL Context
      */
     glLoaded(program, gl) {
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                this[control].glLoaded(program, gl);
+            }
+        }
     }
 
     /**
@@ -167,6 +178,13 @@ WebGLModule.VisualisationLayer = class {
      * (might be multiple times), after htmlControls()
      */
     init() {
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                this[control].init();
+            }
+        }
     }
 
     /**
@@ -174,7 +192,14 @@ WebGLModule.VisualisationLayer = class {
      * @return {string} HTML controls for the particular shader
      */
     htmlControls() {
-        return "";
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                html.push(this[control].toHtml(true));
+            }
+        }
+        return html.join("");
     }
 
     ////////////////////////////////////
@@ -190,6 +215,12 @@ WebGLModule.VisualisationLayer = class {
         use_gamma: (x) => ["pow(", `, 1.0 / ${x})`],
         use_exposure: (x) => ["(1.0 - exp(-(", `)* ${x}))`],
         use_logscale: (x) => [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`]
+    };
+
+    static filterNames = {
+        use_gamma: "Gamma",
+        use_exposure: "Exposure",
+        use_logscale: "Logarithmic scale"
     };
 
     /**
@@ -350,6 +381,27 @@ WebGLModule.VisualisationLayer = class {
         return this.__visualisationLayer.dataReferences.length;
     }
 
+    /**
+     * Can be used to re-set filters for a shader
+     * @param options filters configuration, currently supported are
+     *  'use_gamma', 'use_exposure', 'use_logscale'
+     */
+    setFilters(options) {
+        this.__scalePrefix = [];
+        this.__scaleSuffix = [];
+        let THIS = this.constructor;
+        for (let key in options) {
+            if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
+                let value = options[key];
+                let filter = THIS.filters[key](this.toShaderFloatString(value, "1.0"));
+                this.__scalePrefix.push(filter[0]);
+                this.__scaleSuffix.push(filter[1]);
+            }
+        }
+        this.__scalePrefix = this.__scalePrefix.join("");
+        this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
+    }
+
     ////////////////////////////////////
     ////////// PRIVATE /////////////////
     ////////////////////////////////////
@@ -358,7 +410,7 @@ WebGLModule.VisualisationLayer = class {
     static __chanPattern = new RegExp('[rgbxyzuvw]+');
 
     _buildControls(options) {
-        let controls = this.constructor.defaultControls();
+        let controls = this.constructor.defaultControls;
         for (let control in controls) {
             if (controls.hasOwnProperty(control)) {
                 let buildContext = controls[control];

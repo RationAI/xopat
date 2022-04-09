@@ -1,20 +1,18 @@
 class HistovisoExplain  {
-
-    static identifier = "histoviso_explain";
-
-    constructor() {
+    constructor(id, params) {
         //comply to the documentation:
-        this.id = HistovisoExplain.identifier;
+        this.id = id;
         this.setupData = {};
         this.model_list = {};
+        this.params = params;
         this.current_method = undefined;
         this.current_model = undefined;
     }
 
     //delayed after OSD initialization is finished...
-    openSeadragonReady() {
+    pluginReady() {
         const _this = this;
-        PLUGINS.appendToMainMenu("Neural Network (NN) inspector", "", "Waiting for the server...", "feature-maps", this.id);
+        USER_INTERFACE.MainMenu.append("Neural Network (NN) inspector", "", "Waiting for the server...", "feature-maps", this.id);
         this.fetchParameters("/histoviso-explain/available-expl-methods").then(
             data => {
                 _this._init(data);
@@ -27,19 +25,19 @@ class HistovisoExplain  {
 
     createMenu(notification=undefined) {
         let targetSetup = "";
-        // if (setup.background.length > 1) {
+        // if (APPLICATION_CONTEXT.setup.background.length > 1) {
         targetSetup = `<br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
 onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(this.value);'>`;
         var name;
-        for (let i = setup.background.length-1; i >= 0; i--) {
-            name = this.getNameFromImagePath(setup.data[setup.background[i].dataReference]);
+        for (let i = APPLICATION_CONTEXT.setup.background.length-1; i >= 0; i--) {
+            name = this.getNameFromImagePath(APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[i].dataReference]);
             let selected = i === 0 ? "selected" : "";
             targetSetup += `<option value='${name}' ${selected}>image ${name}</option>`;
         }
         this.targetImageSourceName = name; //reverse order, remember last one
-        targetSetup += "</select>"
+        targetSetup += "</select>";
         // }  else {
-        //     this.targetImageSourceName = this.getNameFromImagePath(setup.data[setup.background[0].dataReference]);
+        //     this.targetImageSourceName = this.getNameFromImagePath(APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[0].dataReference]);
         // }
 
         //bit dirty :)
@@ -49,21 +47,21 @@ onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(thi
         }
 
         //controlPanelId is incomming parameter, defines where to add HTML
-        PLUGINS.replaceInMainMenuExtended("Neural Network (NN) inspector", "",
+        USER_INTERFACE.MainMenu.replaceExtended("Neural Network (NN) inspector", "",
             `${notification}<div id="method-setup"></div><div id="model-setup">Loading...</div>
 <div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.id}.reSendRequest();">Re-evaluate selected</button>
 <button class="btn" onclick="${this.id}.reRenderSelectedObject();">Repaint selected</button></div>`,
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
 onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
-        PLUGINS.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
+        PLUGINS.addHtml("histoviso-explain-scripts", "<div id='histoviso-explain-scripts'></div>", this.id);
     }
 
     createErrorMenu(html, err=undefined) {
         if (!err) {
-            PLUGINS.replaceInMainMenu("Neural Network (NN) inspector", "", html, "feature-maps", this.id);
+            USER_INTERFACE.MainMenu.replace("Neural Network (NN) inspector", "", html, "feature-maps", this.id);
         } else {
-            PLUGINS.replaceInMainMenuExtended("Neural Network (NN) inspector", "", html,
+            USER_INTERFACE.MainMenu.replaceExtended("Neural Network (NN) inspector", "", html,
                 `<br>Error description: <br><code>${err}</code>`, "feature-maps", this.id);
         }
     }
@@ -261,7 +259,7 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         }
 
         let notification = "";
-        let params = setup.params;
+        let params = this.params;
         if (params) {
             //todo hardcoded
             if (params.experimentId && params.experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
@@ -481,4 +479,4 @@ experiment is '${params.experimentId}'.`);
     }
 }
 
-registerPlugin(HistovisoExplain);
+PLUGINS.register("histoviso_explain", HistovisoExplain);

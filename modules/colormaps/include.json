@@ -1,0 +1,8 @@
+{
+    "id": "colorMaps",
+    "name": "Predefined colormaps",
+    "includes" : [
+        "colormaps.js"
+    ],
+    "requires": []
+}

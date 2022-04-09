@@ -1,12 +1,16 @@
 {
     "id": "playground",
-    "name": "Online Python Playground",
+    "name": "Online Playground",
+    "author": "Jirka Horák",
+    "description": "Allgorithms and scripts applied online on images.",
+    "icon": "",
     "includes" : [
         "playground.js",
+        "renderingStrategy.js",
+        "algolist.js",
+        "workflow.js",
         "ppprotocol.js"
     ],
-    "flag": "playground",
-    "public": false,
     "requires": [],
     "modules": ["webgl"]
 }

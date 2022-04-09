@@ -1,65 +1,43 @@
 class Presenter {
-    static identifier = "automatic_presentation";
-
-    constructor() {
-        this.id = Presenter.identifier;
+    constructor(id, params) {
+        this.id = id;
         this._idx = 0;
-        this._maxIdx = 0;
         this._steps = [];
         this._currentStep = null;
+        this._toolsMenuId = "presenter-tools-menu";
+        this.engine = new OpenSeadragon.Tools(VIEWER);
     }
 
-    openSeadragonReady() {
-
-        //controlPanelId is incomming parameter, defines where to add HTML
-        PLUGINS.appendToMainMenuExtended("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <span class="material-icons pointer" onclick="$('#presenter-help').css('display', 'block');" title="Help" style="float: right;">help</span>
+    pluginReady() {
+        //todo call by id (self)
+        USER_INTERFACE.MainMenu.append("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
     <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="automatic_presentation.import(event);" />
-    <span onclick="automatic_presentation.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
-<button class='btn' onclick="automatic_presentation.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn' onclick="automatic_presentation.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
-<button class='btn' onclick="automatic_presentation.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
-<button class='btn' onclick="automatic_presentation.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn' onclick="automatic_presentation.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
+    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
+<button class='btn' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn' onclick="${this.id}.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
+<button class='btn' onclick="${this.id}.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
+<button class='btn' onclick="${this.id}.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn' onclick="${this.id}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
-<br><br>`, `<div class='' id='playback-timeline'></div>`, "auto-recorder", this.id);
+<br><br>`,"auto-recorder", this.id);
 
-        $("body").append(`
-    <div id="presenter-help" class="position-fixed" style="z-index:99999; display:none; left: 50%;top: 50%;transform: translate(-50%,-50%);">
-    <details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast" style=" max-width:700px; max-height: 600px;">
-        <div class="Box-header">
-        <button class="Box-btn-octicon btn-octicon float-right" type="button" aria-label="Close help" onclick="$('#presenter-help').css('display', 'none');">
-            <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"></path></svg>
-        </button>
-        <h3 class="Box-title">Recorder help</h3>
-        </div>
-        <div class="overflow-auto">
-        <div class="Box-body overflow-auto">
-                
-        <h4 class="mt-2"><span class="material-icons">radio_button_checked</span>Recording</h3>
-        <p>Hitting a <b>record</b> button will create a keyframe with the current zoom level and window position. A keyframe can be deleted simply by using  <span class="material-icons">delete</span> delete button. 
-        You can <span class="material-icons">play_arrow</span> play keyframes from the current selected one (the red one) or play all keyframes from the very start using <span class="material-icons">replay</span> replay button.</p>
-        <h4 class="mt-2"><span class="material-icons">tune</span>Tune keyframes</h3>
-        <p>You can adjust three values within a single keyframe:<br>
-        &emsp; &times; delay time (miliseconds) - the time before this keyframe is being played; this value is ignored by manual controls<br>
-        &emsp; &times; animation time (seconds) - the duration of the transition from the previous frame to the current frame<br>
-        &emsp; &times; fade in out - the style of the transition: values close to 1 mean linear transition, default 6.5 value is the default transition of the visualiser when navigating<br>
-        </p>
+        USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
+            `<div class="d-flex">
+<span class="material-icons timeline-play-small pointer" onclick="${this.id}.addRecord();">radio_button_checked</span>
+<div class='d-inline-block timeline-path'>
+<div class="d-inline-block"><span style="font-size: xx-small">Delay</span><br>
+<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.id}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
+</div><div class="d-inline-block"><span style="font-size: xx-small">Duration</span><br>
+<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.id}.setValue('duration', parseFloat($(this).val()));"> s<br>
+</div>&emsp;<div class="d-inline-block"><span style="font-size: xx-small">Linear / Ease</span><br>
+<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.id}.setValue('transition', parseFloat($(this).val()));"> 
+</div></div>
+<div id='playback-timeline' style="white-space: nowrap; overflow-x: auto; overflow-y: hidden; height: 48px" class="d-inline-block v-align-top position-relative flex-1 ml-3"></div>
 
-        <h4 class="mt-2"><span class="material-icons">control_camera</span>Manual controls</h3>
-        <p>Instead of playing the keyframes out, you can manually select a keyframe by clicking the keyframe body (not the delay). It is useful also for keyframe duplication - select any keyframe and hit <span class="material-icons">radio_button_checked</span> record to repeat the exact position.</p>
-        <p>Moreover, you can use <b>n</b> key to go to the next keyframe (next to the red selected one) and <b>s</b> to go to the first keyframe. Useful feature for playing out the recording when hidden.</p>
 
-        <h4 class="mt-2"><span class="material-icons">hide_source</span>Hide plugin</h3>
-        <p>For the recording purposes, the plugin can be hidden. You cannot make it visible again, and the plugin can be controlled only using manual controls. Think twice before hiding it, and always export your keyframes beforehand to avoid any loss.</p>
-        </div>
-        </div>
-    </details-dialog>
-    </div>
-    `);
+</div>`, 'play_circle_outline');
 
         this._container = $("#playback-timeline");
-        this._playBtn = $("#presenter-play-icon");
 
         PLUGINS.addPostExport("presentation-keyframes", this.exportJSON.bind(this), this.id);
         let importedJson = PLUGINS.postData["presentation-keyframes"];
@@ -68,7 +46,7 @@ class Presenter {
                 this.importJSON(JSON.parse(importedJson));
             } catch (e) {
                 console.warn(e);
-                PLUGINS.dialog.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, PLUGINS.dialog.MSG_ERR);
+                Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
             }
         }
 
@@ -89,37 +67,68 @@ class Presenter {
         if (this._playing) {
             return;
         }
-        let view = PLUGINS.osd.viewport;
+        let view = VIEWER.viewport;
         this._addRecord({
             zoomLevel: view.getZoom(),
             point: view.getCenter(),
-            bounds: view.getBounds(),
-            delay: 2000,
-            animationTime: 1.4,
-            springStiffness: 6.5
+            delay: parseFloat($("#point-delay").val()),
+            duration: parseFloat($("#point-duration").val()),
+            transition: parseFloat($("#point-spring").val())
         });
+        USER_INTERFACE.Tools.notify(this._toolsMenuId);
     }
 
-    _addRecord(record, timeoutValue=2000, animationDuration=1.4, fadeStyle=6.5) {
+    _addRecord(record) {
         this._steps.push(record);
-        this._container.append(`<div class='d-inline-block'><div class='timeline-path'><input class='form-control input-sm' type='number' min='0' value='${timeoutValue}' title='Delay' onchange="automatic_presentation._steps[${this._maxIdx}].delay = parseFloat($(this).val());"> ms&nbsp;</div><div class='timeline-point' style='cursor:pointer' onclick='automatic_presentation.selectPoint(${this._maxIdx});'>
-        <input class='form-control' type='number' min='0' value='${animationDuration}' step='0.1' title='Animation Duration' onchange="automatic_presentation._steps[${this._maxIdx}].animationTime = parseFloat($(this).val());"> sec <br>
-        <input class='form-control' type='number' min='0' value='${fadeStyle}' step='0.1' title='Fade in out' onchange="automatic_presentation._steps[${this._maxIdx}].springStiffness = parseFloat($(this).val());"> (1=linear)
-        </div></div>`);
-        this._highlight(this._container.children().eq(this._maxIdx));
-        this._maxIdx++;
+        this._container.append(`<span onclick="${this.id}.selectPoint(this);" style="
+filter: ${this._convertValue('transition', record.transition)};
+width: ${this._convertValue('duration', record.duration)}; 
+height: ${Math.log(record.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
+margin-left: ${this._convertValue('delay', record.delay)};"></span>`);
+        this._highlight(this._steps.length-1);
+    }
+
+    setValue(key, value) {
+        if (this._steps.length === 0) return;
+        this._steps[this._idx][key] = value;
+        let node = this._container.children()[this._idx];
+        node.style[this._getStyleFor(key)] = this._convertValue(key, value);
+    }
+
+    _convertValue(key, value) {
+        switch (key) {
+            case 'delay': return `${value * 2}px`;
+            case 'duration': return `${value * 4 + 6}px`;
+            case 'transition': return `brightness(${(value - 1) / 9})`;
+            default: return value;
+        }
+    }
+
+    _getStyleFor(key) {
+        switch (key) {
+            case 'delay': return "margin-left";
+            case 'duration': return "width";
+            case 'transition': return "filter";
+            default: return value;
+        }
     }
 
     removeHighlightedRecord() {
-        if (!this._currentHighlight) {
-            return;
+        let child = this._container.children()[this._idx];
+        if (child) {
+            this._steps.splice(this._idx, 1);
+            $(child).remove();
+            if (this._steps.length === 0) return;
+            this._highlight(this._idx++ % this._steps.length);
         }
-        this._currentHighlight.html("");
-        this._currentHighlight = null;
-        this._steps[this._idx] = null;
     }
 
-    selectPoint(atIndex) {
+    _findSelfIndex(node) {
+       return Array.prototype.indexOf.call(node.parentNode.children, node);
+    }
+
+    selectPoint(node) {
+        let atIndex = this._findSelfIndex(node);
         if (this._playing || this._steps.length <= atIndex) {
             return;
         }
@@ -131,48 +140,18 @@ class Presenter {
         if (!this._steps[index] || this._steps.length <= index) {
             return;
         }
-        let state = this._steps[index],
-            view = PLUGINS.osd.viewport;
-
-        this._centerSpringXAnimationTime = view.centerSpringX.animationTime;
-        this._centerSpringYAnimationTime = view.centerSpringY.animationTime;
-        this._zoomSpringAnimationTime = view.zoomSpring.animationTime;
-
-        view.centerSpringX.animationTime =
-            view.centerSpringY.animationTime =
-                view.zoomSpring.animationTime =
-                    state.animationTime;
-
-        view.centerSpringX.springStiffness =
-            view.centerSpringY.springStiffness =
-                view.zoomSpring.springStiffness =
-                    state.springStiffness;
-
-        if (direct) {
-            view.fitBoundsWithConstraints(state.bounds);
-        } else {
-            view.panTo(state.point);
-            view.zoomTo(state.zoomLevel);
-        }
-        view.applyConstraints();
-
-        view.centerSpringX.animationTime = this._centerSpringXAnimationTime;
-        view.centerSpringY.animationTime = this._centerSpringYAnimationTime;
-        view.zoomSpring.animationTime = this._zoomSpringAnimationTime;
-        this._highlight(this._container.children().eq(index));
+        this.engine.focus(this._steps[index]);
+        this._highlight(index);
     }
 
     play() {
         if (this._playing || this._idx === this._steps.length) return;
 
-        this._playBtn.addClass("timeline-play");
+        $("#presenter-play-icon").addClass("timeline-play");
+        USER_INTERFACE.Tools.notify(this._toolsMenuId, '➤');
         this.playStep(this._idx);
-        let view = PLUGINS.osd.viewport;
+        let view = VIEWER.viewport;
         this._playing = true;
-
-        // this._centerSpringXStiffness = view.centerSpringX.springStiffness;
-        // this._centerSpringYStiffness = view.centerSpringY.springStiffness;
-        // this._zoomSpringStiffness = view.zoomSpring.springStiffness;
     }
 
     playFromIndex(index) {
@@ -196,10 +175,11 @@ class Presenter {
 
         let prevIdx = index > 0 ? index-1 : 0;
         while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
-        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].animationTime * 1000 : 0;
-        this._currentStep = this._setDelayed(this._steps[index].delay + previousDuration, index);
+        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
+        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
+
+        const _this = this;
         this._currentStep.promise.then(atIndex => {
-            let _this = automatic_presentation;
             _this._jumpAt(atIndex);
             _this._idx  = atIndex + 1;
             _this.playStep(_this._idx);
@@ -215,13 +195,8 @@ class Presenter {
             this._currentStep.cancel();
             this._currentStep = null;
         }
-        this._playBtn.removeClass("timeline-play");
+        $("#presenter-play-icon").removeClass("timeline-play");
         this._playing = false;
-
-        // let view = PLUGINS.osd.viewport;
-        // view.centerSpringX.springStiffness = this._centerSpringXStiffness;
-        // view.centerSpringY.springStiffness = this._centerSpringYStiffness;
-        // view.zoomSpring.springStiffness = this._zoomSpringStiffness;
     }
 
     exportJSON() {
@@ -230,7 +205,6 @@ class Presenter {
 
     importJSON(json) {
         this._idx = 0;
-        this._maxIdx = 0;
         this._steps = [];
         this._currentStep = null;
         this._container.html("");
@@ -241,7 +215,7 @@ class Presenter {
             json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
             json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
 
-            this._addRecord(json[i], json[i].delay, json[i].animationTime, json[i].springStiffness);
+            this._addRecord(json[i]);
         }
     }
 
@@ -280,16 +254,18 @@ class Presenter {
         };
     }
 
-    _highlight(node, index) {
+    _highlight(index) {
         if (this._oldHighlight) {
             this._oldHighlight.removeClass("selected");
         }
-        node.addClass("selected");
-        this._oldHighlight = node;
-        this._currentHighlight = node;
+        this._idx = index;
+        this._oldHighlight = $(this._container.children()[index]);
+        this._oldHighlight.addClass("selected");
+        let data = this._steps[index];
+        $("#point-delay").val(data.delay);
+        $("#point-duration").val(data.duration);
+        $("#point-spring").val(data.transition);
     }
-
-
 }
 
-registerPlugin(Presenter);
+PLUGINS.register("automatic_presentation", Presenter);

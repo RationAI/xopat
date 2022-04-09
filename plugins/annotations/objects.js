@@ -1,7 +1,7 @@
 /**
  * Preset: object that pre-defines the type of annotation to be created, along with its parameters
  */
-class Preset {
+OSDAnnotations.Preset = class {
     constructor(id, objectFactory = null, comment = "", color = "") {
         this.comment = comment;
         this.color = color;
@@ -35,7 +35,7 @@ class Preset {
  * Provides API to objects to obtain object options. Has left and right
  * attributes that specify what preset is being active for the left or right button respectively.
  */
-class PresetManager {
+OSDAnnotations.PresetManager = class {
 
     /**
      * Shared options, set to each annotation object.
@@ -80,7 +80,7 @@ class PresetManager {
 
         //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
         return $.extend({fill: preset.color},
-            PresetManager._commonProperty,
+            OSDAnnotations.PresetManager._commonProperty,
             preset,
             {
                 isLeftClick: isLeftClick,
@@ -103,13 +103,12 @@ class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"><
      * Output additional GUI HTML for presets
      * @returns {string} HTML
      */
-    presetHiddenControls() {
-        return `<span class="d-inline-block" style="width:46%" title="Importing and exporting presets">Preset control:</span>
-<button class="btn px-1" onclick="${this._globalSelf}.exportToFile();" id="presets-download" 
-title="Download presets" style="height:30px;width:23%;"><span class="material-icons px-0">file_download</span>
-Export</button><a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a><button class="btn px-1" style="height:30px;width:23%;"
-id="presets-upload" onclick="this.nextSibling.click();" title="Import presets"><span class="material-icons px-0">
-file_upload</span>Import</button><input type='file' style="visibility:hidden; width: 0; height: 0;" 
+    presetExportControls() {
+        return `
+<button id="presets-download" onclick="${this._globalSelf}.exportToFile();" class="btn">Export presets.</button>&nbsp;
+<a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a>
+<button id="presets-upload" onclick="this.nextSibling.click();" class="btn">Import presets.</button>
+<input type='file' style="visibility:hidden; width: 0; height: 0;" 
 onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
@@ -118,7 +117,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
      * @returns {Preset} newly created preset
      */
     addPreset() {
-        let preset = new Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
         this._presets[preset.presetID] = preset;
         return preset;
     }
@@ -145,7 +144,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
     getCommonProperties() {
-        return PresetManager._commonProperty;
+        return OSDAnnotations.PresetManager._commonProperty;
     }
 
     /**
@@ -166,11 +165,11 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
         let toDelete = this._presets[id];
         if (!toDelete) return false;
 
-        if (this._context.overlay.fabricCanvas()._objects.some(o => {
+        if (this._context.overlay.fabric._objects.some(o => {
             return o.presetID === id;
         })) {
-            PLUGINS.dialog.show("This preset belongs to existing annotations: it cannot be removed.",
-                8000, PLUGINS.dialog.MSG_WARN);
+            Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
+                8000, Dialogs.MSG_WARN);
             return false;
         }
 
@@ -199,7 +198,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
 
         if (!needsRefresh) return;
         this.updatePresetsHTML();
-        //var objects = this._context.overlay.fabricCanvas().getObjects();
+        //var objects = this._context.overlay.fabric.getObjects();
         // if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
 
         // var objectsLength = objects.length
@@ -211,14 +210,24 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
 
     /**
      * Export presets
+     * @returns {object} JSON-friendly representation
+     */
+    toObject() {
+        let exported = [];
+        for (let preset in this._presets) {
+            if (!this._presets.hasOwnProperty(preset)) continue;
+            preset = this._presets[preset];
+            exported.push(preset.toJSONFriendlyObject());
+        }
+        return exported;
+    }
+
+    /**
+     * Export presets
      * @returns {string} JSON-encoded string
      */
     export() {
-        let exported = [];
-        Object.values(this._presets).forEach(value => {
-            exported.push(value.toJSONFriendlyObject());
-        });
-        return JSON.stringify(exported);
+        return JSON.stringify(this.toObject());
     }
 
     /**
@@ -245,7 +254,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
         if (presets && presets.length > 10) {
             presets = JSON.parse(presets);
             for (let i = 0; i < presets.length; i++) {
-                let p = new Preset().fromJSONFriendlyObject(
+                let p = new OSDAnnotations.Preset().fromJSONFriendlyObject(
                     presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
                 );
                 this._presets[p.presetID] = p;
@@ -417,17 +426,17 @@ ${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:
 ${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, 
 $(this).index())); "><span class="material-icons">add</span> New</div>`;
 
-        PLUGINS.dialog.showCustom("preset-modify-dialog",
+        Dialogs.showCustom("preset-modify-dialog",
             `<b>Annotations presets</b>`,
             html,
             `<div class="d-flex flex-row-reverse">
 <button id="select-annotation-preset-right" onclick="if (${this._globalSelf}._selection === 
-undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); 
+undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
 return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
 ${this._globalSelf}.selectPreset(false); }, 150);" class="btn m-2">Set for right click 
 </button>
 <button id="select-annotation-preset-left" onclick="if (${this._globalSelf}._selection === 
-undefined) { PLUGINS.dialog.show('You must click on a preset to be selected first.', 5000, PLUGINS.dialog.MSG_WARN); 
+undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
 return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
 ${this._globalSelf}.selectPreset(true); }, 150);" class="btn m-2">Set for left click 
 </button>
@@ -443,15 +452,15 @@ ${this._globalSelf}.selectPreset(true); }, 150);" class="btn m-2">Set for left c
  * necessary methods for its creation.
  * TODO unify parameters and coordinate systems!
  */
-class AnnotationObjectFactory {
+OSDAnnotations.AnnotationObjectFactory = class {
 
     //Registered annotation object list
     static _registree = [];
     static register(...factories) {
-        AnnotationObjectFactory._registree.push(...factories);
+        this._registree.push(...factories);
     }
     static visitRegistered(callback) {
-        AnnotationObjectFactory._registree.forEach(e => callback(e));
+        this._registree.forEach(e => callback(e));
     }
 
     /**
@@ -616,10 +625,10 @@ class AnnotationObjectFactory {
     static withArrayPoint(x, y) {
         return [x, y];
     }
-}
+};
 
 
-class Rect extends AnnotationObjectFactory {
+OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "rect");
         this._origX = null;
@@ -771,9 +780,9 @@ class Rect extends AnnotationObjectFactory {
     getASAP_XMLTypeName() {
         return "Rectangle";
     }
-}
+};
 
-class Ellipse extends AnnotationObjectFactory {
+OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "ellipse");
         this._origX = null;
@@ -941,10 +950,10 @@ class Ellipse extends AnnotationObjectFactory {
     getASAP_XMLTypeName() {
         return "Ellipse";
     }
-}
+};
 
 //todo rename to underscore if private
-class Polygon extends AnnotationObjectFactory {
+OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon");
@@ -1025,8 +1034,8 @@ class Polygon extends AnnotationObjectFactory {
                 //todo somehow try to avoid copy, but it creates artifacts otherwise :(
                 _this._edited = _this.copy(curr, curr.points);
                 _this._context.replaceAnnotation(curr, _this._edited, false);
-                _this._context.canvas().sendToBack(_this._edited);
-                _this._context.canvas().renderAll();
+                _this._context.canvas.sendToBack(_this._edited);
+                _this._context.canvas.renderAll();
             });
             _this._pointArray.push(circle);
             _this._context.addHelperAnnotation(circle);
@@ -1034,9 +1043,9 @@ class Polygon extends AnnotationObjectFactory {
 
         this._originallyEddited = theObject;
         this._edited = theObject;
-        this._context.canvas().deactivateAll();
-        this._context.canvas().sendToBack(theObject);
-        this._context.canvas().renderAll();
+        this._context.canvas.deactivateAll();
+        this._context.canvas.sendToBack(theObject);
+        this._context.canvas.renderAll();
     }
 
     recalculate(theObject) {
@@ -1048,7 +1057,7 @@ class Polygon extends AnnotationObjectFactory {
         if (this._edited !== this._originallyEddited) {
             this._context.history.push(this._edited, this._originallyEddited);
             this._edited.selectable = true;
-            this._context.overlay.fabricCanvas().setActiveObject(this._edited);
+            this._context.overlay.fabric.setActiveObject(this._edited);
         }
         //clear
         this._initialize(false);
@@ -1184,8 +1193,8 @@ class Polygon extends AnnotationObjectFactory {
         if (quality < 1) points = this.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary
-        if (converter !== AnnotationObjectFactory.withObjectPoint) {
-            let output = Array(result.length);
+        if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
+            let output = new Array(points.length);
             points.forEach(p => {
                 output.push(converter(p.x, p.y))
             });
@@ -1209,7 +1218,7 @@ class Polygon extends AnnotationObjectFactory {
     //todo replace with control point feature?
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: Math.sqrt(this.getRelativePixelDiffDistSquared(10)),
+            radius: 1 / VIEWER.tools.imagePixelSizeOnScreen() * 10,
             fill: '#fbb802',
             left: x,
             top: y,
@@ -1307,10 +1316,7 @@ class Polygon extends AnnotationObjectFactory {
      */
 
     getRelativePixelDiffDistSquared(relativeDiff) {
-        let imageTileSource = PLUGINS.imageLayer();
-        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(relativeDiff, 0));
-        return Math.pow(pointB.x - pointA.x, 2) + Math.pow(pointB.y - pointA.y, 2);
+        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 
     // both algorithms combined for awesome performance
@@ -1336,12 +1342,12 @@ class Polygon extends AnnotationObjectFactory {
 
         return points;
     }
-}
+};
 
 /**
  * Class that contains all logic for automatic annotation creation.
  */
-class AutoObjectCreationStrategy {
+OSDAnnotations.AutoObjectCreationStrategy = class {
 
     constructor(selfName, context) {
         this._currentTile = null;
@@ -1355,7 +1361,7 @@ class AutoObjectCreationStrategy {
                 _this.tileFailure = true;
             }
         });
-        this.tileFailure = false;
+        this.tileFailure = false; //todo remove?
         this._renderEngine.addVisualisation({
             shaders: {
                 _ : {
@@ -1366,46 +1372,54 @@ class AutoObjectCreationStrategy {
             }
         });
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
-        this._renderEngine.prepareAndInit(PLUGINS.seaGL.dataImageSources());
+        this._renderEngine.prepareAndInit(VIEWER.bridge.dataImageSources());
         this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
         this._readingIndex = 0;
         this._readingKey = "";
         this._customControls = "";
 
-        PLUGINS.osd.addHandler('visualisation-used', function (visualisation) {
-            let html = "";
-
-            let index = -1;
-            let layer = null;
-            let key = "";
-            for (key in visualisation.shaders) {
-                layer = visualisation.shaders[key];
-
-                let errIcon = _this.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
-                let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
-                let selected = "";
-
-                if (layer.index === _this._readingIndex) {
-                    index = layer.index;
-                    _this._readingKey = key;
-                    selected = "selected";
-                }
-                html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
-            }
-
-            if (index < 0) {
-                _this._readingIndex = layer.index;
-                _this._readingKey = key;
-                html = "<option selected " + html.substr(8);
-            }
-            _this._customControls = html;
-            $("#sensitivity-auto-outline").html(html);
+        this._initFromVisualization(VIEWER.bridge.currentVisualisation());
+        VIEWER.addHandler('visualisation-used', function (visualisation) {
+            _this._initFromVisualization(visualisation);
         });
     }
 
+    _initFromVisualization(visualisation) {
+        let html = "";
+
+        let index = -1;
+        let layer = null;
+        let key = "";
+        for (key in visualisation.shaders) {
+            if (!visualisation.shaders.hasOwnProperty(key)) continue;
+            layer = visualisation.shaders[key];
+            if (isNaN(layer.index)) return; //not used TODO dirty....
+
+            let errIcon = this.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
+            let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
+            let selected = "";
+
+            if (layer.index === this._readingIndex) {
+                index = layer.index;
+                this._readingKey = key;
+                selected = "selected";
+            }
+            html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
+        }
+
+        if (index < 0) {
+            if (!layer) return;
+            this._readingIndex = layer.index;
+            this._readingKey = key;
+            html = "<option selected " + html.substr(8);
+        }
+        this._customControls = html;
+        $("#sensitivity-auto-outline").html(html);
+    }
+
     _beforeAutoMethod() {
-        let vis = PLUGINS.seaGL.currentVisualisation(),
+        let vis = VIEWER.bridge.currentVisualisation(),
             layer = vis.shaders[this._readingKey];
         this._renderEngine._visualisations[0] = {
             shaders: {}
@@ -1447,9 +1461,9 @@ class AutoObjectCreationStrategy {
         }
         this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
 
-        this._currentPixelSize = this.pixelSize();
+        this._currentPixelSize = VIEWER.tools.imagePixelSizeOnScreen();
 
-        let tiles = PLUGINS.dataLayer().lastDrawn;
+        let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
         for (let i = 0; i < tiles.length; i++) {
             let tile = tiles[i];
             if (!tile.hasOwnProperty("annotationCanvas")) {
@@ -1458,7 +1472,7 @@ class AutoObjectCreationStrategy {
             }
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.origData, tile.sourceBounds, 0, this._currentPixelSize
+                tile.imageData(), tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;
@@ -1471,15 +1485,15 @@ class AutoObjectCreationStrategy {
     }
 
     sensitivityControls() {
-        return `<span class="d-inline-block" title="What layer is used to create automatic 
-annotations.">Auto selection target:</span><select title="What layer is selected for the data." 
-type="number" id="sensitivity-auto-outline" class="form-control" onchange="${this._globalSelf}._setTargetLayer(this);">${this._customControls}</select>`;
+        return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
+annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
+type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this._globalSelf}._setTargetLayer(this);">${this._customControls}</select>`;
     }
 
     _setTargetLayer(self) {
         self = $(self);
         this._readingKey = self.val();
-        let layer = PLUGINS.seaGL.currentVisualisation().shaders[this._readingKey];
+        let layer = VIEWER.bridge.currentVisualisation().shaders[this._readingKey];
         this._readingIndex = layer.index;
     }
 
@@ -1542,14 +1556,6 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
         return { top: top, left: left, bottom: bottom, right: right };
     }
 
-
-    pixelSize() {
-        let imageTileSource = PLUGINS.imageLayer();
-        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(1, 0));
-        return Math.round(Math.abs(pointB.x - pointA.x));
-    }
-
     /*async*/ createOutline(eventPosition) {
         this._beforeAutoMethod();
         if (!this.changeTile(eventPosition)) {
@@ -1593,7 +1599,7 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
             [1, 0, 1],
             [0, 1, 2],
             [-1, 0, 3]
-        ]
+        ];
         // 0 -> up, 1 -> right, 2 -> down, 3-> left
         let rightDirMapping = [1, 2, 3, 0];
         let leftDirMapping = [3, 0, 1, 2];
@@ -1666,11 +1672,11 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
     }
 
     toGlobalPointXY (x, y) {
-		return PLUGINS.imageLayer().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return VIEWER.tools.referencedTileSource().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	toGlobalPoint (point) {
-		return PLUGINS.imageLayer().windowToImageCoordinates(point);
+		return VIEWER.tools.referencedTileSource().windowToImageCoordinates(point);
 	}
 
 	isValidPixel(eventPosition) {
@@ -1689,8 +1695,8 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
      * @param {OpenSeadragon.Point} eventPosition point
      */
     changeTile(eventPosition) {
-        let viewportPos = PLUGINS.osd.viewport.pointFromPixel(eventPosition);
-        let tiles = PLUGINS.dataLayer().lastDrawn;
+        let viewportPos = VIEWER.viewport.pointFromPixel(eventPosition);
+        let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
         for (let i = 0; i < tiles.length; i++) {
             if (tiles[i].bounds.containsPoint(viewportPos)) {
                 this._currentTile = tiles[i];
@@ -1711,8 +1717,9 @@ type="number" id="sensitivity-auto-outline" class="form-control" onchange="${thi
 		var y = eventPosition.y - this._currentTile.position.y;
 
 		// get position on DZI tile (usually 257*257)
-		var relative_x = Math.round((x / this._currentTile.size.x) * this._currentTile.context2D.canvas.width);
-		var relative_y = Math.round((y / this._currentTile.size.y) * this._currentTile.context2D.canvas.height);
+        let canvasCtx = this._currentTile.canvasContext();
+		var relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
+		var relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
 
         // var pixel = new Uint8Array(4);
         // let gl = this._renderEngine.gl;

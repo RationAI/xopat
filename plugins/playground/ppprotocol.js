@@ -1,5 +1,7 @@
 /*
  * Python Playground Protocol
+ * This file is meant to be configured manually, e.g. no URL processing happens, configure->url
+ * param is not used, configure all image-metadata-unrelated properties manually if you want to set them
  *
  * Based on OpenSeadragon.DziTileSource:
  * Copyright (C) 2009 CodePlex Foundation
@@ -34,7 +36,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
+Playground.Protocol = class extends OpenSeadragon.TileSource {
     /**
      * Taken from DZI processing, the same
      */
@@ -63,85 +65,26 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
 
         if (!this.fileFormat) this.fileFormat = ".jpg";
         if (!this.greyscale) this.greyscale = "";
+
+        let canvas = document.createElement('canvas'),
+            context = canvas.getContext('2d');
+        canvas.width = options.tileSize;
+        canvas.height = options.tileSize;
+        context.fillStyle = "rgba(0, 0, 0, 0)";
+        context.fillRect(0, 0, options.tileSize, options.tileSize);
+        this._emptyPlaceholder = canvas.toDataURL("image/jpeg", 0.1);
     }
 
     /**
-     * Support http://rationai.fi.muni.cz/deepzoom/playground
+     * Support http://rationai.fi.muni.cz/deepzoom_json/playground
      */
     supports( data, url ){
         var ns;
-        if ( data.Image ) {
-            ns = data.Image.xmlns;
-        } else if ( data.documentElement) {
-            if ("Image" === data.documentElement.localName || "Image" === data.documentElement.tagName) {
-                ns = data.documentElement.namespaceURI;
-            }
+        if ( data.xmlns ) {
+            ns = data.xmlns;
         }
-
         ns = (ns || '').toLowerCase();
-
-        return ns.indexOf('http://rationai.fi.muni.cz/deepzoom/playground') !== -1;
-    }
-
-    /**
-     * Initialization phase, similar to OSD
-     * @param ready
-     * @param url
-     * @param postData
-     * @param headers
-     * @param useCredentials
-     */
-    static initialize(ready, abort, server, image, algorithm, postData=null, headers={}, useCredentials=false) {
-        const URL = `${server}/init/${algorithm}?Deepzoom=${image}.dzi`;
-        OpenSeadragon.makeAjaxRequest( {
-            url: URL,
-            postData: postData,
-            withCredentials: useCredentials,
-            headers: headers,
-            success: function( xhr ) {
-                let data;
-                if (xhr.responseText.match(/\s*<.*/)){
-                    try {
-                        data = ( xhr.responseXML && xhr.responseXML.documentElement ) ? xhr.responseXML :
-                            OpenSeadragon.parseXml( xhr.responseText );
-                    } catch (e){
-                        data = xhr.responseText;
-                    }
-                } else if ( xhr.responseText.match(/\s*[{[].*/) ){
-                    try {
-                        data = OpenSeadragon.parseJSON(xhr.responseText);
-                    } catch(e){
-                        data =  xhr.responseText;
-                    }
-                } else {
-                    data = xhr.responseText;
-                }
-                if( typeof (data) === "string" ) data = OpenSeadragon.parseXml( data );
-                let protocol = new PythonPlayground.Protocol(
-                    PythonPlayground.Protocol.prototype.configure(data, URL, postData)
-                );
-                protocol.rootServer = server;
-                protocol.imageSource = image;
-                protocol.algorithm = algorithm;
-                ready(protocol);
-            },
-            error: function ( xhr, exc ) {
-                let msg;
-                try {
-                    msg = "HTTP " + xhr.status + " attempting to load TileSource";
-                } catch ( e ) {
-                    let formattedExc;
-                    if ( typeof ( exc ) === "undefined" || !exc.toString ) {
-                        formattedExc = "Unknown error";
-                    } else {
-                        formattedExc = exc.toString();
-                    }
-
-                    msg = formattedExc + " attempting to load TileSource";
-                }
-                abort(msg);
-            }
-        });
+        return ns.indexOf('http://rationai.fi.muni.cz/deepzoom_json/playground') !== -1;
     }
 
     /**
@@ -152,90 +95,10 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
      * @return {Object} options - A dictionary of keyword arguments sufficient
      *      to configure this tile sources constructor.
      */
-    configure( data, url, postData ){
-
-        function configureFromXML( tileSource, xmlDoc ){
-            if ( !xmlDoc || !xmlDoc.documentElement ) {
-                throw "Reponse is not a valid XML document.";
-            }
-
-            var root           = xmlDoc.documentElement,
-                rootName       = root.localName || root.tagName,
-                ns             = xmlDoc.documentElement.namespaceURI,
-                configuration  = null,
-                displayRects   = [],
-                dispRectNodes,
-                dispRectNode,
-                rectNode,
-                sizeNode,
-                i;
-
-            if ( rootName === "Image" ) {
-                sizeNode = root.getElementsByTagName("Size" )[ 0 ];
-                if (sizeNode === undefined) {
-                    sizeNode = root.getElementsByTagNameNS(ns, "Size" )[ 0 ];
-                }
-
-                configuration = {
-                    Image: {
-                        xmlns:       "http://rationai.fi.muni.cz/deepzoom/playground",
-                        Url:         root.getAttribute( "Url" ),
-                        Format:      root.getAttribute( "Format" ),
-                        DisplayRect: null,
-                        Overlap:     parseInt( root.getAttribute( "Overlap" ), 10 ),
-                        TileSize:    parseInt( root.getAttribute( "TileSize" ), 10 ),
-                        Size: {
-                            Height: parseInt( sizeNode.getAttribute( "Height" ), 10 ),
-                            Width:  parseInt( sizeNode.getAttribute( "Width" ), 10 )
-                        }
-                    }
-                };
-
-                if ( !OpenSeadragon.imageFormatSupported( configuration.Image.Format ) ) {
-                    throw new Error(
-                        OpenSeadragon.getString( "Errors.ImageFormat", configuration.Image.Format.toUpperCase() )
-                    );
-                }
-
-                dispRectNodes = root.getElementsByTagName("DisplayRect" );
-                if (dispRectNodes === undefined) {
-                    dispRectNodes = root.getElementsByTagNameNS(ns, "DisplayRect" )[ 0 ];
-                }
-
-                for ( i = 0; i < dispRectNodes.length; i++ ) {
-                    dispRectNode = dispRectNodes[ i ];
-                    rectNode     = dispRectNode.getElementsByTagName("Rect" )[ 0 ];
-                    if (rectNode === undefined) {
-                        rectNode = dispRectNode.getElementsByTagNameNS(ns, "Rect" )[ 0 ];
-                    }
-
-                    displayRects.push({
-                        Rect: {
-                            X: parseInt( rectNode.getAttribute( "X" ), 10 ),
-                            Y: parseInt( rectNode.getAttribute( "Y" ), 10 ),
-                            Width: parseInt( rectNode.getAttribute( "Width" ), 10 ),
-                            Height: parseInt( rectNode.getAttribute( "Height" ), 10 ),
-                            MinLevel: parseInt( dispRectNode.getAttribute( "MinLevel" ), 10 ),
-                            MaxLevel: parseInt( dispRectNode.getAttribute( "MaxLevel" ), 10 )
-                        }
-                    });
-                }
-
-                if( displayRects.length ){
-                    configuration.Image.DisplayRect = displayRects;
-                }
-                return configureFromObject( tileSource, configuration );
-
-            } else if ( rootName === "Error" ) {
-                var messageNode = root.getElementsByTagName("Message")[0];
-                throw messageNode.firstChild.nodeValue;
-            }
-
-            throw "Unknown XML format: node <" + rootName + ">";
-        }
+    configure( data, url, postData ) {
 
         function configureFromObject( tileSource, configuration ){
-            var imageData     = configuration.Image,
+            var imageData     = configuration,
                 fileFormat    = imageData.Format,
                 sizeData      = imageData.Size,
                 dispRectData  = imageData.DisplayRect || [],
@@ -271,7 +134,10 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
                 displayRects: displayRects /* displayRects */
             }, configuration );
         }
-        return OpenSeadragon.isPlainObject(data) ? configureFromObject(this, data) : configureFromXML(this, data);
+
+        if (typeof data === "string") data = JSON.parse(data);
+        if (OpenSeadragon.isPlainObject(data)) return configureFromObject(this, data);
+        throw "Configuration is allowed only with JSON (string supported).";
     }
 
     /**
@@ -281,8 +147,7 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
      * @param {Number} y
      */
     getTileUrl( level, x, y ) {
-        return this.postData ? `${this.rootServer}/algorithm/${this.algorithm}`
-            : `${this.rootServer}/algorithm/${this.algorithm}?Deepzoom=${this.imageSource}_files/${level}/${x}_${y}.${this.fileFormat}${this.greyscale}`;
+        return `${this.rootServer}/process/${this.algorithm}?Deepzoom=${this.imageSource}_files/${level}/${x}_${y}.${this.fileFormat}${this.greyscale}`;
     }
 
     /**
@@ -299,7 +164,7 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
      * @returns {Object}
      */
     getTileAjaxHeaders( level, x, y ) {
-        return {'Content-type': 'application/x-www-form-urlencoded'};
+        return {'Content-type': 'application/x-www-form-urlencoded', 'credentials': 'include' };
     }
 
     /**
@@ -313,7 +178,13 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
      * @return {string || null} post data to send with tile configuration request
      */
     getTilePostData(level, x, y) {
-        return this.postData ? `Deepzoom=${this.imageSource}_files/${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
+        this.owner.setStatus(`Loading tile ${level}/${x}-${y}`, {loading: true});
+        let data = this.owner.getPostData();
+        data.dx = x;
+        data.dy = y;
+        data.level = level;
+        data.tileSize = this.TileSize;
+        return JSON.stringify(data);
     }
 
     /**
@@ -364,5 +235,365 @@ PythonPlayground.Protocol = class extends OpenSeadragon.TileSource {
         }
 
         return false;
+    }
+
+    /**
+     * Download tile data
+     * @param {ImageJob} context job context that you have to call finish(...) on. It also contains abort(...) function
+     *   that can be called to abort the job.
+     * @param {String} [context.src] - URL of image to download.
+     * @param {String} [context.loadWithAjax] - Whether to load this image with AJAX.
+     * @param {String} [context.ajaxHeaders] - Headers to add to the image request if using AJAX.
+     * @param {String} [context.crossOriginPolicy] - CORS policy to use for downloads
+     * @param {String} [context.postData] - HTTP POST data (usually but not necessarily in k=v&k2=v2... form,
+     *      see TileSrouce::getPostData) or null
+     * @param {Function} [context.callback] - Called once image has been downloaded.
+     * @param {Function} [context.abort] - Called when this image job is aborted.
+     * @param {Number} [context.timeout] - The max number of milliseconds that this image job may take to complete.
+     */
+    downloadTileStart(context) {
+        context.image = new Image();
+
+        context.image.onload = function(){
+            context.finish(true);
+        };
+        context.image.onabort = context.image.onerror = function() {
+            context.finish(false, "Image load aborted");
+        };
+        const _this = this;
+        if (context.loadWithAjax) {
+            context.request = OpenSeadragon.makeAjaxRequest({
+                url: context.src,
+                withCredentials: context.ajaxWithCredentials,
+                headers: context.ajaxHeaders,
+                responseType: "arraybuffer",
+                postData: context.postData,
+                success: function(request) {
+                    var blb;
+                    // Make the raw data into a blob.
+                    // BlobBuilder fallback adapted from
+                    // http://stackoverflow.com/questions/15293694/blob-constructor-browser-compatibility
+                    try {
+                        blb = new window.Blob([request.response]);
+                    } catch (e) {
+                        var BlobBuilder = (
+                            window.BlobBuilder ||
+                            window.WebKitBlobBuilder ||
+                            window.MozBlobBuilder ||
+                            window.MSBlobBuilder
+                        );
+                        if (e.name === 'TypeError' && BlobBuilder) {
+                            var bb = new BlobBuilder();
+                            bb.append(request.response);
+                            blb = bb.getBlob();
+                        }
+                    }
+                    // If the blob is empty for some reason consider the image load a failure.
+                    if (blb.size === 0) {
+                        context.finish(false, "Empty image response.");
+                    } else {
+                        context.image.src = (window.URL || window.webkitURL).createObjectURL(blb);
+                    }
+                },
+                error: function(request) {
+                    if (request.status === 422) {
+                        try {
+                            let blob = new window.Blob([request.response]);
+                            blob.text().then(t => _this.owner.setStatus(t, {loading: false}));
+                            context.image.src = _this._emptyPlaceholder;
+                        } catch (e) {
+                            context.finish(false, e);
+                        }
+                    } else {
+                        context.finish(false, "Image load aborted - XHR error");
+                    }
+                }
+            });
+        } else {
+            context.finish(false, "The protocol must use AJAX!.");
+        }
+    }
+
+    /**
+     * TODO `this` refers to the cache not TileSource, dirty design!
+     * @param {*} data the result of downloadTileFinish() function
+     */
+    createTileCache(data) {
+        this._data = data;
+    }
+
+    /**
+     * TODO `this` refers to the cache not TileSource, dirty design!
+     */
+    destroyTileCache() {
+        this._data = null;
+        this._renderedContext = null;
+    }
+
+    /**
+     * TODO `this` refers to the cache not TileSource, dirty design!
+     */
+    getTileCacheData() {
+        return this._data;
+    }
+
+    /**
+     * TODO `this` refers to the cache not TileSource, dirty design!
+     */
+    tileDataToRenderedContext() {
+        if (!this._renderedContext) {
+            console.log(("CREAETED PPPLAYGROUND"));
+            var canvas = document.createElement( 'canvas' );
+            canvas.width = this._data.width;
+            canvas.height = this._data.height;
+            this._renderedContext = canvas.getContext('2d');
+            this._renderedContext.drawImage( this._data, 0, 0 );
+            //since we are caching the prerendered image on a canvas
+            //allow the image to not be held in memory
+
+            //TODO this is a possible bug since DIV drawing strategy uses getImage(...)
+            //I know that div drawing strategy probably does not call getRenderedContext but
+            //it is certainly a not good code design...
+            this._image = null;
+        }
+        return this._renderedContext;
+    }
+};
+
+
+Playground.VectorProtocol = class extends Playground.Protocol {
+    /**
+     * Download tile data
+     * @param {ImageJob} context job context that you have to call finish(...) on. It also contains abort(...) function
+     *   that can be called to abort the job.
+     * @param {String} [context.src] - URL of image to download.
+     * @param {String} [context.loadWithAjax] - Whether to load this image with AJAX.
+     * @param {String} [context.ajaxHeaders] - Headers to add to the image request if using AJAX.
+     * @param {String} [context.crossOriginPolicy] - CORS policy to use for downloads
+     * @param {String} [context.postData] - HTTP POST data (usually but not necessarily in k=v&k2=v2... form,
+     *      see TileSrouce::getPostData) or null
+     * @param {Function} [context.callback] - Called once image has been downloaded.
+     * @param {Function} [context.abort] - Called when this image job is aborted.
+     * @param {Number} [context.timeout] - The max number of milliseconds that this image job may take to complete.
+     */
+    downloadTileStart(context) {
+        // Load the tile with an AJAX request if the loadWithAjax option is
+        // set. Otherwise load the image by setting the source proprety of the image object.
+        const _this = this;
+        if (context.loadWithAjax) {
+            context.request = OpenSeadragon.makeAjaxRequest({
+                url: context.src,
+                withCredentials: context.ajaxWithCredentials,
+                headers: context.ajaxHeaders,
+                responseType: "text",
+                postData: context.postData,
+                success: function(request) {
+                    try {
+                        context.data = {
+                            geometry: JSON.parse(request.responseText),
+                            tileSize: _this.TileSize
+                        };
+                        context.finish(true);
+                    } catch (e) {
+                        context.finish(false, e);
+                    }
+                },
+                error: function(request) {
+                    context.finish(false, "Image load aborted - XHR error");
+                }
+            });
+        } else {
+            context.finish(false, "The protocol must use AJAX!.");
+        }
+    }
+
+    /**
+     * @param {ImageJob} context
+     * @param successful true if successful
+     * @return {null|*} null to indicate missing data or data object
+     *  for example, can return default value if the request was unsuccessful such as default error image
+     */
+    downloadTileFinish(context, successful) {
+        if (!successful) return null;
+        return context.data;
+    }
+
+    createTileCache(data) {
+        this._data = data;
+    }
+
+    destroyTileCache() {
+        this._data = null;
+        this._renderedContext = null;
+    }
+
+    getTileCacheData() {
+        return this._data;
+    }
+
+    tileDataToRenderedContext() {
+        console.log(("CREAETED PPPLAYGROUND-VECTOR"));
+
+        if (!this._rasterizer) {
+            this._rasterizer = new WebGLModule.Rasterizer();
+            this._rasterizer.setDimensions(this._data.tileSize, this._data.tileSize);
+        }
+        if (!this._renderedContext) {
+            let rasterized = this._rasterizer.rasterizePolygons(this._data.geometry);
+
+            var canvas = document.createElement( 'canvas' );
+            canvas.width = rasterized.width;
+            canvas.height = rasterized.height;
+            this._renderedContext = canvas.getContext('2d');
+            this._renderedContext.drawImage( rasterized, 0, 0 );
+            this._data = null;
+        }
+        return this._renderedContext;
+    }
+};
+
+Playground.SelfServingProtocol = class extends Playground.Protocol {
+    constructor(options) {
+        /**
+         * Not possible
+         *
+         * instead bind to tileLoaded of underlying tile and find surroundings,
+         * if not found set is as unfinished
+         *
+         * bind redraw event (custom) as in bridge, bind custom webgl, modify
+         * rendering context of the... basically re-implement OSD bridge
+         * .... maybe re-write bridge such that it binds to specific tile (maybe it is already like that)
+         * ....
+         *
+         * support cleaning feature! re-draw context by cached image and delete cached image
+         */
+
+
+        super(options);
+        this._map = document.createElement('canvas');
+        this._ctx = this._map.getContext('2d');
+        this._level = -1;
+        this._dx = -1;
+        this._mask = [];
+
+        //todo clarify API
+        this.tiledImageIndex = options.tiledImageIndex;
+        this.osd = options.openSeadragon;
+        this.overlap = options.overlap || 255;
+    }
+
+    getTileAjaxHeaders( level, x, y ) {
+        return {'Content-type': 'multipart/form-data', 'credentials': 'include' };
+    }
+
+    getTilePostData(level, x, y) {
+        let data = this.owner.getPostData();
+        data.dx = x;
+        data.dy = y;
+        data.level = level;
+        let result = new FormData();
+        result.append("meta", data);
+        result.append("tile", null);
+        return result;
+    }
+
+    _getTileData(level, x, y) {
+        let tiles = this.osd.world.getItemAt(this.tiledImageIndex).lastDrawn;
+
+        let scale = this.getLevelScale(level),
+            widthScaled = this.dimensions.x * scale,
+            tileWidth = this.getTileWidth(level),
+            tileHeight = this.getTileHeight(level);
+
+        if (this._dimx !== window.innerWidth || this._dimy !== window.innerHeight) {
+            this._dimx = window.innerWidth;
+            this._dimy = window.innerHeight;
+            this._map.width = window.innerWidth + 2*this.tileSize;
+            this._map.height = window.innerHeight + 2*this.tileSize;
+            this._level = -1;
+        }
+
+        if (this._level !== level) {
+            this._bitArray.clear();
+        }
+
+        function drawTile(tile) {
+            this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
+            let canvas = this._renderEngine.processImage(
+                tile.imageData(), tile.sourceBounds, 0, this._currentPixelSize
+            );
+            tile.annotationCanvas.width = tile.sourceBounds.width;
+            tile.annotationCanvas.height = tile.sourceBounds.height;
+            tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
+        }
+
+        //first control whether tiles are drawn
+        for (let dx = -1; dx < 2; dx++)  {
+            for (let dy = -1; dy < 2; dy++)  {
+                let viewportPos = new OpenSeadragon.Point(
+                    (x+dx) * tileWidth / widthScaled,
+                    (y+dy) * tileHeight / widthScaled
+                );
+                //if inside viewport
+                if (viewportPos.x >= 0 && viewportPos.x < 1 &&
+                    viewportPos.y >= 0 && viewportPos.y < 1 / this.aspectRatio) {
+
+                    for (let i = 0; i < tiles.length; i++) {
+                        if (tiles[i].bounds.containsPoint(viewportPos)) {
+                            if (!this._bitArray.isFlag(x, y)) {
+                                drawTile(tiles[i]);
+                                this._bitArray.setFlag(x, y);
+                            }
+                            break;
+                        }
+                    }
+                }
+
+
+
+
+
+
+            }
+        }
+
+
+
+    }
+
+
+    // BITWISE MAP OF VISITED AREAS, USE INTEGER FLAGS TO REDUCE THE ARRAY LENGTH
+    // (e.g. linear nxn matrix array, each cell stores __bitArray.cells.length__ positions)
+    // with javascript, safe to use up to 31 bits (we use 30)
+    _bitArray = {
+
+        dimension: 2000,
+        arr: [],
+
+        cells: [1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 8, 1 << 9,
+            1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16, 1 << 17, 1 << 18, 1 << 19,
+            1 << 20, 1 << 21, 1 << 22, 1 << 23, 1 << 24, 1 << 25, 1 << 26, 1 << 27, 1 << 28, 1 << 29],
+
+        isFlag: function (i, j) {
+            let idx = i * this.dimension + j;
+            let flag = this.arr[Math.floor(idx / this.cells.length)];
+
+            return (flag & this.cells[idx % this.cells.length]) > 0;
+        },
+
+        setFlag: function (i, j, flag = true) {
+            let idx = i * this.dimension + j;
+            if (flag) {
+                // |    to add selection (1 on the only place we want to add)
+                this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] | this.cells[idx % this.cells.length];
+            } else {
+                // & ~   to negate the selection (0 on the only place we want to clear) and bit-wise and this mask to arr
+                this.arr[Math.floor(idx / this.cells.length)] = this.arr[Math.floor(idx / this.cells.length)] & ~this.cells[idx % this.cells.length];
+            }
+        },
+
+        clear: function () {
+            this.arr = [];
+        },
     }
 };

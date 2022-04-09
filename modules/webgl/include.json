@@ -3,7 +3,6 @@
     "name": "WebGL rendering module",
     "includes" : [
         "webGLWrapper.js",
-        "colorBrewer.js",
         "visualisationLayer.js",
         "advancedControls.js",
         "shaders/bipolarHeatmapVisualisationLayer.js",
@@ -15,5 +14,5 @@
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],
-    "requires": ["nouislider"]
+    "requires": ["nouislider", "colorMaps"]
 }

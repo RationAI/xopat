@@ -3,8 +3,8 @@
 require_once("modules.php");
 $PLUGINS = array();
 
-foreach (array_diff(scandir(PLUGINS), array('..', '.')) as $_=>$dir) {
-    $interface = PLUGINS . "/" . $dir . "/include.json";
+foreach (array_diff(scandir(PLUGINS_FOLDER), array('..', '.')) as $_=>$dir) {
+    $interface = PLUGINS_FOLDER . "/" . $dir . "/include.json";
     if (file_exists($interface)) {
         $data = json_decode(file_get_contents($interface));
         $data->directory = $dir;

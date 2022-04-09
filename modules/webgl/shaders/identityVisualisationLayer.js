@@ -17,14 +17,12 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "shows the data AS-IS";
     }
 
-    // static defaultControls() {
-    //     return {
+    // static defaultControls = {
     //         kernel: {
     //             default: {type: "kernel"},
     //             accepts: (type, instance) => type === "float"
     //         }
     //     };
-    // }
 
     constructor(id, options) {
         super(id, options);
@@ -43,22 +41,6 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
     }
 
 
-    // glDrawing(program, dimension, gl) {
-    //     this.kernel.glDrawing(program, dimension, gl);
-    // }
-    //
-    // glLoaded(program, gl) {
-    //     this.kernel.glLoaded(program, gl);
-    // }
-    //
-    // init() {
-    //     this.kernel.init();
-    // }
-    //
-    // htmlControls() {
-    //     this.kernel.toHtml();
-    // }
-    //
     // supports() {
     //     return {
     //         kernel: "float",

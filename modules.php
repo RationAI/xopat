@@ -2,8 +2,8 @@
 
 $MODULES = array();
 
-foreach (array_diff(scandir(MODULES), array('..', '.')) as $_=>$dir) {
-    $interface = MODULES . "/" . $dir . "/include.json";
+foreach (array_diff(scandir(MODULES_FOLDER), array('..', '.')) as $_=>$dir) {
+    $interface = MODULES_FOLDER . "/" . $dir . "/include.json";
     if (file_exists($interface)) {
         $data = json_decode(file_get_contents($interface));
         $data->directory = $dir;

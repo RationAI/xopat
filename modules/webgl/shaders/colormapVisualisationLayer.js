@@ -33,39 +33,30 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color scale";
     }
 
-    static defaultControls() {
-        return {
-            color: {
-                default: {}, //todo define some
-                accepts: (type, instance) => type === "vec3",
-                required: {type: "colormap"}
-            },
-            threshold: {
-                default: {},
-                accepts: (type, instance) => type === "float",
-                required: {type: "advanced_slider"}
-            },
-            opacity: {
-                default: {type: "range", default: 1, min: "0", max: 1, step: 0.1, title: "Opacity: "},
-                accepts: (type, instance) => type === "float"
-            },
-            connect : {
-                default: {type: "bool", interactive: true, title: "Breaks mapping: ", default: false},
-                accepts:  (type, instance) => type === "bool"
-            }
-        };
-    }
+    static defaultControls = {
+        color: {
+            default: {}, //todo define some
+            accepts: (type, instance) => type === "vec3",
+            required: {type: "colormap"}
+        },
+        threshold: {
+            default: {},
+            accepts: (type, instance) => type === "float",
+            required: {type: "advanced_slider"}
+        },
+        opacity: {
+            default: {type: "range", default: 1, min: "0", max: 1, step: 0.1, title: "Opacity: "},
+            accepts: (type, instance) => type === "float"
+        },
+        connect : {
+            default: {type: "bool", interactive: true, title: "Breaks mapping: ", default: false},
+            accepts:  (type, instance) => type === "bool"
+        }
+    };
+
 
     constructor(id, options) {
         super(id, options);
-    }
-
-    getFragmentShaderDefinition() {
-        return `
-${this.color.define()}
-${this.threshold.define()}
-${this.opacity.define()}
-`;
     }
 
     getFragmentShaderExecution() {
@@ -74,18 +65,6 @@ ${this.opacity.define()}
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
     ${this.render(`vec4(${this.color.sample(ratio)}, step(0.05, ${this.threshold.sample(ratio)}) * ${this.opacity.sample()})`)}
 `;
-    }
-
-    glDrawing(program, dimension, gl) {
-        this.color.glDrawing(program, dimension, gl);
-        this.threshold.glDrawing(program, dimension, gl);
-        this.opacity.glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        this.color.glLoaded(program, gl);
-        this.threshold.glLoaded(program, gl);
-        this.opacity.glLoaded(program, gl);
     }
 
     init() {
@@ -109,15 +88,6 @@ ${this.opacity.define()}
            // _this.invalidate(); todo does not update?
         }, true);
         this.connect.init();
-    }
-
-    htmlControls() {
-        return [
-            this.color.toHtml(true),
-            this.threshold.toHtml(true),
-            this.connect.toHtml(true),
-            this.opacity.toHtml(true)
-        ].join("");
     }
 };
 

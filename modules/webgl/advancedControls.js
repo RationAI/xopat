@@ -108,17 +108,17 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
 
         this.setSteps();
 
-        if (!this.value || !WebGLModule.ColorBrewer.schemeGroups[this.params.mode].hasOwnProperty(this.value)) {
-            this.value = WebGLModule.ColorBrewer.defaults[this.params.mode];
+        if (!this.value || !ColorMaps.schemeGroups[this.params.mode].hasOwnProperty(this.value)) {
+            this.value = ColorMaps.defaults[this.params.mode];
         }
-        this.pallete = WebGLModule.ColorBrewer[this.value][this.maxSteps];
+        this.pallete = ColorMaps[this.value][this.maxSteps];
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 let self = $(e.target),
                     selected = self.val();
-                let pallete = WebGLModule.ColorBrewer[selected][_this.maxSteps];
+                let pallete = ColorMaps[selected][_this.maxSteps];
                 _this._setPallete(pallete);
                 self.css("background", _this.cssGradient(pallete));
                 _this.value = selected;
@@ -131,7 +131,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             this._setPallete(this.pallete);
 
             let schemas = [];
-            for (let pallete of WebGLModule.ColorBrewer.schemeGroups[this.params.mode]) { //todo need to do this building after init(...)
+            for (let pallete of ColorMaps.schemeGroups[this.params.mode]) { //todo need to do this building after init(...)
                 schemas.push(`<option value="${pallete}">${pallete}</option>`);
             }
             node.html(schemas.join(""));
@@ -217,7 +217,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
         if (!this.params.interactive) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-readable" 
 style="width: 60%;">${this.params.default}</div>`;
 
-        if (!WebGLModule.ColorBrewer.hasOwnProperty(this.params.pallete)) {
+        if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
             this.params.pallete = "OrRd";
         }
 

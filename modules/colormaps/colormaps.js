@@ -6,8 +6,9 @@
  * Some ColorSchemes are taken from Matlab
  *
  * TODO include our own color schemes [yellow + tyrkys]
+ * TODO exclude usseles schemes
  */
-WebGLModule.ColorBrewer = {
+ColorMaps = {
     defaults: {
         sequential: "Parula",
         singlehue: "Oranges",

@@ -116,20 +116,22 @@ re-used. The module is closely described in `./webgl/` folder.
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
-    - [O]`experimentId` - our usecase-dependent parameter, not really important (unless used by some plugins)
     - [O]`visualizationProtocol` - see protocol construction below
     - [O]`customBlending` - allow to program custom blending, default `false`
-    - [O]`preventNavigationShorcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
+    - [O]`debug` - run in debug mode if `true`, default `false`
+    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`
+    - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
     - [O]`viewport` - where to focus
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom
+    - [O] ... other optional parameters based on what plugins read and support, such as `experimentId` (see plugins themselves)
 - [R]`data` - defines the data for background (a list of paths to the pyramidal tiffs such that that server can understand it), elements
 of this list are essentially given to the construction of the protocol)
 - [R]`background` - defines what images compose the **image part**, at least one element must be present
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [0]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [0]`protocol` - see protocol construction below
-- [0]`shaderSources` - voluntary, array of objects, more details in `./webgl/shaders/`, each object must have these properties:
+- [0]`shaderSources` - array of objects, more details in `./webgl/shaders/`, each object must have these properties:
     - [R]`url` - url where to fetch the shader implementation
     - [0]`headers` - arbitrary headers
     - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
@@ -185,6 +187,18 @@ case is our custom protocol, able to handle multiple image acquisition as descri
 is sent to as `HTTP POST` data in the request.   
 
 </details>
+
+#### New Handlers
+For flawless execution, `VIEWER` fires additional events:
+TODO DESCRIBE:
+tiled-image-force-remove --> has e.worldIndex
+key-down --> has e.focusCanvas
+key-up --> has e.focusCanvas
+
+
+#### TODO available style actions
+--disabled, dot-pulse, ...
+
 
 ### `./external/`
 Always-present third-party libraries and styles which are guaranteed to be included.

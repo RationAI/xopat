@@ -24,26 +24,24 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         return "highlights edges at threshold values";
     }
 
-    static defaultControls() {
-        return {
-            color: {
-                default: {type: "color", default: "#fff700", title: "Color: "},
-                accepts: (type, instance) => type === "vec3"
-            },
-            threshold: {
-                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
-                accepts: (type, instance) => type === "float"
-            },
-            edgeThickness: {
-                default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
-                accepts: (type, instance) => type === "float"
-            },
-            opacity: {
-                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-                accepts: (type, instance) => type === "float"
-            }
-        };
-    }
+    static defaultControls = {
+        color: {
+            default: {type: "color", default: "#fff700", title: "Color: "},
+            accepts: (type, instance) => type === "vec3"
+        },
+        threshold: {
+            default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+            accepts: (type, instance) => type === "float"
+        },
+        edgeThickness: {
+            default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
+            accepts: (type, instance) => type === "float"
+        },
+        opacity: {
+            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+            accepts: (type, instance) => type === "float"
+        }
+    };
 
     constructor(id, options) {
         super(id, options);
@@ -108,36 +106,6 @@ vec4 getBorder_${this.uid}() {
         ${this.render(`vec4(border_${this.uid}.rgb, border_${this.uid}.a * ${this.opacity.sample()})`)}
     }
 `;
-    }
-
-    glDrawing(program, dimension, gl) {
-        this.color.glDrawing(program, dimension, gl);
-        this.opacity.glDrawing(program, dimension, gl);
-        this.threshold.glDrawing(program, dimension, gl);
-        this.edgeThickness.glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        this.color.glLoaded(program, gl);
-        this.opacity.glLoaded(program, gl);
-        this.threshold.glLoaded(program, gl);
-        this.edgeThickness.glLoaded(program, gl);
-    }
-
-    init() {
-        this.color.init();
-        this.opacity.init();
-        this.threshold.init();
-        this.edgeThickness.init();
-    }
-
-    htmlControls() {
-        return [
-            this.color.toHtml(true),
-            this.opacity.toHtml(true),
-            this.threshold.toHtml(true),
-            this.edgeThickness.toHtml(true)
-        ].join("");
     }
 };
 

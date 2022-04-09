@@ -31,38 +31,27 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "values are of two categories, smallest considered in the middle";
     }
 
-    static defaultControls() {
-        return {
-            colorHigh: {
-                default: {type: "color", default: "#ff1000", title: "Color High: "},
-                accepts: (type, instance) => type === "vec3"
-            },
-            colorLow: {
-                default: {type: "color", default: "#01ff00", title: "Color Low: "},
-                accepts: (type, instance) => type === "vec3"
-            },
-            threshold: {
-                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
-                accepts: (type, instance) => type === "float"
-            },
-            opacity: {
-                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-                accepts: (type, instance) => type === "float"
-            }
-        };
-    }
+    static defaultControls = {
+        colorHigh: {
+            default: {type: "color", default: "#ff1000", title: "Color High: "},
+            accepts: (type, instance) => type === "vec3"
+        },
+        colorLow: {
+            default: {type: "color", default: "#01ff00", title: "Color Low: "},
+            accepts: (type, instance) => type === "vec3"
+        },
+        threshold: {
+            default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+            accepts: (type, instance) => type === "float"
+        },
+        opacity: {
+            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+            accepts: (type, instance) => type === "float"
+        }
+    };
 
     constructor(id, options) {
         super(id, options);
-    }
-
-    getFragmentShaderDefinition() {
-        return `
-${this.colorHigh.define()}
-${this.colorLow.define()}
-${this.threshold.define()}
-${this.opacity.define()}
-`;
     }
 
     getFragmentShaderExecution() {
@@ -83,27 +72,6 @@ ${this.opacity.define()}
         }
     }        
 `;
-    }
-
-    glDrawing(program, dimension, gl) {
-        this.colorHigh.glDrawing(program, dimension, gl);
-        this.colorLow.glDrawing(program, dimension, gl);
-        this.threshold.glDrawing(program, dimension, gl);
-        this.opacity .glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        this.colorHigh.glLoaded(program, gl);
-        this.colorLow.glLoaded(program, gl);
-        this.threshold.glLoaded(program, gl);
-        this.opacity.glLoaded(program, gl);
-    }
-
-    init() {
-        this.colorHigh.init();
-        this.colorLow.init();
-        this.threshold.init();
-        this.opacity.init();
     }
 
     htmlControls() {

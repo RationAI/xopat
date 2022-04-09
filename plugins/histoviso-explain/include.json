@@ -1,12 +1,13 @@
 {
     "id": "histoviso_explain",
     "name": "Neural Network Inspector",
+    "author": "Jirka Horák",
+    "description": "TODO",
+    "icon": "",
     "includes" : [
         "histoviso_explain.js",
         "histoviso_explain_annotation_factory_extension.js"
     ],
-    "flag": "histoviso_explain",
-    "public": false,
     "requires": ["openseadragon_image_annotations"],
     "modules": ["webgl"]
 }

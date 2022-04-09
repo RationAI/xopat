@@ -17,28 +17,26 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
         return "use GLSL to display anything you want";
     }
 
-    static defaultControls() {
-        return {
-            fs_define: {
-                default: {type: 'text_area', title: false,
-                    placeholder: "Input GLSL that is not executed: define functions/globals.",
-                    default: this._getDefaultFSDefine()},
-                accepts: (type, instance) => type === "text"
-            },
-            fs_execute: {
-                default: {type: 'text_area', title: false, placeholder: "Input GLSL into main() - executed.", default: "\n//no output\nreturn vec4(0);"},
-                accepts: (type, instance) => type === "text"
-            },
-            hints: {
-                default: {type: "bool", default: true, title: "Show hints"},
-                accepts: (type, instance) => type === "bool"
-            },
-            submit : {
-                default: {type: "button", title: "Render"},
-                accepts:  (type, instance) => type === "action"
-            }
-        };
-    }
+    static defaultControls = {
+        fs_define: {
+            default: {type: 'text_area', title: false,
+                placeholder: "Input GLSL that is not executed: define functions/globals.",
+                default: this._getDefaultFSDefine()},
+            accepts: (type, instance) => type === "text"
+        },
+        fs_execute: {
+            default: {type: 'text_area', title: false, placeholder: "Input GLSL into main() - executed.", default: "\n//no output\nreturn vec4(0);"},
+            accepts: (type, instance) => type === "text"
+        },
+        hints: {
+            default: {type: "bool", default: true, title: "Show hints"},
+            accepts: (type, instance) => type === "bool"
+        },
+        submit : {
+            default: {type: "button", title: "Render"},
+            accepts:  (type, instance) => type === "action"
+        }
+    };
 
     constructor(id, options) {
         super(id, options);

@@ -1,6 +1,6 @@
 //todo use getters from the parent class and do not rely on jQuery!!!
 
-class HistovisoImage extends AnnotationObjectFactory {
+class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager, id) {
         super(context, autoCreationStrategy, presetManager, id);
         this._current = null;
@@ -120,7 +120,7 @@ class HistovisoImage extends AnnotationObjectFactory {
 
     _setRequestStarted(id, request) {
         if (this._isRequestPending(id)) {
-            PLUGINS.dialog.show("Still working on the task, please, be patient.", 8000, PLUGINS.dialog.MSG_WARN);
+            Dialogs.show("Still working on the task, please, be patient.", 8000, Dialogs.MSG_WARN);
             return;
         }
         let _this = this;
@@ -142,7 +142,7 @@ class HistovisoImage extends AnnotationObjectFactory {
     }
 
     _abortSendRequest(message, dummyRect) {
-        PLUGINS.dialog.show(message, 8000, PLUGINS.dialog.MSG_ERR);
+        Dialogs.show(message, 8000, Dialogs.MSG_ERR);
         if (dummyRect) {
             this._context.deleteHelperAnnotation(dummyRect);
         }
@@ -277,7 +277,7 @@ class HistovisoImageExplorer extends HistovisoImage {
             _this._context.deleteHelperAnnotation(dummyRect);
 
         }).catch(e => {
-            PLUGINS.dialog.show(e, 8000, PLUGINS.dialog.MSG_WARN);
+            Dialogs.show(e, 8000, Dialogs.MSG_WARN);
             _this._context.deleteHelperAnnotation(dummyRect);
         });
     }
@@ -333,7 +333,7 @@ class HistovisoImageRenderer extends HistovisoImage {
 
             _this._context.replaceAnnotation(_this._selected, img, true);
             img.bringToFront();
-            _this._context.canvas().renderAll();
+            _this._context.canvas.renderAll();
             _this._selected = img;
         });
     }
@@ -373,7 +373,7 @@ class HistovisoImageRenderer extends HistovisoImage {
             y1: imageBounds.y,
             x2: imageBounds.x + imageBounds.width,
             y2: imageBounds.y + imageBounds.height
-        }
+        };
 
         if (Math.abs(coords.x1 - coords.x2) > 5000 || Math.abs(coords.y1 - coords.y2) > 5000) {
             this._abortSendRequest("Selected area is too big to process: either zoom closer or select smaller area.", dummyRect);
@@ -483,17 +483,17 @@ class HistovisoImageRenderer extends HistovisoImage {
                     _this._context.addAnnotation(img);
                     img.bringToFront();
 
-                    _this._context.canvas().renderAll();
+                    _this._context.canvas.renderAll();
                 });
 
             };
         }).catch(e => {
-            PLUGINS.dialog.show(e, 8000, PLUGINS.dialog.MSG_WARN);
+            Dialogs.show(e, 8000, Dialogs.MSG_WARN);
             _this._context.deleteHelperAnnotation(dummyRect);
         });
     }
 }
 
 //registering is performed after the plugin has been successfully initialized
-AnnotationObjectFactory.register(HistovisoImageRenderer);
-AnnotationObjectFactory.register(HistovisoImageExplorer);
+OSDAnnotations.AnnotationObjectFactory.register(HistovisoImageRenderer);
+OSDAnnotations.AnnotationObjectFactory.register(HistovisoImageExplorer);

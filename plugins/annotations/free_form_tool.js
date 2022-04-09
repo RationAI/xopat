@@ -10,12 +10,13 @@ FreeFormTool = function (selfName, context) {
     this.SQRT2DIV2 = 0.707106781187;
     this._context = context;
     this._update = null;
+    this._created = false;
 };
 
 FreeFormTool.prototype = {
 
     //initialize any object for cursor-drawing modification
-    init: function (object, atPosition) {
+    init: function (object, atPosition, created=false) {
 
         let objectFactory = this._context.getAnnotationObjectFactory(object.type);
         if (objectFactory !== undefined) {
@@ -23,33 +24,35 @@ FreeFormTool.prototype = {
                 //object can be used immedietaly
                 this._setupPolygon(object);
             } else {
-                let points = objectFactory.toPointArray(object, AnnotationObjectFactory.withObjectPoint, 1);
+                let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
                 if (points) {
                     this._createPolygonAndSetupFrom(points, object);
                 } else {
-                    PLUGINS.dialog.show("This object cannot be modified.", 5000, PLUGINS.dialog.MSG_WARN);
+                    Dialogs.show("This object cannot be modified.", 5000, Dialogs.MSG_WARN);
                     return;
                 }
             }
         } else {
             this.polygon = null;
-            PLUGINS.dialog.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, PLUGINS.dialog.MSG_WARN);
+            Dialogs.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, Dialogs.MSG_WARN);
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
         this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
+        this._created = created;
     },
 
     brushSizeControls: function() {
-        let modeRemove = this._update === this._subtract ? "border" : "";
-        let modeAdd = this._update === this._subtract ? "" : "border";
+        let modeRemove = this._update === this._subtract ? "checked" : "";
+        let modeAdd = this._update === this._subtract ? "" : "checked";
 
-        return `<span class="d-inline-block" title="Size of a brush used to modify annotations areas.">Brush size:</span>
-        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.screenRadius}" 
-        disabled style="height: 22px;"> (scroll to change)
-<span id="fft-mode-add" onclick="${this._globalSelf}.setModeAdd(true)" class="pointer rounded-2 pb-1 ${modeAdd}" style="border-width: 3px !important;box-sizing: content-box;"><span class="material-icons pointer">add_circle</span> mode add </span> &nbsp;  
-<span id="fft-mode-remove" onclick="${this._globalSelf}.setModeAdd(false)" class="pointer rounded-2 pb-1 ${modeRemove}" style="border-width: 3px !important;box-sizing: content-box;"><span class="material-icons pointer">remove_circle</span> mode remove </span>
-`;
+        return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush used to modify annotations areas.">Brush radius:</span>
+        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.screenRadius}" style="height: 22px; width: 60px;">
+        <input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-add-radio"><label for="fft-mode-add-radio">
+<span id="fft-mode-add" onclick="${this._globalSelf}.setModeAdd(true)" class="material-icons pointer p-1 rounded-2 ${modeAdd}">add_circle_outline</span>
+</label><input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-remove-radio"><label for="fft-mode-remove-radio">
+<span id="fft-mode-remove" onclick="${this._globalSelf}.setModeAdd(false)" class="material-icons pointer p-1 rounded-2 ${modeRemove}">remove_circle_outline</span>
+</label>`;
     },
 
     updateRadius: function () {
@@ -59,12 +62,10 @@ FreeFormTool.prototype = {
     setModeAdd: function(isModeAdd) {
         this.modeAdd = isModeAdd;
         if (isModeAdd) {
-            $("#fft-mode-add").addClass('border');
-            $("#fft-mode-remove").removeClass('border');
+            $("#fft-mode-add-radio").prop('checked', true);
             this._update = this._union;
         } else {
-            $("#fft-mode-add").removeClass('border');
-            $("#fft-mode-remove").addClass('border');
+            $("#fft-mode-remove-radio").prop('checked', true);
             this._update = this._subtract;
         }
     },
@@ -77,7 +78,7 @@ FreeFormTool.prototype = {
 
     setRadius: function (radius) {
         this.screenRadius = radius;
-        let imageTileSource = PLUGINS.imageLayer();
+        let imageTileSource = VIEWER.tools.referencedTileSource();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
@@ -112,8 +113,12 @@ FreeFormTool.prototype = {
             if (this.polygon.incrementId !== this.initial.incrementId) {
                 //incrementID is used by history - if ID equal, no changes were made -> no record
                 this._context.history.push(this.polygon, this.initial);
+            } else if (this._created) {
+                //new objects do not have incrementID as they should be instantiated without registering in history
+                this._context.promoteHelperAnnotation(this.polygon);
             }
             this._cachedSelection = this.polygon;
+            this._created = false;
             let outcome = this.polygon;
             this.polygon = null;
             this.initial = null;
@@ -222,7 +227,8 @@ FreeFormTool.prototype = {
     },
 
     getScreenToolRadius: function () {
-        let imageTileSource = PLUGINS.imageLayer();
+        //todo read this property from global API
+        let imageTileSource = VIEWER.tools.referencedTileSource();
         return imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
             .distanceTo(
                 imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))

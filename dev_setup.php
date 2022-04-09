@@ -29,7 +29,7 @@ $webglPath = "";
 
 foreach ($MODULES as $id => $mod) {
     if ($id == "webgl") {
-        $webglPath = MODULES . "/" . $mod->directory;
+        $webglPath = MODULES_FOLDER . "/" . $mod->directory;
         foreach ($mod->includes as $__ => $file) {
             echo "    <script src=\"" .$webglPath . "/$file?v=$version\"></script>\n";
         }

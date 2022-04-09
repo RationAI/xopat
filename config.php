@@ -1,33 +1,66 @@
 <?php
 
+$production = false;
+
 //relative path system in the application
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //todo this is invalid, it will be different if included from different sources
 define('EXTERNAL_SOURCES', 'external');
-define('MODULES', 'modules');
-define('PLUGINS', 'plugins');
+define('MODULES_FOLDER', 'modules');
+define('PLUGINS_FOLDER', 'plugins');
 define('OPEN_SEADRAGON', 'osd');
 
-//absolute path system
-//PRODUCTION
-define('PROTOCOL', "https://");
-//LOCALHOST
-//define('PROTOCOL', "http://");
-define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
+if ($production) {
+    define('PROTOCOL', "https://");
+    define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
+    //auto domain: ($_SERVER['HTTP_HOST'] != 'localhost') ? $_SERVER['HTTP_HOST'] : false
+    define('JS_COOKIE_SETUP', "expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/");
+
+    define('BG_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
+    define('LAYERS_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
+} else {
+    define('PROTOCOL', "http://");
+    define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
+    define('JS_COOKIE_SETUP', "expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/");
+    define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
+    define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
+}
+
 define('VISUALISATION_ROOT_ABS_PATH', SERVER . VISUALISATION_ROOT);
 define('EXTERNAL_SOURCES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . EXTERNAL_SOURCES);
-define('MODULES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . MODULES);
-define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS);
+define('MODULES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . MODULES_FOLDER);
+define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
 
-//application data
+/**
+ * Version is attached to javascript
+ * sources so that an update is enforced
+ * with change
+ */
 define('VERSION', "1.1.0");
 
-//PRODUCTION
-define('SERVED_IMAGES', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
-define('SERVED_LAYERS', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
-//LOCALHOST
-//define('SERVED_IMAGES', "https://rationai-vis.ics.muni.cz/iipsrv-martin/iipsrv.fcgi");
-//define('SERVED_LAYERS', "https://rationai-vis.ics.muni.cz/iipsrv-martin/iipsrv.fcgi");
 
+/**
+ * Default protocol
+ * one-liner javascript expression with two available variables:
+ *  - path: server URL
+ *  - data: requested images ids/paths (comma-separated if multiple)
+ */
+define('BG_DEFAULT_PROTOCOL', '`${path}?Deepzoom=\${data}.dzi`');
+define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(\',\')}.dzi`');
+
+//temp solution for now...
+//todo make this more sophisticated...
+define('USER', 'rationai');
+define('PASSWORD', 'rationai_demo');
+//set to empty string if no authorization
+define('AUTH_HEADER_CONTENT', "Basic " . base64_encode(USER.":".PASSWORD));
+
+/**
+ * Headers used to fetch data from image servers
+ */
 define('COMMON_HEADERS', array());
-define('AUTH_HEADERS', isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : false);
+
+/**
+ * Path/URL to a context page
+ * (where user should be offered to go in case of failure)
+ */
 define('GATEWAY', '../list-experiments.php');
