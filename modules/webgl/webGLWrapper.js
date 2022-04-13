@@ -7,7 +7,6 @@
 * http://via.hoff.in
 */
 
-//todo maybe change name to WebGLProcessing or something like that
 class WebGLModule {
     constructor(incomingOptions) {
         /////////////////////////////////////////////////////////////////////////////////
@@ -202,8 +201,8 @@ class WebGLModule {
         let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
             imageElement, tileDimension, zoomLevel, pixelSize);
 
-        if (!this.debug) return result;
-        this._renderDebugIO(imageElement, result);
+        if (this.debug) this._renderDebugIO(imageElement, result);
+        return result;
     }
 
     /**
@@ -429,7 +428,7 @@ class WebGLModule {
             this.running = true;
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
             this._loadDebugInfo();
-            if (!this._loadScript(i, this._program)) { //todo set visible on each false so that no fail occurs?
+            if (!this._loadScript(i, this._program)) {
                 if (!reset) throw "Could not build visualization";
                 return this._forceSwitchShader(i, false); //force reset in errors
             }
@@ -473,7 +472,9 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
         //TODO using directly IO data results in loss of rendering capabilities --> re-render?
-        //if (!this._icanvas) this._icanvas = document.createElement("canvas");
+        // if (!this._icanvas) this._icanvas = document.createElement("canvas");
+        // if (!this._ocanvas) this._ocanvas = document.createElement("canvas");
+        // let ictx = this._icanvas.getContext('2d');
 
         input.innerHTML = "";
         input.append(inputData);
@@ -484,6 +485,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             output.innerHTML = "No output!";
         }
     }
+
+    _copy
 
     _buildFailed(visualisation, error) {
         console.error(error);

@@ -28,7 +28,7 @@ OSDAnnotations.Preset = class {
             presetID: this.presetID
         };
     }
-} // end of namespace Preset
+}; // end of namespace Preset
 
 /**
  * Preset manager, takes care of GUI and management of presets.
@@ -59,10 +59,9 @@ OSDAnnotations.PresetManager = class {
      * @param {OSDAnnotations} context parent context
      */
     constructor(selfName, context) {
-        this._globalSelf = `${context.id}['${selfName}']`;
         this._context = context;
         this._presets = {};
-        //mouse button presets
+        //active presets for mouse buttons
         this.left = undefined;
         this.right = undefined;
         this._colorSteps = 8;
@@ -84,32 +83,9 @@ OSDAnnotations.PresetManager = class {
             preset,
             {
                 isLeftClick: isLeftClick,
-                opacity: this._context.opacity.val(),
+                opacity: this._context.getOpacity(),
             }
         );
-    }
-
-    /**
-     * Output GUI HTML for presets
-     * @returns {string} HTML
-     */
-    presetControls() {
-        return `<span id="annotations-left-click" class="d-inline-block position-relative" 
-style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
-class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
-    }
-
-    /**
-     * Output additional GUI HTML for presets
-     * @returns {string} HTML
-     */
-    presetExportControls() {
-        return `
-<button id="presets-download" onclick="${this._globalSelf}.exportToFile();" class="btn">Export presets.</button>&nbsp;
-<a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a>
-<button id="presets-upload" onclick="this.nextSibling.click();" class="btn">Import presets.</button>
-<input type='file' style="visibility:hidden; width: 0; height: 0;" 
-onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
     /**
@@ -144,7 +120,7 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
     getCommonProperties() {
-        return OSDAnnotations.PresetManager._commonProperty;
+        return this.constructor._commonProperty;
     }
 
     /**
@@ -152,14 +128,14 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
      * @param {Number} id preset id
      * @returns {Preset} preset instance
      */
-    getPreset(id) {
+    get(id) {
         return this._presets[id];
     }
 
     /**
      * Safely remove preset
      * @param {Number} id preset id
-     * @returns {boolean} true if deletion succeeded
+     * @returns deleted preset or false if deletion failed
      */
     removePreset(id) {
         let toDelete = this._presets[id];
@@ -173,16 +149,15 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
             return false;
         }
 
-        if (toDelete === this.right) $("#annotations-right-click").html(this.getMissingPresetHTML(false));
-        if (toDelete === this.left) $("#annotations-left-click").html(this.getMissingPresetHTML(true));
         delete this._presets[id];
-        return true;
+        return toDelete;
     }
 
     /**
      *
      * @param {Number} id preset id
      * @param {Object} properties to update in the preset (keys must match)
+     * @return updated preset in case any value changed, false otherwise
      */
     updatePreset(id, properties) {
         let toUpdate = this._presets[id],
@@ -196,16 +171,14 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
             toUpdate[key] = value;
         });
 
-        if (!needsRefresh) return;
-        this.updatePresetsHTML();
-        //var objects = this._context.overlay.fabric.getObjects();
-        // if (objects.length == 0 || !confirm("Do you really want to delete all annotations?")) return;
+        return needsRefresh ? toUpdate : false;
+    }
 
-        // var objectsLength = objects.length
-        // for (var i = 0; i < objectsLength; i++) {
-        // 	this.history.push(null, objects[objectsLength - i - 1]);
-        // 	objects[objectsLength - i - 1].remove();
-        // }
+    foreach(call) {
+        for (let id in this._presets) {
+            if (!this._presets.hasOwnProperty(id)) continue;
+            call(this._presets[id]);
+        }
     }
 
     /**
@@ -231,19 +204,6 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
     }
 
     /**
-     * Makes the browser download the export() output
-     */
-    exportToFile() {
-        let output = new Blob([this.export()], { type: 'text/plain' });
-        let downloadURL = window.URL.createObjectURL(output);
-        var downloader = document.getElementById("presets-export");
-        downloader.href = downloadURL;
-        downloader.download = "annotation-presets.json";
-        downloader.click();
-        URL.revokeObjectURL(downloadURL);
-    }
-
-    /**
      * Import presets
      * @param {string} presets JSON to decode
      */
@@ -265,184 +225,20 @@ onchange="${this._globalSelf}.importFromFile(event);$(this).val('');" />`;
             first = this.addPreset();
         }
         this.left = first;
-        this.updatePresetsHTML();
+        //TODO this.updatePresetsHTML();
     }
 
     /**
-     * Load presets from a file
-     * @param {Event} e event of the file load
-     */
-    importFromFile(e) {
-        let file = e.target.files[0];
-        if (!file) return;
-        let fileReader = new FileReader();
-        let _this = this;
-        fileReader.onload = function (e) {
-            _this.import(e.target.result);
-        }
-        fileReader.readAsText(file);
-    }
-
-    /**
-     * Update main HTML GUI part of presets upon preset change
-     */
-    updatePresetsHTML() {
-        if (this.left) {
-            $("#annotations-left-click").html(this.getPresetControlHTML(this.left, true));
-        } else {
-            $("#annotations-left-click").html(this.getMissingPresetHTML(true));
-        }
-        if (this.right) {
-            $("#annotations-right-click").html(this.getPresetControlHTML(this.right, false));
-        } else {
-            $("#annotations-right-click").html(this.getMissingPresetHTML(false));
-        }
-    }
-
-    /**
-     * Select preset as active. GUI is updated.
+     * Select preset as active.
+     * @param id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
-    selectPreset(isLeftClick) {
-        if (!this._selection || !this._presets[this._selection]) return;
-        if (isLeftClick) {
-            this.left = this._presets[this._selection];
-        } else {
-            this.right = this._presets[this._selection];
-        }
-        this.updatePresetsHTML();
+    selectPreset(id, isLeftClick) {
+        if (!this._presets[id]) return;
+        if (isLeftClick) this.left = this._presets[id];
+        else this.right = this._presets[id];
     }
-
-    /**
-     * GUI Item, ho left/right button looks like when no preset is set for it
-     * @param {boolean} isLeftClick true if the preset is for the left mouse btn
-     * @returns {string} HTML
-     */
-    getMissingPresetHTML(isLeftClick) {
-        return `<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" 
-onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
-    }
-
-    /**
-     * GUI Item, ho left/right button looks like when it has a preset assigned
-     * @param {Preset} preset object
-     * @param {boolean} isLeftClick true if for the left mouse button
-     * @returns {string} HTML
-     */
-    getPresetControlHTML(preset, isLeftClick) {
-        let comment = preset.comment ? preset.comment : preset.objectFactory.getASAP_XMLTypeName();
-        let icon = preset.objectFactory.getIcon();
-
-        let changeHtml = "";
-        Object.values(this._context.objectFactories).forEach(factory => {
-            if (factory.type !== preset.objectFactory.type) {
-                changeHtml += `<div onclick="${this._globalSelf}.updatePreset(${preset.presetID}, 
-{objectFactory: openseadragon_image_annotations.getAnnotationObjectFactory('${factory.type}')}); 
-event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
-style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
-            }
-        });
-
-        return `<div class="position-relative border-md p-1 mx-2 rounded-3" style="border-width:3px!important;" 
-onclick="${this._globalSelf}.showPresets(${isLeftClick});"><span class="material-icons" 
-style="color: ${preset.color};">${icon}</span>  ${comment}
-<div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
-    }
-
-    /**
-     * Preset modification GUI part, used to show preset modification tab
-     * @param {Number} id preset id
-     * @param {boolean} isLeftClick true if the button is the left one
-     * @param {Number} index if set, the element is assigned an ID in the HTML, should differ in each call if set
-     * @returns {string} HTML
-     */
-    getPresetHTMLById(id, isLeftClick, index = undefined) {
-        if (!this._presets[id]) {
-            return "";
-        }
-        return this.getPresetHTML(this._presets[id], isLeftClick, index);
-    }
-
-    /**
-     * Preset modification GUI part, used to show preset modification tab
-     * @param {Preset} preset object
-     * @param {boolean} isLeftClick true if the button is the left one
-     * @param {Number} index if set, the element is assigned an ID in the HTML, should differ in each call if set
-     * @returns {string} HTML
-     */
-    getPresetHTML(preset, isLeftClick, index = undefined) {
-        let select = "",
-            currentPreset = isLeftClick ? this.left : this.right;
-
-        Object.values(this._context.objectFactories).forEach(factory => {
-            if (factory.type === preset.objectFactory.type) {
-                select += `<option value="${factory.type}" selected>${factory.getASAP_XMLTypeName()}</option>`;
-            } else {
-                select += `<option value="${factory.type}">${factory.getASAP_XMLTypeName()}</option>`;
-            }
-        });
-
-        let id = index === undefined ? "" : `id="preset-no-${index}"`;
-
-        let html = `<div ${id} class="position-relative border-md border-dashed p-1 rounded-3 d-inline-block `;
-        if (preset === currentPreset) {
-            html += `highlighted-preset"`;
-            this._selection = preset.presetID;
-        } else {
-            html += `"`;
-        }
-        return `${html} style="cursor:pointer; margin: 5px;" 
-onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
-${this._globalSelf}._selection = ${preset.presetID};"><span class="material-icons pointer position-absolute top-0 right-0 px-0" 
-onclick="if (${this._globalSelf}.removePreset(${preset.presetID})) {$(this).parent().remove();}">delete</span>
-<div class="d-inline-block mr-1">Annotation<br><select class="form-control" onchange="
-${this._globalSelf}.updatePreset(${preset.presetID}, {objectFactory: 
-${this._context.id}.getAnnotationObjectFactory(this.value)});">${select}</select></div>
-<div class="d-inline-block">Color<br><input class="form-control" type="color" style="height:33px;" 
-onchange="${this._globalSelf}.updatePreset(${preset.presetID}, {fill: this.value});" value="${preset.color}"></div>
-<br>Comment<br><input class="form-control" type="text" onchange="${this._globalSelf}.updatePreset(${preset.presetID}, 
-{comment: this.value});" value="${preset.comment}"><br></div>`;
-    }
-
-    /**
-     * Show the user preset modification tab along with the option to select an active preset for either
-     * left or right mouse button
-     * @param {boolean} isLeftClick true if the modification tab sets left preset
-     */
-    showPresets(isLeftClick) {
-        this._selection = undefined;
-
-        let html = "",
-            counter = 0,
-            _this = this;
-
-        Object.values(this._presets).forEach(preset => {
-            html += _this.getPresetHTML(preset, isLeftClick, counter);
-            counter++;
-        });
-
-        html += `<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
-${this._context.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;" onclick="let id = 
-${this._globalSelf}.addPreset().presetID; $(this).before(${this._globalSelf}.getPresetHTMLById(id, ${isLeftClick}, 
-$(this).index())); "><span class="material-icons">add</span> New</div>`;
-
-        Dialogs.showCustom("preset-modify-dialog",
-            `<b>Annotations presets</b>`,
-            html,
-            `<div class="d-flex flex-row-reverse">
-<button id="select-annotation-preset-right" onclick="if (${this._globalSelf}._selection === 
-undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
-return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
-${this._globalSelf}.selectPreset(false); }, 150);" class="btn m-2">Set for right click 
-</button>
-<button id="select-annotation-preset-left" onclick="if (${this._globalSelf}._selection === 
-undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
-return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
-${this._globalSelf}.selectPreset(true); }, 150);" class="btn m-2">Set for left click 
-</button>
-</div>`);
-    }
-}
+};
 
 
 
@@ -708,10 +504,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        let height = theObject.getHeight();
-        let width = theObject.getWidth();
+        let height = theObject.getScaledHeight();
+        let width = theObject.getScaledWidth();
         theObject.set({ width: width, height: height, scaleX: 1, scaleY: 1, });
-        theObject.calcCoords();
+        theObject.calcACoords();
     }
 
     instantCreate(point, isLeftClick = true) {
@@ -863,7 +659,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         let rx = theObject.rx * theObject.scaleX;
         let ry = theObject.ry * theObject.scaleY;
         theObject.set({ rx: rx, ry: ry, scaleX: 1, scaleY: 1, });
-        theObject.calcCoords();
+        theObject.calcACoords();
     }
 
     instantCreate(point, isLeftClick = true) {
@@ -1043,8 +839,8 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
         this._originallyEddited = theObject;
         this._edited = theObject;
-        this._context.canvas.deactivateAll();
         this._context.canvas.sendToBack(theObject);
+        this._context.canvas.discardActiveObject();
         this._context.canvas.renderAll();
     }
 
@@ -1484,6 +1280,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
         delete this._renderEngine._visualisations[0];
     }
 
+    //todo better approach this relies on ID's and any plugin can re-use it :/
     sensitivityControls() {
         return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
 annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
@@ -1748,4 +1545,4 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 		}
 		return result;
 	}
-}
+};

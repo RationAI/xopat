@@ -35,7 +35,7 @@ define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
  * sources so that an update is enforced
  * with change
  */
-define('VERSION', "1.1.0");
+define('VERSION', "1.2.0");
 
 
 /**

@@ -10,7 +10,7 @@ and each goal can define arbitrary amount of layers to render into the output ca
 (downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
 in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
 
-Constructors of both `OpenSeadragonToGLBridge` and `WebGLModule` accept `options` argument
+Constructors of both `OpenSeadragon.BridgeGL` and `WebGLModule` accept `options` argument
 - `options.ready()` function called once the visualisation is prepared to render, for the first time only
 - `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
 - `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function for custom UI html controls (ignored if `htmlControlsId` not set)
@@ -24,7 +24,7 @@ Constructors of both `OpenSeadragonToGLBridge` and `WebGLModule` accept `options
 - `options.uniqueId` - unique identifier, **must be defined if multiple WebGLModules are running** (note: can be left out for one of them), can contain
 only `[A-Za-z0-9_]*` (can be empty, only numbers and letters with no diacritics or `_`) 
 
-Constructor of `OpenSeadragonToGLBridge` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
+Constructor of `OpenSeadragon.BridgeGL` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
 this module is going to be used on the given OSD TileSource post-processing. 
 
 ### Setting up the visualisation
@@ -102,8 +102,9 @@ your parameters like this. For more detailed info and guidelines on writing shad
 ### webGLToOSDBridge.js
 Binding of WebGLModule to OpenSeadragon. The API is docummented in the code. A recommended use is:
 ```js
-var seaGL = new OpenSeadragonToGLBridge({...}, drawingEvent => {return true;});
+var renderer = new WebGLModule({...});
 var osd = new OpenSeadragon({...}); //init OSD without specifying the TileSources to load - delay the initialization
+var seaGL = new OpenSeadragon.BridgeGL(osd, renderer);
 
 //load shaders now
 seaGL.loadShaders(function() {
@@ -111,7 +112,7 @@ seaGL.loadShaders(function() {
     osd.open(...);
 });
 //init bridge before OSD 'open' event ocurred
-seaGL.initBeforeOpen(osd); //calls seaGL.loadShaders(...) if not performed manually
+seaGL.initBeforeOpen(); //calls seaGL.loadShaders(...) if not performed manually
 ```
 
 ### webGLWrapper.js

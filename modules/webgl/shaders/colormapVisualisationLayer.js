@@ -5,8 +5,9 @@
  * expected parameters:
  *  index - unique number in the compiled shader
  * supported parameters:
- *  color - for more details, see @WebGLModule.UIControls color UI type
- *  threshold - for more details, see @WebGLModule.UIControls number UI type
+ *  color - must be a ColorMap, number of steps = x
+ *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1, mask array size = x, incorrect
+ *      values are changed to reflect the color steps
  *  opacity - for more details, see @WebGLModule.UIControls color UI type
  *
  *  inverse - low values are high opacities instead of high values, 1 or 0, default 0
@@ -35,12 +36,26 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
     static defaultControls = {
         color: {
-            default: {}, //todo define some
+            default: {
+                steps: 2,
+                default: "Inferno",
+                mode: "sequential",
+                title: "Colormap",
+                continuous: false,
+            },
             accepts: (type, instance) => type === "vec3",
             required: {type: "colormap"}
         },
         threshold: {
-            default: {},
+            default: {
+                default: [0.2, 0.4, 0.6, 0.8],
+                mask: [1, 0, 0, 0, 1],
+                title: "Breaks",
+                pips: {
+                    mode: 'positions',
+                    values: [0, 35, 50, 75, 90, 100],
+                    density: 4
+                }},
             accepts: (type, instance) => type === "float",
             required: {type: "advanced_slider"}
         },
@@ -83,9 +98,8 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
                 _this.color.setSteps([...raw, 1]);
             }
         }, true);
-        this.connect.on('connects', function (raw, encoded, ctx) {
+        this.connect.on('connect', function (raw, encoded, ctx) {
             _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] : undefined);
-           // _this.invalidate(); todo does not update?
         }, true);
         this.connect.init();
     }

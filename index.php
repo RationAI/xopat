@@ -756,8 +756,6 @@ EOF;
         });
     }
 
-    //TODO return prevention from closing and disable only if refreshed via API
-
     /*---------------------------------------------------------*/
     /*------------ EXPORTING ----------------------------------*/
     /*---------------------------------------------------------*/
@@ -973,6 +971,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             console.warn("Plugin registered with no id defined!", id);
             return;
         }
+        if (!PLUGINS.each[id]) {
+            console.warn("Plugin registered with invalid id: no such id present in 'include.json'.", id);
+            return;
+        }
 
         try {
             let parameters = APPLICATION_CONTEXT.setup.plugins[id];
@@ -1002,6 +1004,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
     }
 
     function initializePlugin(plugin) {
+        if (!plugin) return false;
+        if (!plugin.pluginReady) return true;
         try {
             plugin.pluginReady();
             return true;
@@ -1125,7 +1129,10 @@ onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
 
             <?php
             if ($layerVisible) {
-                echo "            VIEWER.bridge.addLayer(layerIDX);";
+                echo <<<EOF
+                VIEWER.bridge.addLayer(layerIDX);
+                VIEWER.bridge.initAfterOpen();
+EOF;
             }
             ?>
         }
@@ -1234,7 +1241,7 @@ onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
             LOADING_PLUGIN = false;
             //loaded after page load: TODO be cautious...
             if (!initializePlugin(PLUGINS.each[id].instance)) return;
-            Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}<b> has been loaded.`, 2500, Dialogs.MSG_INFO);
+            Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
 
             if (meta.styleSheet) {  //load css if necessary
                 $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
@@ -1332,7 +1339,6 @@ onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
         toOpen.push(VIEWER.bridge.urlMaker("$srvLayers", activeData));
         window.VIEWER.open(toOpen);
     });
-    VIEWER.bridge.initBeforeOpen( window.VIEWER, APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources);
 
     //todo better error system :(
      window.VIEWER.addHandler('open-failed', function(e) {

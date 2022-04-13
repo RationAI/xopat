@@ -1,22 +1,28 @@
 //tool for object modification: draw on canvas to add (add=true) or remove (add=false) parts of fabric.js object
 //any object is first converted to polygon
-FreeFormTool = function (selfName, context) {
-    this._globalSelf = `${context.id}['${selfName}']`;
-    this.polygon = null;
-    this.modeAdd = true;
-    this.screenRadius = 20;
-    this.radius = 20;
-    this.mousePos = null;
-    this.SQRT2DIV2 = 0.707106781187;
-    this._context = context;
-    this._update = null;
-    this._created = false;
-};
+OSDAnnotations.FreeFormTool = class {
+    constructor(selfName, context) {
+        this.polygon = null;
+        this.modeAdd = true;
+        this.screenRadius = 20;
+        this.radius = 20;
+        this.mousePos = null;
+        this.SQRT2DIV2 = 0.707106781187;
+        this._context = context;
+        this._update = null;
+        this._created = false;
 
-FreeFormTool.prototype = {
+        this._visibleCursor = false;
+        this._node = null;
 
+        //todo bit unsafe... move cursor also to GUI?
+        PLUGINS.addHtml("annotation-cursor",
+            `<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
+            this._context.id);
+        this._node = document.getElementById("annotation-cursor");
+    }
     //initialize any object for cursor-drawing modification
-    init: function (object, atPosition, created=false) {
+    init(object, atPosition, created=false) {
 
         let objectFactory = this._context.getAnnotationObjectFactory(object.type);
         if (objectFactory !== undefined) {
@@ -40,54 +46,75 @@ FreeFormTool.prototype = {
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
         this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
         this._created = created;
-    },
+    }
 
-    brushSizeControls: function() {
-        let modeRemove = this._update === this._subtract ? "checked" : "";
-        let modeAdd = this._update === this._subtract ? "" : "checked";
-
-        return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush used to modify annotations areas.">Brush radius:</span>
-        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.screenRadius}" style="height: 22px; width: 60px;">
-        <input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-add-radio"><label for="fft-mode-add-radio">
-<span id="fft-mode-add" onclick="${this._globalSelf}.setModeAdd(true)" class="material-icons pointer p-1 rounded-2 ${modeAdd}">add_circle_outline</span>
-</label><input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-remove-radio"><label for="fft-mode-remove-radio">
-<span id="fft-mode-remove" onclick="${this._globalSelf}.setModeAdd(false)" class="material-icons pointer p-1 rounded-2 ${modeRemove}">remove_circle_outline</span>
-</label>`;
-    },
-
-    updateRadius: function () {
-        this.setRadius(parseFloat($("#fft-size").val()));
-    },
-
-    setModeAdd: function(isModeAdd) {
-        this.modeAdd = isModeAdd;
-        if (isModeAdd) {
-            $("#fft-mode-add-radio").prop('checked', true);
-            this._update = this._union;
-        } else {
-            $("#fft-mode-remove-radio").prop('checked', true);
-            this._update = this._subtract;
+    updateCursorRadius() {
+        let radius = this.getScreenToolRadius() * 2;
+        if (this._node) {
+            this._node.style.width = radius + "px";
+            this._node.style.height = radius + "px";
         }
-    },
+    }
 
-    setSafeRadius: function(radius) {
-        radius = Math.min(Math.max(radius, 3), 100);
-        this.setRadius(radius);
-        $("#fft-size").val(radius)
-    },
+    showCursor() {
+        if (this._listener) return;
+        this._node.style.display = "block";
+        this.updateCursorRadius();
+        this._node.style.top = "0px";
+        this._node.style.left = "0px";
 
-    setRadius: function (radius) {
+        const c = this._node;
+        this._visibleCursor = true;
+        this._listener = e => {
+            c.style.top = e.pageY + "px";
+            c.style.left = e.pageX + "px";
+        };
+        window.addEventListener("mousemove", this._listener);
+    }
+
+    hideCursor() {
+        if (!this._listener) return;
+        this._node.style.display = "none";
+        this._visibleCursor = false;
+        window.removeEventListener("mousemove", this._listener);
+        this._listener = null;
+    }
+
+    get isModeAdd() {
+        return this._update === this._subtract;
+    }
+
+    setModeAdd(isModeAdd) {
+        this.modeAdd = isModeAdd;
+        if (isModeAdd) this._update = this._union;
+        else this._update = this._subtract;
+        this._context.raiseEvent('free-form-tool-mode-add', {isModeAdd: isModeAdd});
+    }
+
+    recomputeRadius() {
+        this.setSafeRadius(this.screenRadius);
+    }
+
+    setSafeRadius(radius) {
+        this.setRadius(Math.min(Math.max(radius, 3), 100));
+    }
+
+    setRadius (radius) {
+        if (this.screenRadius !== radius) {
+            this.updateCursorRadius();
+        }
         this.screenRadius = radius;
         let imageTileSource = VIEWER.tools.referencedTileSource();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
         this.radius = Math.round(Math.abs(pointB.x - pointA.x));
-    },
+        this._context.raiseEvent('free-form-tool-radius', {radius: radius});
+    }
 
     //update step meant to be executed on mouse move event
-    update: function(point) {
-        //todo check if contains NaN values and exit if so
+    update(point) {
+        //todo check if contains NaN values and exit if so abort
         if (!this.polygon) {
             return;
         }
@@ -103,10 +130,10 @@ FreeFormTool.prototype = {
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
         }
-    },
+    }
 
     //final step
-    finish: function () {
+    finish () {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
@@ -126,10 +153,10 @@ FreeFormTool.prototype = {
             return outcome;
         }
         return null;
-    },
+    }
 
     //TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
-    _union: function (nextMousePos) {
+    _union (nextMousePos) {
         if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
@@ -173,9 +200,9 @@ FreeFormTool.prototype = {
 
         console.log("NO UNION FOUND");
         return null;
-    },
+    }
 
-    _subtract: function (nextMousePos) {
+    _subtract (nextMousePos) {
         if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
 
         let radPoints = this.getCircleShape(nextMousePos);
@@ -222,39 +249,38 @@ FreeFormTool.prototype = {
             }
             return polygon;
         }
-        console.log("NO DIFFERENCE FOUND");
         return null;
-    },
+    }
 
-    getScreenToolRadius: function () {
+    getScreenToolRadius() {
         //todo read this property from global API
         let imageTileSource = VIEWER.tools.referencedTileSource();
         return imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
             .distanceTo(
                 imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
             );
-    },
+    }
 
     //initialize object so that it is ready to be modified
-    _setupPolygon: function (polyObject) {
+    _setupPolygon(polyObject) {
         this.polygon = polyObject;
         this.initial = polyObject;
 
         polyObject.moveCursor = 'crosshair';
-    },
+    }
 
     //create polygon from points and initialize so that it is ready to be modified
-    _createPolygonAndSetupFrom: function (points, object) {
+    _createPolygonAndSetupFrom(points, object) {
         //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.type = this._context.polygonFactory.type;
 
         this._context.replaceAnnotation(object, polygon, true);
         this._setupPolygon(polygon);
-    },
+    }
 
     //try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
-    _unify: function (unions) {
+    _unify(unions) {
         let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
 
         unions.forEach(u => {
@@ -278,10 +304,10 @@ FreeFormTool.prototype = {
             secondary = [];
         }
         return primary;
-    },
+    }
 
     //when removing parts of polygon, decide which one has smaller area and will be removed
-    _findApproxBoundBoxSize: function (points) {
+    _findApproxBoundBoxSize (points) {
         if (points.length < 3) return { diffX: 0, diffY: 0 };
         let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
         for (let i = 1; i < points.length; i++) {
@@ -291,14 +317,14 @@ FreeFormTool.prototype = {
             minY = Math.min(minY, points[i].y);
         }
         return { diffX: maxX - minX, diffY: maxY - minY };
-    },
+    }
 
-    toDistancePointsAsObjects: function (pointA, pointB) {
+    toDistancePointsAsObjects(pointA, pointB) {
         return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
-    },
+    }
 
     //create approximated polygon of drawing tool
-    getCircleShape: function (fromPoint) {
+    getCircleShape(fromPoint) {
         let diagonal = this.radius * this.SQRT2DIV2;
         return [
             { x: fromPoint.x - this.radius, y: fromPoint.y },
@@ -311,4 +337,4 @@ FreeFormTool.prototype = {
             { x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
         ]
     }
-}
+};

@@ -72,6 +72,9 @@ window.addEventListener("beforeunload", (e) => {
 }, false);
 
 </script>`);
+
+        let active = this._context.canvas.getActiveObject();
+        if (active) this.highlight(active);
     }
 
     winContext(required=false) {
@@ -136,8 +139,14 @@ window.addEventListener("beforeunload", (e) => {
 
     _getJQNode(id) {
         let ctx = this.winContext();
-        if (!ctx)  return undefined;
+        if (!ctx) return undefined;
         return $(ctx.document.getElementById(id));
+    }
+
+    _getNode(id) {
+        let ctx = this.winContext();
+        if (!ctx) return undefined;
+        return ctx.document.getElementById(id);
     }
 
     refresh() {
@@ -171,7 +180,7 @@ window.addEventListener("beforeunload", (e) => {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }
-                let preset = this._presets.getPreset(o.presetID);
+                let preset = this._presets.get(o.presetID);
                 if (preset) {
                     if (typeof o.fill === 'string') {
                         o.fill = preset.color;
@@ -227,24 +236,23 @@ window.addEventListener("beforeunload", (e) => {
         return this._editSelection && this._editSelection.incrementId === ofObject.incrementId;
     }
 
-    setOnGoingEditObject(obj) {
-        this._editSelection.target = obj;
-    }
-
     _focus(cx, cy, objectId = null) {
         cx = Number.parseFloat(cx);
         cy = Number.parseFloat(cy);
         if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
 
-        let target = VIEWER.tools.referencedTileSource().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+        let target = VIEWER.tools.referencedTileSource().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy)),
+            targetObj = undefined;
         if (objectId !== null) {
-            let targetObj = this._findObjectOnCanvasById(objectId);
+            targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
+                this.highlight(targetObj);
                 this._context.canvas.setActiveObject(targetObj);
             }
         }
-        VIEWER.viewport.panTo(target);
+        VIEWER.viewport.panTo(target, false);
         VIEWER.viewport.applyConstraints();
+        return targetObj;
     }
 
     _updateBoardText(object, text) {
@@ -301,11 +309,19 @@ onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.i
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
 <input type="text" class="form-control border-0" readonly class="desc" 
 style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
-<span class="material-icons pointer" onclick="let self = $(this); if (self.html() === 'edit') {
-opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else { opener.${_this._globalSelf}._boardItemSave(); }">edit</span></div>`));
+<span class="material-icons pointer" id="edit-log-object-${object.incrementId}" onclick="let self = $(this); if (self.html() === 'edit') {
+opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
+else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
     }
 
-    _boardItemEdit(self, objectId) {
+    itemEdit(object) {
+        let node = this._getNode(`edit-log-object-${object.incrementId}`);
+        if (node) {
+            this._boardItemEdit(node, object.x, object.y);
+        }
+    }
+
+    _boardItemEdit(self, cx, cy, object) {
         if (this._editSelection) {
             this._boardItemSave(true);
         } else {
@@ -317,41 +333,64 @@ opener.${_this._globalSelf}._boardItemEdit(self, ${object.incrementId}); } else 
         self.prev().prop('readonly', false);
         self.html('save');
 
+        let objectId = -1;
+        if (typeof object !== "object") {
+            objectId = object;
+            object = this._focus(cx, cy, objectId) || this._context.canvas.getActiveObject();
+        } else {
+            objectId = object.incrementId;
+        }
+
         //todo possible problem with storing dynamic html node
         this._editSelection = {
             incrementId: objectId,
-            self: self
-        }
+            self: self,
+            target: object
+        };
+
+        if (object) {
+            let factory = this._context.getAnnotationObjectFactory(object.type);
+            if (factory) factory.edit(object);
+        } else console.warn("Object edit: no active object.");
     }
 
     _boardItemSave(switches=false) {
         if (!this._editSelection) return;
 
-        let obj = this._editSelection.target;
-        if (obj) {
-            //if target was set, object could have been edited, update
-            let factory = this._context.getAnnotationObjectFactory(obj.type);
-            let newObject = factory.recalculate(obj);
-            if (newObject) {
-                this._context.replaceAnnotation(obj, newObject, true);
-                obj = newObject;
+        try {
+            let obj = this._editSelection.target;
+            if (obj) {
+                //if target was set, object could have been edited, update
+                let factory = this._context.getAnnotationObjectFactory(obj.type);
+                let newObject = factory.recalculate(obj);
+                if (newObject) {
+                    this._context.replaceAnnotation(obj, newObject, true);
+                    obj = newObject;
+                }
+
+                //self.target.initialize(obj);
+                //obj.polygon.initialize(object.polygon.points);
+            } else {
+                obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
             }
 
-            //self.target.initialize(obj);
-            //obj.polygon.initialize(object.polygon.points);
-        } else {
-            obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
-        }
-        let self = this._editSelection.self;
-        if (obj) obj.set({comment: self.prev().val()});
+            let self = this._editSelection.self;
+            if (obj) {
+                obj.set({comment: self.prev().val()});
+            } else {
+                console.warn("Failed to update object: could not find object with id "
+                    + this._editSelection.incrementId);
+            }
+            self.html('edit');
+            self.prev().prop('readonly', true);
 
-        self.html('edit');
-        self.prev().prop('readonly', true);
-
-        if (!switches) {
-            $('#bord-for-annotations .Box-header').css('background', 'none');
-            this._context.setMouseOSDInteractive(true);
-            this._context.enableInteraction(true);
+            if (!switches) {
+                $('#bord-for-annotations .Box-header').css('background', 'none');
+                this._context.setMouseOSDInteractive(true);
+                this._context.enableInteraction(true);
+            }
+        } catch (e) {
+            console.warn(e);
         }
         this._editSelection = undefined;
     }

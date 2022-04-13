@@ -63,12 +63,12 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
             ${varname} = ${this.filter(`1.0 - ${varname} * 2.0`)};
             if (${varname} > ${this.threshold.sample()}) {
                 ${this.render(`vec4( ${this.colorLow.sample()}, ${varname} * ${this.opacity.sample()})`)}
-            }
+            } else ${this.render(`vec4(.0)`)}
         } else {  
             ${varname} = ${this.filter(`(${varname} - 0.5) * 2.0`)};
             if (${varname} > ${this.threshold.sample()}) {
                 ${this.render(`vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()})`)}
-            }
+            } else ${this.render(`vec4(.0)`)}
         }
     }        
 `;

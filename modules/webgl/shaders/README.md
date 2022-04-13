@@ -122,7 +122,12 @@ insertion is possible
     - specify code to define in `getFragmentShaderDefinition`
     - specify code to execute in `getFragmentShaderExecution` (possibly use stuff from the former)
     - render your `vec4` output using code returned by `this.render(...)` function
+- RENDER OVER ALL PIXELS
+    - `this.render(...)` should be used in all scenarios, e.g. render a transparent color in case there should be no output,
+    this is important for blending purposes - further processes might use your call without your direct knowledge
 - WORK CAREFULLY WITH UI CONTROLS, preferably use existing ones
+    - creating a bug-free UI controls is rather hard: keep the cache correct at all times, keep the UI updated,
+    program the handlers correctly...
 
 #### Writing the Layer Class
 You of course might want to do more such as passing user input into the shader. The `VisualisationLayer` enables you to implement

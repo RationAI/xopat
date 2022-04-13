@@ -61,10 +61,10 @@ class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        let height = theObject.getHeight();
-        let width = theObject.getWidth();
+        let height = theObject.getScaledHeight();
+        let width = theObject.getScaledWidth();
         theObject.set({ width: width, height: height, scaleX: 1, scaleY: 1, });
-        theObject.calcCoords();
+        theObject.calcACoords();
     }
 
     instantCreate(point, isLeftClick = true) {

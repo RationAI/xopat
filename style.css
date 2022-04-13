@@ -145,7 +145,7 @@ a {
     background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));/*dirty using border color but not usable BG colors*/
 }
 
-.shader-part span, .shader-part span {
+.shader-part span {
     width: 30%;
     display: inline-block;
 }
@@ -405,7 +405,7 @@ UTILITIES
 .error-container {
     background: var(--color-bg-danger);
     text-overflow: ellipsis;
-    padding-left: 25px !important;
+    cursor: auto;
 }
 
 .error-container::before {
@@ -413,12 +413,13 @@ UTILITIES
     font-family: 'Material Icons';
     color: var(--color-icon-danger);
     font-size: initial;
-    padding: 3px 7px;
+    padding: 3px 9px;
     vertical-align: sub;
 }
 
 .error-container code {
     display: none;
+    padding: 3px 9px;
 }
 
 .error-container:hover code {

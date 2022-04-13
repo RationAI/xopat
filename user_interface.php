@@ -395,7 +395,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             },
             openMenu(atPluginId=undefined) {
                 this.selfContext.show(atPluginId);
-                if (window.innerWidth < 800) {
+                if (window.innerWidth < 1150) {
                     this._closedMm = true;
                     USER_INTERFACE.MainMenu.close();
                 }
@@ -435,7 +435,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 for (let pid in PLUGINS.each) {
                     if (!PLUGINS.each.hasOwnProperty(pid)) continue;
                     let plugin = PLUGINS.each[pid];
-                    let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small"></div>`;
+                    let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
+                    let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
                     let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="APPLICATION_CONTEXT.UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;
                     this.__pBuilder.addRow({
                         title: plugin.name,
@@ -482,7 +483,6 @@ To apply changes, please <a onclick="APPLICATION_CONTEXT.UTILITIES.refreshPage()
 Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_CONTEXT.UTILITIES.updateTheme();`, APPLICATION_CONTEXT.getOption("theme"), {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"})}
 <br> ${inputs.checkBox("", "Show ToolBar", "$('#plugin-tools-menu').toggleClass('d-none')", true)}
 <br> ${inputs.checkBox("", "Show Scale", updateBool("scaleBar") + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("scaleBar"))}
-
 `
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,

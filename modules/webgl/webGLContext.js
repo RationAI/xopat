@@ -90,7 +90,7 @@ WebGLModule.WebGLImplementation = class {
      * Set default blending to be MASK
      */
     constructor() {
-        this.glslBlendCode = "return background * (1.0 - step(0.001, foreground.a));";
+        this.glslBlendCode = "return background * (step(0.001, foreground.a));";
     }
 
     /**
@@ -151,7 +151,7 @@ WebGLModule.WebGLImplementation = class {
      * Draw on the canvas using given program
      * @param program  used program
      * @param {object} currentVisualisation  JSON parameters used for this visualisation
-     * @param {object} imageElement image data (how do we define the format? todo image convertor class)
+     * @param {object} imageElement image data
      * @param {object} tileDimension
      * @param {number} tileDimension.width width of the result
      * @param {number} tileDimension.height height of the result
@@ -237,7 +237,8 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 
                 const NUM_IMAGES = Math.round(image.height / tileBounds.height);
                 //Allowed texture size dimension only 256+ and power of two...
-                //TODO it worked for arbitrary size until we begun with image arrays... is it necessary?
+
+                //it worked for arbitrary size until we begun with image arrays... is it necessary?
                 const IMAGE_SIZE = image.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(image.width)));
                 this.canvasConverter.width = IMAGE_SIZE;
                 this.canvasConverter.height = IMAGE_SIZE;
@@ -267,7 +268,6 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.filter);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.filter);
                     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-
 
                     var pixels;
                     if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
@@ -341,13 +341,13 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
             }
         });
 
+        //TODO this could implement the selection of data sources to fetch, not employed for now due to behavioral problems: requires re-fetching
         //must preserve the definition order
         // let urls = [];
         // for (let key in visualisation.shaders) {
         //     if (visualisation.shaders.hasOwnProperty(key)) {
         //         let layer = visualisation.shaders[key];
         //
-        //         //TODO implement?
         //         // if (layer.hasOwnProperty("target")) {
         //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
         //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
@@ -356,7 +356,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         //         //     }
         //         // } else
         //
-        //         //todo once we start to reflect only decessary data to donwload, not all...
+        //         //to-do once we start to reflect only decessary data to donwload, not all...
         //         // if (layer.rendering) {
         //         //     urls.push(key);
         //         // }
@@ -364,7 +364,6 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         //     }
         // }
         // this.texture.renderOrder = urls;
-
 
         //since we download for now all data, we can just index the sources...
         this.texture.loadOrder = this.context.currentVisualisation();
@@ -457,11 +456,9 @@ void main() {
 
         // Get attribute terms
         this._att = [this.pos, this.tile_pos].map(function (name, number) {
-
             var index = Math.min(number, boxes.length - 1);
             var vec = Math.floor(boxes[index].length / count);
             var vertex = gl.getAttribLocation(program, name);
-
             return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
@@ -486,9 +483,6 @@ void main() {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        //TODO with glsl 1 (and same probably on 2) any error get stuck here --> AVOID USING if
-        //problem TODO fix this
-
         // Set Attributes for GLSL
         this._att.map(function (x) {
             gl.enableVertexAttribArray(x.slice(0, 1));
@@ -498,14 +492,10 @@ void main() {
         gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), pixelSize);
         gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
-        //this.context.setDimensions(tileDimension.width, tileDimension.height);
-
         // Upload textures
         this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, context.gl);
-
         // Draw everything needed to canvas
         gl.drawArrays.apply(gl, this._drawArrays);
-
         return gl.canvas;
     }
 };
@@ -545,18 +535,6 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, this.filter);
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, this.wrap);
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, this.wrap);
-                // gl.texImage3D(
-                //     gl.TEXTURE_2D_ARRAY,
-                //     0,
-                //     gl.R8,
-                //     tileBounds.width,
-                //     tileBounds.height,
-                //     NUM_IMAGES,
-                //     0,
-                //     gl.RED,
-                //     gl.UNSIGNED_BYTE,
-                //     pixels
-                // );
                 gl.texImage3D(
                     gl.TEXTURE_2D_ARRAY,
                     0,
@@ -612,16 +590,15 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                     `The requested visualisation type does not work properly.`, dataId, false, layer, false) + html;
                 console.warn("Invalid shader part.", "Missing one of the required elements.", layer);
             }
-
         });
 
+        //TODO this could implement the selection of data sources to fetch, not employed for now due to behavioral problems: requires re-fetching
         //must preserve the definition order
         // let urls = [], indicesMapping = new Array(usableShaders).fill(0);
         // for (let key in visualisation.shaders) {
         //     if (visualisation.shaders.hasOwnProperty(key)) {
         //         let layer = visualisation.shaders[key];
         //
-        //         //TODO implement?
         //         // if (layer.hasOwnProperty("target")) {
         //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
         //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
@@ -632,7 +609,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         //
         //         if (!layer.hasOwnProperty("order")) continue;
         //
-        //         //todo enable once we really DOWNLOAD only necessary stuff, otherwise this mapping is invalid
+        //         //to-do enable once we really DOWNLOAD only necessary stuff, otherwise this mapping is invalid
         //         // if (layer.rendering) {
         //         //     urls.push(key);
         //         //     indicesMapping[layer.index] = urls.length-1;
@@ -836,9 +813,6 @@ void main() {
         `;
     }
 
-
-
-
     toCanvas(program, vertices, color, indices) {
         if (!this.context.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
@@ -846,7 +820,6 @@ void main() {
         let context = this.context,
             gl = this.gl;
 
-        //todo blending!!!!!
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
         gl.uniform4fv(this.colorPosition, color);

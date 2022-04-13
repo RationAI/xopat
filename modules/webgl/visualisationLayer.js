@@ -59,8 +59,7 @@ WebGLModule.VisualisationLayer = class {
      *     }, ...
      * }
      */
-    static defaultControls = {
-    };
+    static defaultControls = {};
 
     /**
      * Global supported options
@@ -557,6 +556,7 @@ WebGLModule.UIControls = class {
             && check(uiElement, "glUniformFunName", "glUniformFunName():string")
             && check(uiElement, "decode", "decode(encodedValue):<compatible with glType>")
             && check(uiElement, "normalize", "normalize(value, params):<typeof value>")
+            && check(uiElement, "sample", "sample(name, ratio):glslString")
             && check(uiElement, "glType", "glType:string")
         ) {
             if (this._items.hasOwnProperty(type)) {
@@ -572,25 +572,13 @@ WebGLModule.UIControls = class {
      * @param {WebGLModule.UIControls.IControl} cls to register, implementation class of the controls
      */
     static registerClass(type, cls) {
-        function check(el, prop, desc) {
-            if (!el.hasOwnProperty(prop)) {
-                console.warn(`Skipping UI control '${type}' due to '${prop}': missing implementation of ${desc}.`);
-                return false;
-            }
-            return true;
-        }
-
-        //todo does not work for subchildren...
-        if (check(cls.prototype, "init", "init(webGLVariableName):void")
-            && check(cls.prototype, "glDrawing", " glDrawing(program, dimension, gl):void")
-            && check(cls.prototype, "glLoaded", "glLoaded(program, gl):void")
-            && check(cls.prototype, "toHtml", "toHtml(breakLine=true, controlCss=\"\"):string")
-            && check(cls.prototype, "sample", "sample(ratio):string")
-        ) {
+        if (WebGLModule.UIControls.IControl.isPrototypeOf(cls)) {
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
             this._impls[type] = cls;
+        } else {
+            console.warn(`Skipping UI control '${type}': does not inherit from WebGLModule.UIControls.IControl.`);
         }
     }
 
@@ -624,6 +612,9 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             normalize: function(value, params) {
                 return  (value - params.min) / (params.max - params.min);
             },
+            sample: function(name, ratio) {
+                return `${name} * ${ratio}`;
+            },
             glType: "float"
         },
 
@@ -644,6 +635,9 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             },
             normalize: function(value, params) {
                 return  (value - params.min) / (params.max - params.min);
+            },
+            sample: function(name, ratio) {
+                return `${name} * ${ratio}`;
             },
             glType: "float"
         },
@@ -674,6 +668,9 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             normalize: function(value, params) {
                 return value;
             },
+            sample: function(name, ratio) {
+                return `${name} * ${ratio}`;
+            },
             glType: "vec3"
         },
 
@@ -684,7 +681,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 let value = params.default && params.default !== "false" ? "checked" : "";
-                //todo verify if this dirty trick works
+                //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
                 return `${title}<input type="checkbox" id="${uniqueId}" ${value}
 class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
             },
@@ -696,6 +693,9 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
             },
             normalize: function(value, params) {
                 return value;
+            },
+            sample: function(name, ratio) {
+                return name;
             },
             glType: "bool"
         }
@@ -939,9 +939,8 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     }
 
     sample(ratio) {
-        //TODO INVALID!!!! * not valid on all types, e.g. bool
         if (!ratio) return this.webGLVariableName;
-        return `${this.webGLVariableName} * ${ratio}`;
+        return this.component.sample(this.webGLVariableName, ratio);
     }
 
     get supports() {

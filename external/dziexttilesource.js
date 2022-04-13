@@ -173,6 +173,10 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         return this.postData ? `${this.postData}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
     },
 
+    //TO-DOCS describe how meta is handled and error property treated
+    getImageMetaAt: function(index) {
+        return this.imageArray[index];
+    },
 
     /**
      * @function
@@ -241,7 +245,7 @@ function configureFromXML( tileSource, xmlDoc ){
         root           = null,
         rootName       = imagesArray.localName || imagesArray.tagName,
         ns             = xmlDoc.documentElement.namespaceURI,
-        configuration  = null,
+        configuration  = {ImageArray: []},
         displayRects   = [],
         dispRectNodes,
         dispRectNode,
@@ -249,7 +253,6 @@ function configureFromXML( tileSource, xmlDoc ){
         sizeNode,
         i;
 
-    //TODO add translation support?
     if (imagesArray.childNodes.length < 1) throw new Error( "No images defined. There are zero images to display." );
 
     if ( rootName == "ImageArray" ) {
@@ -269,23 +272,14 @@ function configureFromXML( tileSource, xmlDoc ){
 
                 let width = parseInt( sizeNode.getAttribute( "Width" ), 10 );
                 let height = parseInt( sizeNode.getAttribute( "Height" ), 10 );
-                if (width < maxWidth || height < maxHeight) {
-                    selectedNode = child;
-                    maxWidth = width;
-                    maxHeight = height;
-                }
 
                 if ( !$.imageFormatSupported( root.getAttribute( "Format" ) ) ) {
                     throw new Error(
                         $.getString( "Errors.ImageFormat", root.getAttribute( "Format" ).toUpperCase() )
                     );
                 }
-            }
 
-            root = imagesArray.childNodes[selectedNode];
-
-            configuration = {
-                Image: {
+                configuration.ImageArray.push({
                     xmlns:       "http://rationai.fi.muni.cz/deepzoom/images",
                     Url:         root.getAttribute( "Url" ),
                     Format:      root.getAttribute( "Format" ),
@@ -293,11 +287,13 @@ function configureFromXML( tileSource, xmlDoc ){
                     Overlap:     parseInt( root.getAttribute( "Overlap" ), 10 ),
                     TileSize:    parseInt( root.getAttribute( "TileSize" ), 10 ),
                     Size: {
-                        Height: maxHeight,
-                        Width:  maxWidth
+                        Height: height,
+                        Width:  width
                     }
-                }
-            };
+                });
+            }
+
+            root = imagesArray.childNodes[selectedNode];
 
             dispRectNodes = root.getElementsByTagName("DisplayRect");
             if (dispRectNodes === undefined) {
@@ -324,7 +320,7 @@ function configureFromXML( tileSource, xmlDoc ){
             }
 
             if( displayRects.length ){
-                configuration.Image.DisplayRect = displayRects;
+                configuration.DisplayRect = displayRects;
             }
 
             return configureFromObject( tileSource, configuration );
@@ -351,18 +347,41 @@ function configureFromXML( tileSource, xmlDoc ){
  * @function
  */
 function configureFromObject( tileSource, configuration ){
-    var imageData     = configuration.Image,
-        tilesUrl      = imageData.Url,
-        fileFormat    = imageData.Format,
-        sizeData      = imageData.Size,
-        dispRectData  = imageData.DisplayRect || [],
+    var firstImage    = configuration.ImageArray[0],
+        tilesUrl      = firstImage.Url,
+        fileFormat    = firstImage.Format,
+        sizeData      = firstImage.Size,
+        dispRectData  = configuration.DisplayRect || [],
         width         = parseInt( sizeData.Width, 10 ),
         height        = parseInt( sizeData.Height, 10 ),
-        tileSize      = parseInt( imageData.TileSize, 10 ),
-        tileOverlap   = parseInt( imageData.Overlap, 10 ),
+        tileSize      = parseInt( firstImage.TileSize, 10 ),
+        tileOverlap   = parseInt( firstImage.Overlap, 10 ),
         displayRects  = [],
         rectData,
         i;
+
+    for (let image of configuration.ImageArray) {
+        let imageWidth = parseInt( image.Size.Width, 10 ),
+            imageHeight = parseInt( image.Size.Height, 10 ),
+            imageTileSize = parseInt( firstImage.TileSize, 10 ),
+            imageTileOverlap = parseInt( firstImage.Overlap, 10 );
+
+        if (imageTileSize !== tileSize) {
+            image.error = "Incompatible images: the rendering might contain artifacts.";
+        }
+
+        if (imageTileOverlap !== tileOverlap) {
+            image.error = "Incompatible images: the rendering might contain artifacts.";
+        }
+
+        if (imageWidth <= 0 || imageHeight <= 0) {
+            image.error = "Missing image data.";
+        } else if (imageWidth < width || imageHeight < height) {
+            //todo possibly experiment with taking maximum
+            width = imageWidth;
+            height = imageHeight;
+        }
+    }
 
     //TODO: need to figure out out to better handle image format compatibility
     //      which actually includes additional file formats like xml and pdf
@@ -399,9 +418,9 @@ function configureFromObject( tileSource, configuration ){
         maxLevel: null, /* maxLevel */
         tilesUrl: tilesUrl, /* tilesUrl */
         fileFormat: fileFormat, /* fileFormat */
+        imageArray: configuration.ImageArray,
         displayRects: displayRects /* displayRects */
     }, configuration );
-
 }
 
 }( OpenSeadragon ));

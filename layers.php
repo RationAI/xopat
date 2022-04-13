@@ -9,8 +9,6 @@
     //We are active!
     window.APPLICATION_CONTEXT.layersAvailable = true;
 
-    let originalIndex = -1;
-
     let webglProcessing = new WebGLModule({
         htmlControlsId: "data-layer-options",
         htmlShaderPartHeader: createHTMLLayerControls,
@@ -41,16 +39,16 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         },
         visualisationInUse: function(visualisation) {
             enableDragSort("data-layer-options");
+            APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources();
             //called only if everything is fine
             USER_INTERFACE.Errors.hide(); //preventive
-            //re-fetch data
 
-            // TODO maybe do not use this at all, or perform it more sophistically
+            // TODO Re-fetching data not necessary as we always fetch all the data of given visualization
+            //re-fetch data
             // var activeData = ""; //don't set this globally :(
             // let data = seaGL.dataImageSources();
             // if (data !== activeData) {
             //     activeData = data;
-            //     //todo dirty?
             //     if (seaGL.getTiledImage()) {
             //          window.VIEWER.addTiledImage({
             //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
@@ -69,14 +67,14 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                 seaGL.enable();
                 window.VIEWER.addTiledImage({
                     tileSource : seaGL.urlMaker('/iipsrv-martin/iipsrv.fcgi', seaGL.dataImageSources()),
-                    index: originalIndex,
+                    index: seaGL.getWorldIndex(),
                     opacity: $("#global-opacity").val()
                 });
-                seaGL.addLayer(originalIndex);
+                seaGL.addLayer(seaGL.getWorldIndex());
             } else {
                 window.VIEWER.addTiledImage({
                     tileSource : seaGL.urlMaker('/iipsrv-martin/iipsrv.fcgi', seaGL.dataImageSources()),
-                    index: seaGL.getLayerIndex(),
+                    index: seaGL.getWorldIndex(),
                     opacity: $("#global-opacity").val(),
                     replace: true
                 });
@@ -94,7 +92,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     });
 
     // Wrap WebGL module into bridge interface to bind to OpenSeadragon
-    let seaGL = new OpenSeadragonToGLBridge(webglProcessing);
+    let seaGL = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing);
 
     VIEWER.bridge = seaGL;
     seaGL.addVisualisation(...APPLICATION_CONTEXT.setup.visualizations);
@@ -267,15 +265,37 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     };
 
     APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources = function () {
-        //todo debug
-        // seaGL.refreshMissingSources();
-        // let layers = seaGL.currentVisualisation().shaders;
-        // for (let key in layers) {
-        //     if (layers.hasOwnProperty(key) && layers[key].missingDataSources) {
-        //         let layer = $(`#${key}-shader-part`);
-        //         layer.find("input")[0].attr("disabled", true);
-        //     }
-        // }
+        let layers = seaGL.currentVisualisation().shaders;
+        let sources = webglProcessing.getSources();
+        let allSources = APPLICATION_CONTEXT.setup.data;
+        let tiledImage = seaGL.getTiledImage();
+        if (!tiledImage) {
+            console.error("Could not determine TiledImage item that is bound to the bridge.");
+            return;
+        }
+
+        if (typeof tiledImage.source.getImageMetaAt !== 'function') {
+            console.warn('OpenSeadragon TileSource for the visualization layers is missing getImageMetaAt() function.',
+                'The visualization is unable to inspect problems with data sources.');
+            return;
+        }
+
+        for (let key in layers) {
+            if (!layers.hasOwnProperty(key)) continue;
+
+            let errorMessage;
+            for (let imgSource of layers[key].dataReferences) {
+                let idx = sources.findIndex(s => s === allSources[imgSource]);
+                if (idx !== -1
+                    && (errorMessage = tiledImage.source.getImageMetaAt(idx))
+                    && (errorMessage = errorMessage.error)) {
+
+                    let node = $(`#${key}-shader-part`);
+                    node.prepend(`<div class="p2 error-container rounded-2">Possibly faulty layer.<code>${errorMessage}</code></div>`);
+                    break;
+                }
+            }
+        }
     };
 
     function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {

@@ -62,6 +62,8 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     if (${this.inverse.sample()}) data${this.uid} = 1.0 - data${this.uid};
     if(data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample()}){
         ${this.render(`vec4(${this.color.sample()}, data${this.uid} * ${this.opacity.sample()})`)}
+    } else {
+        ${this.render(`vec4(.0)`)}
     }
 `;
     }

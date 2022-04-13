@@ -1,19 +1,11 @@
 {
-    "id": "openseadragon_image_annotations",
-    "name": "Annotations",
-    "author": "Jirka Horák",
-    "description": "A plugin for ROI creation and management.",
-    "icon": "",
-    "includes" : [
-        "ext/greiner-hormann.min.js",
-        "ext/hull.js",
-        "osd_fabric_annotation.js",
-        "objects.js",
-        "free_form_tool.js",
-        "history.js"
-    ],
-    "requires": [],
-    "modules": ["webgl", "fabricjs"],
-
-    "server": "/iipsrv.fcgi"
+  "id": "gui_annotations",
+  "name": "Annotations for Pathopus",
+  "author": "Jirka Horák",
+  "description": "A plugin for ROI creation and management.",
+  "icon": "",
+  "includes" : ["osd_fabric_annotation.js"],
+  "requires": [],
+  "modules": ["annotations"],
+  "server": "/iipsrv.fcgi"
 }

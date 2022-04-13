@@ -38,9 +38,9 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
 
     toHtml(breakLine=true, controlCss="") {
         if (!this._c1.params.interactive) return "";
-        return `<div ${controlCss}>${this._c1.toHtml(false, 'style="width: 48%;"')}
-        ${this._c2.toHtml(false, 'style="width: 12%;"')}</div>
-        ${breakLine ? "<br>" : ""}`;
+        let cls = breakLine ? "" : "class='d-inline-block'";
+        return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'style="width: 48%;"')}
+        ${this._c2.toHtml(false, 'style="width: 12%;"')}</div>`;
     }
 
     define() {
@@ -73,7 +73,8 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this.params = this.supports;
-        this.MAX_SAMPLES = 12;
+        //Note that colormap must support 2->this.MAX_SAMPLES color arrays
+        this.MAX_SAMPLES = 8;
         $.extend(this.params, params);
 
         this.params.steps = Math.max(Math.round(this.params.steps), 2);
@@ -103,7 +104,6 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     init() {
-        //todo safe steps - provide maps up to this.MAX_SAMPLES or prevent from malicious access
         this.value = this.context.loadProperty(this.name, this.params.default);
 
         this.setSteps();
@@ -131,7 +131,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             this._setPallete(this.pallete);
 
             let schemas = [];
-            for (let pallete of ColorMaps.schemeGroups[this.params.mode]) { //todo need to do this building after init(...)
+            for (let pallete of ColorMaps.schemeGroups[this.params.mode]) {
                 schemas.push(`<option value="${pallete}">${pallete}</option>`);
             }
             node.html(schemas.join(""));
@@ -204,7 +204,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     glDrawing(program, dimension, gl) {
-        gl.uniform3fv(this.colormap_gluint,  Float32Array.from(this.pallete));
+        gl.uniform3fv(this.colormap_gluint, Float32Array.from(this.pallete));
         gl.uniform1fv(this.steps_gluint, Float32Array.from(this.steps));
     }
 
@@ -401,7 +401,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 }
             }
 
-            container.noUiSlider.on("change", function doSomething(values, handle, unencoded, tap, positions, noUiSlider) {
+            container.noUiSlider.on("change", function(values, handle, unencoded, tap, positions, noUiSlider) {
                 _this.value[handle] = _this._normalize(unencoded[handle]);
                 _this.encodedValues = values;
                 if (_this._ignoreNextClick) {
@@ -518,7 +518,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //         params.color.interactive = false;
 //         params.color.title = params.color.title || "Localized: ";
 //
-//         //todo maybe adjust steps/mask for threshold
+//         //to-do maybe adjust steps/mask for threshold
 //     }
 // };
 // WebGLModule.UIControls.registerClass("localize_colormap", WebGLModule.UIControls.LocalizeColorMap);

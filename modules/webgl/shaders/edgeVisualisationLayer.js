@@ -104,6 +104,8 @@ vec4 getBorder_${this.uid}() {
     if (${this.threshold.sample()} > 1e-6) {
         vec4 border_${this.uid} = getBorder_${this.uid}();
         ${this.render(`vec4(border_${this.uid}.rgb, border_${this.uid}.a * ${this.opacity.sample()})`)}
+    } else {
+        ${this.render(`vec4(.0)`)}
     }
 `;
     }

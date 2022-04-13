@@ -1,7 +1,6 @@
 /**
  * Code shader
- *
- * todo allow shader inspection by showing the rendered thing
+ * todo open window in https://github.com/microsoft/monaco-editor
  */
 WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
 
@@ -43,7 +42,7 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
     }
 
     getFragmentShaderDefinition() {
-        //todo fix this, not really reading the value from the control
+        //fix this, not really reading the value from the control
         return `
 ${this._getUpdatedDefineHints()}
 
@@ -57,20 +56,6 @@ vec4 render_${this.uid}() {
         return `
     ${this.render(`render_${this.uid}()`)}
         `;
-    }
-
-    glDrawing(program, dimension, gl) {
-        //maybe the controls need to call it, default ones don't
-        //todo fix type and remove this
-        this.fs_define.glDrawing(program, dimension, gl);
-        this.fs_execute.glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        //maybe the controls need to call it, default ones don't
-        //todo fix type and remove this
-        this.fs_define.glLoaded(program, gl);
-        this.fs_execute.glLoaded(program, gl);
     }
 
     static _getDefaultFSDefine() {

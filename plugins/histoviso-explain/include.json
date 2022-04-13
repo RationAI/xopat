@@ -8,6 +8,6 @@
         "histoviso_explain.js",
         "histoviso_explain_annotation_factory_extension.js"
     ],
-    "requires": ["openseadragon_image_annotations"],
-    "modules": ["webgl"]
+    "requires": [],
+    "modules": ["annotations", "webgl"]
 }
