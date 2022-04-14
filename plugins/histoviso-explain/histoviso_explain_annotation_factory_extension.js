@@ -1,8 +1,8 @@
 //todo use getters from the parent class and do not rely on jQuery!!!
 
 class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager, id) {
-        super(context, autoCreationStrategy, presetManager, id);
+    constructor(context, autoCreationStrategy, presetManager, id, type) {
+        super(context, autoCreationStrategy, presetManager, id, type);
         this._current = null;
         this._pending = {};
         this.active = false;
@@ -32,6 +32,7 @@ class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
         //approximated by a rectangle
         return new fabric.Rect($.extend({}, options, parameters, {
             type: this.type,
+            factoryId: this.factoryId,
             stroke: 'gray',
             fill: this._pattern,
             strokeWidth: 16,
@@ -151,7 +152,7 @@ class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
 
 class HistovisoImageExplorer extends HistovisoImage {
     constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "histoviso-explain-explorer");
+        super(context, autoCreationStrategy, presetManager, "_histoviso-explain-explorer", "rect");
     }
 
     getIcon() {
@@ -285,7 +286,7 @@ class HistovisoImageExplorer extends HistovisoImage {
 
 class HistovisoImageRenderer extends HistovisoImage {
     constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "image");
+        super(context, autoCreationStrategy, presetManager, "_histoviso-network_inspector", "image");
     }
 
     getIcon() {
@@ -326,6 +327,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                     width: _this._selected.width,
                     height: _this._selected.height,
                     type: _this.type,
+                    factoryId: _this.factoryId,
                     comment: _this._selected.comment
                 }
             ));
@@ -459,7 +461,7 @@ class HistovisoImageRenderer extends HistovisoImage {
 
             myImage.onload = () => {
                 //todo necessary?
-                _this._renderer.setDimensions(myImage.width, myImage.height);
+                _this._renderer.setDimensions(myImage.width*2, myImage.height*2); //idk why 2* but it works
 
                 // Render a webGL canvas to an input canvas using cached version
                 // Only one image supported at the time, will be given to all shaders defined in visualisation, will change soon
@@ -474,6 +476,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                             width: imageBounds.width,
                             height: imageBounds.height,
                             type: _this.type,
+                            factoryId: _this.factoryId,
                             comment: `(${data.expl_method}) Layer ${data.expl_params.layer_name} [feature ${data.expl_params.feature_map_id}]`
                         }
                     ));
@@ -495,5 +498,5 @@ class HistovisoImageRenderer extends HistovisoImage {
 }
 
 //registering is performed after the plugin has been successfully initialized
-OSDAnnotations.AnnotationObjectFactory.register(HistovisoImageRenderer);
-OSDAnnotations.AnnotationObjectFactory.register(HistovisoImageExplorer);
+OSDAnnotations.registerAnnotationFactory(HistovisoImageRenderer);
+OSDAnnotations.registerAnnotationFactory(HistovisoImageExplorer);

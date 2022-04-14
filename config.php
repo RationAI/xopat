@@ -3,7 +3,7 @@
 $production = false;
 
 //relative path system in the application
-define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //todo this is invalid, it will be different if included from different sources
+define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
 define('EXTERNAL_SOURCES', 'external');
 define('MODULES_FOLDER', 'modules');
 define('PLUGINS_FOLDER', 'plugins');
@@ -48,7 +48,6 @@ define('BG_DEFAULT_PROTOCOL', '`${path}?Deepzoom=\${data}.dzi`');
 define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(\',\')}.dzi`');
 
 //temp solution for now...
-//todo make this more sophisticated...
 define('USER', 'rationai');
 define('PASSWORD', 'rationai_demo');
 //set to empty string if no authorization

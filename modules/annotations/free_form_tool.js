@@ -11,11 +11,8 @@ OSDAnnotations.FreeFormTool = class {
         this._context = context;
         this._update = null;
         this._created = false;
-
-        this._visibleCursor = false;
         this._node = null;
 
-        //todo bit unsafe... move cursor also to GUI?
         PLUGINS.addHtml("annotation-cursor",
             `<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
@@ -24,7 +21,7 @@ OSDAnnotations.FreeFormTool = class {
     //initialize any object for cursor-drawing modification
     init(object, atPosition, created=false) {
 
-        let objectFactory = this._context.getAnnotationObjectFactory(object.type);
+        let objectFactory = this._context.getAnnotationObjectFactory(object.factoryId);
         if (objectFactory !== undefined) {
             if (!objectFactory.isImplicit()) {
                 //object can be used immedietaly
@@ -49,10 +46,10 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     updateCursorRadius() {
-        let radius = this.getScreenToolRadius() * 2;
+        let screenRadius = this.radius * VIEWER.tools.imagePixelSizeOnScreen() * 2;
         if (this._node) {
-            this._node.style.width = radius + "px";
-            this._node.style.height = radius + "px";
+            this._node.style.width = screenRadius + "px";
+            this._node.style.height = screenRadius + "px";
         }
     }
 
@@ -64,7 +61,6 @@ OSDAnnotations.FreeFormTool = class {
         this._node.style.left = "0px";
 
         const c = this._node;
-        this._visibleCursor = true;
         this._listener = e => {
             c.style.top = e.pageY + "px";
             c.style.left = e.pageX + "px";
@@ -75,7 +71,6 @@ OSDAnnotations.FreeFormTool = class {
     hideCursor() {
         if (!this._listener) return;
         this._node.style.display = "none";
-        this._visibleCursor = false;
         window.removeEventListener("mousemove", this._listener);
         this._listener = null;
     }
@@ -155,7 +150,7 @@ OSDAnnotations.FreeFormTool = class {
         return null;
     }
 
-    //TODO sometimes the greinerHormann takes too long to finish (it is cycling, verticaes are NaN values), do some measurement and kill after it takes too long (2+s ?)
+    //TODO sometimes the greinerHormann cycling, vertices are NaN values, do some measurement and kill after it takes too long (2+s ?)
     _union (nextMousePos) {
         if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
 
@@ -252,15 +247,6 @@ OSDAnnotations.FreeFormTool = class {
         return null;
     }
 
-    getScreenToolRadius() {
-        //todo read this property from global API
-        let imageTileSource = VIEWER.tools.referencedTileSource();
-        return imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0))
-            .distanceTo(
-                imageTileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, this.radius))
-            );
-    }
-
     //initialize object so that it is ready to be modified
     _setupPolygon(polyObject) {
         this.polygon = polyObject;
@@ -273,7 +259,7 @@ OSDAnnotations.FreeFormTool = class {
     _createPolygonAndSetupFrom(points, object) {
         //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
         let polygon = this._context.polygonFactory.copy(object, points);
-        polygon.type = this._context.polygonFactory.type;
+        polygon.factoryId = this._context.polygonFactory.factoryId;
 
         this._context.replaceAnnotation(object, polygon, true);
         this._setupPolygon(polygon);

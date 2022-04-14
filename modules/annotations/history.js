@@ -23,10 +23,6 @@ OSDAnnotations.History = class {
             return;
         }
 
-        const _this = this;
-
-        //todo what if there is only 1 object that is not a part of annotaions, but present in the canvas anyway
-        //e.g. from other plugins
         let undoCss = this._context.canvasObjects().length > 0 ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
@@ -55,12 +51,12 @@ window.addEventListener('load', (e) => {
 document.addEventListener('keydown', (e) => {
     const parentContext = opener.${this._context.id};  
     opener.focus();
-    parentContext.keyDownHandler(e);
+    parentContext._keyDownHandler(e);
 });
 
 document.addEventListener('keyup', (e) => {
     const parentContext = opener.${this._context.id};   
-    parentContext.keyUpHandler(e);
+    parentContext._keyUpHandler(e);
 });
 
 //refresh/close: reset mode
@@ -176,7 +172,7 @@ window.addEventListener("beforeunload", (e) => {
     _syncLoad() {
         let _this = this;
         this._context.canvasObjects().some(o => {
-            if (o.presetID) { //todo works with presents only, plugins might want to add even non-preset stuff... predicate? flag?
+            if (o.presetID) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }
@@ -188,6 +184,8 @@ window.addEventListener("beforeunload", (e) => {
                     o.color = preset.color;
                     o.comment = preset.comment;
                 }
+                _this._addToBoard(o);
+            } else if (o.incrementId && !isNaN(o.incrementId)) {
                 _this._addToBoard(o);
             }
             return false;
@@ -202,10 +200,8 @@ window.addEventListener("beforeunload", (e) => {
         }
 
         if (previous) {
-            //todo not necessarily ID present
             this._removeFromBoard(previous);
         }
-
         //console.log("PREV", previous, "NEXT", newObject);
 
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
@@ -225,9 +221,12 @@ window.addEventListener("beforeunload", (e) => {
         if (!object || !object.hasOwnProperty("incrementId")) return;
 
         if (object && board) {
-            board.find(`#log-object-${object.incrementId}`).css({
-                background: "var(--color-bg-success)"
-            });
+            let node = board.find(`#log-object-${object.incrementId}`);
+            if (!node) {
+                this._addToBoard(object);
+                node = board.find(`#log-object-${object.incrementId}`);
+            }
+            node.css("background", "var(--color-bg-success)");
         }
         this._boardSelected = object;
     }
@@ -341,7 +340,6 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             objectId = object.incrementId;
         }
 
-        //todo possible problem with storing dynamic html node
         this._editSelection = {
             incrementId: objectId,
             self: self,
@@ -349,7 +347,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
         };
 
         if (object) {
-            let factory = this._context.getAnnotationObjectFactory(object.type);
+            let factory = this._context.getAnnotationObjectFactory(object.factoryId);
             if (factory) factory.edit(object);
         } else console.warn("Object edit: no active object.");
     }
@@ -361,7 +359,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             let obj = this._editSelection.target;
             if (obj) {
                 //if target was set, object could have been edited, update
-                let factory = this._context.getAnnotationObjectFactory(obj.type);
+                let factory = this._context.getAnnotationObjectFactory(obj.factoryId);
                 let newObject = factory.recalculate(obj);
                 if (newObject) {
                     this._context.replaceAnnotation(obj, newObject, true);
@@ -396,7 +394,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
     }
 
     _getObjectDefaultDescription(object) {
-        let factory = this._context.getAnnotationObjectFactory(object.type);
+        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
         if (factory !== undefined) {
             return factory.getDescription(object);
         }
@@ -404,7 +402,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
     }
 
     _getObjectDefaultIcon(object) {
-        let factory = this._context.getAnnotationObjectFactory(object.type);
+        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
         if (factory !== undefined) {
             return factory.getIcon();
         }

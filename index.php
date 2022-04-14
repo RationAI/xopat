@@ -629,9 +629,8 @@ EOF;
     // opacity of general layer available everywhere
     $("#global-opacity").on("input", function () {
         let val = $(this).val();
-        window.VIEWER.world.getItemAt(window.VIEWER).setOpacity(val);
+        VIEWER.world.getItemAt(VIEWER.bridge.getWorldIndex()).setOpacity(val);
     });
-
 
     $(VIEWER.element).on('contextmenu', function (event) {
         event.preventDefault();

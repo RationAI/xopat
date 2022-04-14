@@ -7,5 +7,6 @@
   "includes" : ["osd_fabric_annotation.js"],
   "requires": [],
   "modules": ["annotations"],
-  "server": "/iipsrv.fcgi"
+  "server": "/iipsrv.fcgi",
+  "factories": ["polygon", "rect", "ellipse"]
 }

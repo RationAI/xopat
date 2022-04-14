@@ -2,6 +2,7 @@ class AnnotationsGUI {
 	constructor(id, params) {
 		this.id = id;
 		this._server = PLUGINS.each[this.id].server;
+		this._allowedFactories = PLUGINS.each[this.id].factories || ["polygon"];
 	}
 
 	/*
@@ -13,6 +14,8 @@ class AnnotationsGUI {
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL");
+		//by default no preset is active, make one
+		this.context.setPreset();
 
 		const _this = this;
 
@@ -25,7 +28,8 @@ class AnnotationsGUI {
 		let opacityControl = $("#annotations-opacity");
 		opacityControl.val(this.context.getOpacity());
 		opacityControl.on("input", function () {
-			_this.context.setOpacity(Number.parseInt($(this).val()));
+			if (_this.context.disabledInteraction) return;
+			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
 		this.loadAnnotationsList();
 	} // end of initialize
@@ -47,13 +51,7 @@ class AnnotationsGUI {
 <span class="material-icons pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
 <span class="material-icons pointer" title="Export annotations" style="float: right;" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
 <span class="material-icons pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
-<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="
-	let self = $(this); 
-	if (self.attr('data-ref') === 'on'){
-		${this.id}.context.enableAnnotations(false); self.html('visibility_off'); self.attr('data-ref', 'off');
-	} else {
-		${this.id}.context.enableAnnotations(true); self.html('visibility'); self.attr('data-ref', 'on');
-	}"> visibility</span>`,
+<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
 			`
 <span>Opacity: &emsp;</span>
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br><br>${this.presetControls()}
@@ -212,11 +210,25 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	}
 
 	annotationsEnabledHandler(e) {
-		//todo disable main panel controls too
 		if (e.isEnabled) {
 			$("#annotations-tool-bar").removeClass('disabled');
+			$("#annotations-opacity").attr("disabled", false);
 		} else {
 			$("#annotations-tool-bar").addClass('disabled');
+			$("#annotations-opacity").attr("disabled", true);
+		}
+	}
+
+	_toggleEnabled(node) {
+		let self = $(node);
+		if (this.context.disabledInteraction){
+			this.context.enableAnnotations(true);
+			self.html('visibility');
+			self.attr('data-ref', 'on');
+		} else {
+			this.context.enableAnnotations(false);
+			self.html('visibility_off');
+			self.attr('data-ref', 'off');
 		}
 	}
 
@@ -258,9 +270,11 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 
 		let changeHtml = "";
 		Object.values(this.context.objectFactories).forEach(factory => {
-			if (factory.type !== preset.objectFactory.type) {
+			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
+
+			if (factory.factoryId !== preset.objectFactory.factoryId) {
 				changeHtml += `<div onclick="${this.id}.updatePreset(${preset.presetID}, 
-{objectFactory: ${this.id}.context.getAnnotationObjectFactory('${factory.type}')}); 
+{objectFactory: ${this.id}.context.getAnnotationObjectFactory('${factory.factoryId}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
 			}
@@ -343,12 +357,14 @@ onchange="${this.id}.importFromFile(event);$(this).val('');" />`;
 	 * Update main HTML GUI part of presets upon preset change
 	 */
 	updatePresetsHTML() {
-		let leftPreset = this.context.presets.left,
-			rightPreset = this.context.presets.right;
-		if (leftPreset) $("#annotations-left-click").html(this.getPresetControlHTML(leftPreset, true));
-		else $("#annotations-left-click").html(this.getMissingPresetHTML(true));
+		let leftPreset = this.context.getPreset(true),
+			rightPreset = this.context.getPreset(false);
 
-		if (rightPreset) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
+		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) {
+			$("#annotations-left-click").html(this.getPresetControlHTML(leftPreset, true));
+		} else $("#annotations-left-click").html(this.getMissingPresetHTML(true));
+
+		if (rightPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
 		else $("#annotations-right-click").html(this.getMissingPresetHTML(false));
 	}
 
@@ -361,13 +377,15 @@ onchange="${this.id}.importFromFile(event);$(this).val('');" />`;
 	 */
 	getPresetHTML(preset, isLeftClick, index = undefined) {
 		let select = "",
-			currentPreset = isLeftClick ? this.context.presets.left : this.context.presets.right;
+			currentPreset = this.context.getPreset(isLeftClick);
 
 		Object.values(this.context.objectFactories).forEach(factory => {
-			if (factory.type === preset.objectFactory.type) {
-				select += `<option value="${factory.type}" selected>${factory.getASAP_XMLTypeName()}</option>`;
+			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
+
+			if (factory.factoryId === preset.objectFactory.factoryId) {
+				select += `<option value="${factory.factoryId}" selected>${factory.getASAP_XMLTypeName()}</option>`;
 			} else {
-				select += `<option value="${factory.type}">${factory.getASAP_XMLTypeName()}</option>`;
+				select += `<option value="${factory.factoryId}">${factory.getASAP_XMLTypeName()}</option>`;
 			}
 		});
 
@@ -397,10 +415,10 @@ onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" val
 		let removed = this.context.presets.removePreset(presetId);
 		if (removed) {
 			$(buttonNode).parent().remove();
-			if (removed === this.context.presets.right) {
+			if (removed === this.context.getPreset(false)) {
 				$("#annotations-right-click").html(this.getMissingPresetHTML(false));
 			}
-			if (removed === this.context.presets.left) {
+			if (removed === this.context.getPreset(true)) {
 				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
 		}
@@ -419,6 +437,10 @@ onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" val
 	 * @param {boolean} isLeftClick true if the modification tab sets left preset
 	 */
 	showPresets(isLeftClick) {
+		if (this.context.disabledInteraction) {
+			Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
+			return;
+		}
 		this._presetSelection = undefined;
 
 		let html = [],
@@ -483,11 +505,10 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 		}
 		this.annotationsMenuBuilder.clear();
 
-		//todo better approach
+		//todo cannot use more than one tissue at time
 		this.activeTissue = APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[0].dataReference];
 
 		const _this = this;
-		//todo if background images too many - populated...?  TODO custom link
 		PLUGINS.fetchJSON(this._server + "?Annotation=list/" + this.activeTissue
 		).then(json => {
 			let count = 0;
@@ -533,82 +554,106 @@ ${this.presetExportControls()}
 	}
 
 	loadAnnotation(id) {
-		//todo code duplicity
 		const _this = this;
-		PLUGINS.fetchJSON(this._server + "?Annotation=load/" + id).then(json => {
-			try {
+		this._fetchWorker(
+			this._server + "?Annotation=load/" + id,
+			null,
+			function(json) {
+				console.log(json);
 				_this.context.loadFromJSON(json.annotations);
+				$('#preset-modify-dialog').remove();
 				_this.context.presets.import(json.presets);
 				_this.updatePresetsHTML();
 				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
 				Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
-			} catch (e) {
-				console.warn(e);
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide export file.", 20000, Dialogs.MSG_ERR);
-			}
-		}).catch(e =>
-			Dialogs.show("Failed to download annotation.", 2000, Dialogs.MSG_ERR)
+			},
+			function (e) {
+				console.error(e);
+				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
+					"<a onclick=\"${_this.id}.context.exportToFile()\">exported file</a>.",
+					20000, Dialogs.MSG_ERR);
+			},
+			false //do not inspect 'success' property
 		);
 	}
 
 	updateAnnotation(id) {
 		const _this = this;
-		PLUGINS.fetchJSON(this._server, {
-			protocol: 'Annotation',
-			command: 'update',
-			id: Number.parseInt(id),
-			data: this.getFullExportData()
-		}).then(json => {
-			if (json.success) {
+		console.log(this.getFullExportData());
+
+		this._fetchWorker(
+			this._server,
+			{
+				protocol: 'Annotation',
+				command: 'update',
+				id: Number.parseInt(id),
+				data: this.getFullExportData()
+			},
+			function() {
 				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
-			} else {
-				Dialogs.show(`Failed to upload annotations. You can <a onclick="${this.id}.context.exportToFile()">Export them instead</a>, and upload later.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to upload annotations.", json);
+			},
+			function (e) {
+				Dialogs.show(`Failed to upload annotations. You can 
+<a onclick="${_this.id}.context.exportToFile()">Export them instead</a>, and upload later.`,
+					7000, Dialogs.MSG_ERR);
+				console.error("Failed to update annotation id " + id, e);
 			}
-		}).catch(e => {
-			Dialogs.show(`Failed to upload annotations. You can <a onclick="${this.id}.context.exportToFile()">Export them instead</a>, and upload later.`, 7000, Dialogs.MSG_ERR);
-			console.error("Failed to upload annotations.", e);
-		});
+		);
 	}
 
 	removeAnnotation(id) {
 		const _this = this;
-		PLUGINS.fetchJSON(this._server + "?Annotation=remove/" + id).then(json => {
-			if (json.success) {
+		this._fetchWorker(
+			this._server + "?Annotation=remove/" + id,
+			null,
+			function() {
 				Dialogs.show(`Annotation id '${id}' removed.`, 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
-			} else {
+			},
+			function (e) {
 				Dialogs.show(`Failed to delete annotation id '${id}'.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to upload annotations.", json);
+				console.error("Failed to delete annotation id " + id, e);
 			}
-		}).catch(e =>
-			Dialogs.show("Failed to remove annotation.", 2000, Dialogs.MSG_ERR)
 		);
 	}
 
 	uploadAnnotation() {
 		const _this = this;
-		PLUGINS.fetchJSON(this._server, {
-			protocol: 'Annotation',
-			command: 'save',
-			name: "a" + Date.now(),
-			tissuePath: this.activeTissue,
-			data: this.getFullExportData()
-		}).then(json => {
-			if (json.success) {
+		this._fetchWorker(
+			this._server,
+			{
+				protocol: 'Annotation',
+				command: 'save',
+				name: "a" + Date.now(),
+				tissuePath: this.activeTissue,
+				data: this.getFullExportData()
+			},
+			function() {
 				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
-			} else {
-				Dialogs.show(`Failed to upload annotations. You can <a onclick="${this.id}.context.exportToFile()">Export them instead</a>, and upload later.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to upload annotations.", json);
+			},
+			function (e) {
+				Dialogs.show(`Failed to upload annotations. You can 
+<a onclick="${_this.id}.context.exportToFile()">Export them instead</a>, and upload later.`,
+					7000, Dialogs.MSG_ERR);
+				console.error("Failed to upload annotations.", e);
 			}
-		}).catch(e => {
-			Dialogs.show(`Failed to upload annotations. You can <a onclick="${this.id}.context.exportToFile()">Export them instead</a>, and upload later.`, 7000, Dialogs.MSG_ERR);
-			console.error("Failed to upload annotations.", e);
-		});
+		);
 	}
-};
+
+	_fetchWorker(url, post, onsuccess, onfail, successProperty=true) {
+		if (this.context.disabledInteraction) {
+			Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
+			return;
+		}
+		const _this = this;
+		PLUGINS.fetchJSON(url, post).then(json => {
+			if (!successProperty || json.success) onsuccess(json);
+			else onfail(json);
+		}).catch(e => onfail(e));
+	}
+}
 
 /*------------ Initialization of OSD Annotations ------------*/
 PLUGINS.register("gui_annotations", AnnotationsGUI);

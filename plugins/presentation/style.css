@@ -46,20 +46,7 @@
     border: 2px solid #81ff0e;
     margin: 0.5px;
 }
-/*#playback-timeline :nth-child(5n) {*/
-/*    height: 20px;*/
-/*}*/
-/*#playback-timeline :nth-child(5n)::after {*/
-/*    content: attr(data-count);*/
-/*    position: absolute;*/
-/*    top: 17px;*/
-/*    color: var(--color-text-primary) !important;*/
-/*    margin-left: -5px;*/
-/*    height: 16px;*/
-/*    width: 14px;*/
-/*    text-align: center;*/
-/*    opacity: 1;*/
-/*}*/
+
 #playback-timeline span.selected {
     border: 2px solid var(--color-text-danger) !important;
 }

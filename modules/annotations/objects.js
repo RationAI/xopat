@@ -10,9 +10,9 @@ OSDAnnotations.Preset = class {
     }
 
     fromJSONFriendlyObject(parsedObject, factoryGetter) {
-        this.objectFactory = factoryGetter(parsedObject.objectType);
+        this.objectFactory = factoryGetter(parsedObject.factoryID);
         if (this.objectFactory === undefined) {
-            console.error("Invalid preset type.", parsedObject.type, "of", parsedObject,
+            console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
                 "No factory for such object available.");
         }
         this.comment = parsedObject.comment;
@@ -24,7 +24,7 @@ OSDAnnotations.Preset = class {
         return {
             comment: this.comment,
             color: this.color,
-            objectType: this.objectFactory.type,
+            factoryID: this.objectFactory.factoryId,
             presetID: this.presetID
         };
     }
@@ -42,7 +42,7 @@ OSDAnnotations.PresetManager = class {
      */
     static _commonProperty = {
         selectable: true,
-        strokeWidth: 2,
+        strokeWidth: 4,
         borderColor: '#fbb802',
         cornerColor: '#fbb802',
         stroke: 'black',
@@ -100,11 +100,11 @@ OSDAnnotations.PresetManager = class {
 
     _randomColorHexString() {
         // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
-        var r, g, b;
-        var h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
-        var i = ~~(h * 6);
-        var f = h * 6 - i;
-        var q = 1 - f;
+        let r, g, b;
+        let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
+        let i = ~~(h * 6);
+        let f = h * 6 - i;
+        let q = 1 - f;
         switch(i % 6){
             case 0: r = 1; g = f; b = 0; break;
             case 1: r = q; g = 1; b = 0; break;
@@ -113,7 +113,7 @@ OSDAnnotations.PresetManager = class {
             case 4: r = f; g = 0; b = 1; break;
             case 5: r = 1; g = 0; b = q; break;
         }
-        var c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
+        let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
                         + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
                         + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
         return (c);
@@ -139,14 +139,14 @@ OSDAnnotations.PresetManager = class {
      */
     removePreset(id) {
         let toDelete = this._presets[id];
-        if (!toDelete) return false;
+        if (!toDelete) return undefined;
 
         if (this._context.overlay.fabric._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
                 8000, Dialogs.MSG_WARN);
-            return false;
+            return undefined;
         }
 
         delete this._presets[id];
@@ -162,7 +162,7 @@ OSDAnnotations.PresetManager = class {
     updatePreset(id, properties) {
         let toUpdate = this._presets[id],
             needsRefresh = false;
-        if (!toUpdate) return;
+        if (!toUpdate) return undefined;
 
         Object.entries(properties).forEach(([key, value]) => {
             if (toUpdate[key] !== value) {
@@ -171,7 +171,7 @@ OSDAnnotations.PresetManager = class {
             toUpdate[key] = value;
         });
 
-        return needsRefresh ? toUpdate : false;
+        return needsRefresh ? toUpdate : undefined;
     }
 
     foreach(call) {
@@ -205,14 +205,18 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Import presets
-     * @param {string} presets JSON to decode
+     * @param {string|object} presets JSON to decode
+     * @return {OSDAnnotations.Preset|undefined} preset
      */
     import(presets) {
-        $('#preset-modify-dialog').remove();
         this._presets = {};
-        let first = null;
-        if (presets && presets.length > 10) {
+        let first;
+
+        if (typeof presets === 'string' && presets.length > 10) {
             presets = JSON.parse(presets);
+        }
+
+        if (typeof presets === 'object') {
             for (let i = 0; i < presets.length; i++) {
                 let p = new OSDAnnotations.Preset().fromJSONFriendlyObject(
                     presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
@@ -224,8 +228,7 @@ OSDAnnotations.PresetManager = class {
         } else {
             first = this.addPreset();
         }
-        this.left = first;
-        //TODO this.updatePresetsHTML();
+        return first;
     }
 
     /**
@@ -246,31 +249,24 @@ OSDAnnotations.PresetManager = class {
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
- * TODO unify parameters and coordinate systems!
  */
 OSDAnnotations.AnnotationObjectFactory = class {
-
-    //Registered annotation object list
-    static _registree = [];
-    static register(...factories) {
-        this._registree.push(...factories);
-    }
-    static visitRegistered(callback) {
-        this._registree.forEach(e => callback(e));
-    }
 
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context (Parent class)
      * @param {AutoObjectCreationStrategy} autoCreationStrategy or an object of similar interface
      * @param {PresetManager} presetManager manager of presets or an object of similar interface
-     * @param {string} identifier unique annotation shape identifier
+     * @param {string} identifier unique annotation identifier, start with '_' to avoid exporting
+     *   - note that for now the export avoidance woks only for XML exports, JSON will include all
+     * @param {string} objectType which shape type it maps to inside fabricJS
      */
-    constructor(context, autoCreationStrategy, presetManager, identifier) {
+    constructor(context, autoCreationStrategy, presetManager, identifier, objectType) {
         this._context = context;
         this._presets = presetManager;
         this._auto = autoCreationStrategy;
-        this.type = identifier;
+        this.factoryId = identifier;
+        this.type = objectType;
     }
 
     /**
@@ -299,8 +295,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Create an annotation object from given parameters
-     * @param {Object} parameters type-dependent parameters (see documentation of subclass)
+     * Create an annotation object from given parameters, used mostly privately
+     * @param {*} parameters geometry, depends on the object type
      * @param {Object} options FbaricJS and custom options to set
      * @returns
      */
@@ -309,18 +305,18 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Prototype pattern (inside Factory class), create copy of an object
+     * Create copy of an object
      * @param {Object} ofObject object to copy
-     * @param {Object} parameters type-dependent parameters (see documentation of subclass)
+     * @param {*} parameters internal variable, should not be used
      * @returns
      */
-    copy(ofObject, parameters) {
+    copy(ofObject, parameters=undefined) {
         return null;
     }
 
 
     /**
-     * Create an object at given point with a given strategy (TODO use strategy pattern)
+     * Create an object at given point with a given strategy
      * @param {OpenSeadragon.Point} point origin of the object
      * @param {boolean} isLeftClick true if the object was created using left mouse button
      * @return {boolean} true if creation succeeded
@@ -330,12 +326,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * TODO consfusing naming?
-     * Check whether object supports hit-click creation
-     * @returns true if supports hit-click creation
+     * Objects created by smaller than x MS click-drag might be invalid, define how long drag event must last
+     * @returns {number} time in MS how long (at least) the drag event should last for object to be created
      */
-    isValidShortCreationClick() {
-        return false;
+    getCreationRequiredMouseDragDurationMS() {
+        return 100;
     }
 
     /**
@@ -426,7 +421,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
 OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "rect");
+        super(context, autoCreationStrategy, presetManager, "rect", "rect");
         this._origX = null;
         this._origY = null;
         this._current = null;
@@ -456,7 +451,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect($.extend({
             scaleX: 1,
             scaleY: 1,
-            type: this.type
+            type: this.type,
+            factoryId: this.factoryId
         }, parameters, options));
     }
 
@@ -465,10 +461,11 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} parameters object of the following properties:
      *              - left: offset in the image dimension
      *              - top: offset in the image dimension
-     *              - rx: major axis radius
-     *              - ry: minor axis radius
+     *              - width: rect width
+     *              - height: rect height
      */
-    copy(ofObject, parameters) {
+    copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = ofObject;
         return new fabric.Rect({
             left: parameters.left,
             top: parameters.top,
@@ -483,6 +480,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             scaleX: ofObject.scaleX,
             scaleY: ofObject.scaleY,
             type: ofObject.type,
+            factoryId: ofObject.factoryId,
             hasRotatingPoint: ofObject.hasRotatingPoint,
             borderColor: ofObject.borderColor,
             cornerColor: ofObject.cornerColor,
@@ -580,7 +578,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
 OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ellipse");
+        super(context, autoCreationStrategy, presetManager, "ellipse", "ellipse");
         this._origX = null;
         this._origY = null;
         this._current = null;
@@ -614,11 +612,21 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             angle: 0,
             scaleX: 1,
             scaleY: 1,
-            type: this.type
+            type: this.type,
+            factoryId: this.factoryId
         }, parameters, options));
     }
 
-    copy(ofObject, parameters) {
+    /**
+     * @param {Object} ofObject fabricjs.Ellipse object that is being copied
+     * @param {Object} parameters object of the following properties:
+     *              - left: offset in the image dimension
+     *              - top: offset in the image dimension
+     *              - rx: major axis radius
+     *              - ry: minor axis radius
+     */
+    copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = ofObject;
         return new fabric.Ellipse({
             left: parameters.left,
             top: parameters.top,
@@ -633,6 +641,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             strokeWidth: ofObject.strokeWidth,
             opacity: ofObject.opacity,
             type: ofObject.type,
+            factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
             selectable: ofObject.selectable,
             hasRotatingPoint: ofObject.hasRotatingPoint,
@@ -748,11 +757,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 };
 
-//todo rename to underscore if private
 OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "polygon");
+        super(context, autoCreationStrategy, presetManager, "polygon", "polygon");
         this._initialize(false);
     }
 
@@ -774,14 +782,15 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         return new fabric.Polygon(parameters, $.extend({
-            type: this.type
+            type: this.type,
+            factoryId: this.factoryId
         }, options));
     }
 
     /**
-     * @param {Array} parameters array of objects with {x, y} properties (points)
+     * @param {Object} ofObject fabricjs.Polygon object that is being copied
+     * @param {Array} parameters array of points: {x, y} objects
      */
-    //todo unify parameters - where is evented?
     copy(ofObject, parameters) {
         return new fabric.Polygon(parameters, {
             hasRotatingPoint: ofObject.hasRotatingPoint,
@@ -792,6 +801,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             isLeftClick: ofObject.isLeftClick,
             opacity: ofObject.opacity,
             type: ofObject.type,
+            factoryId: ofObject.factoryId,
             selectable: ofObject.selectable,
             borderColor: ofObject.borderColor,
             cornerColor: ofObject.cornerColor,
@@ -863,21 +873,19 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     instantCreate(point, isLeftClick = true) {
         const _this = this;
         //(async function _() {
-            //todo disable user interaction while computing
-            //todo delete polygon if not big enough
-            let result = /*await*/ _this._auto.createOutline(point);
+        let result = /*await*/ _this._auto.createOutline(point);
 
-            if (!result || result.length < 3) return false;
-            result = _this.simplify(result);
-            _this._context.addAnnotation(
-                _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
-            );
-            return true;
+        if (!result || result.length < 3) return false;
+        result = _this.simplify(result);
+        _this._context.addAnnotation(
+            _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
+        );
+        return true;
         //})();
     }
 
-    isValidShortCreationClick() {
-        return true;
+    getCreationRequiredMouseDragDurationMS() {
+        return -1; //always allow
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -917,8 +925,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
                 x: x,
                 y: y
             });
-            polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick))
-
+            polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick));
             this._context.replaceAnnotation(this._current, polygon);
         }  else {
             polygon = this.create([{ x: x, y: y }],
@@ -999,7 +1006,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         return points;
     }
 
-
     getASAP_XMLTypeName() {
         return "Polygon";
     }
@@ -1011,7 +1017,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         this._edited = null;
     }
 
-    //todo replace with control point feature?
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
             radius: 1 / VIEWER.tools.imagePixelSizeOnScreen() * 10,
@@ -1020,7 +1025,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             top: y,
             originX: 'center',
             originY: 'center',
-            type: "__polygon.controls.circle",
+            factory: "__private",
         }));
     }
 
@@ -1031,18 +1036,18 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
      * mourner.github.io/simplify-js
      */
     _getSqDist(p1, p2) {
-        var dx = p1.x - p2.x,
+        let dx = p1.x - p2.x,
             dy = p1.y - p2.y;
         return dx * dx + dy * dy;
     }
 
     _getSqSegDist(p, p1, p2) {
-        var x = p1.x,
+        let x = p1.x,
             y = p1.y,
             dx = p2.x - x,
             dy = p2.y - y;
         if (dx !== 0 || dy !== 0) {
-            var t = ((p.x - x) * dx + (p.y - y) * dy) / (dx * dx + dy * dy);
+            let t = ((p.x - x) * dx + (p.y - y) * dy) / (dx * dx + dy * dy);
             if (t > 1) {
                 x = p2.x;
                 y = p2.y;
@@ -1058,11 +1063,11 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _simplifyRadialDist(points, sqTolerance) {
 
-        var prevPoint = points[0],
+        let prevPoint = points[0],
             newPoints = [prevPoint],
             point;
 
-        for (var i = 1, len = points.length; i < len; i++) {
+        for (let i = 1, len = points.length; i < len; i++) {
             point = points[i];
 
             if (this._getSqDist(point, prevPoint) > sqTolerance) {
@@ -1077,11 +1082,11 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _simplifyDPStep(points, first, last, sqTolerance, simplified) {
-        var maxSqDist = sqTolerance,
+        let maxSqDist = sqTolerance,
             index;
 
-        for (var i = first + 1; i < last; i++) {
-            var sqDist = this._getSqSegDist(points[i], points[first], points[last]);
+        for (let i = first + 1; i < last; i++) {
+            let sqDist = this._getSqSegDist(points[i], points[first], points[last]);
 
             if (sqDist > maxSqDist) {
                 index = i;
@@ -1098,9 +1103,9 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     // simplification using Ramer-Douglas-Peucker algorithm
     _simplifyDouglasPeucker(points, sqTolerance) {
-        var last = points.length - 1;
+        let last = points.length - 1;
 
-        var simplified = [points[0]];
+        let simplified = [points[0]];
         this._simplifyDPStep(points, 0, last, sqTolerance, simplified);
         simplified.push(points[last]);
 
@@ -1115,10 +1120,8 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 
-    // both algorithms combined for awesome performance
-    // simplifies the object based on zoom level
     simplify(points, highestQuality = false) {
-
+        // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
         let tolerance = this.getRelativePixelDiffDistSquared(3);
@@ -1133,10 +1136,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
         let tolerance = this.getRelativePixelDiffDistSquared(10 - 9*quality);
-        points = highestQuality ? points : this._simplifyRadialDist(points, tolerance);
-        points = this._simplifyDouglasPeucker(points, tolerance);
-
-        return points;
+        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
     }
 };
 
@@ -1151,13 +1151,14 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
         this._renderEngine = new WebGLModule({
             uniqueId: "annot",
             onError: function(error) {
-                _this.tileFailure = true;
+                //maybe notify
             },
             onFatalError: function (error) {
-                _this.tileFailure = true;
+                Dialogs.show("Error with automatic detection: this feature wil be disabled.");
+                _this._running = false;
             }
         });
-        this.tileFailure = false; //todo remove?
+        this._running = true;
         this._renderEngine.addVisualisation({
             shaders: {
                 _ : {
@@ -1190,7 +1191,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
         for (key in visualisation.shaders) {
             if (!visualisation.shaders.hasOwnProperty(key)) continue;
             layer = visualisation.shaders[key];
-            if (isNaN(layer.index)) return; //not used TODO dirty....
+            if (isNaN(layer.index)) continue;
 
             let errIcon = this.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
             let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
@@ -1215,8 +1216,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
     }
 
     _beforeAutoMethod() {
-        let vis = VIEWER.bridge.currentVisualisation(),
-            layer = vis.shaders[this._readingKey];
+        let vis = VIEWER.bridge.currentVisualisation();
         this._renderEngine._visualisations[0] = {
             shaders: {}
         };
@@ -1280,7 +1280,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
         delete this._renderEngine._visualisations[0];
     }
 
-    //todo better approach this relies on ID's and any plugin can re-use it :/
+    //todo better approach this relies on ID's and any plugin can re-use it :/ maybe move to GUI
     sensitivityControls() {
         return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
 annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
@@ -1296,7 +1296,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 
     approximateBounds(point) {
         this._beforeAutoMethod();
-		if (!this.changeTile(point)) {
+		if (!this.changeTile(point) || !this._running) {
             this._afterAutoMethod();
             return null;
         }
@@ -1304,49 +1304,39 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
         this.origPixel = this.getPixelData(point);
         let dimensionSize = Math.max(screen.width, screen.height);
 
-		var x = point.x;
-		var y = point.y;
-
+		let p = {x: point.x, y: point.y};
 		if (!this.comparator(this.origPixel)) {
 			//default object of width 40
-			return { top: this.toGlobalPointXY(x, y - 20), left: this.toGlobalPointXY(x - 20, y),
-                bottom: this.toGlobalPointXY(x, y + 20), right: this.toGlobalPointXY(x + 20, y) }
+			return { top: this.toGlobalPointXY(p.x, p.y - 20), left: this.toGlobalPointXY(p.x - 20, p.y),
+                bottom: this.toGlobalPointXY(p.x, p.y + 20), right: this.toGlobalPointXY(p.x + 20, p.y) }
 		}
 
         let counter = 0;
-		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
-			x += 2;
-			counter++;
-		}
-		if (counter >= dimensionSize) return null;
-		counter = 0;
-		var right = this.toGlobalPointXY(x, y);
-		x = point.x;
+		const _this = this;
+        function progress(variable, stepSize) {
+            while (_this.getAreaStamp(p.x, p.y) === 15 && counter < dimensionSize) {
+                p[variable] += stepSize;
+                counter++;
+            }
+            let ok = counter < dimensionSize;
+            counter = 0;
+            return ok;
+        }
 
-		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
-			x -= 2;
-            counter++;
-		}
-        if (counter >= dimensionSize) return null;
-        counter = 0;
-		var left = this.toGlobalPointXY(x, y);
-		x = point.x;
+		if (!progress("x", 2)) return null;
+		let right = this.toGlobalPointXY(p.x, p.y);
+		p.x = point.x;
 
-		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
-			y += 2;
-            counter++;
-		}
-        if (counter >= dimensionSize) return null;
-        counter = 0;
-		var bottom = this.toGlobalPointXY(x, y);
+        if (!progress("x", -2)) return null;
+        let left = this.toGlobalPointXY(p.x, p.y);
+		p.x = point.x;
 
-		y = point.y;
-		while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
-			y -= 2;
-            counter++;
-		}
-        if (counter >= dimensionSize) return null;
-		var top = this.toGlobalPointXY(x, y);
+        if (!progress("y", 2)) return null;
+		let bottom = this.toGlobalPointXY(p.x, p.y);
+		p.y = point.y;
+
+        if (!progress("y", -2)) return null;
+        let top = this.toGlobalPointXY(p.x, p.y);
 
 		//if too small, discard
 		if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;
@@ -1355,7 +1345,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 
     /*async*/ createOutline(eventPosition) {
         this._beforeAutoMethod();
-        if (!this.changeTile(eventPosition)) {
+        if (!this.changeTile(eventPosition) || !this._running) {
             this._afterAutoMethod();
             return null;
         }
@@ -1364,10 +1354,9 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
         let dimensionSize = Math.max(screen.width, screen.height);
 
         let points = [];
-        const _this = this;
 
-        var x = eventPosition.x;  // current x position
-        var y = eventPosition.y;  // current y position
+        let x = eventPosition.x;  // current x position
+        let y = eventPosition.y;  // current y position
 
         if (!this.comparator(this.origPixel)) {
             console.warn("Outline algorithm exited: outside region.");
@@ -1423,8 +1412,6 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
         let oldDirection = direction;
         counter = 0;
         while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 40) {
-
-
             if (this.isValidPixel(first_point)) {
                 let left = turns[leftDirMapping[direction]];
                 first_point.x += left[0]*2;
@@ -1510,15 +1497,15 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 		}
 
 		// get position on a current tile
-		var x = eventPosition.x - this._currentTile.position.x;
-		var y = eventPosition.y - this._currentTile.position.y;
+		let x = eventPosition.x - this._currentTile.position.x;
+		let y = eventPosition.y - this._currentTile.position.y;
 
 		// get position on DZI tile (usually 257*257)
         let canvasCtx = this._currentTile.canvasContext();
-		var relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
-		var relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
+		let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
+		let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
 
-        // var pixel = new Uint8Array(4);
+        // let pixel = new Uint8Array(4);
         // let gl = this._renderEngine.gl;
         // gl.readPixels(relative_x, relative_y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
         // return pixel;
@@ -1530,7 +1517,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 	//  |x|x|x|   --> returns  0011 -> 0*8 + 1*4 + 1*2 + 0*1 = 6, bottom right & left pixel inside
 	//  |x|x|x|
 	getAreaStamp(x, y) {
-		var result = 0;
+		let result = 0;
 		if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y - 1))) {
 			result += 8;
 		}

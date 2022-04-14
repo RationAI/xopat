@@ -12,7 +12,10 @@ class HistovisoExplain  {
     //delayed after OSD initialization is finished...
     pluginReady() {
         const _this = this;
-        USER_INTERFACE.MainMenu.append("Neural Network (NN) inspector", "", "Waiting for the server...", "feature-maps", this.id);
+        USER_INTERFACE.MainMenu.append("Neural Network (NN) inspector",
+            `<span class="material-icons pointer" id="show-histoviso-board" title="Show board" 
+style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>`,
+            "Waiting for the server...", "feature-maps", this.id);
         this.fetchParameters("/histoviso-explain/available-expl-methods").then(
             data => {
                 _this._init(data);
@@ -21,12 +24,39 @@ class HistovisoExplain  {
             console.error(e);
             _this.createErrorMenu(`An error has occured while loading the plugin.`, e);
         });
+
+        this.context = OSDAnnotations.instance();
+        this.context.setModeUsed("CUSTOM");
+
+        this.inspect = new OSDAnnotations.Preset(Date.now(),
+            this.context.getAnnotationObjectFactory("_histoviso-network_inspector"));
+        this.measure = new OSDAnnotations.Preset(Date.now(),
+            this.context.getAnnotationObjectFactory("_histoviso-explain-explorer"));
+    }
+
+    setMode(node, otherNode, mode) {
+        let tool = this[mode];
+        if (!tool) return;
+        if (this.context.getPreset() == tool) {
+            this.context.setPreset(this._cachedTool);
+            delete this._cachedTool;
+            node.setAttribute('aria-selected', false);
+            return;
+        }
+        this._cachedTool = this.context.setPreset(tool);
+        node.setAttribute('aria-selected', true);
+        otherNode.setAttribute('aria-selected', false);
     }
 
     createMenu(notification=undefined) {
         let targetSetup = "";
         // if (APPLICATION_CONTEXT.setup.background.length > 1) {
-        targetSetup = `<br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
+        targetSetup = `<br><br>
+Use Alt+Left Mouse button to draw region of interest.<br>
+<button class="btn" onclick="${this.id}.setMode(this, this.nextElementSibling , 'inspect');">Inspect</button>
+<button class="btn" onclick="${this.id}.setMode(this, this.previousElementSibling, 'measure');">Measure</button>
+
+<br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
 onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(this.value);'>`;
         var name;
         for (let i = APPLICATION_CONTEXT.setup.background.length-1; i >= 0; i--) {
@@ -128,8 +158,8 @@ name="method-selection">${options.join('')}</select><div id="method-specifier"><
         let _this = this,
             container = $("#model-setup"),
             method_select = $("#method-selection");
-        this._ownExplorer.active = false;
-        this._ownRenderer.active = false;
+        this.inspect.objectFactory.active = false;
+        this.measure.objectFactory.active = false;
 
         if (!this.model_list.hasOwnProperty(model)) {
             if (fetches) {
@@ -175,8 +205,8 @@ ${options.join('')}</select><div id="feature-map-specifier"></div>`);
             this.updateFeatureMaps(model, first);
         }
 
-        this._ownExplorer.active = true;
-        this._ownRenderer.active = true;
+        this.measure.objectFactory.active = true;
+        this.inspect.objectFactory.active = true;
     }
 
     updateFeatureMaps(model, layer) {
@@ -251,13 +281,6 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
     _init(setupData) {
         //todo add annotation objects at runtime to avoid interaction in failure
 
-        //Requires Annotations plugin
-        let annotationPlugin = PLUGINS.each[PLUGINS.each[this.id].requires];
-        if (!annotationPlugin || !annotationPlugin.loaded) {
-            this.createErrorMenu("The Annotations plugin is required: please, reload with the plugin as active.");
-            return;
-        }
-
         let notification = "";
         let params = this.params;
         if (params) {
@@ -276,9 +299,6 @@ experiment is '${params.experimentId}'.`);
 
         if (!notification) notification = "Experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
         this._initParamParsers();
-        this._annotationPlugin = annotationPlugin.instance;
-        this._ownRenderer = this._annotationPlugin.getAnnotationObjectFactory("image");
-        this._ownExplorer = this._annotationPlugin.getAnnotationObjectFactory("histoviso-explain-explorer");
 
         this.createMenu(notification);
         //todo check structure?
@@ -289,11 +309,11 @@ experiment is '${params.experimentId}'.`);
     }
 
     reSendRequest() {
-        this._ownRenderer.reSendRequest();
+        this.inspect.objectFactory.reSendRequest();
     }
 
     reRenderSelectedObject() {
-        this._ownRenderer.reRenderSelectedObject();
+        this.inspect.objectFactory.reRenderSelectedObject();
     }
 
     _initParamParsers() {
@@ -473,8 +493,8 @@ experiment is '${params.experimentId}'.`);
 
         this.viaGL.prepare(["_not_used_"], () => {
             _this.viaGL.init(1, 1);
-            this._ownRenderer.setContext(_this.viaGL, _this);
-            this._ownExplorer.setContext(_this);
+            this.inspect.objectFactory.setContext(_this.viaGL, _this);
+            this.measure.objectFactory.setContext(_this);
         });
     }
 }

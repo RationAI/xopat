@@ -23,6 +23,7 @@
 #annotations-right-click:hover .quick_selection {
   display: block;
 }
+
 #annotations-right-click .quick_selection {
   position: absolute;
   display: none;
@@ -34,7 +35,6 @@
   top: 33px;
   z-index: 21;
 }
-
 
 #annotations-left-click:hover .quick_selection {
   display: block;
@@ -56,20 +56,6 @@
   border-color: var(--color-border-warning) !important;
   border-style: solid !important;
   margin: 2px !important;
-}
-
-/* TODO unused? */
-#input_form {
-  display: none;
-  left: 5px;
-  position: fixed;
-  z-index: 999999;
-  height: max-content;
-  width: max-content;
-  background: #fff;
-  border: 1px solid #000;
-  border-radius: 5px;
-  padding: 10px;
 }
 
 #annotation-status-bar {
