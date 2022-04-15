@@ -522,7 +522,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_
             prerequisites: [],
 
             show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
-                if (USER_INTERFACE.Errors.active) return;
+                if (USER_INTERFACE.Errors.active || this.running) return;
 
                 $("#tutorials-container").removeClass("d-none");
                 $("#viewer-container").addClass("disabled");
@@ -531,6 +531,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_
                 USER_INTERFACE.MainMenu.close();
                 USER_INTERFACE.Tools.close();
                 USER_INTERFACE.AdvancedMenu.close();
+                this.running = true;
             },
 
             hide: function() {
@@ -544,6 +545,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_
                     USER_INTERFACE.MainMenu.open();
                     USER_INTERFACE.Tools.open();
                 }
+                this.running = false;
                 document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
             },
 
@@ -574,6 +576,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_
                 enjoyhintInstance.set(this.steps[index]);
                 this.hide();
                 enjoyhintInstance.run();
+                this.running = false;
             }
         }
     };

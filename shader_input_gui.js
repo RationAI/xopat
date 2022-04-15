@@ -1,3 +1,4 @@
+//Not used for now, was meant to configure shader params/inputs in GUI layout (clickable setup)
 var PredefinedShaderControlParameters = {
 
     _text: function(cls, placeholder, funToCall, ofType, paramName) {

@@ -14,6 +14,7 @@ OSDAnnotations.Preset = class {
         if (this.objectFactory === undefined) {
             console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
                 "No factory for such object available.");
+            this.objectFactory = factoryGetter("polygon"); //rely on polygon presence
         }
         this.comment = parsedObject.comment;
         this.color = parsedObject.color;
@@ -65,7 +66,7 @@ OSDAnnotations.PresetManager = class {
         this.left = undefined;
         this.right = undefined;
         this._colorSteps = 8;
-        this._colorStep = 0;
+        this._colorStep = 1;
     }
 
     /**

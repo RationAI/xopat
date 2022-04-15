@@ -598,7 +598,7 @@ EOF;
         echo '{
         \'next #panel-shaders\' : \'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be conrolled here.\'
 }, {
-        \'click #shaders-pin\' : \'Click on the pin to set <br>this controls subpanel to be always visible.\'
+        \'click #shaders-pin\' : \'Click to set <br>this controls subpanel to be always visible.\'
 }, {
         \'next #shaders\' : \'In case multiple different visualisations <br>are set, you can select <br>which one is being displayed.\'
 }, {
@@ -608,6 +608,10 @@ EOF;
 
     echo <<<EOF
 {
+        'next #copy-url' : 'Your setup can be shaded with a link.'
+},{
+        'next #global-export' : 'You can share also a file: this option <br>includes (most) plugins data too.'
+},{
         'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
 }]
 EOF; //end of the first argument of Tutorials.add()
@@ -721,36 +725,42 @@ EOF;
 
         //todo article!!! also acceleration!
         VIEWER.addHandler('key-up', function(e) {
-            if (!e.focusCanvas) return;
-            let zoom = null,
-                speed = 0.3;
-            switch (e.key) {
-                case "Down": // IE/Edge specific value
-                case "ArrowDown":
-                    adjustBounds(0, speed);
-                    break;
-                case "Up": // IE/Edge specific value
-                case "ArrowUp":
-                    adjustBounds(0, -speed);
-                    break;
-                case "Left": // IE/Edge specific value
-                case "ArrowLeft":
-                    adjustBounds(-speed, 0);
-                    break;
-                case "Right": // IE/Edge specific value
-                case "ArrowRight":
-                    adjustBounds(speed, 0);
-                    break;
-                case "+":
-                    zoom = VIEWER.viewport.getZoom();
-                    VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                    return;
-                case "-":
-                    zoom = VIEWER.viewport.getZoom();
-                    VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                    return;
-                default:
-                    return; // Quit when this doesn't handle the key event.
+            if (e.focusCanvas) {
+                let zoom = null,
+                    speed = 0.3;
+                switch (e.key) {
+                    case "Down": // IE/Edge specific value
+                    case "ArrowDown":
+                        adjustBounds(0, speed);
+                        break;
+                    case "Up": // IE/Edge specific value
+                    case "ArrowUp":
+                        adjustBounds(0, -speed);
+                        break;
+                    case "Left": // IE/Edge specific value
+                    case "ArrowLeft":
+                        adjustBounds(-speed, 0);
+                        break;
+                    case "Right": // IE/Edge specific value
+                    case "ArrowRight":
+                        adjustBounds(speed, 0);
+                        break;
+                    case "+":
+                        zoom = VIEWER.viewport.getZoom();
+                        VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
+                        return;
+                    case "-":
+                        zoom = VIEWER.viewport.getZoom();
+                        VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
+                        return;
+                    default:
+                        return; // Quit when this doesn't handle the key event.
+                }
+            }
+
+            if (e.key === 'Escape') {
+                USER_INTERFACE.AdvancedMenu.close();
+                USER_INTERFACE.Tutorials.hide();
             }
         });
     }

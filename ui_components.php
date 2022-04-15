@@ -299,7 +299,7 @@ ${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
             icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
             return `<input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
 class="panel-menu-input ${pluginId}" onclick="
-for (let ch of document.getElementById('${this.uid}-body').childNodes) {console.log(document.getElementById('${this.uid}-body'));ch.style.display = 'none'}
+for (let ch of document.getElementById('${this.uid}-body').childNodes) {ch.style.display = 'none'}
 document.getElementById('${id}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
 head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${pluginId} ${this.borderClass}
 panel-menu-label" data-animation="popIn">${icon}${title}</label>`;

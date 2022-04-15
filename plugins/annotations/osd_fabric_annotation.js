@@ -49,7 +49,7 @@ class AnnotationsGUI {
 			"Annotations",
 			`
 <span class="material-icons pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
-<span class="material-icons pointer" title="Export annotations" style="float: right;" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
+<span class="material-icons pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
 <span class="material-icons pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
 <span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
 			`
@@ -81,7 +81,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		//Rewrite mode property so that it gives us the html controls we want
 		let fftMode = this.context.Modes.FREE_FORM_TOOL;
-		fftMode.customHtml = this.freeFormToolControls;
+		fftMode.customHtml = this.freeFormToolControls.bind(this);
 		//FFt handlers
 		this.context.addHandler('free-form-tool-mode-add', function (e) {
 			if (e.isModeAdd) $("#fft-mode-add-radio").prop('checked', true);
@@ -97,18 +97,12 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			this.id, "Annotations Plugin Overview", "get familiar with the annotations plugin", "draw", [
 			{
 				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
-			}, {
-				"next #window-manager": "Annotation board is useful for existing objects management.<br> You can control the board window in the window manager."
 			},{
-				"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all plugin controls and hotkeys."
-			},{
-				"next #downloadAnnotation": "Here you can download <b>just</b> your annotations.<br>This is included automatically when using global `Export` option."
-			},{
-				"click #annotations-panel-pin": "Click on the pin to keep visible all controls."
+				"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
 			},{
 				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by mouse hover."
 			},{
-				"click #annotations-right-click": "Click on one of these buttons to open <b>Presets dialog window</b>."
+				"click #annotations-right-click": "Click on one of these buttons<br>to open <b>Presets dialog window</b>."
 			},{
 				"next #preset-no-0": "This is an example of an annotation preset."
 			},{
@@ -117,90 +111,83 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				"click #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
 			},{
 				"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
-			},{
+			}, {
 				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 			},{
-				"next #annotation-mode": "Apart from the default, navigation mode, you can switch to different annotation modes here. Modes are closely described in other tutorials."
+				"click #annotations-tool-bar-input-header + label": "Click here to open the annotations toolbar.<br> If it's opened, click anyway :)"
+			},{
+				"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
 			}]
 		);
 
-		//todo bit dirty...
-		let pluginOpener = (function() {let pin = document.getElementById("annotations-panel-pin"); if (pin) pin.click()});
 		PLUGINS.addTutorial(
 			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
 				{
-					"next #sensitivity-auto-outline": "You have to select what data you want to annotate.<br> Then, automatic annotation can be created by a double-click."
-				},
-				{
-					"next #annotations-left-click": "If you use POLYGON and click on empty space, the plugin will tell you.<br>Creation migh also fail - you can try adjusting ZOOM level or clicking on a different spot."
-				},
-				{
-					"next #annotations-left-click": "Rectangle and ellipse will try to fit the data in layer you selected, <br> but if you click somewhere without data, instead of failure a default-size object<br> will be created."
-				},
-				{
-					"next #inner-panel-content-1": "It is a good idea to limit threshold values: selected regions will be smaller with higher thresholds."
-				},
-				{
+					"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click allows you to<br>automatically annotate regions."
+				}, {
+					"next #mode-custom-items": "This select specifies which layer will be annotated.<br>For now, it is not possible in the tissue itself."
+				}, {
+					"next #panel-shaders": "When you double-click on the canvas,<br>all close parts of the selected layer will be outlined.<br>It is therefore a good idea to first apply some threshold."
+				}, {
+					"next #annotations-left-click": "If you use POLYGON, the outline will fit perfectly,<br>but click outside a region is ignored.<br>Creation might also fail - you can try adjusting ZOOM level<br>or clicking on a different spot."
+				}, {
+					"next #annotations-left-click": "Rectangle and ellipse will try to fit the data in layer you selected, <br> but if you click somewhere without data, a default-size object will be created."
+				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			], pluginOpener
+			]
 		);
 
 		PLUGINS.addTutorial(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #annotation-mode": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
-				},
-				{
-					"next #annotations-left-click": "If you use POLYGON you can click or drag mouse to create its vertices.<br> For now, polygon will be finished if you change mode, so releasing Alt key is a good way to go."
-				},
-				{
-					"next #annotations-left-click": "Rectangle and ellipse will be created by click-drag movement."
-				},
-				{
+					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
+				}, {
+					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release Alt key)."
+				}, {
+					"next #annotations-left-click": "Rectangle and ellipse can be created by a drag."
+				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			], pluginOpener
+			]
 		);
 
 		PLUGINS.addTutorial(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
-					"next #annotation-mode": "You need to be in free form tool. We recommend using 'Left Shift' key <br> instead of setting this manually."
-				},
-				{
+					"click #fft-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
+				}, {
 					"next #viewer-container": "Hold Left Shift while drawing on a canvas<br>(by a mouse button which has assigned any preset)."
-				},
-				{
-					"next #bord-for-annotations": "Your last-created annotation should be now highlighted."
-				},
-				{
-					"next #viewer-container": "Selected object can be appended to (Left Shift only) or removed from (Left Shift + Left Alt)."
-				},
-				{
-					"next #viewer-container": "Now you can try it out."
+				}, {
+					"next #fft-mode-add-radio + label": "Selected object can be appended to (Left Shift only) ..."
+				}, {
+					"next #fft-mode-remove-radio + label": "... or removed from (Left Shift + Left Alt)."
+				}, {
+					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
+				},{
+					"next #viewer-container": "Now you can try it out.<br>Note that key shortcuts do not work<br>when the mode is selected manually."
 				}
-			], pluginOpener
+			]
 		);
 
 		PLUGINS.addTutorial(
-			this.id, "Annotations Board", "annotations management", "dashboard_customize", [
+			this.id, "Other UI Controls", "annotations management", "dashboard_customize", [
 				{
-					"next #viewer-container": "First, make sure you have some annotation created. If not, make one now."
+					"next #viewer-container": "There are much more features included."
 				},
 				{
-					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>But you can use some features even on the canvas itself."
+					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>The board opens in a separate window.<br>It allows you to edit annotations."
 				},
 				{
-					"next #viewer-container": "A history cache will allow you to undo few last modifications.<br> Shortcut is Ctrl+Z (or use the board menu)."
+					"next #viewer-container": "A history is also available.<br> Shortcut is undo:Ctrl+Z and redo:Ctrl+Shift+Z<br>(or use the annotation board)."
 				},
 				{
-					"next #viewer-container": "Use Ctrl+Shift+Z to revert (redo, or use the board menu button)."
+					"click #annotations-cloud": "Click here to open export options."
 				},
 				{
-					"next #viewer-container": "If you want to modify some object, click on the pencil icon within the board window.<br> The board will turn red to notify you navigation is disabled."
-				}
-			], pluginOpener
+					"next #gui_annotations": "Apart from file exports/imports, you can also use shared annotations if available."
+				},
+			]
 		);
 	}
 
@@ -237,6 +224,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	freeFormToolControls() {
 		let modeRemove = this.context.modifyTool.modeAdd ? "" : "checked";
 		let modeAdd = this.context.modifyTool.modeAdd ? "checked" : "";
+
+		console.log(this.id);
 
 		return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush used to modify annotations areas.">Brush radius:</span>
         <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}" style="height: 22px; width: 60px;">
@@ -559,7 +548,6 @@ ${this.presetExportControls()}
 			this._server + "?Annotation=load/" + id,
 			null,
 			function(json) {
-				console.log(json);
 				_this.context.loadFromJSON(json.annotations);
 				$('#preset-modify-dialog').remove();
 				_this.context.presets.import(json.presets);
@@ -579,8 +567,6 @@ ${this.presetExportControls()}
 
 	updateAnnotation(id) {
 		const _this = this;
-		console.log(this.getFullExportData());
-
 		this._fetchWorker(
 			this._server,
 			{
