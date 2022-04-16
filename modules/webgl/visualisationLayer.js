@@ -91,7 +91,7 @@ WebGLModule.VisualisationLayer = class {
                 this.__mode = "blend";
             }
         }
-        this.setFilters(options);
+        this.resetFilters(options);
         this._buildControls(options);
     }
 
@@ -395,17 +395,30 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * Set filter value
+     * @param filter filter name
+     * @param value value of the filter
+     */
+    setFilterValue(filter, value) {
+        if (!this.constructor.filterNames.hasOwnProperty(filter)) {
+            console.error("Invalid filter name.", filter);
+            return;
+        }
+        this.storeProperty(filter, value);
+    }
+
+    /**
      * Can be used to re-set filters for a shader
      * @param options filters configuration, currently supported are
      *  'use_gamma', 'use_exposure', 'use_logscale'
      */
-    setFilters(options) {
+    resetFilters(options) {
         this.__scalePrefix = [];
         this.__scaleSuffix = [];
         let THIS = this.constructor;
         for (let key in options) {
             if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
-                let value = options[key];
+                let value = this.loadProperty(key, options[key]);
                 let filter = THIS.filters[key](this.toShaderFloatString(value, "1.0"));
                 this.__scalePrefix.push(filter[0]);
                 this.__scaleSuffix.push(filter[1]);

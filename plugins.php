@@ -13,22 +13,12 @@ foreach (array_diff(scandir(PLUGINS_FOLDER), array('..', '.')) as $_=>$dir) {
             if (!isset($MODULES[$modId])) {
                 $data->error = "The plugin requires unknown module.";
                 break;
+            } else if (isset($MODULES[$modId]->error)) {
+                $data->error = "Dependency module is invalid: " . $MODULES[$modId]->error;
+                break;
             }
         }
         $PLUGINS[$data->id] = $data;
     }
 }
-
-//resolve dependencies
-foreach ($PLUGINS as $id=>$plugin) {
-    if (!isset($plugin->priority)) {
-        scanDependencies($PLUGINS, $id, 'plugins');
-    }
-}
-
-uasort($PLUGINS, function($a, $b) {
-    //ascending
-    return $a->priority - $b->priority;
-});
-
 ?>

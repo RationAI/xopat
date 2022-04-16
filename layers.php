@@ -43,8 +43,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             //called only if everything is fine
             USER_INTERFACE.Errors.hide(); //preventive
 
-            // TODO Re-fetching data not necessary as we always fetch all the data of given visualization
-            //re-fetch data
+            //Re-fetching data not necessary as we always fetch all the data of given visualization
             // var activeData = ""; //don't set this globally :(
             // let data = seaGL.dataImageSources();
             // if (data !== activeData) {
@@ -242,7 +241,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer = function(layerId) {
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
-            let useBlend = viz.shaders[layerId].params.use_mode === "blend"; //todo remporary since we have now only two modes
+            let useBlend = viz.shaders[layerId].params.use_mode === "blend";
             viz.shaders[layerId].params.use_mode = useBlend ? "show" : "blend";
             viz.shaders[layerId].error = "force_rebuild"; //error will force reset
             seaGL.reorder(null); //force to re-build
@@ -255,9 +254,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
             //store to the configuration
-            //todo cache instead? so that it can be re-set
-            viz.shaders[layerId].params[filter] = value;
-            viz.shaders[layerId]._renderContext.setFilters(viz.shaders[layerId].params);
+            viz.shaders[layerId].setFilterValue(filter, value);
+            viz.shaders[layerId]._renderContext.resetFilters(viz.shaders[layerId].params);
             seaGL.reorder(null); //force to re-build
         } else {
             console.error("Invalid layer: bad initialization?");

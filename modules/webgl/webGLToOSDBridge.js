@@ -5,7 +5,7 @@
 * Based on OpenSeadragonGL plugin
 * https://github.com/thejohnhoffer/viaWebGL
 *
-* NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... TODO revise API
+* NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
 */
 
 OpenSeadragon.BridgeGL = class {
@@ -352,8 +352,6 @@ OpenSeadragon.BridgeGL = class {
         if (this.hasImageAssigned(e.tiledImage) && !e.tile.webglId) {
             e.tile.webglId = this.uid;
             e.tile.webglRefresh = 0; // -> will draw immediatelly
-            //todo try using OSD image cache instead
-
             //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement('canvas');
             canvas.width = e.tile.sourceBounds.width;
@@ -426,7 +424,7 @@ OpenSeadragon.BridgeGL = class {
             if (this.webglRefresh <= _context.upToDateTStamp) {
                 this.webglRefresh = _context.upToDateTStamp + 1;
 
-                //todo keep?
+                //todo might not be necessary
                 _context.webGLEngine.setDimensions(this._dim.width, this._dim.height);
 
                 // Render a webGL canvas to an input canvas using cached version

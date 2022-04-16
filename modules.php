@@ -36,7 +36,7 @@ function scanDependencies($itemList, $id, $contextName) {
         if (!isset($itemList[$dependency]->priority)) {
             $valid &= scanDependencies($itemList, $dependency, $contextName);
         } else if ($itemList[$dependency]->priority == -1) {
-            //todo unwind recurse and invalidate all...
+            //maybe we could unwind recurse and invalidate all...
             $item->error = "Found cyclic dependency in $contextName: $id->$dependency";
             return false;
         }

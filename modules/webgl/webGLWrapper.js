@@ -471,22 +471,21 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         let input = document.getElementById(`test-${this.uniqueId}-webgl-input`);
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
-        //TODO using directly IO data results in loss of rendering capabilities --> re-render?
-        // if (!this._icanvas) this._icanvas = document.createElement("canvas");
-        // if (!this._ocanvas) this._ocanvas = document.createElement("canvas");
-        // let ictx = this._icanvas.getContext('2d');
-
         input.innerHTML = "";
         input.append(inputData);
+
         if (outputData) {
             output.innerHTML = "";
-            output.append(outputData);
+            if (!this._ocanvas) this._ocanvas = document.createElement("canvas");
+            this._ocanvas.width = outputData.width;
+            this._ocanvas.height = outputData.height;
+            let octx = this._ocanvas.getContext('2d');
+            octx.drawImage(outputData, 0, 0);
+            output.append(this._ocanvas);
         } else {
             output.innerHTML = "No output!";
         }
     }
-
-    _copy
 
     _buildFailed(visualisation, error) {
         console.error(error);
@@ -595,7 +594,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 
     _updateRequiredDataSources(vis) {
-        //todo for now just request all data, later decide in the context on what to really send
+        //for now just request all data, later decide in the context on what to really send
+        //might in the future decide to only request used data, now not supported
         let usedIds = new Set();
         for (let key in vis.shaders) {
             if (vis.shaders.hasOwnProperty(key)) {
@@ -718,7 +718,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 }
 
-/**Not a part of API, static functionality to process polygons**/
+/**Not a part of API, static functionality to process polygons, not yet implemented.**/
 WebGLModule.Rasterizer = class {
     constructor() {
         this.canvas = document.createElement("canvas");

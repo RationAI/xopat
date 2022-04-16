@@ -35,8 +35,8 @@
             window.onunload = function () {
                 for (let key in _this._modals) {
                     if (_this._modals.hasOwnProperty(key)) {
-                        let context = _this._modals[key];
-                        context.window.close();
+                        let context = _this._modals[key].context;
+                        if (context && context.window) context.window.close();
                         _this._destroyModalWindow(key, context);
                     }
                 }
@@ -124,7 +124,7 @@
         openEditor: function(parentId, title, inputText, language, onSave) {
             if (this.getModalContext(parentId)) {
                 console.log("Modal window with id '" + parentId + "' already exists. Using the window.");
-                this._modals[parentId]._clbck = onSave;
+                this._modals[parentId].callback = onSave;
                 return;
             }
 
@@ -160,7 +160,7 @@ const onCreated = (_editor) => {
 const save = () => {
     let Diag = window.opener.Dialogs;
     try {
-         Diag._modals['${parentId}']._clbck(editor.getValue());
+         Diag._modals['${parentId}'].callback(editor.getValue());
     } catch(e) {
          Diag.warn("Could not save the code.", 3500, Diag.MSG_ERR);
     }
@@ -185,9 +185,7 @@ window.addEventListener("beforeunload", (e) => {
 }, false);
 <\/script>
             <div id="container" style="width:100%; height:100%;"></div>`,
-            'width=600,height=450');
-            //todo window might fail to open :/
-            if (this._modals[parentId]) this._modals[parentId]._clbck = onSave;
+            'width=600,height=450', onSave);
         },
 
         /**
@@ -201,7 +199,8 @@ window.addEventListener("beforeunload", (e) => {
          */
         getModalContext: function(id) {
             let ctx = this._modals[id];
-            if (!ctx) return undefined;
+            if (!ctx || !ctx.context) return undefined;
+            ctx = ctx.context;
 
             //for some reason does not work without checking 'opener' while inspector closed
             if (!ctx.window || !ctx.opener || !ctx.self) {
@@ -229,34 +228,36 @@ window.addEventListener("beforeunload", (e) => {
             }
             if (node) $(node).remove();
 
-            let ctx = this._modals[id];
-            if (ctx) {
-                if (ctx.window) ctx.window.close();
+            if (this._modals[id]) {
+                let ctx = this._modals[id].context;
+                if (ctx && ctx.window) ctx.window.close();
                 this._destroyModalWindow(id, ctx);
             }
             return true;
         },
 
-        _showCustomModalImpl: function(id, title, html, size='width=450,height=250') {
+        _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function () {}) {
             //can be called recursively from message popup, that's why we cache it
             if (html) this._cachedHtml = html;
             else html = this._cachedHtml;
             if (!html) return;
 
-            let win = this._openModalWindow(id, title, html, size);
-            if (!win) {
+            this._cachedCall = customCall;
+            let result = this._openModalWindow(id, title, html, size);
+            if (!result.context) {
                 this.show(`An application modal window '${title}' was blocked by your browser. <a onclick="
 Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide();" class='pointer'>Click here to open.</a>`,
                     15000, this.MSG_WARN);
             } else {
-                this._modals[id] = win;
+                result.callback = this._cachedCall;
+                this._modals[id] = result;
                 delete this._cachedHtml;
+                delete this._cachedCall;
             }
         },
 
         _openModalWindow: function(id, title, content, size) {
-            //todo clean up also object URL? or is it freed automatically? revokeURL...
-            return window.open(URL.createObjectURL(
+            let objUrl = URL.createObjectURL(
                 new Blob([`
 <!DOCTYPE html>
 <html lang="en">
@@ -278,13 +279,19 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
     ${content}
     </body>
 </html>
-`], { type: "text/html" })), id, size);
+`], { type: "text/html" }));
+            return {
+                context: window.open(objUrl, id, size),
+                objUrl,
+                id
+            };
         },
 
         _destroyModalWindow: function(id, context) {
             //important to clean up
-            let body = context.document.getElementById("body");
+            let body = context ? context.document.getElementById("body") : undefined;
             if (body) body.innerHTML = "";
+            URL.revokeObjectURL(this._modals[id].objUrl);
             delete this._modals[id];
         },
 
@@ -413,7 +420,6 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 if (PLUGINS.__toolsContext) {
                     PLUGINS.__toolsContext.context.style.width = width;
                 }
-                //todo settings menu
             }
         },
 
@@ -499,7 +505,6 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 <div id='plug-list-content-inner'></div>
 `, 'extension', false, true);
 
-                //todo disable feature of plugin dependency between themselves
                 this.__pBuilder = new UIComponents.Containers.RowPanel("plug-list-content-inner",
                     UIComponents.Elements.SelectableImageRow,
                     {multiselect: true, id: 'plug-list-content'});
@@ -541,7 +546,6 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             _settingsMenu() {
                 let inputs = UIComponents.Inputs;
                 let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
-                //todo what about non-string values...?!?
                 let updateOption = name => `APPLICATION_CONTEXT.setup.params['${name}'] = $(this).val();`;
                 let updateBool = name => `APPLICATION_CONTEXT.setup.params['${name}'] = this.checked;`;
                 return `

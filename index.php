@@ -16,11 +16,6 @@ function isFlagInProtocols($flag) {
     return (hasKey($_GET, $flag) ? $_GET[$flag] : (hasKey($_POST, $flag) ? $_POST[$flag] : false));
 }
 
-function letUserSetUp($image, $layer) {
-    header("Location: user_setup.php?image=$image&layer=$layer");
-    exit;
-}
-
 function throwFatalError($title, $description, $details) {
     session_start();
     $_SESSION['title'] = $title;
@@ -32,26 +27,13 @@ function throwFatalError($title, $description, $details) {
 
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
- *
- * todo rather use default visualization setup...
  */
 
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
-
-if (!$visualisation /*&& hasKey($_COOKIE, "visualisation")*/) {
-    $image = hasKey($_GET, "image") ? $_GET["image"] : (hasKey($_POST, "image") ? $_POST["image"] : false);
-    if (!$image) {
-        throwFatalError("No visualisation defined.",
-            "Visualisation was not defined and custom image source is missing. See POST data:",
-            print_r($_POST, true));
-    }
-    $layer = hasKey($_GET, "layer") ? $_GET["layer"] : (hasKey($_POST, "layer") ? $_POST["layer"] : false);
-    if (!$layer) {
-        throwFatalError("No visualisation defined.",
-            "Visualisation was not defined and custom data sources are missing. See POST data:",
-            print_r($_POST, true));
-    }
-    letUserSetUp($image, $layer);
+if (!$visualisation) {
+    throwFatalError("Invalid link.",
+        "The request has no setup data. See POST data:",
+        print_r($_POST, true));
 }
 
 /**
@@ -75,11 +57,10 @@ propertyExists($parsedParams, "data", "No image data available.",
     "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
     print_r($parsedParams, true));
 
-//todo make background voluntary parameter
-propertyExists($parsedParams, "background", "No data available.",
-    "JSON parametrization of the visualiser requires <i>background</i> object: a dictionary of data interpretation. This field is missing.",
-    print_r($parsedParams, true));
 
+if (!isset($parsedParams->background)) {
+    $parsedParams->background = array();
+}
 foreach ($parsedParams->background as $bg) {
     propertyExists($bg, "dataReference", "No data available.",
         "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
@@ -268,7 +249,6 @@ foreach ($MODULES as $_ => $mod) {
 
     <!--Modules-->
     <?php
-
     foreach ($MODULES as $_ => $mod) {
         if ($mod->loaded) {
             //add module style sheet if exists
@@ -350,7 +330,7 @@ EOF;
                 if ($layerVisible) {
                     echo '<label for="global-opacity">Layer Opacity: &nbsp;</label>
             <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;';
-                }
+                } else if (count($parsedParams->background) > 0)
                 echo <<<EOF
         </div> <!--end of general controls-->
         <div id="panel-images" class="inner-panel">   
@@ -440,7 +420,6 @@ EOF;
             permaLoadPlugins: true,
             theme: "auto"
         },
-        imageLayer: _ => undefined, //largest background image
         layersAvailable: false, //default
         settingsMenuId: "app-settings",
         pluginsMenuId: "app-plugins",
@@ -497,7 +476,8 @@ EOF;
             APPLICATION_CONTEXT.setup.plugins[id] = params;
         },
         imageSources: setup.data,
-        setDirty: () => {setup.dirty = true;}, //todo change not reflected..
+        //note that this does not work on page closing, just for button refreshing...
+        setDirty: () => {setup.dirty = true;},
         postData: <?php echo json_encode($_POST)?>,
         each: <?php echo json_encode((object)$PLUGINS)?>,
         _exportHandlers: []
@@ -550,7 +530,7 @@ EOF;
 
     if (!setup.params.hasOwnProperty("scaleBar") || setup.params.scaleBar) {
         VIEWER.scalebar({
-            pixelsPerMeter: 1e6, //todo from metadata!!!
+            pixelsPerMeter: (setup.params.microns ?? 1000) * 1e3,
             sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
             stayInsideImage: false,
             location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
@@ -582,7 +562,7 @@ EOF;
         echo '{
         \'next #general-controls\' : \'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.<br>You can control the data layer opacity here.\'
 },';
-    } else {
+    } else if (count($parsedParams->background) > 0) {
         echo '{
         \'next #panel-images\' : \'There are several background images available: <br> you can turn them on/off or blend using an opacity slider.\'
         
@@ -659,7 +639,6 @@ EOF;
         e.focusCanvas = focusOnViewer;
         VIEWER.raiseEvent('key-up', e);
     });
-    //todo register tile-load-failed and count invalid requests and if > 5 remove tile automatically...
 
     let failCount = new WeakMap();
     VIEWER.addHandler('tile-load-failed', function(e) {
@@ -678,7 +657,7 @@ EOF;
             }
             if (e.tiledImage._failedCount > 5) {
                 e.tiledImage._failedCount = 1;
-                //todo docs
+                //to-docs
                 e.worldIndex = index;
                 VIEWER.raiseEvent('tiled-image-problematic', e);
             }
@@ -855,7 +834,6 @@ form.submit();<\/script>`;
                 point: VIEWER.viewport.getCenter()
             };
             <?php
-            //todo move this to layers.php somehow
             if ($layerVisible) {
                 //we need to safely stringify setup (which has been modified by the webgl module)
                 echo "        let postData = JSON.stringify(setup, VIEWER.bridge.webGLEngine.jsonReplacer);";
@@ -939,11 +917,7 @@ ${constructExportVisualisationForm()}
         }
         $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">This plugin has been automatically
 removed: there was an error. <br><code>[${e}]</code></div>`);
-
-        //todo reload must refrehs VINDOW or plugins must declare themselves only unlsess they are not declared!!!
-        //if (!window.plugin) window.plugin = ...!!!!
         $(`#load-plugin-${id}`).html(`<button disabled class="btn">Failed</button>`);
-
         Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}<b> has been removed: there was an error.`,
             4000, Dialogs.MSG_ERR);
     }
@@ -1028,8 +1002,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
     /**
      * Load a script at runtime. Plugin is REMOVED from the viewer
      * if the script is faulty
-     * (todo maybe do not be so sctrict and just delete that plugin..? but remember this is used by online plugin integration)
-     * todo rewrite using promises
+     *
+     * Enhancement: use Premise API instead
      * @param pluginId plugin that uses particular script
      * @param src script URL
      * @param onload function to call on success
@@ -1115,7 +1089,6 @@ onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
         }
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer
-        //todo consider also data layers...?
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
         VIEWER.tools.referencedTileSource = VIEWER.world.getItemAt.bind(window.VIEWER.world, selectedImageLayer);
 
@@ -1248,7 +1221,8 @@ EOF;
 
         let successLoaded = function() {
             LOADING_PLUGIN = false;
-            //loaded after page load: TODO be cautious...
+
+            //loaded after page load
             if (!initializePlugin(PLUGINS.each[id].instance)) return;
             Dialogs.show(`Plugin <b>${PLUGINS.each[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
 
@@ -1263,29 +1237,28 @@ EOF;
             onload();
         };
         LOADING_PLUGIN = true;
-        //todo does not load plugin.requires - disable feature?
         chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
     };
 
-    //TODO not working
-    // function preventDirtyClose(e) {
-    //     e.preventDefault();
-    //         if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
-    //
-    //     if ( window.history.replaceState ) {
-    //         window.history.replaceState( null, null, window.location.href );
-    //     }
-    //
-    //
-    //     window.location = window.location.href;
-    //     return;
-    // }
-    //
-    // if (window.addEventListener) {
-    //     window.addEventListener('beforeunload', preventDirtyClose, true);
-    // } else if (window.attachEvent) {
-    //     window.attachEvent('onbeforeunload', preventDirtyClose);
-    // }
+    //TODO: also refresh page should not ask to re-send data -> redirect loop instead?
+    function preventDirtyClose(e) {
+        e.preventDefault();
+            if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+
+        if ( window.history.replaceState ) {
+            window.history.replaceState( null, null, window.location.href );
+        }
+
+
+        window.location = window.location.href;
+        return;
+    }
+
+    if (window.addEventListener) {
+        window.addEventListener('beforeunload', preventDirtyClose, true);
+    } else if (window.attachEvent) {
+        window.attachEvent('onbeforeunload', preventDirtyClose);
+    }
 
     /**
      * Refresh current page with all plugins and their data if export API used
@@ -1299,12 +1272,11 @@ EOF;
             return;
         }
 
-        //todo not working
-        // if (window.removeEventListener) {
-        //     window.removeEventListener('beforeunload', preventDirtyClose, true);
-        // } else if (window.detachEvent) {
-        //     window.detachEvent('onbeforeunload', preventDirtyClose);
-        // }
+        if (window.removeEventListener) {
+            window.removeEventListener('beforeunload', preventDirtyClose, true);
+        } else if (window.detachEvent) {
+            window.detachEvent('onbeforeunload', preventDirtyClose);
+        }
         $("body").append(APPLICATION_CONTEXT.UTILITIES.getForm(formData, includedPluginsList));
     };
 })(window);
@@ -1359,7 +1331,7 @@ Url's are probably invalid. <br><code>\${sources.join(", ")}</code>`, true);
 </script>
 EOF;
 
-    } else {
+    } else if (count($parsedParams->background) > 0) {
         echo <<<EOF
 <script type="text/javascript">
 

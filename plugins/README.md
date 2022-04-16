@@ -79,8 +79,6 @@ There is a deadlock (unless they are in the same file):
 This global variable contains a lot of useful references, functions require you to pass `pluginId` parameter so that in case of failure, your plugin can be safely removed from the application:
 - `osd` Instance of underlying OpenSeadragon
 - `seaGL` Instance of underlying OpenSeadragon GL library
-- `imageLayer` Instance of `TiledImage` - OSD Class, the tissue visualisation layer (0), use this layer for correct coordinates conversion (and other dimensionality-related tasks) if needed
-- `dataLayer` Instance of `TiledImage` - OSD Class, the data visualisation layer (1)
 - `addTutorial(pluginId, title, description, icon, steps)` - add tutorial series, icon is an identifier icon string from material design (google) icons, steps is an array of objects that define the tutorial, for more info see [how are steps defined](https://github.com/xbsoftware/enjoyhint).
 - `appendToMainMenu(title, titleHtml, html, id, pluginId)` - both this and following two functions below allow for insertion of `HTML` into the Main Panel
 - `appendToMainMenuRaw(html, id, pluginId)` - if you need more freedom, we recommend using one of the other two functions

@@ -167,7 +167,6 @@ UIComponents.Containers = {
             this.horizontal = true;
             this.fullbody = false;
             this.elements = [];
-            //todo split contruct/init phase? probably yes
             if (!this.context) throw "PanelMenu(): invalid initialization: container does not exist!";
             this._updateBorder();
         }
@@ -312,7 +311,7 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
         }
     },
 
-    //todo let creator own builder and just accept plain html
+    //Enhancement: let creator own builder and just accept plain html
     RowPanel: class {
         constructor(containerId, builder=UIComponents.Elements.ImageRow, builderOptions={}) {
             this.context = document.getElementById(containerId);
@@ -336,25 +335,6 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
         clear() {
             this.context.html("");
         }
-        //todo remove func
     },
-
-    // Columns: {
-    //     constructor(containerId, columns=2) {
-    //         this.context = document.getElementById(containerId);
-    //         this.uid = containerId;
-    //         if (!this.context) throw "Columns(): invalid initialization: container does not exist!";
-    //         this.context.innerHTML = `<div style="column-count: ${columns};"></div>`;
-    //         this.context = this.context.children[0];
-    //     }
-    //
-    //     set(html) {
-    //         this.context.append(html);
-    //     }
-    //
-    //     clear() {
-    //         this.context.html();
-    //     }
-    // }
 };
 </script>
