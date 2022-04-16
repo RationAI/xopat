@@ -120,7 +120,7 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
                 "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
                 shader.type(),".png'></div><div>");
 
-            let controls = shader.prototype.supports();
+            let controls = shader.prototype.defaultControls;
             for (let control in controls) {
                 html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
                     "class='position-relative'><span class='flex-1'>Control <code>",

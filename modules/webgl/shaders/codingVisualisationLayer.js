@@ -17,22 +17,18 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
     }
 
     static defaultControls = {
-        fs_define: {
+        fs: {
             default: {type: 'text_area', title: false,
-                placeholder: "Input GLSL that is not executed: define functions/globals.",
+                placeholder: "Input GLSL custom code.",
                 default: this._getDefaultFSDefine()},
             accepts: (type, instance) => type === "text"
         },
-        fs_execute: {
-            default: {type: 'text_area', title: false, placeholder: "Input GLSL into main() - executed.", default: "\n//no output\nreturn vec4(0);"},
-            accepts: (type, instance) => type === "text"
-        },
-        hints: {
-            default: {type: "bool", default: true, title: "Show hints"},
-            accepts: (type, instance) => type === "bool"
-        },
         submit : {
             default: {type: "button", title: "Render"},
+            accepts:  (type, instance) => type === "action"
+        },
+        editor : {
+            default: {type: "button", title: "Open Editor"},
             accepts:  (type, instance) => type === "action"
         }
     };
@@ -42,14 +38,15 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
     }
 
     getFragmentShaderDefinition() {
-        //fix this, not really reading the value from the control
-        return `
-${this._getUpdatedDefineHints()}
-
-vec4 render_${this.uid}() {
-    ${this._getUpdatedExecHints()}
+        let defined = this.loadProperty("fs", "");
+        if (!defined) {
+            return this.constructor._getDefaultFSDefine() + `
+vec4 render_${this.uid}() {` + this._getDefaultFSExecute() + `
+    return vec4(.0);
 }
 `;
+        }
+        return defined;
     }
 
     getFragmentShaderExecution() {
@@ -84,63 +81,41 @@ float filtered = ${this.filter("0.123456")};
 */`;
     }
 
-    _getUpdatedDefineHints() {
-        let defined = this.loadProperty("fs_define", "");
-        if (!defined) return this.showHints ? this.constructor._getDefaultFSDefine() : "";
-
-        if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
-            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this.constructor._getDefaultFSDefine() : "");
-        }
-        return (this.showHints ? this.constructor._getDefaultFSDefine() : "") + defined;
-    }
-
-    _getUpdatedExecHints() {
-        let defined = this.loadProperty("fs_execute", "");
-        if (!defined) return (this.showHints ? this._getDefaultFSExecute() : "") + "\nreturn vec4(.0);";
-
-        if (defined.match(WebGLModule.CodingLayer._commentsRegex)) {
-            return defined.replace(WebGLModule.CodingLayer._commentsRegex, this.showHints ? this._getDefaultFSExecute() : "");
-        }
-        return (this.showHints ? this._getDefaultFSExecute() : "") + defined;
-    }
-
     init() {
         const _this = this;
-        this.hints.init();
-        this.hints.on('hints', function (raw, encoded, ctx)  {
-            _this.showHints = raw === 1;
-            _this.storeProperty("fs_execute", _this._getUpdatedExecHints());
-            _this.storeProperty("fs_define", _this._getUpdatedDefineHints());
-            _this.fs_execute.init();
-            _this.fs_define.init();
-        });
-        this.showHints = this.hints.raw === 1;
-
-        this.storeProperty("fs_define", this._getUpdatedDefineHints());
-        this.fs_define.init();
-        this.storeProperty("fs_execute", this._getUpdatedExecHints());
-        this.fs_execute.init();
+        this.storeProperty("fs", this.getFragmentShaderDefinition());
+        this.fs.init();
         this.submit.init();
         this.submit.on('submit', function (raw, encoded, ctx)  {
             _this.build_shaders();
             _this.invalidate();
         });
+
+        this.editor.init();
+        this.editor.on('editor', function (raw, encoded, ctx)  {
+            //todo dialogs should not be used in webgl module :D
+            Dialogs.openEditor(
+                'test',
+                'Fragment Shader',
+                _this.getFragmentShaderDefinition(),
+                'glsl',
+                code => {
+                    _this.storeProperty("fs", code);
+                    //_this.fs.init(); //update UI?
+                    _this.build_shaders();
+                    _this.invalidate();
+                });
+        });
     }
 
     htmlControls() {
         return [
-            '<span class="blob-code"><span class="blob-code-inner pl-0">//here you can define GLSL</span></span>',
-            this.fs_define.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;height: 170px;"),
-            '<span class="blob-code"><span class="blob-code-inner pl-0">vec4 render() {</span></span>',
-            this.fs_execute.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;margin-left:5px;display: block; height: 170px;"),
-            '<span class="blob-code"><span class="blob-code-inner pl-0">}</span></span><br>',
-            this.hints.toHtml(false),
+            `<span class="blob-code"><span class="blob-code-inner pl-0">//the output of 'render_${this.uid}()' is rendered</span></span>`,
+            this.fs.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;height: 170px;"),
+            this.editor.toHtml(false, "style='float: left;'"),
             this.submit.toHtml()
         ].join("");
     }
-
-    //escaped: \/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/
-    static _commentsRegex = new RegExp('/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/');
 };
 
 WebGLModule.ShaderMediator.registerLayer(WebGLModule.CodingLayer);

@@ -186,6 +186,20 @@ WebGLModule.VisualisationLayer = class {
         }
     }
 
+    clearUiCallbacks() {
+        let controls = this.constructor.defaultControls,
+            html = [];
+        for (let control in controls) {
+            if (this.hasOwnProperty(control)) {
+                this[control].init();
+            }
+        }
+    }
+
+    _clearCallback(ui) {
+        ui.on
+    }
+
     /**
      * Get the shader UI controls
      * @return {string} HTML controls for the particular shader
@@ -840,20 +854,24 @@ WebGLModule.UIControls.IControl = class {
      * On parameter change register self
      * @param {string} event which event change
      * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
-     * @param {bool} silent whether to be silent on failure, default false, makes the developer to realize that
-     *      if used in init(...), it can be called multiple times and on(...) event might be already occupied
      */
-    on(event, clbck, silent=false) {
-        if (!this.__onchange.hasOwnProperty(event)) this.__onchange[event] = clbck;
-        else if (!silent) console.warn(`on() event already full for event '${event}': due to implementation reasons, only one callback is allowed at time.`);
+    on(event, clbck) {
+        this.__onchange[event] = clbck; //just re-write
     }
 
     /**
-     * Clear ALL events of the event type
+     * Clear events of the event type
      * @param {string} event type
      */
     off(event) {
         delete this.__onchange[event];
+    }
+
+    /**
+     * Clear ALL events
+     */
+    clearEvents() {
+        this.__onchange = {}
     }
 
     /**

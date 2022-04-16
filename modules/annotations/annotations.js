@@ -660,7 +660,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		mode.setFromAuto();
 		this.mode = mode;
-		//$(`#${mode.getId()}-annotation-mode`).prop('checked', true);
 	}
 
 	_setModeToAuto() {
@@ -668,12 +667,10 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
 		//must be early due to custom HTML controls that might be used later
-		//$("#mode-custom-items").html(this.Modes.AUTO.customHtml());
 		this.raiseEvent('mode-to-auto', {mode: this.Modes.AUTO});
 
 		this.mode.setToAuto();
 		this.mode = this.Modes.AUTO;
-		//$(`#${this.mode.getId()}-annotation-mode`).prop('checked', true);
 	}
 
 	_getModeByKeyEvent(e) {

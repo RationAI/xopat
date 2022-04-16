@@ -749,8 +749,9 @@ WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
 
     toHtml(breakLine=true, controlCss="") {
         let disabled = this.params.interactive ? "" : "disabled";
-        return `<button id="${this.id}" style="float: right;" class="btn"
-${disabled}></button><br style="clear: both;">`;
+        let css = controlCss ? controlCss : 'style="float: right;"';
+        return `<button id="${this.id}" ${css} class="btn" ${disabled}></button>
+${breakLine ? '<br style="clear: both;">' : ""}`;
     }
 
     define() {

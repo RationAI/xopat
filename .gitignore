@@ -5,5 +5,7 @@ webgl/shaders/**
 .idea/
 Thumbs.db
 
+external/monaco/*
+
 osd_debug/*
 !osd_debug/src

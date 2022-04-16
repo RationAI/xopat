@@ -110,12 +110,84 @@
          */
         showCustomModal: function(parentId, title, header, content) {
             if (this.getModalContext(parentId)) {
-                console.warn("Modal window " + title + " with id '" + parentId + "' already exists.");
+                console.error("Modal window " + title + " with id '" + parentId + "' already exists.");
                 return;
             }
 
             this._showCustomModalImpl(parentId, title, this._buildComplexWindow(true, parentId, header, content, '',
                 `style="width: 100%; height: 100%"`, {defaultHeight: "100%"}));
+        },
+
+        /**
+         * Open Monaco Editor
+         */
+        openEditor: function(parentId, title, inputText, language, onSave) {
+            if (this.getModalContext(parentId)) {
+                console.log("Modal window with id '" + parentId + "' already exists. Using the window.");
+                this._modals[parentId]._clbck = onSave;
+                return;
+            }
+
+            this._showCustomModalImpl(parentId, title, `
+<script type="text/javascript" src="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/external/monaco/loader.js"><\/script>
+<script type="text/javascript">
+require.config({
+  paths: { vs: "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/external/monaco" }
+});
+
+const DEFAULT_EDITOR_OPTIONS = {
+  value: \`${inputText}\`,
+  lineNumbers: "on",
+  roundedSelection: false,
+  ariaLabel: "${title}",
+  //accessibilityHelpUrl: "Nothing yet...",
+  readOnly: false,
+  theme: "hc-black",
+  language: "${language}",
+  scrollBeyondLastLine: false,
+  automaticLayout: true
+};
+function editorResize(editor){
+  editor.layout();
+}
+
+var editor;
+const onCreated = (_editor) => {
+  editor = _editor; //set global ref
+  editor.layout();
+}
+
+const save = () => {
+    let Diag = window.opener.Dialogs;
+    try {
+         Diag._modals['${parentId}']._clbck(editor.getValue());
+    } catch(e) {
+         Diag.warn("Could not save the code.", 3500, Diag.MSG_ERR);
+    }
+}
+
+//Creating the editor & adding Event listeners.
+require(["vs/editor/editor.main"], () => {
+  monaco.editor.onDidCreateEditor(onCreated);
+  monaco.editor.create(
+    document.getElementById("container"),
+    DEFAULT_EDITOR_OPTIONS
+  );
+});
+
+document.addEventListener('keydown', function (e) {
+    if (e.code === "KeyS" && e.ctrlKey) {
+       save();
+    }
+});
+window.addEventListener("beforeunload", (e) => {
+    save();
+}, false);
+<\/script>
+            <div id="container" style="width:100%; height:100%;"></div>`,
+            'width=600,height=450');
+            //todo window might fail to open :/
+            if (this._modals[parentId]) this._modals[parentId]._clbck = onSave;
         },
 
         /**
