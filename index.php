@@ -16,13 +16,21 @@ function isFlagInProtocols($flag) {
     return (hasKey($_GET, $flag) ? $_GET[$flag] : (hasKey($_POST, $flag) ? $_POST[$flag] : false));
 }
 
-function throwFatalError($title, $description, $details) {
-    session_start();
-    $_SESSION['title'] = $title;
-    $_SESSION['description'] = $description;
-    $_SESSION['details'] = $details;
-    header('Location: error.php');
-    exit;
+function throwFatalErrorIf($condition, $title, $description, $details) {
+    if ($condition) {
+        session_start();
+        $_SESSION['title'] = $title;
+        $_SESSION['description'] = $description;
+        $_SESSION['details'] = $details;
+        header('Location: error.php');
+        exit;
+    }
+}
+
+function ensureDefined($object, $property, $default) {
+    if (!isset($object->{$property})) {
+        $object->{$property} = $default;
+    }
 }
 
 /**
@@ -30,72 +38,48 @@ function throwFatalError($title, $description, $details) {
  */
 
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
-if (!$visualisation) {
-    throwFatalError("Invalid link.",
-        "The request has no setup data. See POST data:",
+throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
         print_r($_POST, true));
-}
 
 /**
  * Parsing: verify valid parameters
  */
 
-function propertyExists($data, $key, $errTitle, $errDesc, $errDetails) {
-    if (!isset($data->{$key})) {
-        throwFatalError($errTitle, $errDesc, $errDetails);
-    }
-}
-
 $parsedParams = json_decode($visualisation);
-if (!$parsedParams) {
-    throwFatalError("Invalid link.",
-        "The visualisation setup is not parse-able.", $visualisation);
-}
-$cookieCache = isset($_COOKIE["cache"]) && !isFlagInProtocols("ignoreCookiesCache") ? json_decode($_COOKIE["cache"]) : (object)[];
+throwFatalErrorIf(!$parsedParams, "Invalid link.", "The visualisation setup is not parse-able.", $visualisation);
 
-propertyExists($parsedParams, "data", "No image data available.",
-    "JSON parametrization of the visualiser requires <i>data</i> for each visualisation goal. This field is missing.",
-    print_r($parsedParams, true));
+$cookieCache = isset($_COOKIE["_cache"]) && !$parsedParams->params->bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 
+ensureDefined($parsedParams, "data", array());
+ensureDefined($parsedParams, "background", array());
+ensureDefined($parsedParams, "shaderSources", array());
+ensureDefined($parsedParams, "plugins", (object)array());
 
-if (!isset($parsedParams->background)) {
-    $parsedParams->background = array();
-}
 foreach ($parsedParams->background as $bg) {
-    propertyExists($bg, "dataReference", "No data available.",
+    throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
         "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
         print_r($parsedParams->background, true));
 
-    if (!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data)) {
-        throwFatalError("Invalid image.",
-            "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
-            "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
-    }
-}
-if (!isset($parsedParams->shaderSources)) {
-    $parsedParams->shaderSources = array();
+    throwFatalErrorIf(!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data),
+        "Invalid image.",
+        "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
+        "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
 }
 
 $layerVisible = isset($parsedParams->visualizations);
 $singleBgImage = count($parsedParams->background) == 1;
-$firstTimeVisited = !isset($_COOKIE["shadersPin"]);
-
-if (!isset($parsedParams->plugins)) {
-    $parsedParams->plugins = (object)array();
-}
+$firstTimeVisited = !isset($_COOKIE["_shadersPin"]);
 
 if ($layerVisible) {
-
     foreach ($parsedParams->visualizations as $visualisationTarget) {
         if (!isset($visualisationTarget->name)) {
             $visualisationTarget->name = "Custom Visualisation";
         }
-
-        propertyExists($visualisationTarget, "shaders", "No visualisation defined.",
+        throwFatalErrorIf(!isset($visualisationTarget->shaders), "No visualisation defined.",
             "You must specify non-empty <b>shaders</b> object.", print_r($visualisationTarget, true));
 
         foreach ($visualisationTarget->shaders as $data=>$layer) {
-            propertyExists($layer, "type", "No visualisation style defined for $layer->name.",
+            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
                 "You must specify <b>type</b> parameter.", print_r($layer, true));
 
             if (!isset($layer->name)) {
@@ -117,7 +101,7 @@ if ($layerVisible) {
 /**
  * Plugins+Modules loading: load required parts of the application
  */
-$pluginsInCookies = isset($_COOKIE["plugins"]) ? explode(',', $_COOKIE["plugins"]) : [];
+$pluginsInCookies = isset($_COOKIE["_plugins"]) ? explode(',', $_COOKIE["_plugins"]) : [];
 foreach ($PLUGINS as $_ => $plugin) {
     if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
         $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
@@ -139,7 +123,6 @@ foreach ($PLUGINS as $_ => $plugin) {
 }
 
 $visualisation = json_encode($parsedParams);
-$cookieCache = json_encode($cookieCache);
 $protoLayers = LAYERS_DEFAULT_PROTOCOL;
 $cookie_setup = JS_COOKIE_SETUP;
 
@@ -293,53 +276,59 @@ foreach ($MODULES as $_ => $mod) {
 <!-- Main Panel -->
 <span id="main-panel-show" class="material-icons pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
-<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="overflow-y: overlay; background: var(--color-bg-primary); width: 400px;">
+<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="background: var(--color-bg-primary); width: 400px;">
 
-    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: auto; scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
-        <span id="main-panel-hide" class="material-icons pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
-        <div id="navigator-container" class="inner-panel top-0 left-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
+    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
+        <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
+            <span id="main-panel-hide" class="material-icons pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
+
+            <!--TODO export also these values? -->
+            <?php
+            if ($layerVisible) {
+                echo <<<EOF
+            <label for="global-opacity">Layer Opacity &nbsp;</label>
+            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 100px;">&emsp;
+EOF;
+            }
+
+            if ($singleBgImage) {
+                echo <<<EOF
+            <label for="global-tissue-visibility"> Tissue &nbsp;</label>
+            <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
+                   onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+EOF;
+            }?>
+
+            <span class="material-icons pointer ml-2" onclick="APPLICATION_CONTEXT.UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
+        </div><!--end of general controls-->
+
+        <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
             <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
-            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick="let self = $(this);
+            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick="
+ let self = $(this);
  if (self.hasClass('pressed')) {
     self.removeClass('pressed');
-    self.parent().removeClass('color-shadow-medium position-fixed');
+    self.parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
  } else {
-    self.parent().addClass('color-shadow-medium position-fixed');
+    self.parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
     self.addClass('pressed');
  }
 "> push_pin </span>
         </div>
-        <div id="general-controls" class="inner-panel inner-panel-visible d-flex">
-            <!--TODO export also these values? -->
-            <?php
 
-            //if only one data layer visible, show as checkbox, else add Images menu
-            if ($layerVisible && $singleBgImage) {
-                echo <<<EOF
-            <label for="global-opacity">Layer Opacity &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 120px;">&emsp;
-            <label for="global-tissue-visibility"> Show tissue &nbsp;</label>
-            <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
-                   onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-            <span class="material-icons pointer ml-2" onclick="APPLICATION_CONTEXT.UTILITIES.clone()" title="Clone and synchronize">sync_alt</span>
-        </div><!--end of general controls-->
-EOF;
-            } else {
-                if ($layerVisible) {
-                    echo '<label for="global-opacity">Layer Opacity: &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 250px;">&emsp;';
-                } else if (count($parsedParams->background) > 0)
+        <?php
+           if (count($parsedParams->background) > 1) {
                 echo <<<EOF
         </div> <!--end of general controls-->
-        <div id="panel-images" class="inner-panel">   
+        <div id="panel-images" class="inner-panel mt-2">
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
                         <span id="images-pin" class="material-icons pointer inline-arrow" onclick="APPLICATION_CONTEXT.UTILITIES.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                        <h3 class="d-inline-block">Images</h3>
+                        <h3 class="d-inline-block pointer" onclick="APPLICATION_CONTEXT.UTILITIES.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
                     </div>
-   
+
                     <div id="image-layer-options" class="inner-panel-hidden">
                         <!--populated with options for a given image data -->
                     </div>
@@ -347,37 +336,33 @@ EOF;
            </div>
 EOF;
             }
-
             if ($layerVisible) {
-                $opened = $firstTimeVisited || $_COOKIE["shadersPin"] == "true";
-                $pinClass = $opened ? "pressed" : "";
+                $opened = $firstTimeVisited || $_COOKIE["_shadersPin"] == "true";
+                $pinClass = $opened ? "opened" : "";
                 $shadersSettingsClass = $opened ? "force-visible" : "";
                 echo <<<EOF
           <div id="panel-shaders" class="inner-panel">
-    
+
                 <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
-    
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
-    
                         <span id="shaders-pin" class="material-icons pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); APPLICATION_CONTEXT.UTILITIES.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                        document.cookie = `shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
+                        document.cookie = `_shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot();">repeat_on</span>
+                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot();">bookmark</span>
                     </div>
-    
+
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
                             <!--populated with options for a given image data -->
                     </div>
-                    
                     <div id="blending-equation"></div>
                 </div>
             </div>
 EOF;
-            }
-            ?>
+            }?>
+
             <!-- Appended controls for other plugins -->
         </div>
 
@@ -402,29 +387,51 @@ EOF;
 
 (function (window) {
     let setup = <?php echo $visualisation ?>;
+    let defaultSetup = {
+        customBlending: false,
+        debugMode: false,
+        webglDebugMode: false,
+        scaleBar: true,
+        microns: undefined,
+        viewport: {
+            zoomLevel: 1,
+            point: {x: 0.5, y: 0.5}
+        },
+        activeVisualizationIndex: 0,
+        grayscale: false,
+        preventNavigationShortcuts: false,
+        permaLoadPlugins: true,
+        bypassCookies: false,
+        theme: "auto"
+    };
+    let serverCookies = <?php echo json_encode($_COOKIE) ?>;
     //default parameters not extended by setup.params (would bloat link files)
     setup.params = setup.params || {};
+    //optimization allways present
+    setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
     window.APPLICATION_CONTEXT = {
-        shadersCache: <?php echo $cookieCache ?>,
+        shadersCache: serverCookies._cache,
         setup: setup,
         //here are all parameters supported by the core visualization
-        defaultParams: {
-            visualizationProtocol: "<?php echo $protoLayers?>",
-            customBlending: false,
-            debugMode: false,
-            webglDebugMode: false,
-            scaleBar: true,
-            activeVisualizationIndex: 0,
-            preventNavigationShortcuts: false,
-            permaLoadPlugins: true,
-            theme: "auto"
-        },
+        defaultParams: defaultSetup,
         layersAvailable: false, //default
         settingsMenuId: "app-settings",
         pluginsMenuId: "app-plugins",
         getOption: function (name) {
+            if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
+            if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(name)) {
+                return serverCookies[name]; //todo URL decode?
+            }
             return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] : this.defaultParams[name];
+        },
+        setOption: function (name, value, cookies=false) {
+            if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
+            if (cookies && !this.setup.params.bypassCookies) {
+                serverCookies[name] = value;
+                document.cookie = `${name}=${value}; <?php echo JS_COOKIE_SETUP ?>`; //todo URL encode?
+            }
+            this.setup.params[name] = value;
         }
     };
 
@@ -694,6 +701,11 @@ EOF;
         this.lastScroll = this.currentScroll; //Set last scroll to now
     });
 
+    window.VIEWER.addHandler('navigator-scroll', function (e) {
+        VIEWER.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+        VIEWER.viewport.applyConstraints();
+    });
+
     if (!setup.params.preventNavigationShortcuts) {
         function adjustBounds(speedX, speedY) {
             let bounds = VIEWER.viewport.getBounds();
@@ -765,6 +777,7 @@ EOF;
             }
         }
 
+        APPLICATION_CONTEXT.setup.params.bypassCookies = true; //export will bypass cookies
         let form = `
       <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
@@ -782,6 +795,7 @@ EOF;
         ?>
         var form = document.getElementById("redirect");
         var node;`;
+        APPLICATION_CONTEXT.setup.params.bypassCookies = false;
 
         for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
             let toExport = PLUGINS._exportHandlers[i];
@@ -828,20 +842,22 @@ form.submit();<\/script>`;
         copyUrlToClipboard: function () {
             let baseUrl = "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/redirect.php#";
 
-            let oldViewport = setup.params.viewport;
-            setup.params.viewport = {
+            let oldViewport = APPLICATION_CONTEXT.setup.params.viewport;
+            APPLICATION_CONTEXT.setup.params.viewport = {
                 zoomLevel: VIEWER.viewport.getZoom(),
                 point: VIEWER.viewport.getCenter()
             };
+            APPLICATION_CONTEXT.setup.params.bypassCookies = false; //export will bypass cookies
             <?php
             if ($layerVisible) {
                 //we need to safely stringify setup (which has been modified by the webgl module)
-                echo "        let postData = JSON.stringify(setup, VIEWER.bridge.webGLEngine.jsonReplacer);";
+                echo "        let postData = JSON.stringify(APPLICATION_CONTEXT.setup, VIEWER.bridge.webGLEngine.jsonReplacer);";
             } else {
-                echo "        let postData = JSON.stringify(setup);";
+                echo "        let postData = JSON.stringify(APPLICATION_CONTEXT.setup);";
             }
             ?>
-            setup.params.viewport = oldViewport;
+            APPLICATION_CONTEXT.setup.params.viewport = oldViewport;
+            APPLICATION_CONTEXT.setup.params.bypassCookies = false;
 
             let $temp = $("<input>");
             $("body").append($temp);
@@ -1080,10 +1096,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                     selectedImageLayer = i;
                 }
                 imageNode.prepend(`
-<div class="h5 pl-3 py-1 position-relative"><input type="checkbox" checked class="form-control"
-onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);">Image
-${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])}<input type="range" min="0" max="1" value="1" step="0.1"
-onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));"></div>`);
+<div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
+onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
+${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                 i++;
             }
         }
@@ -1099,14 +1115,13 @@ onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value))
                 layerIDX = i;
             }
 
-            let layerWorldItem =  window.VIEWER.world.getItemAt(layerIDX);
+            let layerWorldItem =  VIEWER.world.getItemAt(layerIDX);
             if (layerWorldItem) {
-                let activeVis = setup.visualizations[setup.activeVisualizationIndex];
-                if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless) {
-                    layerWorldItem.source.fileFormat = "png"; //todo on visualization change reflect also lossless?!
+                let activeVis = VIEWER.bridge.currentVisualisation();
+                if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless && layerWorldItem.source.setFormat) {
+                    layerWorldItem.source.setFormat("png");
                 }
-                layerWorldItem.source.greyscale = (APPLICATION_CONTEXT.setup.params.hasOwnProperty("grayscale")
-                    && APPLICATION_CONTEXT.setup.params.grayscale) ? "/greyscale" : "";
+                layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
             }
 
             <?php
@@ -1131,7 +1146,9 @@ EOF;
         }
 
         if (window.innerHeight < 630) {
-            $("#navigator-pin").click();
+            <?php if (!$firstTimeVisited) {
+                echo "            $('#navigator-pin').click();";
+            }?>
             USER_INTERFACE.MainMenu.close();
         }
 
@@ -1147,7 +1164,10 @@ EOF;
         }
         <?php
         if ($firstTimeVisited) {
-            echo "        setTimeout(_ => USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.'), 2000);";
+            echo "        setTimeout(function() {
+                    USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
+                        'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
+            }, 2000);";
         }
         ?>
     }
@@ -1231,8 +1251,8 @@ EOF;
             }
             meta.loaded = true;
             if (APPLICATION_CONTEXT.getOption("permaLoadPlugins")) {
-                let plugins = new URLSearchParams(document.cookie.replaceAll("; ","&")).get("plugins");
-                document.cookie = `plugins=${plugins + "," + meta.id}; <?php echo JS_COOKIE_SETUP ?>`;
+                let plugins = new URLSearchParams(document.cookie.replaceAll("; ","&")).get("_plugins");
+                document.cookie = `_plugins=${plugins + "," + meta.id}; <?php echo JS_COOKIE_SETUP ?>`;
             }
             onload();
         };
@@ -1310,15 +1330,18 @@ EOF;
     /*----- Init with layers (variables from layers.js) -------*/
     /*---------------------------------------------------------*/
 
-    VIEWER.bridge.loadShaders(function() {
-        let activeData = VIEWER.bridge.dataImageSources(); 
-        //reverse order: last opened IMAGE is the first visible
-        let toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
-            const urlmaker = new Function("path,data", "return " + (value.protocol || "$protoImages"));
-            return urlmaker("$srvImages", APPLICATION_CONTEXT.setup.data[value.dataReference]);
-        }).reverse();
-        toOpen.push(VIEWER.bridge.urlMaker("$srvLayers", activeData));
-        window.VIEWER.open(toOpen);
+    VIEWER.bridge.loadShaders(
+        APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
+        function() {
+            let activeData = VIEWER.bridge.dataImageSources(); 
+            //reverse order: last opened IMAGE is the first visible
+            let toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
+                const urlmaker = new Function("path,data", "return " + (value.protocol || "$protoImages"));
+                return urlmaker("$srvImages", APPLICATION_CONTEXT.setup.data[value.dataReference]);
+            }).reverse();
+            VIEWER.bridge.createUrlMaker(VIEWER.bridge.currentVisualisation());
+            toOpen.push(VIEWER.bridge.urlMaker("$srvLayers", activeData));
+            window.VIEWER.open(toOpen);
     });
 
     //todo better error system :(
@@ -1339,8 +1362,8 @@ EOF;
     /*----- Init without layers (layers.js) -------------------*/
     /*---------------------------------------------------------*/
 
-     window.VIEWER.open(setup.background.map(value => {
-        const urlmaker = new Function("path,data", "return " + (value.protocol || $protoImages));
+     window.VIEWER.open(APPLICATION_CONTEXT.setup.background.map(value => {
+        const urlmaker = new Function("path,data", "return " + (value.protocol || "$protoImages"));
         //todo absolute path? dynamic using php?
         return urlmaker("$srvImages", APPLICATION_CONTEXT.setup.data[value.dataReference]);
     }).reverse());

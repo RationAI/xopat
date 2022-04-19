@@ -43,7 +43,6 @@ UIComponents.Inputs = {
             options.push("<option value='", key, "'", key===def ? " selected" : "", ">", values[key], "</option>");
         }
         return `<select class="${cls} form-control" onchange="${funToCall}">${options.join("")}</select>`;
-
     }
 };
 

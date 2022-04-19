@@ -161,6 +161,10 @@ class WebGLModule {
      * @param {Number} i program index or null if you wish to re-initialize the current one
      */
     switchVisualisation(i) {
+        if (!this._initialized) {
+            console.warn("WebGLModule::switchVisualisation(): not initialized.");
+            return;
+        }
         if (this._program === i) return;
         let oldIndex = this._program;
         this._forceSwitchShader(i);
@@ -403,8 +407,9 @@ class WebGLModule {
         if (isNaN(i) || i === null || i === undefined) i = this._program;
 
         if (i >= this._visualisations.length) {
-            console.error("Invalid visualisation index " + i);
-            return;
+            console.error("Invalid visualisation index ", i, "trying to use index 0...");
+            if (i === 0) return;
+            i = 0;
         }
 
         let target = this._visualisations[i];
@@ -640,7 +645,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 }
             }
 
-            if (!vis.hasOwnProperty("order")) {
+            if (!Array.isArray(vis.order) || vis.order.length < 1) {
                 vis.order = Object.keys(vis.shaders);
             }
 

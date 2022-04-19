@@ -118,13 +118,21 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
                 shader.name(), "</p><p style='max-width: 150px;'>", shader.description(),
                 "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
                 "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
-                shader.type(),".png'></div><div>");
+                shader.type(),".png'></div><div><code class='f4'>", id, "</code>");
 
-            let controls = shader.prototype.defaultControls;
+            let controls = shader.defaultControls;
             for (let control in controls) {
+                let supported = [];
+                for (let gltype in uicontrols) {
+                    for (let existing of uicontrols[gltype]) {
+                        if (!controls[control].accepts(gltype, existing)) continue;
+                        supported.push(existing.name);
+                    }
+                }
                 html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
                     "class='position-relative'><span class='flex-1'>Control <code>",
-                    control, "</code> | Supports: ", uicontrols[controls[control]].map(t => t.name).join(", ") ,"</span></span></div>");
+                    control, "</code> | Supports: ", supported.join(", ") ,"</span></span></div>");
+
             }
             html.push("</div></div><br>");
         }

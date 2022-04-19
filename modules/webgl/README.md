@@ -106,8 +106,8 @@ var renderer = new WebGLModule({...});
 var osd = new OpenSeadragon({...}); //init OSD without specifying the TileSources to load - delay the initialization
 var seaGL = new OpenSeadragon.BridgeGL(osd, renderer);
 
-//load shaders now
-seaGL.loadShaders(function() {
+//load shaders now, get prepared for the visualization at index 'atIndex'
+seaGL.loadShaders(atIndex, function() {
     //fire OpenSeadragon initialization after WebGLModule finished and the rendering can begin
     osd.open(...);
 });

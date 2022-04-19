@@ -12,12 +12,13 @@
     let webglProcessing = new WebGLModule({
         htmlControlsId: "data-layer-options",
         htmlShaderPartHeader: createHTMLLayerControls,
-        debug: window.APPLICATION_CONTEXT.setup.params.webglDebugMode,
+        debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
         ready: function() {
             var i = 0;
-            let select = $("#shaders");
+            let select = $("#shaders"),
+                activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
             seaGL.foreachVisualisation(function (vis) {
-                let selected = vis.params.hasOwnProperty("isDefault") && vis.params.isDefault ? "selected" : "";
+                let selected = i === activeIndex ? "selected" : "";
                 if (vis.error) {
                     select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
                 } else {
@@ -26,7 +27,7 @@
                 i++;
             });
 
-            if (window.APPLICATION_CONTEXT.setup.params.customBlending) {
+            if (window.APPLICATION_CONTEXT.getOption("customBlending")) {
                 let blend = $("#blending-equation");
                 blend.html(`
 <span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
@@ -58,24 +59,42 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             //     }
             // }
 
-            window.VIEWER.raiseEvent('visualisation-used', visualisation);
+            VIEWER.raiseEvent('visualisation-used', visualisation);
         },
         visualisationChanged: function(oldVis, newVis) {
+            seaGL.createUrlMaker(newVis);
+            let index = seaGL.getWorldIndex(),
+                sources = seaGL.dataImageSources();
+
+
 
             if (seaGL.disabled()) {
                 seaGL.enable();
-                window.VIEWER.addTiledImage({
-                    tileSource : seaGL.urlMaker('/iipsrv-martin/iipsrv.fcgi', seaGL.dataImageSources()),
-                    index: seaGL.getWorldIndex(),
-                    opacity: $("#global-opacity").val()
+                VIEWER.addTiledImage({
+                    tileSource : seaGL.urlMaker('<?php echo LAYERS_TILE_SERVER ?>', sources),
+                    index: index,
+                    opacity: $("#global-opacity").val(),
+                    success: function (e) {
+                        if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
+                            e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
+                        }
+                        seaGL.addLayer(index);
+                        seaGL.redraw();
+                    }
                 });
-                seaGL.addLayer(seaGL.getWorldIndex());
             } else {
                 window.VIEWER.addTiledImage({
-                    tileSource : seaGL.urlMaker('/iipsrv-martin/iipsrv.fcgi', seaGL.dataImageSources()),
-                    index: seaGL.getWorldIndex(),
+                    tileSource : seaGL.urlMaker('<?php echo LAYERS_TILE_SERVER ?>', sources),
+                    index: index,
                     opacity: $("#global-opacity").val(),
-                    replace: true
+                    replace: true,
+                    success: function (e) {
+                        if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
+                            e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
+                        }
+                        seaGL.addLayer(index);
+                        seaGL.redraw();
+                    }
                 });
             }
         },
@@ -96,14 +115,16 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     VIEWER.bridge = seaGL;
     seaGL.addVisualisation(...APPLICATION_CONTEXT.setup.visualizations);
     seaGL.addData(...APPLICATION_CONTEXT.setup.data);
-    seaGL.webGLEngine.addCustomShaderSources(...APPLICATION_CONTEXT.setup.shaderSources);
-
-    //Proprietary:
-    if (isNaN(APPLICATION_CONTEXT.setup.activeVisualizationIndex)) {
-        APPLICATION_CONTEXT.setup.activeVisualizationIndex = 0;
+    webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.setup.shaderSources);
+    if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > APPLICATION_CONTEXT.setup.visualizations) {
+        console.warn("Invalid default vis index. Using 0.");
+        APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
     }
-    seaGL.urlMaker = new Function("path,data", "return " +
-        (APPLICATION_CONTEXT.setup.params.visualizationProtocol || APPLICATION_CONTEXT.defaultParams.visualizationProtocol));
+
+    seaGL.createUrlMaker = function(vis) {
+        seaGL.urlMaker = new Function("path,data", "return " + (vis.protocol || "<?php echo $protoLayers?>"));
+        return seaGL.urlMaker;
+    };
 
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
@@ -117,14 +138,14 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                 APPLICATION_CONTEXT.shadersCache[shaderSettings.name] = shaderSettings.cache;
             }
         }
-        document.cookie = `cache=${JSON.stringify(APPLICATION_CONTEXT.shadersCache)}; <?php echo JS_COOKIE_SETUP ?>`;
+        document.cookie = `_cache=${JSON.stringify(APPLICATION_CONTEXT.shadersCache)}; <?php echo JS_COOKIE_SETUP ?>`;
         Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
     };
 
     // load desired shader upon selection
     $("#shaders").on("change", function () {
         let active =  Number.parseInt(this.value);
-        window.APPLICATION_CONTEXT.setup.params.activeVisualizationIndex = active;
+        APPLICATION_CONTEXT.setOption("activeVisualizationIndex", active);
         seaGL.switchVisualisation(active);
     });
 
@@ -241,8 +262,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer = function(layerId) {
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
-            let useBlend = viz.shaders[layerId].params.use_mode === "blend";
-            viz.shaders[layerId].params.use_mode = useBlend ? "show" : "blend";
+            let useMask = viz.shaders[layerId].params.use_mode === "mask";
+            viz.shaders[layerId].params.use_mode = useMask ? "show" : "mask";
             viz.shaders[layerId].error = "force_rebuild"; //error will force reset
             seaGL.reorder(null); //force to re-build
         } else {
@@ -302,7 +323,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
         let modeChange = fixed ? "" : `<span class="material-icons pointer"
-id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "blend" ? "" : "color: var(--color-icon-tertiary);"}"
+id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "mask" ? "" : "color: var(--color-icon-tertiary);"}"
 onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
 
         wasErrorWhenLoading = wasErrorWhenLoading || layer.missingDataSources;
@@ -336,7 +357,7 @@ onchange="APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer('${dataId}', '${key}', 
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="APPLICATION_CONTEXT.UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;${title}
+              &emsp;<span style='width: 210px; white-space: nowrap;text-overflow: ellipsis;overflow: hidden;vertical-align: bottom;'>${title}</span>
               <div class="d-inline-block label-render-type" style="cursor: pointer; float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}

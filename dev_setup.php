@@ -29,7 +29,7 @@ include_once("config.php");
 include_once("modules.php");
 
 $webglPath = "";
-
+$version = VERSION;
 foreach ($MODULES as $id => $mod) {
     if ($id == "webgl") {
         $webglPath = MODULES_FOLDER . "/" . $mod->directory;

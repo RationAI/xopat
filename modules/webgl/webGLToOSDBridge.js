@@ -173,9 +173,9 @@ OpenSeadragon.BridgeGL = class {
      * called inside init() if not called manually before
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */
-    loadShaders(onPrepared=function(){}) {
+    loadShaders(activeVisualizationIdx=0, onPrepared=function(){}) {
         if (this.webGLEngine.isPrepared) return;
-        this.webGLEngine.prepare(this.imageData, onPrepared);
+        this.webGLEngine.prepare(this.imageData, onPrepared, activeVisualizationIdx);
     }
 
     /**
@@ -342,6 +342,7 @@ OpenSeadragon.BridgeGL = class {
                 }
                 this._disabled = true;
             };
+            this._disabled = false;
         }
     }
 
@@ -368,7 +369,7 @@ OpenSeadragon.BridgeGL = class {
             //todo might not be necessary
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
-            let imageData = e.tile.image || e.tile.cacheImageRecord.getImage();
+            let imageData = e.tile.imageData();
 
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
@@ -388,55 +389,55 @@ OpenSeadragon.BridgeGL = class {
         const _context = this;
         let source = layer.source;
         source.__cached_createTileCache = source.createTileCache;
-        source.createTileCache = function(data, tile) {
-            //dirty but we need to always say 'YES'
-            tile._hasTransparencyChannel = function () {
-                return true;
-            };
-
-            this._data = data;
-            this._dim = tile.sourceBounds;
-            this._dim.width = Math.max(this._dim.width,1);
-            this._dim.height = Math.max(this._dim.height,1);
+        source.createTileCache = function(cache, data, tile) {
+            cache._data = data;
+            cache._dim = tile.sourceBounds;
+            cache._dim.width = Math.max(cache._dim.width,1);
+            cache._dim.height = Math.max(cache._dim.height,1);
         };
 
         source.__cached_destroyTileCache = source.destroyTileCache;
-        source.destroyTileCache = function() {
-            this._data = null;
-            this._renderedContext = null;
+        source.destroyTileCache = function(cache) {
+            cache._data = null;
+            cache._renderedContext = null;
         };
 
         source.__cached_getTileCacheData = source.getTileCacheData;
-        source.getTileCacheData = function() {
-            return this._data;
+        source.getTileCacheData = function(cache) {
+            return cache._data;
         };
 
-        source.__cached_tileDataToRenderedContext = source.tileDataToRenderedContext;
-        source.tileDataToRenderedContext = function () {
-            if (!this._renderedContext) {
-                this.webglRefresh = 0;
+        source.__cached_hasTransparency = source.hasTransparency;
+        source.hasTransparency = function(context2D, url, ajaxHeaders, post) {
+            return true;
+        };
+
+        source.__cached_tileDataToRenderedContext = source.getTileCacheDataAsContext2D;
+        source.getTileCacheDataAsContext2D = function (cache) {
+            if (!cache._renderedContext) {
+                cache.webglRefresh = 0;
                 var canvas = document.createElement('canvas');
-                canvas.width = this._dim.width;
-                canvas.height = this._dim.height;
-                this._renderedContext = canvas.getContext('2d');
+                canvas.width = cache._dim.width;
+                canvas.height = cache._dim.height;
+                cache._renderedContext = canvas.getContext('2d');
             }
 
-            if (this.webglRefresh <= _context.upToDateTStamp) {
-                this.webglRefresh = _context.upToDateTStamp + 1;
+            if (cache.webglRefresh <= _context.upToDateTStamp) {
+                cache.webglRefresh = _context.upToDateTStamp + 1;
 
                 //todo might not be necessary
-                _context.webGLEngine.setDimensions(this._dim.width, this._dim.height);
+                _context.webGLEngine.setDimensions(cache._dim.width, cache._dim.height);
 
                 // Render a webGL canvas to an input canvas using cached version
-                var output = _context.webGLEngine.processImage(this._data, this._dim,
+                var output = _context.webGLEngine.processImage(cache._data, cache._dim,
                     _context.openSD.viewport.getZoom(), _context.imagePixelSizeOnScreen());
 
                 // Note: you can comment out clearing if you don't use transparency
-                this._renderedContext.clearRect(0, 0, this._dim.width, this._dim.height);
-                this._renderedContext.drawImage(output == null ? this._data : output, 0, 0,
-                    this._dim.width, this._dim.height);
+                cache._renderedContext.clearRect(0, 0, cache._dim.width, cache._dim.height);
+                cache._renderedContext.drawImage(output == null ? cache._data : output, 0, 0,
+                    cache._dim.width, cache._dim.height);
             }
-            return this._renderedContext;
+            return cache._renderedContext;
         };
     }
 
@@ -444,13 +445,15 @@ OpenSeadragon.BridgeGL = class {
         let source = this._rendering[index];
         if (!source || !source.source) return;
         source = source.source;
+        source.hasTransparency = source.__cached_hasTransparency;
+        delete source.__cached_hasTransparency;
         source.createTileCache = source.__cached_createTileCache;
         delete source.__cached_createTileCache;
         source.destroyTileCache = source.__cached_destroyTileCache;
         delete source.__cached_destroyTileCache;
         source.getTileCacheData = source.__cached_getTileCacheData;
         delete source.__cached_getTileCacheData;
-        source.tileDataToRenderedContext = source.__cached_tileDataToRenderedContext;
+        source.getTileCacheDataAsContext2D = source.__cached_tileDataToRenderedContext;
         delete source.__cached_tileDataToRenderedContext;
     }
 };

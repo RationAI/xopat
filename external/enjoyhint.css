@@ -4,7 +4,7 @@
     cursor:pointer;text-align:center;padding: 0 5px; background: var(--color-bg-tertiary); border: none;font-weight: 900;color: white; background: transparent;
     font-size: large; }
 .enjoyhint_next_btn,.enjoyhint_prev_btn{position:absolute;z-index:1012;pointer-events:all;-o-text-overflow:clip;text-overflow:clip;}
-.enjoyhint_skip_btn {z-index:1012;pointer-events:all;-moz-box-sizing:content-box;-o-text-overflow:clip;text-overflow:clip; right: 12px; top: 12px;}
+.enjoyhint_skip_btn {z-index:1012;pointer-events:all;-moz-box-sizing:content-box;-o-text-overflow:clip;text-overflow:clip; right: 35px; top: 35px;}
 .enjoyhint_next_btn:active,.enjoyhint_skip_btn:active,.enjoyhint_prev_btn:active{transition:none;-webkit-transition:none;-moz-transition:none;-o-transition:none}
 .enjoyhint_close_btn{display:none}
 .enjoyhint_btn{-o-text-overflow:clip;text-overflow:clip}

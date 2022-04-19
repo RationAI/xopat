@@ -318,11 +318,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Create an object at given point with a given strategy
-     * @param {OpenSeadragon.Point} point origin of the object
+     * @param {OpenSeadragon.Point} screenPoint mouse coordinates (X|Y) in SCREEN coordinates
+     *  that this is an exception, other methods work with image coord system
      * @param {boolean} isLeftClick true if the object was created using left mouse button
      * @return {boolean} true if creation succeeded
      */
-    instantCreate(point, isLeftClick) {
+    instantCreate(screenPoint, isLeftClick) {
         return false;
     }
 
@@ -495,6 +496,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     edit(theObject) {
+        this._left = theObject.left;
+        this._top = theObject.top;
         theObject.set({
             hasControls: true,
             lockMovementX: false,
@@ -503,14 +506,21 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        let height = theObject.getScaledHeight();
-        let width = theObject.getScaledWidth();
-        theObject.set({ width: width, height: height, scaleX: 1, scaleY: 1, });
+        let height = theObject.getScaledHeight(),
+            width = theObject.getScaledWidth(),
+            left = theObject.left,
+            top = theObject.top;
+        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {
+            left: left, top: top, width: width, height: height
+        });
         theObject.calcACoords();
+        this._context.replaceAnnotation(theObject, newObject, true);
     }
 
-    instantCreate(point, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(point);
+    instantCreate(screenPoint, isLeftClick = true) {
+        let bounds = this._auto.approximateBounds(screenPoint);
         if (bounds) {
             this._context.addAnnotation(this.create({
                 left: bounds.left.x,
@@ -537,12 +547,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateCreate(x, y) {
         if (!this._current) return;
-        if (this._origX > x) {
-            this._current.set({ left: Math.abs(x) });
-        }
-        if (this._origY > y) {
-            this._current.set({ top: Math.abs(y) });
-        }
+        if (this._origX > x) this._current.set({ left: x });
+        if (this._origY > y) this._current.set({ top: y });
+
         let width = Math.abs(x - this._origX);
         let height = Math.abs(y - this._origY);
         this._current.set({ width: width, height: height });
@@ -574,6 +581,163 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getASAP_XMLTypeName() {
         return "Rectangle";
+    }
+};
+
+OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "ruler", "group");
+        this._current = null;
+    }
+
+    getIcon() {
+        return "square_foot";
+    }
+
+    getDescription(ofObject) {
+        return `Length ${Math.round(ofObject.measure)} mm`;
+    }
+
+    getCurrentObject() {
+        return this._current;
+    }
+
+    /**
+     * @param {array} parameters array of line points [x, y, x, y ..]
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        let parts = this._createParts(parameters, options);
+        return this._createWrap(parts, options);
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Line object that is being copied
+     * @param {array} parameters array of line points [x, y, x, y ..]
+     */
+    copy(ofObject, parameters=undefined) {
+        let line = ofObject.item(0),
+            text = ofObject.item(1);
+        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
+        return new fabric.Group([fabric.Line(parameters, {
+            fill: line.fill,
+            color: line.color,
+            opacity: line.opacity,
+            strokeWidth: line.strokeWidth,
+            stroke: line.stroke,
+            scaleX: line.scaleX,
+            scaleY: line.scaleY,
+            hasRotatingPoint: line.hasRotatingPoint,
+            borderColor: line.borderColor,
+            cornerColor: line.cornerColor,
+            borderScaleFactor: line.borderScaleFactor,
+            hasControls: line.hasControls,
+            lockMovementX: line.lockMovementX,
+            lockMovementY: line.lockMovementY,
+        }), new fabric.Text(ofObject.measure + 'mm'), {
+            textBackgroundColor: text.textBackgroundColor,
+            fontSize: text.fontSize
+        }], {
+            presetID: ofObject.presetID,
+            measure: ofObject.measure,
+            comment: ofObject.comment,
+            factoryId: ofObject.factoryId,
+            isLeftClick: ofObject.isLeftClick,
+            type: ofObject.type,
+        });
+    }
+
+    edit(theObject) {
+        //not allowed
+    }
+
+    recalculate(theObject) {
+        //not supported error?
+    }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        let bounds = this._auto.approximateBounds(screenPoint, false);
+        if (bounds) {
+            let opts = this._presets.getAnnotationOptions(isLeftClick);
+            opts.strokeWidth = opts.strokeWidth / VIEWER.tools.imagePixelSizeOnScreen();
+            let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
+            this._context.addAnnotation(object);
+            return true;
+        }
+        return false;
+    }
+
+    initCreate(x, y, isLeftClick) {
+        let opts = this._presets.getAnnotationOptions(isLeftClick);
+        opts.strokeWidth = opts.strokeWidth / VIEWER.tools.imagePixelSizeOnScreen();
+        let parts = this._createParts([x, y, x, y], opts);
+        this._updateText(parts[0], parts[1]);
+        this._current = parts;
+        this._context.addHelperAnnotation(this._current[0]);
+        this._context.addHelperAnnotation(this._current[1]);
+
+    }
+
+    updateCreate(x, y) {
+        if (!this._current) return;
+        let line = this._current[0],
+            text = this._current[1];
+        line.set({ x2: x, y2: y });
+        this._updateText(line, text);
+    }
+
+    finishDirect() {
+        let obj = this.getCurrentObject();
+        if (!obj) return;
+        this._context.deleteHelperAnnotation(obj[0]);
+        this._context.deleteHelperAnnotation(obj[1]);
+
+        obj =  this._createWrap(obj, this._presets.getCommonProperties());
+        this._context.addAnnotation(obj);
+        this._current = undefined;
+    }
+
+    //todo also finish indirect? because what if mode changes?
+
+    /**
+     * Create array of points - approximation of the object shape
+     * @return {undefined} not supported, ruler cannot be turned to polygon
+     */
+    toPointArray(obj, converter, quality=1) {
+        return undefined;
+    }
+
+    getASAP_XMLTypeName() {
+        return "Ruler";
+    }
+
+    _updateText(line, text) {
+        //todo not accurate, move microns API to the tools
+        text.set({
+            text: Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)) + 'ms',
+            left: (line.x1 + line.x2) / 2,
+            top: (line.y1 + line.y2) / 2,
+        });
+    }
+
+    _createParts(parameters, options) {
+        return [new fabric.Line(parameters, $.extend({
+            scaleX: 1,
+            scaleY: 1
+        }, options)), new fabric.Text('ms', {
+            fontSize: 12 / VIEWER.tools.imagePixelSizeOnScreen(),
+            textBackgroundColor: "#fff"
+
+        })];
+    }
+
+    _createWrap(parts, options) {
+        this._updateText(parts[0], parts[1]);
+        return new fabric.Group(parts, $.extend({
+            factoryId: this.factoryId,
+            type: this.type,
+            measure: 0
+        }, options));
     }
 };
 
@@ -658,6 +822,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     edit(theObject) {
+        this._left = theObject.left;
+        this._top = theObject.top;
         theObject.set({
             hasControls: true,
             lockMovementX: false,
@@ -666,14 +832,21 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        let rx = theObject.rx * theObject.scaleX;
-        let ry = theObject.ry * theObject.scaleY;
-        theObject.set({ rx: rx, ry: ry, scaleX: 1, scaleY: 1, });
+        let rx = theObject.rx * theObject.scaleX,
+            ry = theObject.ry * theObject.scaleY,
+            left = theObject.left,
+            top = theObject.top;
+        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {
+            left: left, top: top, rx: rx, ry: ry
+        });
         theObject.calcACoords();
+        this._context.replaceAnnotation(theObject, newObject, true);
     }
 
-    instantCreate(point, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(point);
+    instantCreate(screenPoint, isLeftClick = true) {
+        let bounds = this._auto.approximateBounds(screenPoint);
         if (bounds) {
             this._context.addAnnotation(this.create({
                 left: bounds.left.x,
@@ -774,7 +947,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return (this._current || this._edited);
+        return (this._current /*|| this._edited*/);
     }
 
     /**
@@ -816,65 +989,83 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     edit(theObject) {
-        //from the official example http://fabricjs.com/custom-controls-polygon
-        if (this._edited) {
-            this.recalculate(this._edited);
-        }
+        this._context.canvas.setActiveObject(theObject);
 
-        this._initialize(false);
-        let points = theObject.get("points");
+        var lastControl = theObject.points.length - 1;
         const _this = this;
-        theObject.selectable = false;
-        theObject.hasControls = false;
-
-        points.forEach(function (point, index) {
-            let circle = _this._createControlPoint(point.x, point.y, {
-                name: index,
-                selectable: true,
-                hasControls: false,
-                objectCaching: false,
-                evented: true
+        theObject.cornerStyle = 'circle';
+        theObject.cornerColor = '#fbb802';
+        theObject.hasControls = true;
+        theObject.objectCaching = false;
+        theObject.strokeWidth = 8 / VIEWER.tools.imagePixelSizeOnScreen();
+        theObject.transparentCorners = false;
+        theObject.controls = theObject.points.reduce(function(acc, point, index) {
+            acc['p' + index] = new fabric.Control({
+                positionHandler: _this._polygonPositionHandler,
+                actionHandler: _this._anchorWrapper(index > 0 ? index - 1 : lastControl, _this._actionHandler),
+                actionName: 'modifyPolygon',
+                pointIndex: index
             });
-            circle.on('moving', function () {
-                let curr = _this._edited;
-                curr.points[this.name] = { x: this.getCenterPoint().x, y: this.getCenterPoint().y };
-                //todo somehow try to avoid copy, but it creates artifacts otherwise :(
-                _this._edited = _this.copy(curr, curr.points);
-                _this._context.replaceAnnotation(curr, _this._edited, false);
-                _this._context.canvas.sendToBack(_this._edited);
-                _this._context.canvas.renderAll();
-            });
-            _this._pointArray.push(circle);
-            _this._context.addHelperAnnotation(circle);
-        });
-
-        this._originallyEddited = theObject;
-        this._edited = theObject;
-        this._context.canvas.sendToBack(theObject);
-        this._context.canvas.discardActiveObject();
+            return acc;
+        }, { });
         this._context.canvas.renderAll();
     }
 
-    recalculate(theObject) {
-        let _this=this;
-        $.each(this._pointArray, function (index, point) {
-            _this._context.deleteHelperAnnotation(point);
-        });
-
-        if (this._edited !== this._originallyEddited) {
-            this._context.history.push(this._edited, this._originallyEddited);
-            this._edited.selectable = true;
-            this._context.overlay.fabric.setActiveObject(this._edited);
-        }
-        //clear
-        this._initialize(false);
-        this._edited = null;
+    _polygonPositionHandler(dim, finalMatrix, fabricObject) {
+        var x = (fabricObject.points[this.pointIndex].x - fabricObject.pathOffset.x),
+            y = (fabricObject.points[this.pointIndex].y - fabricObject.pathOffset.y);
+        return fabric.util.transformPoint(
+            { x: x, y: y },
+            fabric.util.multiplyTransformMatrices(
+                fabricObject.canvas.viewportTransform,
+                fabricObject.calcTransformMatrix()
+            )
+        );
     }
 
-    instantCreate(point, isLeftClick = true) {
+    _actionHandler(eventData, transform, x, y) {
+        var polygon = transform.target,
+            mouseLocalPosition = polygon.toLocalPoint(new fabric.Point(x, y), 'center', 'center'),
+            polygonBaseSize = polygon._getNonTransformedDimensions(),
+            size = polygon._getTransformedDimensions(0, 0);
+        polygon.points[polygon.controls[polygon.__corner].pointIndex] = {
+            x: mouseLocalPosition.x * polygonBaseSize.x / size.x + polygon.pathOffset.x,
+            y: mouseLocalPosition.y * polygonBaseSize.y / size.y + polygon.pathOffset.y
+        };
+        return true;
+    }
+
+    _anchorWrapper(anchorIndex, fn) {
+        return function(eventData, transform, x, y) {
+            var fabricObject = transform.target,
+                absolutePoint = fabric.util.transformPoint({
+                    x: (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x),
+                    y: (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y),
+                }, fabricObject.calcTransformMatrix()),
+                actionPerformed = fn(eventData, transform, x, y),
+                newDim = fabricObject._setPositionDimensions({}),
+                polygonBaseSize = fabricObject._getNonTransformedDimensions(),
+                newX = (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x) / polygonBaseSize.x,
+                newY = (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y) / polygonBaseSize.y;
+            fabricObject.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
+            return actionPerformed;
+        }
+    }
+
+    recalculate(theObject) {
+        this._context.deleteHelperAnnotation(this._initPoint);
+        theObject.controls = fabric.Object.prototype.controls;
+        theObject.hasControls = false;
+        theObject.objectCaching = true;
+        theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
+        this._context.canvas.renderAll();
+        this._initialize(false);
+    }
+
+    instantCreate(screenPoint, isLeftClick = true) {
         const _this = this;
         //(async function _() {
-        let result = /*await*/ _this._auto.createOutline(point);
+        let result = /*await*/ _this._auto.createOutline(screenPoint);
 
         if (!result || result.length < 3) return false;
         result = _this.simplify(result);
@@ -893,7 +1084,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!this._polygonBeingCreated) {
             this._initialize();
         }
-        this.isLeftClick = isLeftClick;
 
         let properties = {
             selectable: false,
@@ -906,51 +1096,53 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         };
 
         //create circle representation of the point
-        let circle = this._createControlPoint(x, y, properties);
-        if (this._pointArray.length === 0) {
-            circle.set({fill: '#d93442', radius: circle.radius*2});
+        let polygon = this._current,
+            index = polygon && polygon.points ? polygon.points.length : -1;
+
+        if (index < 1) {
+            this._initPoint = this._createControlPoint(x, y, properties);
+            this._initPoint.set({fill: '#d93442', radius: this._initPoint.radius*2});
+            this._context.addHelperAnnotation(this._initPoint);
         } else {
-            if (Math.sqrt(Math.pow(this._pointArray[0].left - x, 2) +
-                    Math.pow(this._pointArray[0].top - y, 2)) < circle.radius*2) {
+            if (Math.sqrt(Math.pow(this._initPoint.left - x, 2) +
+                    Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.tools.imagePixelSizeOnScreen()) {
                 this.finishIndirect();
                 return;
             }
         }
-        this._pointArray.push(circle);
-        this._context.addHelperAnnotation(circle);
 
-        let polygon;
-        if (this._current) {
-            let points = this._current.get("points");
-            points.push({
-                x: x,
-                y: y
-            });
-            polygon = this.create(points, this._presets.getAnnotationOptions(isLeftClick));
-            this._context.replaceAnnotation(this._current, polygon);
-        }  else {
+        if (!polygon) {
             polygon = this.create([{ x: x, y: y }],
                 $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
             this._context.addHelperAnnotation(polygon);
+            this._current = polygon;
+        } else {
+            if (!this._followPoint) {
+                this._followPoint = this._createControlPoint(x, y, properties);
+                this._context.addHelperAnnotation(this._followPoint);
+            } else {
+                this._followPoint.set({left: x, top: y});
+            }
+            polygon.points.push({x: x, y: y});
+            polygon.setCoords();
         }
-        this._current = polygon;
-        this._context.clearAnnotationSelection();
+        this._context.canvas.renderAll();
     }
 
     updateCreate(x, y) {
         if (!this._polygonBeingCreated) return;
 
-        let lastIdx = this._pointArray.length - 1,
-            last = this._pointArray[lastIdx],
-            dy = last.top - y,
-            dx = last.left - x;
+        let lastIdx = this._current.points.length - 1,
+            last = this._current.points[lastIdx],
+            dy = last.y - y,
+            dx = last.x - x;
 
         let powRad = this.getRelativePixelDiffDistSquared(10);
         //startPoint is twice the radius of distance with relativeDiff 10, if smaller
         //the drag could end inside finish zone
-        if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)){
-            this.initCreate(x, y, this.isLeftClick);
+        if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)) {
+            this.initCreate(x, y);
         }
     }
 
@@ -962,18 +1154,11 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     finishIndirect() {
         if (!this._current) return;
 
-        let points = [], _this = this;
-        $.each(this._pointArray, function (index, point) {
-            points.push({
-                x: point.left,
-                y: point.top
-            });
-            _this._context.deleteHelperAnnotation(point);
-        });
-
-        _this._context.deleteHelperAnnotation(this._current);
-
-        if (this._pointArray.length < 3) {
+        let points = this._current.points;
+        this._context.deleteHelperAnnotation(this._initPoint);
+        if (this._followPoint) this._context.deleteHelperAnnotation(this._followPoint);
+        this._context.deleteHelperAnnotation(this._current);
+        if (points.length < 3) {
             this._initialize(false); //clear
             return;
         }
@@ -992,17 +1177,12 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
-
         let points = obj.get("points");
         if (quality < 1) points = this.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary
         if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
-            let output = new Array(points.length);
-            points.forEach(p => {
-                output.push(converter(p.x, p.y))
-            });
-            return output;
+            return points.map(p => converter(p.x, p.y));
         }
         return points;
     }
@@ -1013,14 +1193,14 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _initialize(isNew = true) {
         this._polygonBeingCreated = isNew;
-        this._pointArray = [];
+        this._initPoint = null;
         this._current = null;
-        this._edited = null;
+        this._followPoint = null;
     }
 
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 1 / VIEWER.tools.imagePixelSizeOnScreen() * 10,
+            radius: 10 / VIEWER.tools.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
@@ -1141,12 +1321,31 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 };
 
+OSDAnnotations.AutoObjectCreationStrategy = class {
+    constructor(selfName, context) {
+        this._globalSelf = `${context.id}['${selfName}']`;
+        this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
+    }
+
+    approximateBounds(point, growY=true) {
+        //todo default object?
+        return null;
+    }
+
+    /*async*/ createOutline(eventPosition) {
+        //todo default object?
+        return null;
+    }
+};
+
 /**
  * Class that contains all logic for automatic annotation creation.
  */
-OSDAnnotations.AutoObjectCreationStrategy = class {
+OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.AutoObjectCreationStrategy {
 
     constructor(selfName, context) {
+        super(selfName, context);
+
         this._currentTile = null;
         const _this = this;
         this._renderEngine = new WebGLModule({
@@ -1169,9 +1368,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
                 }
             }
         });
-        this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
         this._renderEngine.prepareAndInit(VIEWER.bridge.dataImageSources());
-        this._globalSelf = `${context.id}['${selfName}']`;
         this._currentTile = "";
         this._readingIndex = 0;
         this._readingKey = "";
@@ -1295,7 +1492,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
         this._readingIndex = layer.index;
     }
 
-    approximateBounds(point) {
+    approximateBounds(point, growY=true) {
         this._beforeAutoMethod();
 		if (!this.changeTile(point) || !this._running) {
             this._afterAutoMethod();
@@ -1332,12 +1529,17 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
         let left = this.toGlobalPointXY(p.x, p.y);
 		p.x = point.x;
 
-        if (!progress("y", 2)) return null;
-		let bottom = this.toGlobalPointXY(p.x, p.y);
-		p.y = point.y;
+		let top, bottom;
+		if (growY) {
+            if (!progress("y", 2)) return null;
+            bottom = this.toGlobalPointXY(p.x, p.y);
+            p.y = point.y;
 
-        if (!progress("y", -2)) return null;
-        let top = this.toGlobalPointXY(p.x, p.y);
+            if (!progress("y", -2)) return null;
+            top = this.toGlobalPointXY(p.x, p.y);
+        } else {
+            bottom = top = this.toGlobalPointXY(p.x, p.y);
+        }
 
 		//if too small, discard
 		if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;

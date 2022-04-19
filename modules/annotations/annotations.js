@@ -370,6 +370,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		if (updateHistory) this.history.push(next, previous);
+		//else this.history.pushWithoutUpdate(next, previous);
 		this.canvas.renderAll();
 	}
 
@@ -469,12 +470,16 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
 		this.history = new OSDAnnotations.History("history", this, this.presets);
 		this.modifyTool = new OSDAnnotations.FreeFormTool("modifyTool", this);
-		this.automaticCreationStrategy = new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
+		this.automaticCreationStrategy = VIEWER.bridge ?
+			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
+			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
+
 		const _this = this;
 
 		//after properties initialized
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
 
 		//Polygon presence is a must
@@ -914,7 +919,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	customHtml() {
-		return this.context.autoSelectionEnabled ? this.context.automaticCreationStrategy.sensitivityControls() : "";
+		return this.context.autoSelectionEnabled ?
+			this.context.automaticCreationStrategy.sensitivityControls() : "";
 	}
 };
 

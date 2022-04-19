@@ -41,10 +41,6 @@ class AnnotationsGUI {
 	*****************************************************************************************************************/
 
 	initHTML() {
-		let autoSelectionControls = this.context.autoSelectionEnabled ?
-			this.context.automaticCreationStrategy.sensitivityControls() : "";
-		autoSelectionControls += "<br>";
-
 		USER_INTERFACE.MainMenu.append(
 			"Annotations",
 			`
@@ -123,11 +119,11 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		PLUGINS.addTutorial(
 			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
 				{
-					"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click allows you to<br>automatically annotate regions."
+					"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click on the canvas allows you to<br>automatically annotate regions."
 				}, {
 					"next #mode-custom-items": "This select specifies which layer will be annotated.<br>For now, it is not possible in the tissue itself."
 				}, {
-					"next #panel-shaders": "When you double-click on the canvas,<br>all close parts of the selected layer will be outlined.<br>It is therefore a good idea to first apply some threshold."
+					"next #panel-shaders": "When you double-click on the canvas,<br>all close parts of the selected layer will be outlined.<br>It is therefore a good idea to first izolate the region of interest <br> (e.g. apply threshold if available)."
 				}, {
 					"next #annotations-left-click": "If you use POLYGON, the outline will fit perfectly,<br>but click outside a region is ignored.<br>Creation might also fail - you can try adjusting ZOOM level<br>or clicking on a different spot."
 				}, {
@@ -157,7 +153,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				{
 					"click #fft-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
 				}, {
-					"next #viewer-container": "Hold Left Shift while drawing on a canvas<br>(by a mouse button which has assigned any preset)."
+					"next #viewer-container": "Now you can draw a polygon by a free hand."
 				}, {
 					"next #fft-mode-add-radio + label": "Selected object can be appended to (Left Shift only) ..."
 				}, {
@@ -228,7 +224,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		console.log(this.id);
 
 		return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush used to modify annotations areas.">Brush radius:</span>
-        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}" style="height: 22px; width: 60px;">
+        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" 
+        step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}"
+        style="height: 22px; width: 60px;" onchange="${this.id}.context.modifyTool.setSafeRadius(Number.parseInt(this.value));">
         <input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-add-radio"><label for="fft-mode-add-radio">
 <span id="fft-mode-add" onclick="${this.id}.context.modifyTool.setModeAdd(true)" class="material-icons pointer p-1 rounded-2 ${modeAdd}">add_circle_outline</span>
 </label><input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-remove-radio"><label for="fft-mode-remove-radio">

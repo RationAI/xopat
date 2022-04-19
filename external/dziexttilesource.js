@@ -177,6 +177,13 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     getImageMetaAt: function(index) {
         return this.imageArray[index];
     },
+    setFormat: function(format) {
+        this.fileFormat = format;
+    },
+
+    getTileHashKey: function(level, x, y, url, ajaxHeaders, postData) {
+        return `${x}_${y}/${level}/${this.postData}`;
+    },
 
     /**
      * @function

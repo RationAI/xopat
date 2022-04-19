@@ -25,7 +25,7 @@ OSDAnnotations.FreeFormTool = class {
         if (objectFactory !== undefined) {
             if (!objectFactory.isImplicit()) {
                 //object can be used immedietaly
-                this._setupPolygon(object);
+                this._setupPolygon(object, object);
             } else {
                 let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
                 if (points) {
@@ -95,15 +95,13 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     setRadius (radius) {
-        if (this.screenRadius !== radius) {
-            this.updateCursorRadius();
-        }
-        this.screenRadius = radius;
         let imageTileSource = VIEWER.tools.referencedTileSource();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
         this.radius = Math.round(Math.abs(pointB.x - pointA.x));
+        if (this.screenRadius !== radius) this.updateCursorRadius();
+        this.screenRadius = radius;
         this._context.raiseEvent('free-form-tool-radius', {radius: radius});
     }
 
@@ -248,21 +246,20 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     //initialize object so that it is ready to be modified
-    _setupPolygon(polyObject) {
+    _setupPolygon(polyObject, original) {
         this.polygon = polyObject;
-        this.initial = polyObject;
+        this.initial = original;
 
         polyObject.moveCursor = 'crosshair';
     }
 
     //create polygon from points and initialize so that it is ready to be modified
     _createPolygonAndSetupFrom(points, object) {
-        //TODO //FIXME history redo of this step incorrectly places the object at canvas (shifts)
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.factoryId = this._context.polygonFactory.factoryId;
 
-        this._context.replaceAnnotation(object, polygon, true);
-        this._setupPolygon(polygon);
+        this._context.replaceAnnotation(object, polygon);
+        this._setupPolygon(polygon, object);
     }
 
     //try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon

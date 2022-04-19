@@ -37,7 +37,7 @@ id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 <span id="history-sync" class="material-icons pointer" onclick="opener.${this._globalSelf}.sync()" 
 id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
-onclick="if (opener.${this._context.id}.disabledInteraction) return; window.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
+onclick="if (opener.${this._context.id}.disabledInteraction) return; window.opener.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
 <div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
 <script>
@@ -83,10 +83,7 @@ window.addEventListener("beforeunload", (e) => {
         const _this = this;
         if (this._buffer[this._buffidx]) {
             this._performSwap(this._context.canvas,
-                this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward)
-
-            //this._bufferLastRemoved = this._buffer[this._buffidx];
-            //this._buffer[this._buffidx] = null;
+                this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward);
 
             this._buffidx--;
             if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
@@ -210,6 +207,11 @@ window.addEventListener("beforeunload", (e) => {
 
         this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-tertiary)"));
+    }
+
+    pushWithoutUpdate(newObject, previous = null) {
+        this._buffer[this._buffidx].forward = newObject;
+        if (previous) this._buffer[this._buffidx].back = previous;
     }
 
     highlight(object) {
@@ -410,29 +412,26 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
     }
 
     async _performSwap(canvas, toAdd, toRemove) {
-        if (toRemove) {
+        if (toAdd) {
+            let center = toAdd.getCenterPoint();
+            this._focus(center.x, center.y);
+            await this._sleep(150); //let user to orient where canvas moved before deleting the element
+            canvas.add(toAdd);
+            this._addToBoard(toAdd);
+
+            if (toRemove) {
+                canvas.remove(toRemove);
+                this._removeFromBoard(toRemove);
+            }
+            this._context.canvas.setActiveObject(toAdd);
+        } else if (toRemove) {
             let center = toRemove.getCenterPoint();
             this._focus(center.x, center.y);
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
-
-            if (toAdd) {
-                canvas.add(toAdd);
-                this._context.canvas.setActiveObject(toAdd);
-                this._addToBoard(toAdd);
-            }
-            canvas.renderAll();
-
-        } else if (toAdd) {
-            let center = toAdd.getCenterPoint();
-            this._focus(center.x, center.y);
-            await this._sleep(150); //let user to orient where canvas moved before deleting the element
-            canvas.add(toAdd);
-            this._context.canvas.setActiveObject(toAdd);
-            canvas.renderAll();
-            this._addToBoard(toAdd);
         }
+        canvas.renderAll();
     }
 
     _findObjectOnCanvasById(id) {

@@ -16,14 +16,6 @@ class HistovisoExplain  {
             `<span class="material-icons pointer" id="show-histoviso-board" title="Show board" 
 style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>`,
             "Waiting for the server...", "feature-maps", this.id);
-        this.fetchParameters("/histoviso-explain/available-expl-methods").then(
-            data => {
-                _this._init(data);
-            }
-        ).catch( e => {
-            console.error(e);
-            _this.createErrorMenu(`An error has occured while loading the plugin.`, e);
-        });
 
         this.context = OSDAnnotations.instance();
         this.context.setModeUsed("CUSTOM");
@@ -32,6 +24,15 @@ style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHist
             this.context.getAnnotationObjectFactory("_histoviso-network_inspector"));
         this.measure = new OSDAnnotations.Preset(Date.now(),
             this.context.getAnnotationObjectFactory("_histoviso-explain-explorer"));
+
+        this.fetchParameters("/histoviso-explain/available-expl-methods").then(
+            data => {
+                _this._init(data);
+            }
+        ).catch( e => {
+            console.error(e);
+            _this.createErrorMenu(`An error has occured while loading the plugin.`, e);
+        });
     }
 
     setMode(node, otherNode, mode) {

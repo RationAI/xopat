@@ -5,7 +5,7 @@ Playground.ServerPixelStrategy = class {
 
         if (!this.context.webGLEngine) this.context.createWebGLEngine();
 
-        this.seaGL = new OpenSeadragon.BridgeGL(VIEWER, this.context.webglEngine, "pixels");
+        this.seaGL = new OpenSeadragon.BridgeGL(VIEWER, this.context.webglEngine, "cache");
     }
 
     prepareVisualization(visualization, source, imageCount) {
@@ -18,7 +18,7 @@ Playground.ServerPixelStrategy = class {
 
     initVisualization(onloaded) {
         const _this = this;
-        this.seaGL.loadShaders(function() {
+        this.seaGL.loadShaders(0,function() {
             _this.seaGL.initAfterOpen();
             onloaded();
         });

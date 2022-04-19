@@ -87,7 +87,8 @@ WebGLModule.VisualisationLayer = class {
 
         this.__mode = "show";
         if (options.hasOwnProperty("use_mode")) {
-            if (options["use_mode"] === "blend") {
+            if (options["use_mode"] === "mask") {
+                //option is called 'mask' for the default blending implementation
                 this.__mode = "blend";
             }
         }
@@ -225,9 +226,12 @@ WebGLModule.VisualisationLayer = class {
     //expression should be wrapped in parenthesses for safety: ["(....(", ")....)"] in the middle the
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
     static filters = {
-        use_gamma: (x) => ["pow(", `, 1.0 / ${x})`],
-        use_exposure: (x) => ["(1.0 - exp(-(", `)* ${x}))`],
-        use_logscale: (x) => [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`]
+        use_gamma: (x) => ["pow(", `, 1.0 / ${this.toShaderFloatString(x, "1.0")})`],
+        use_exposure: (x) => ["(1.0 - exp(-(", `)* ${this.toShaderFloatString(x, "1.0")}))`],
+        use_logscale: (x) => {
+            x = this.toShaderFloatString(x, "1.0");
+            return [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`]
+        }
     };
 
     static filterNames = {
@@ -252,6 +256,13 @@ WebGLModule.VisualisationLayer = class {
      * Parses value to a float string representation with given precision (length after decimal)
      */
     toShaderFloatString(value, defaultValue, precisionLen=5) {
+        return this.constructor.toShaderFloatString(value, defaultValue, precisionLen);
+    }
+
+    /**
+     * Parses value to a float string representation with given precision (length after decimal)
+     */
+    static toShaderFloatString(value, defaultValue, precisionLen=5) {
         if (isNaN(Number.parseInt(precisionLen)) || precisionLen < 0 || precisionLen > 9) {
             precisionLen = 5;
         }
@@ -280,6 +291,7 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * todo do not samble by default texture, but the output of rendering!!
      * Alias for sampleReferenced(textureCoords, 0)
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
@@ -350,6 +362,7 @@ WebGLModule.VisualisationLayer = class {
      */
     loadProperty(name, defaultValue) {
         let selfType = this.constructor.type();
+        if (!this.__visualisationLayer) return defaultValue;
         if (this.__visualisationLayer.cache[selfType].hasOwnProperty(name)) {
             return this.__visualisationLayer.cache[selfType][name];
         }
@@ -419,7 +432,7 @@ WebGLModule.VisualisationLayer = class {
         for (let key in options) {
             if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
                 let value = this.loadProperty(key, options[key]);
-                let filter = THIS.filters[key](this.toShaderFloatString(value, "1.0"));
+                let filter = THIS.filters[key](value);
                 this.__scalePrefix.push(filter[0]);
                 this.__scaleSuffix.push(filter[1]);
             }

@@ -314,49 +314,35 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
         }
     }
 
-    /**
-     * TODO `this` refers to the cache not TileSource, dirty design!
-     * @param {*} data the result of downloadTileFinish() function
-     */
-    createTileCache(data) {
-        this._data = data;
+    createTileCache(cache, data) {
+        cache._data = data;
     }
 
-    /**
-     * TODO `this` refers to the cache not TileSource, dirty design!
-     */
-    destroyTileCache() {
-        this._data = null;
-        this._renderedContext = null;
+    destroyTileCache(cache) {
+        cache._data = null;
+        cache._renderedContext = null;
     }
 
-    /**
-     * TODO `this` refers to the cache not TileSource, dirty design!
-     */
-    getTileCacheData() {
-        return this._data;
+    getTileCacheData(cache) {
+        return cache._data;
     }
 
-    /**
-     * TODO `this` refers to the cache not TileSource, dirty design!
-     */
-    tileDataToRenderedContext() {
-        if (!this._renderedContext) {
-            console.log(("CREAETED PPPLAYGROUND"));
+    getTileCacheDataAsContext2D(cache) {
+        if (!cache._renderedContext) {
             var canvas = document.createElement( 'canvas' );
             canvas.width = this._data.width;
             canvas.height = this._data.height;
-            this._renderedContext = canvas.getContext('2d');
-            this._renderedContext.drawImage( this._data, 0, 0 );
+            cache._renderedContext = canvas.getContext('2d');
+            cache._renderedContext.drawImage( cache._data, 0, 0 );
             //since we are caching the prerendered image on a canvas
             //allow the image to not be held in memory
 
             //TODO this is a possible bug since DIV drawing strategy uses getImage(...)
             //I know that div drawing strategy probably does not call getRenderedContext but
             //it is certainly a not good code design...
-            this._image = null;
+            cache._image = null;
         }
-        return this._renderedContext;
+        return cache._renderedContext;
     }
 };
 

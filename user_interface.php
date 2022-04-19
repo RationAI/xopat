@@ -312,7 +312,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             return `<div id="${parentId}" data-dialog="true" ${positionStrategy}>
 <details-dialog class="${diaClasses} d-flex flex-column" ${limits}>
-    <div class="Box-header" id="${parentId}-header">
+    <div class="Box-header noselect" id="${parentId}-header">
       ${close}
       <h3 class="Box-title">${title}</h3>
     </div>
@@ -381,6 +381,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         MainMenu: {
             context: $("#main-panel"),
             content: $("#main-panel-content"),
+            navigator: $("#navigator-container"),
             opened: true,
             append: function(title, titleHtml, html, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-simple"><div><h3 class="d-inline-block h3" style="padding-left: 15px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
@@ -415,6 +416,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this._sync();
             },
             _sync() {
+                this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
                 let width = this.opened ? "calc(100% - 400px)" : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (PLUGINS.__toolsContext) {
@@ -540,14 +542,14 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
                 }
                 let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-                document.cookie = `plugins=${pluginCookie}; <?php echo JS_COOKIE_SETUP ?>`;
+                document.cookie = `_plugins=${pluginCookie}; <?php echo JS_COOKIE_SETUP ?>`;
                 APPLICATION_CONTEXT.UTILITIES.refreshPage(formData.join(""), plugins);
             },
             _settingsMenu() {
                 let inputs = UIComponents.Inputs;
                 let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
-                let updateOption = name => `APPLICATION_CONTEXT.setup.params['${name}'] = $(this).val();`;
-                let updateBool = name => `APPLICATION_CONTEXT.setup.params['${name}'] = this.checked;`;
+                let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
+                let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
                 return `
 <div class="position-absolute top-1 left-1 right-1" style="width: inherit; visibility: hidden;" id="settings-notification">
 <div class="py-1 px-2 rounded-2"
@@ -556,9 +558,12 @@ style="background: var(--color-bg-warning); max-height: 70px; text-overflow: ell
 To apply changes, please <a onclick="APPLICATION_CONTEXT.UTILITIES.refreshPage()" class="pointer">reload the page</a>.</div>
 </div>
 <span class="f3-light header-sep">Appearance</span>
-Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_CONTEXT.UTILITIES.updateTheme();`, APPLICATION_CONTEXT.getOption("theme"), {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"})}
+Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme", true)} APPLICATION_CONTEXT.UTILITIES.updateTheme();`, APPLICATION_CONTEXT.getOption("theme"), {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"})}
 <br> ${inputs.checkBox("", "Show ToolBar", "$('#plugin-tools-menu').toggleClass('d-none')", true)}
-<br> ${inputs.checkBox("", "Show Scale", updateBool("scaleBar") + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("scaleBar"))}
+<br> ${inputs.checkBox("", "Show Scale", updateBool("scaleBar", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("scaleBar"))}
+<br><br><span class="f3-light header-sep">Behaviour</span>
+${inputs.checkBox("", "Use Cookies", updateBool("bypassCookies", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("bypassCookies"))}
+<br> ${inputs.checkBox("", "Debug Mode", updateBool("debugMode") + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("debugMode"))}
 `
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,
@@ -622,7 +627,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme")} APPLICATION_
                     USER_INTERFACE.Tools.open();
                 }
                 this.running = false;
-                document.cookie = 'shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
+                document.cookie = '_shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
             },
 
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {

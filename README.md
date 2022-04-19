@@ -61,8 +61,6 @@ Then, based on the presence of `visualisation` the user is
 ````JSON
 {    
     "params": {
-        "experimentId": "ID_OF_THE_EXPERIMENT",
-        "visualizationProtocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";"
     }, 
     "data": ["path/to/tissue/scan.tif", "path/to/annotation.tif", "path/to/probability.tif"],
     "background": [
@@ -84,6 +82,7 @@ Then, based on the presence of `visualisation` the user is
         {
             "name": "A visualisation setup 1",
             "lossless": true,
+            "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
             "shaders": {
                 "shader_id_1": { 
                     "name": "Advanced visualisation layer",
@@ -116,7 +115,6 @@ re-used. The module is closely described in `./webgl/` folder.
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
 - [O]`params` - visualisation parameters, supported:
-    - [O]`visualizationProtocol` - see protocol construction below
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debug` - run in debug mode if `true`, default `false`
     - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`
@@ -163,9 +161,9 @@ shader type, so always check whether a desired property exists or not
     
 _Protocol construction_ &emsp;
 To use custom-defined protocol, pass a string that can be evaluated as a JavaScript code to a valid URL. It must be one-liner expression, which
-can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script (as set in `config.php`). Note that `params.visualizationProtocol` 
+can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script (as set in `config.php`). Note that `vis.protocol` 
 expression receives a string **list** in the `data` parameter (array of selected images), whereas
-`background.protocol` only a single string (one image). That means a server behind `visualizationProtocol` url must be able to serve simultaneously multiple images. These images
+`background.protocol` only a single string (one image). That means a server behind `vis.protocol` url must be able to serve simultaneously multiple images. These images
 must be concatenated below each other into a single bigger image (see the `webgl` module for more details).
 <details>
  <summary>Examples:</summary>
@@ -178,7 +176,7 @@ must be concatenated below each other into a single bigger image (see the `webgl
 
 - URL construction using **ES6 String Template**
 
-    > "visualizationProtocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
+    > "protocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
 
     is the default behaviour for `visualizations` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=[my/data.tif, other/data.tif]`,
 the `http://serv.org/iipsrv.fcgi#DeepZoomExt=my/data.tif,other/data.tif.dzi` url 

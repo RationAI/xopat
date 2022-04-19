@@ -8,5 +8,5 @@
   "requires": [],
   "modules": ["annotations"],
   "server": "/iipsrv.fcgi",
-  "factories": ["polygon", "rect", "ellipse"]
+  "factories": ["polygon", "rect", "ellipse", "ruler"]
 }
