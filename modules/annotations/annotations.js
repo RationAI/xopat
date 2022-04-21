@@ -11,6 +11,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//possibly try to avoid in the future accessing self through a global
 		window.Annotations = this;
 		this.id = "Annotations";
+		this.session = Date.now();
 		this.constructor.__self = this;
 		this._init();
 	}
@@ -91,8 +92,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/******************* EXPORT, IMPORT **********************/
 
 	getObjectContent(...withProperties) {
-		return this.canvas.toObject(['comment', 'a_group', 'threshold', 'borderColor',
-			'cornerColor', 'borderScaleFactor', 'color', 'presetID', 'hasControls', 'factoryId', ...withProperties]);
+		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor',
+			'borderScaleFactor', 'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', ...withProperties]);
 	}
 
 	getXMLDocumentContent() {
@@ -356,6 +357,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	promoteHelperAnnotation(annotation) {
+		annotation.sessionId = this.session;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 		this.canvas.renderAll();

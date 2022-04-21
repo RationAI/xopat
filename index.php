@@ -48,12 +48,14 @@ throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup da
 $parsedParams = json_decode($visualisation);
 throwFatalErrorIf(!$parsedParams, "Invalid link.", "The visualisation setup is not parse-able.", $visualisation);
 
-$cookieCache = isset($_COOKIE["_cache"]) && !$parsedParams->params->bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
-
+ensureDefined($parsedParams, "params", (object)array());
 ensureDefined($parsedParams, "data", array());
 ensureDefined($parsedParams, "background", array());
 ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
+
+$bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
+$cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 
 foreach ($parsedParams->background as $bg) {
     throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
@@ -101,7 +103,7 @@ if ($layerVisible) {
 /**
  * Plugins+Modules loading: load required parts of the application
  */
-$pluginsInCookies = isset($_COOKIE["_plugins"]) ? explode(',', $_COOKIE["_plugins"]) : [];
+$pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 foreach ($PLUGINS as $_ => $plugin) {
     if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
         $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
@@ -411,7 +413,7 @@ EOF;
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
     window.APPLICATION_CONTEXT = {
-        shadersCache: serverCookies._cache,
+        shadersCache: serverCookies._cache || {},
         setup: setup,
         //here are all parameters supported by the core visualization
         defaultParams: defaultSetup,
@@ -421,12 +423,15 @@ EOF;
         getOption: function (name) {
             if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
             if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(name)) {
-                return serverCookies[name]; //todo URL decode?
+                let value = serverCookies[name]; //todo URL decode?
+                if (value === "false") value = false;
+                return value;
             }
             return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] : this.defaultParams[name];
         },
         setOption: function (name, value, cookies=false) {
             if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
+            if (value === "false") value = false;
             if (cookies && !this.setup.params.bypassCookies) {
                 serverCookies[name] = value;
                 document.cookie = `${name}=${value}; <?php echo JS_COOKIE_SETUP ?>`; //todo URL encode?
@@ -462,6 +467,11 @@ EOF;
                 headers = {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*',
+                    <?php
+                        if (defined(AUTH_HEADER_CONTENT)) {
+                            echo "'Authorization': '" . AUTH_HEADER_CONTENT . "'";
+                        }
+                    ?>
                 };
             const response = await fetch(url, {
                 method: method,
@@ -583,23 +593,25 @@ EOF;
 
     if ($layerVisible) {
         echo '{
-        \'next #panel-shaders\' : \'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be conrolled here.\'
+        \'next #panel-shaders\': \'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be conrolled here.\'
 }, {
-        \'click #shaders-pin\' : \'Click to set <br>this controls subpanel to be always visible.\'
+        \'click #shaders-pin\': \'Click to set <br>this controls subpanel to be always visible.\'
 }, {
-        \'next #shaders\' : \'In case multiple different visualisations <br>are set, you can select <br>which one is being displayed.\'
+        \'next #shaders\': \'In case multiple different visualisations <br>are set, you can select <br>which one is being displayed.\'
 }, {
-        \'next #data-layer-options\' : \'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.\'
-},';
+        \'next #data-layer-options\': \'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.\'
+}, {
+        \'next #cache-snapshot\': \'Your settings can be saved here. <br> Saved adjustments are applied on layers of the same name.\'
+}, ';
     }
 
     echo <<<EOF
 {
-        'next #copy-url' : 'Your setup can be shaded with a link.'
+        'next #copy-url' : 'Your setup can be shared with a link.'
 },{
-        'next #global-export' : 'You can share also a file: this option <br>includes (most) plugins data too.'
+        'next #global-export' : 'You can share also a file: this option <br>includes (most) plugins data too (unlike URL sharing). <br> That means, if you export a file with <br> drawn annotations, these will be included too.'
 },{
-        'next #global-help' : 'That\'s all for now.<br> With plugins, more tutorials will appear here.'
+        'next #global-help' : 'That\'s all for now.<br> For more functionality, see Plugins menu. <br> With attached plugins, more tutorials will appear here.'
 }]
 EOF; //end of the first argument of Tutorials.add()
 
@@ -760,7 +772,7 @@ EOF;
     /*------------ EXPORTING ----------------------------------*/
     /*---------------------------------------------------------*/
 
-    function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined) {
+    function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         //reconstruct active plugins
         let pluginsData = APPLICATION_CONTEXT.setup.plugins;
         let plugins = PLUGINS.each;
@@ -777,7 +789,8 @@ EOF;
             }
         }
 
-        APPLICATION_CONTEXT.setup.params.bypassCookies = true; //export will bypass cookies
+        let bypass = APPLICATION_CONTEXT.setup.params.bypassCookies;
+        if (!withCookies) APPLICATION_CONTEXT.setup.params.bypassCookies = true;
         let form = `
       <form method="POST" id="redirect" action="<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>">
         <input type="hidden" id="visualisation" name="visualisation">
@@ -795,7 +808,7 @@ EOF;
         ?>
         var form = document.getElementById("redirect");
         var node;`;
-        APPLICATION_CONTEXT.setup.params.bypassCookies = false;
+        APPLICATION_CONTEXT.setup.params.bypassCookies = bypass;
 
         for (let i = 0; i < PLUGINS._exportHandlers.length; i++) {
             let toExport = PLUGINS._exportHandlers[i];
@@ -830,7 +843,6 @@ form.submit();<\/script>`;
             if (theme === "dark_dimmed") {
                 document.documentElement.dataset['darkTheme'] = "dark_dimmed";
                 document.documentElement.dataset['colorMode'] = "dark";
-
             } else {
                 document.documentElement.dataset['darkTheme'] = "dark";
                 document.documentElement.dataset['colorMode'] = theme;
@@ -847,7 +859,9 @@ form.submit();<\/script>`;
                 zoomLevel: VIEWER.viewport.getZoom(),
                 point: VIEWER.viewport.getCenter()
             };
-            APPLICATION_CONTEXT.setup.params.bypassCookies = false; //export will bypass cookies
+
+            let bypass = APPLICATION_CONTEXT.setup.params.bypassCookies;
+            APPLICATION_CONTEXT.setup.params.bypassCookies = true;
             <?php
             if ($layerVisible) {
                 //we need to safely stringify setup (which has been modified by the webgl module)
@@ -857,7 +871,7 @@ form.submit();<\/script>`;
             }
             ?>
             APPLICATION_CONTEXT.setup.params.viewport = oldViewport;
-            APPLICATION_CONTEXT.setup.params.bypassCookies = false;
+            APPLICATION_CONTEXT.setup.params.bypassCookies = bypass;
 
             let $temp = $("<input>");
             $("body").append($temp);
@@ -907,6 +921,8 @@ ${constructExportVisualisationForm()}
                 constructExportVisualisationForm(), `width=${x},height=${y}`);
         }
     };
+
+    APPLICATION_CONTEXT.UTILITIES.updateTheme();
 })(window);
     </script>
 
@@ -1163,7 +1179,7 @@ EOF;
             return;
         }
         <?php
-        if ($firstTimeVisited) {
+        if ($firstTimeVisited && !$bypassCookies) {
             echo "        setTimeout(function() {
                     USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
                         'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
@@ -1250,7 +1266,7 @@ EOF;
                 $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
             }
             meta.loaded = true;
-            if (APPLICATION_CONTEXT.getOption("permaLoadPlugins")) {
+            if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
                 let plugins = new URLSearchParams(document.cookie.replaceAll("; ","&")).get("_plugins");
                 document.cookie = `_plugins=${plugins + "," + meta.id}; <?php echo JS_COOKIE_SETUP ?>`;
             }
@@ -1263,13 +1279,11 @@ EOF;
     //TODO: also refresh page should not ask to re-send data -> redirect loop instead?
     function preventDirtyClose(e) {
         e.preventDefault();
-            if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+        if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
 
         if ( window.history.replaceState ) {
             window.history.replaceState( null, null, window.location.href );
         }
-
-
         window.location = window.location.href;
         return;
     }
@@ -1297,7 +1311,7 @@ EOF;
         } else if (window.detachEvent) {
             window.detachEvent('onbeforeunload', preventDirtyClose);
         }
-        $("body").append(APPLICATION_CONTEXT.UTILITIES.getForm(formData, includedPluginsList));
+        $("body").append(APPLICATION_CONTEXT.UTILITIES.getForm(formData, includedPluginsList, true));
     };
 })(window);
     </script>

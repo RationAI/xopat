@@ -224,7 +224,6 @@ OSDAnnotations.FreeFormTool = class {
                 }
 
                 if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
-                    //this.polygon.comment = this.initial.comment; //for some reason not preserved
                     delete this.initial.moveCursor;
                     delete this.polygon.moveCursor;
                     //todo avoid touching history/overlay

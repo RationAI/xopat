@@ -389,6 +389,26 @@ DIALOGS
 UTILITIES
 =====================
 */
+
+/*Use <..class="show-hint" data-hint="Show me as hint!"..> */
+.show-hint {
+    position: relative;
+}
+
+.show-hint:before {
+    content: attr(data-hint);
+    position: absolute;
+    font-size: xx-small;
+    top:-3px;
+    display: inline-block;
+}
+
+.one-liner {
+    white-space: nowrap !important;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
 .header-sep {
     width: 100%;
     display: flex;
@@ -515,7 +535,7 @@ select::-ms-expand {
           -ms-user-select: none; /* Internet Explorer/Edge */
               user-select: none; /* Non-prefixed version, currently
                                     supported by Chrome, Edge, Opera and Firefox */
-  }
+}
 
 
 .material-icons {

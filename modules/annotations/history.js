@@ -179,7 +179,6 @@ window.addEventListener("beforeunload", (e) => {
                         o.fill = preset.color;
                     }
                     o.color = preset.color;
-                    o.comment = preset.comment;
                 }
                 _this._addToBoard(o);
             } else if (o.incrementId && !isNaN(o.incrementId)) {
@@ -289,17 +288,27 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _addToBoard(object) {
-        let desc, icon;
-        if (!object.hasOwnProperty("comment") || object.comment.length < 1) {
-            desc = this._getObjectDefaultDescription(object);
-            icon = this._getObjectDefaultIcon(object);
-        } else {
-            desc = object.comment;
-            icon = this._getObjectDefaultIcon(object);
-        }
+        let desc;
+        let icon = this._getObjectDefaultIcon(object), inputs = [];
 
         if (!object.hasOwnProperty("incrementId")) {
             object.incrementId = this._autoIncrement++;
+        }
+
+        if (object.hasOwnProperty("meta")) {
+            for (let key in object.meta) {
+                let fn = key === "comment" ? inputs.unshift : inputs.push;
+                fn.apply(inputs, ['<input type="text" class="form-control border-0" readonly class="desc" ',
+                    'style="width: calc(100% - 80px); background:transparent;color: inherit;" value="',
+                    object.meta[key].value, '" name="', key, '">']);
+            }
+        }
+
+        //with no metadata, object will receive 'comment' on edit
+        if (inputs.length  < 1) {
+            inputs.push('<input type="text" class="form-control border-0" readonly class="desc" ',
+                'style="width: calc(100% - 80px); background:transparent;color: inherit;" value="',
+                this._getObjectDefaultDescription(object), '" name="comment">');
         }
 
         const _this = this;
@@ -308,8 +317,7 @@ window.addEventListener("beforeunload", (e) => {
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="color: ${object.color}">${icon}</span> 
-<input type="text" class="form-control border-0" readonly class="desc" 
-style="width: calc(100% - 80px); background:transparent;color: inherit;" value="${desc}">
+${inputs.join("")}
 <span class="material-icons pointer" id="edit-log-object-${object.incrementId}" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
@@ -331,7 +339,10 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             this._context.enableInteraction(false);
         }
 
-        self.prev().prop('readonly', false);
+        self.parent().find("input").each((e, t) => {
+            //todo does not work
+            t.readonly = false;
+        });
         self.html('save');
 
         let objectId = -1;
@@ -367,22 +378,25 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
                     this._context.replaceAnnotation(obj, newObject, true);
                     obj = newObject;
                 }
-
-                //self.target.initialize(obj);
-                //obj.polygon.initialize(object.polygon.points);
             } else {
                 obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
             }
 
-            let self = this._editSelection.self;
+            let self = this._editSelection.self,
+                inputs = self.parent().find("input");
             if (obj) {
-                obj.set({comment: self.prev().val()});
+                if (!obj.meta) obj.meta = {};
+                inputs.each((e, t) => {
+                    obj.meta[t.name] = t.value;
+                    t.readonly = true;
+                });
+                console.log(obj.meta);
             } else {
                 console.warn("Failed to update object: could not find object with id "
                     + this._editSelection.incrementId);
+                inputs.each((e, t) => t.readonly = true);
             }
             self.html('edit');
-            self.prev().prop('readonly', true);
 
             if (!switches) {
                 $('#bord-for-annotations .Box-header').css('background', 'none');

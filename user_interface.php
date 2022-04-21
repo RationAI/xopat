@@ -562,7 +562,7 @@ Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme", true)} APPLIC
 <br> ${inputs.checkBox("", "Show ToolBar", "$('#plugin-tools-menu').toggleClass('d-none')", true)}
 <br> ${inputs.checkBox("", "Show Scale", updateBool("scaleBar", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("scaleBar"))}
 <br><br><span class="f3-light header-sep">Behaviour</span>
-${inputs.checkBox("", "Use Cookies", updateBool("bypassCookies", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("bypassCookies"))}
+${inputs.checkBox("", "Disable Cookies", updateBool("bypassCookies", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("bypassCookies"))}
 <br> ${inputs.checkBox("", "Debug Mode", updateBool("debugMode") + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("debugMode"))}
 `
             },
@@ -651,9 +651,24 @@ ${inputs.checkBox("", "Use Cookies", updateBool("bypassCookies", true) + notifyN
                     pin.removeClass('pressed');
                     container.removeClass('force-visible');
                 });
-                //do prerequisite setup if necessary
-                if(this.prerequisites[index]) this.prerequisites[index]();
-                let enjoyhintInstance = new EnjoyHint({});
+
+                let prereq = this.prerequisites[index];
+                let enjoyhintInstance = new EnjoyHint({
+                    onStart: function () {
+                        window.addEventListener("resize", enjoyhintInstance.reRender, false);
+                        window.addEventListener("click", enjoyhintInstance.rePaint, false);
+
+                        if (prereq) prereq();
+                    },
+                    onEnd : function () {
+                        window.removeEventListener("resize", enjoyhintInstance.reRender, false);
+                        window.removeEventListener("click", enjoyhintInstance.rePaint, false);
+                    },
+                    onSkip: function () {
+                        window.removeEventListener("resize", enjoyhintInstance.reRender, false);
+                        window.removeEventListener("click", enjoyhintInstance.rePaint, false);
+                    }
+                });
                 enjoyhintInstance.set(this.steps[index]);
                 this.hide();
                 enjoyhintInstance.run();

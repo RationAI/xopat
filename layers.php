@@ -131,6 +131,11 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     /*---------------------------------------------------------*/
 
     window.APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot = function() {
+        if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
+            Dialogs.show("Cookies are disabled. You can change this option in 'Settings'.", 5000, Dialogs.MSG_WARN);
+            return;
+        }
+
         let active = seaGL.currentVisualisation().shaders;
         for (let key in active) {
             if (active.hasOwnProperty(key)) {
@@ -357,7 +362,7 @@ onchange="APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer('${dataId}', '${key}', 
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="APPLICATION_CONTEXT.UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; white-space: nowrap;text-overflow: ellipsis;overflow: hidden;vertical-align: bottom;'>${title}</span>
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
               <div class="d-inline-block label-render-type" style="cursor: pointer; float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}

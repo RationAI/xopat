@@ -3,10 +3,16 @@
  */
 OSDAnnotations.Preset = class {
     constructor(id, objectFactory = null, comment = "", color = "") {
-        this.comment = comment;
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
+        this.meta = {};
+        if (comment) {
+            this.meta.comment = {
+                name: 'Comment',
+                value: comment
+            };
+        }
     }
 
     fromJSONFriendlyObject(parsedObject, factoryGetter) {
@@ -16,18 +22,27 @@ OSDAnnotations.Preset = class {
                 "No factory for such object available.");
             this.objectFactory = factoryGetter("polygon"); //rely on polygon presence
         }
-        this.comment = parsedObject.comment;
         this.color = parsedObject.color;
         this.presetID = parsedObject.presetID;
+        this.meta = parsedObject.meta || {};
         return this;
     }
+
     toJSONFriendlyObject() {
         return {
-            comment: this.comment,
             color: this.color,
             factoryID: this.objectFactory.factoryId,
-            presetID: this.presetID
+            presetID: this.presetID,
+            meta: this.meta
         };
+    }
+
+    getMetaName(key) {
+        return this.meta[key] ? this.meta[key].name : undefined;
+    }
+
+    getMetaValue(key) {
+        return this.meta[key] ? this.meta[key].value : undefined;
     }
 }; // end of namespace Preset
 
@@ -81,8 +96,8 @@ OSDAnnotations.PresetManager = class {
         //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
         return $.extend({fill: preset.color},
             OSDAnnotations.PresetManager._commonProperty,
-            preset,
             {
+                presetID: preset.presetID,
                 isLeftClick: isLeftClick,
                 opacity: this._context.getOpacity(),
             }
@@ -94,8 +109,9 @@ OSDAnnotations.PresetManager = class {
      * @returns {Preset} newly created preset
      */
     addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "ID ", this._randomColorHexString());
         this._presets[preset.presetID] = preset;
+        preset.meta.comment.value += preset.presetID;
         return preset;
     }
 
@@ -161,18 +177,45 @@ OSDAnnotations.PresetManager = class {
      * @return updated preset in case any value changed, false otherwise
      */
     updatePreset(id, properties) {
-        let toUpdate = this._presets[id],
+        let preset = this._presets[id],
             needsRefresh = false;
-        if (!toUpdate) return undefined;
+        if (!preset) return undefined;
 
-        Object.entries(properties).forEach(([key, value]) => {
-            if (toUpdate[key] !== value) {
-                needsRefresh = true;
+        for (let key in properties) {
+            let value = properties[key];
+
+            if (preset.hasOwnProperty(key)) {
+                if (preset[key] !== value) {
+                    preset[key] = value;
+                    needsRefresh = true;
+                }
+            } else {
+                if (preset.meta[key] && preset.meta[key].value !== value) {
+                    preset.meta[key].value = value;
+                    needsRefresh = true;
+                }
             }
-            toUpdate[key] = value;
-        });
+        }
+        return needsRefresh ? preset : undefined;
+    }
 
-        return needsRefresh ? toUpdate : undefined;
+    addCustomMeta(id, name, value) {
+        let preset = this._presets[id];
+        let key = "k"+Date.now();
+        preset.meta[key] = {
+            name: name,
+            value: value
+        };
+        return key;
+    }
+
+    deleteCustomMeta(id, key) {
+        let preset = this._presets[id];
+        if (preset && preset.meta[key]) {
+            delete preset.meta[key];
+            return true;
+        }
+        return false;
     }
 
     foreach(call) {
@@ -490,7 +533,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: ofObject.hasControls,
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
-            comment: ofObject.comment,
+            meta: ofObject.meta,
             presetID: ofObject.presetID
         });
     }
@@ -640,7 +683,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
-            comment: ofObject.comment,
+            meta: ofObject.meta,
             factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
@@ -816,7 +859,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: ofObject.hasControls,
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
-            comment: ofObject.comment,
+            meta: ofObject.meta,
             presetID: ofObject.presetID
         });
     }
@@ -980,7 +1023,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             borderColor: ofObject.borderColor,
             cornerColor: ofObject.cornerColor,
             borderScaleFactor: ofObject.borderScaleFactor,
-            comment: ofObject.comment,
+            meta: ofObject.meta,
             hasControls: ofObject.hasControls,
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
@@ -989,6 +1032,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     edit(theObject) {
+        this._origPoints = [...theObject.points];
         this._context.canvas.setActiveObject(theObject);
 
         var lastControl = theObject.points.length - 1;
@@ -1053,12 +1097,22 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        this._context.deleteHelperAnnotation(this._initPoint);
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
-        theObject.objectCaching = true;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
-        this._context.canvas.renderAll();
+
+        if (!theObject.points.every(
+            (value, index) => value === this._origPoints[index])) {
+
+            console.log(this._origPoints);
+            console.log(theObject.points);
+
+            let newObject = this.copy(theObject, theObject.points);
+            theObject.points = this._origPoints;
+            this._context.replaceAnnotation(theObject, newObject, true);
+            this._context.canvas.renderAll();
+        }
+        this._origPoints = null;
         this._initialize(false);
     }
 
