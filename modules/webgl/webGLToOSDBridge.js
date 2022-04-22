@@ -10,7 +10,7 @@
 
 OpenSeadragon.BridgeGL = class {
 
-    constructor( openSeaDragonInstance, webGLEngine, mode="cache") {
+    constructor( openSeaDragonInstance, webGLEngine, cachedMode=true) {
         let _this  = this;
         this.openSD = openSeaDragonInstance;
 
@@ -19,7 +19,7 @@ OpenSeadragon.BridgeGL = class {
         this.webGLEngine = webGLEngine;
         this.upToDateTStamp = Date.now();
 
-        if (mode !== "cache") {
+        if (!cachedMode) {
             this.uid = OpenSeadragon.BridgeGL.getUniqueId();
         }
         this._rendering = new WeakMap();
@@ -57,7 +57,9 @@ OpenSeadragon.BridgeGL = class {
      */
     hasImageAssigned(tiledImage) {
         for (let key in this._rendering) {
-            if (this._rendering[key] == tiledImage) return true;
+            if (this._rendering.hasOwnProperty(key) && this._rendering[key].source == tiledImage.source) {
+                return true;
+            }
         }
         return false;
     }
@@ -350,8 +352,16 @@ OpenSeadragon.BridgeGL = class {
 
     _tileLoaded(e) {
         if (! e.image) return;
+
+        let loaded= this.hasImageAssigned(e.tiledImage);
+        if (!loaded) {
+            console.log(loaded, this.hasImageAssigned(e.tiledImage), e);
+        }
+
         if (this.hasImageAssigned(e.tiledImage) && !e.tile.webglId) {
             e.tile.webglId = this.uid;
+            //todo necessary to set?!?! I thougth OSD does this automatically
+            e.tile.image = e.image;
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement('canvas');
@@ -366,7 +376,7 @@ OpenSeadragon.BridgeGL = class {
         if (e.tile.webglRefresh <= this.upToDateTStamp) {
             e.tile.webglRefresh = this.upToDateTStamp + 1;
 
-            //todo might not be necessary
+            //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
             let imageData = e.tile.imageData();
@@ -425,7 +435,7 @@ OpenSeadragon.BridgeGL = class {
             if (cache.webglRefresh <= _context.upToDateTStamp) {
                 cache.webglRefresh = _context.upToDateTStamp + 1;
 
-                //todo might not be necessary
+                //todo make it such that it is called just once
                 _context.webGLEngine.setDimensions(cache._dim.width, cache._dim.height);
 
                 // Render a webGL canvas to an input canvas using cached version

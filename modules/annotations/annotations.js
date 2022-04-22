@@ -418,7 +418,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let objectsLength = objects.length;
 		for (let i = 0; i < objectsLength; i++) {
 			this.history.push(null, objects[objectsLength - i - 1]);
-			objects[objectsLength - i - 1].remove();
+			this.canvas.remove(objects[objectsLength - i - 1]);
 		}
 	}
 
@@ -444,10 +444,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 
 		/* OSD values used by annotations */
+		let refTileImage = VIEWER.tools.referencedTiledImage();
 		this.overlay = VIEWER.fabricjsOverlay({
-			scale: VIEWER.tools.referencedTileSource().source.Image.Size.Width,
+			scale: refTileImage.source.dimensions ?
+				refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
 			fireRightClick: true
 		});
+		//if plugin loaded at runtime, 'open' event not called
+		this.overlay.resize();
+		this.overlay.resizecanvas();
 
 		//this.canvas.__eventListeners = {};
 		// const get = this.canvas.getActiveObject.bind(this.canvas);
@@ -545,7 +550,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		**************************************************************************************************/
 		let screenToPixelCoords = function (x, y) {
 			//cannot use VIEWER.tools.imagePixelSizeOnScreen() because of canvas margins
-			return VIEWER.tools.referencedTileSource().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+			return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 		}.bind(this);
 
 		function handleRightClickUp(event) {
@@ -575,6 +580,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickUp(event, point, true, factory);
+
 			_this.cursor.isDown = false;
 		}
 
@@ -609,7 +615,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//Update object when user hodls ALT and moving with mouse (this.isMouseOSDInteractive() == true)
 		this.canvas.on('mouse:move', function (o) {
 			if (_this.disabledInteraction || !_this.cursor.isDown) return;
-			_this.mode.handleMouseMove(_this.canvas.getPointer(o.e));
+			_this.mode.handleMouseMove(screenToPixelCoords(o.e.x, o.e.y));
 		});
 
 		this.canvas.on('mouse:wheel', function (o) {
@@ -990,7 +996,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		let currentObject = this.context.polygonFactory.create(
 			this.context.modifyTool.getCircleShape(point), this.context.presets.getAnnotationOptions(isLeftClick)
 		);
-		this.context.addHelperAnnotation(currentObject);
+		this.context.addAnnotation(currentObject);
 		return currentObject;
 	}
 

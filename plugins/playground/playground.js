@@ -66,7 +66,7 @@ class Playground  {
         APPLICATION_CONTEXT.UTILITIES.loadModules(function () {
             this.vectorCanvas = VIEWER.fabricjsOverlay({
                 //todo move this to the fabricjs module
-                scale: VIEWER.tools.referencedTileSource().source.Image.Size.Width,
+                scale: VIEWER.tools.referencedTiledImage().source.Image.Size.Width,
                 fireRightClick: false,
                 fireMiddleClick: false,
             });

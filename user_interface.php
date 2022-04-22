@@ -320,8 +320,8 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
       <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
 	  ${content}
 	  </div>
-       ${footer}
     </div>
+   ${footer}
 </details-dialog>
 </div>`;
         },

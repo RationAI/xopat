@@ -56,9 +56,6 @@
      * @param {Integer} options.pixelsPerMeter The pixels per meter of the
      * zoomable image at the original image size. If null, the scale bar is not
      * displayed. default: null
-     * @param {Integer} options.referenceItemIdx Specify the item from
-     * viewer.world to which options.pixelsPerMeter is refering.
-     * default: 0
      * @param (String} options.minWidth The minimal width of the scale bar as a
      * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
      * @param {OpenSeadragon.ScalebarLocation} options.location The location
@@ -107,7 +104,6 @@
         this.fontFamily = options.fontFamily || "";
         this.barThickness = options.barThickness || 2;
         this.pixelsPerMeter = options.pixelsPerMeter || null;
-        this.referenceItemIdx = options.referenceItemIdx || 0;
         this.location = options.location || $.ScalebarLocation.BOTTOM_LEFT;
         this.xOffset = options.xOffset || 5;
         this.yOffset = options.yOffset || 5;
@@ -160,9 +156,6 @@
             if (isDefined(options.pixelsPerMeter)) {
                 this.pixelsPerMeter = options.pixelsPerMeter;
             }
-            if (isDefined(options.referenceItemIdx)) {
-                this.referenceItemIdx = options.referenceItemIdx;
-            }
             if (isDefined(options.location)) {
                 this.location = options.location;
             }
@@ -203,9 +196,6 @@
          * @param {Integer} options.pixelsPerMeter The pixels per meter of the
          * zoomable image at the original image size. If null, the scale bar is not
          * displayed. default: null
-         * @param {Integer} options.referenceItemIdx Specify the item from
-         * viewer.world to which options.pixelsPerMeter is refering.
-         * default: 0
          * @param (String} options.minWidth The minimal width of the scale bar as a
          * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
          * @param {OpenSeadragon.ScalebarLocation} options.location The location
@@ -242,13 +232,9 @@
             }
             this.divElt.style.display = "";
 
-            var viewport = this.viewer.viewport;
-            var tiledImage = this.viewer.world.getItemAt(this.referenceItemIdx);
-            var zoom = tiledImageViewportToImageZoom(tiledImage,
-                viewport.getZoom(true));
-            var currentPPM = zoom * this.pixelsPerMeter;
-            var props = this.sizeAndTextRenderer(currentPPM, this.minWidth);
-
+            var props = this.sizeAndTextRenderer(
+                this.pixelsPerMeter * this.viewer.tools.imagePixelSizeOnScreen(), this.minWidth
+            );
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
             this.divElt.style.left = location.x + "px";
@@ -282,11 +268,15 @@
          * @returns {OpenSeadragon.Point}
          */
         getScalebarLocation: function() {
+            var barWidth = this.divElt.offsetWidth;
+            var barHeight = this.divElt.offsetHeight;
+            var container = this.viewer.container;
+            var x = 0;
+            var y = 0;
+            var pixel;
             if (this.location === $.ScalebarLocation.TOP_LEFT) {
-                var x = 0;
-                var y = 0;
                 if (this.stayInsideImage) {
-                    var pixel = this.viewer.viewport.pixelFromPoint(
+                    pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(0, 0), true);
                     if (!this.viewer.wrapHorizontal) {
                         x = Math.max(pixel.x, 0);
@@ -296,14 +286,10 @@
                     }
                 }
                 return new $.Point(x + this.xOffset, y + this.yOffset);
-            }
-            if (this.location === $.ScalebarLocation.TOP_RIGHT) {
-                var barWidth = this.divElt.offsetWidth;
-                var container = this.viewer.container;
-                var x = container.offsetWidth - barWidth;
-                var y = 0;
+            } else if (this.location === $.ScalebarLocation.TOP_RIGHT) {
+                x = container.offsetWidth - barWidth;
                 if (this.stayInsideImage) {
-                    var pixel = this.viewer.viewport.pixelFromPoint(
+                    pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 0), true);
                     if (!this.viewer.wrapHorizontal) {
                         x = Math.min(x, pixel.x - barWidth);
@@ -313,15 +299,11 @@
                     }
                 }
                 return new $.Point(x - this.xOffset, y + this.yOffset);
-            }
-            if (this.location === $.ScalebarLocation.BOTTOM_RIGHT) {
-                var barWidth = this.divElt.offsetWidth;
-                var barHeight = this.divElt.offsetHeight;
-                var container = this.viewer.container;
-                var x = container.offsetWidth - barWidth;
-                var y = container.offsetHeight - barHeight;
+            } else if (this.location === $.ScalebarLocation.BOTTOM_RIGHT) {
+                x = container.offsetWidth - barWidth;
+                y = container.offsetHeight - barHeight;
                 if (this.stayInsideImage) {
-                    var pixel = this.viewer.viewport.pixelFromPoint(
+                    pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 1 / this.viewer.source.aspectRatio),
                         true);
                     if (!this.viewer.wrapHorizontal) {
@@ -332,14 +314,10 @@
                     }
                 }
                 return new $.Point(x - this.xOffset, y - this.yOffset);
-            }
-            if (this.location === $.ScalebarLocation.BOTTOM_LEFT) {
-                var barHeight = this.divElt.offsetHeight;
-                var container = this.viewer.container;
-                var x = 0;
-                var y = container.offsetHeight - barHeight;
+            } else if (this.location === $.ScalebarLocation.BOTTOM_LEFT) {
+                y = container.offsetHeight - barHeight;
                 if (this.stayInsideImage) {
-                    var pixel = this.viewer.viewport.pixelFromPoint(
+                    pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(0, 1 / this.viewer.source.aspectRatio),
                         true);
                     if (!this.viewer.wrapHorizontal) {
@@ -391,7 +369,7 @@
             newCanvas.height = imgCanvas.height;
             var newCtx = newCanvas.getContext("2d");
             newCtx.drawImage(imgCanvas, 0, 0);
-            var scalebarCanvas = this.getAscanvas;
+            var scalebarCanvas = this.getAsCanvas();
             var location = this.getScalebarLocation();
             newCtx.drawImage(scalebarCanvas, location.x, location.y);
             return newCanvas;

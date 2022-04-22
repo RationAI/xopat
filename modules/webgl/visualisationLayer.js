@@ -225,8 +225,9 @@ WebGLModule.VisualisationLayer = class {
     //should start as 'use_[name]' for namespace collision avoidance (params object)
     //expression should be wrapped in parenthesses for safety: ["(....(", ")....)"] in the middle the
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
+    //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
     static filters = {
-        use_gamma: (x) => ["pow(", `, 1.0 / ${this.toShaderFloatString(x, "1.0")})`],
+        use_gamma: (x) => ["exp(log(", `) / ${this.toShaderFloatString(x, "1.0")})`],
         use_exposure: (x) => ["(1.0 - exp(-(", `)* ${this.toShaderFloatString(x, "1.0")}))`],
         use_logscale: (x) => {
             x = this.toShaderFloatString(x, "1.0");
@@ -291,7 +292,6 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * todo do not samble by default texture, but the output of rendering!!
      * Alias for sampleReferenced(textureCoords, 0)
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
@@ -356,9 +356,9 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Load value, useful for controls value caching
-     * @param name value name
-     * @param defaultValue default value if no stored value available
-     * @return stored value or default value
+     * @param {string} name value name
+     * @param {string} defaultValue default value if no stored value available
+     * @return {string} stored value or default value
      */
     loadProperty(name, defaultValue) {
         let selfType = this.constructor.type();
@@ -418,6 +418,16 @@ WebGLModule.VisualisationLayer = class {
             return;
         }
         this.storeProperty(filter, value);
+    }
+
+    /**
+     * Get the filter value (alias for loadProperty(...)
+     * @param {string} filter filter to read the value of
+     * @param {string} defaultValue
+     * @return {string} stored filter value or defaultValue if no value available
+     */
+    getFilterValue(filter, defaultValue) {
+        return this.loadProperty(filter, defaultValue);
     }
 
     /**

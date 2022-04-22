@@ -10,8 +10,6 @@
  *  ctrlColor - whether to allow color modification, true or false, default true
  *  ctrlThreshold - whether to allow threshold modification, true or false, default true
  *  ctrlOpacity - whether to allow opacity modification, true or false, default true
- *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
- *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
  *
  * this shader considers insignificant values to be around the middle (0.5), and significant are low or high values,
  * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively
@@ -70,7 +68,7 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
                 ${this.render(`vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()})`)}
             } else ${this.render(`vec4(.0)`)}
         }
-    }        
+    }  
 `;
     }
 

@@ -70,7 +70,7 @@ foreach ($parsedParams->background as $bg) {
 
 $layerVisible = isset($parsedParams->visualizations);
 $singleBgImage = count($parsedParams->background) == 1;
-$firstTimeVisited = !isset($_COOKIE["_shadersPin"]);
+$firstTimeVisited = count($_COOKIE) > 1;
 
 if ($layerVisible) {
     foreach ($parsedParams->visualizations as $visualisationTarget) {
@@ -339,7 +339,7 @@ EOF;
 EOF;
             }
             if ($layerVisible) {
-                $opened = $firstTimeVisited || $_COOKIE["_shadersPin"] == "true";
+                $opened = $firstTimeVisited || isset($_COOKIE["_shadersPin"]) && $_COOKIE["_shadersPin"] == "true";
                 $pinClass = $opened ? "opened" : "";
                 $shadersSettingsClass = $opened ? "force-visible" : "";
                 echo <<<EOF
@@ -350,7 +350,7 @@ EOF;
                     <div>
                         <span id="shaders-pin" class="material-icons pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); APPLICATION_CONTEXT.UTILITIES.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
                         document.cookie = `_shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
-                        <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1" aria-label="Visualisation">
+                        <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
                         <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot();">bookmark</span>
@@ -395,12 +395,10 @@ EOF;
         webglDebugMode: false,
         scaleBar: true,
         microns: undefined,
-        viewport: {
-            zoomLevel: 1,
-            point: {x: 0.5, y: 0.5}
-        },
+        viewport: undefined,
         activeVisualizationIndex: 0,
         grayscale: false,
+        tileCache: true,
         preventNavigationShortcuts: false,
         permaLoadPlugins: true,
         bypassCookies: false,
@@ -441,7 +439,7 @@ EOF;
     };
 
     //https://github.com/mrdoob/stats.js
-    if (setup.params.debugMode) {
+    if (APPLICATION_CONTEXT.getOption("debugMode")) {
         (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='external/stats.js';document.head.appendChild(script);})()
     }
 
@@ -540,26 +538,10 @@ EOF;
             navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-        debugMode: setup.params.debugMode,
+        debugMode: APPLICATION_CONTEXT.getOption("debugMode"),
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
-
-    if (!setup.params.hasOwnProperty("scaleBar") || setup.params.scaleBar) {
-        VIEWER.scalebar({
-            pixelsPerMeter: (setup.params.microns ?? 1000) * 1e3,
-            sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
-            stayInsideImage: false,
-            location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
-            xOffset: 5,
-            yOffset: 10,
-            // color: "var(--color-text-primary)",
-            // fontColor: "var(--color-text-primary)",
-            backgroundColor: "rgba(255, 255, 255, 0.5)",
-            fontSize: "small",
-            barThickness: 2
-        });
-    }
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of Visualisation ------------*/
@@ -718,7 +700,7 @@ EOF;
         VIEWER.viewport.applyConstraints();
     });
 
-    if (!setup.params.preventNavigationShortcuts) {
+    if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {
         function adjustBounds(speedX, speedY) {
             let bounds = VIEWER.viewport.getBounds();
             bounds.x += speedX*bounds.width;
@@ -1122,7 +1104,6 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
-        VIEWER.tools.referencedTileSource = VIEWER.world.getItemAt.bind(window.VIEWER.world, selectedImageLayer);
 
         let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
         if (layerIDX !== -1) {
@@ -1140,6 +1121,23 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
                 layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
             }
 
+            let microns = APPLICATION_CONTEXT.getOption("microns");
+            if (microns && APPLICATION_CONTEXT.getOption("scaleBar")) {
+                VIEWER.scalebar({
+                    pixelsPerMeter: microns * 1e3,
+                    sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
+                    stayInsideImage: false,
+                    location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+                    xOffset: 5,
+                    yOffset: 10,
+                    // color: "var(--color-text-primary)",
+                    // fontColor: "var(--color-text-primary)",
+                    backgroundColor: "rgba(255, 255, 255, 0.5)",
+                    fontSize: "small",
+                    barThickness: 2
+                });
+            }
+
             <?php
             if ($layerVisible) {
                 echo <<<EOF
@@ -1154,11 +1152,10 @@ EOF;
         registeredPlugins.forEach(plugin => initializePlugin(plugin));
         registeredPlugins = undefined;
 
-        if (setup.params.hasOwnProperty("viewport")
-            && setup.params.viewport.hasOwnProperty("point")
-            && setup.params.viewport.hasOwnProperty("zoomLevel")) {
-            window.VIEWER.viewport.panTo(setup.params.viewport.point, true);
-            window.VIEWER.viewport.zoomTo(setup.params.viewport.zoomLevel, null, true);
+        let focus = APPLICATION_CONTEXT.getOption("viewport");
+        if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
+            window.VIEWER.viewport.panTo(focus.point, true);
+            window.VIEWER.viewport.zoomTo(focus.zoomLevel, null, true);
         }
 
         if (window.innerHeight < 630) {
@@ -1267,8 +1264,11 @@ EOF;
             }
             meta.loaded = true;
             if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                let plugins = new URLSearchParams(document.cookie.replaceAll("; ","&")).get("_plugins");
-                document.cookie = `_plugins=${plugins + "," + meta.id}; <?php echo JS_COOKIE_SETUP ?>`;
+                let plugins = [];
+                for (let p in PLUGINS.each) {
+                    if (PLUGINS.each[p].loaded) plugins.push(p);
+                }
+                document.cookie = `_plugins=${plugins.join(",")}; <?php echo JS_COOKIE_SETUP ?>`;
             }
             onload();
         };

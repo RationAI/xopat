@@ -43,6 +43,7 @@ OSDAnnotations.FreeFormTool = class {
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
         this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
         this._created = created;
+        this._updatePerformed = false;
     }
 
     updateCursorRadius() {
@@ -95,7 +96,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     setRadius (radius) {
-        let imageTileSource = VIEWER.tools.referencedTileSource();
+        let imageTileSource = VIEWER.tools.referencedTiledImage();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
@@ -113,13 +114,9 @@ OSDAnnotations.FreeFormTool = class {
         }
 
         try {
-            let result = this._update(point);
-
-            //result must exist and new no. of points must be at least 10% of the previous
-            if (result && this.polygon.points.length * 0.1 <= result.points.length) {
-                this._context.replaceAnnotation(this.polygon, result, false);
-                this.polygon = result;
-            }
+            this._updatePerformed = this._update(point) || this._updatePerformed;
+            this.polygon._setPositionDimensions({});
+            this._context.canvas.renderAll();
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
         }
@@ -130,19 +127,20 @@ OSDAnnotations.FreeFormTool = class {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
-            if (this.polygon.incrementId !== this.initial.incrementId) {
-                //incrementID is used by history - if ID equal, no changes were made -> no record
-                this._context.history.push(this.polygon, this.initial);
-            } else if (this._created) {
-                //new objects do not have incrementID as they should be instantiated without registering in history
-                this._context.promoteHelperAnnotation(this.polygon);
+
+            if (this._updatePerformed) {
+                let newPolygon = this._context.polygonFactory.copy(this.polygon, this.polygon.points);
+                this._context.replaceAnnotation(this.polygon, newPolygon, true);
+                this.polygon = newPolygon;
             }
+
             this._cachedSelection = this.polygon;
             this._created = false;
             let outcome = this.polygon;
             this.polygon = null;
             this.initial = null;
             this.mousePos = null;
+            this._updatePerformed = false;
             return outcome;
         }
         return null;
@@ -150,7 +148,7 @@ OSDAnnotations.FreeFormTool = class {
 
     //TODO sometimes the greinerHormann cycling, vertices are NaN values, do some measurement and kill after it takes too long (2+s ?)
     _union (nextMousePos) {
-        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
+        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
         let radPoints = this.getCircleShape(nextMousePos);
         //console.log(radPoints);
@@ -164,49 +162,51 @@ OSDAnnotations.FreeFormTool = class {
             var union = greinerHormann.union(polypoints, radPoints);
         } catch (e) {
             console.warn("Unable to unify polygon with tool.", this.polygon, radPoints, e);
-            return null;
+            return false;
         }
 
         if (union) {
             if (typeof union[0][0] === 'number') { // single linear ring
-                // var polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(union));
-            } else {
-                if (union.length > 1) union = this._unify(union);
-
-                let maxIdx = 0,maxScore = 0;
-                for (let j = 0; j < union.length; j++) {
-                    let measure = this._findApproxBoundBoxSize(union[j]);
-                    if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
-                    let area = measure.diffX * measure.diffY;
-                    let score = 2*area + union[j].length;
-                    if (score > maxScore) {
-                        maxScore = score;
-                        maxIdx = j;
-                    }
-                }
-
-                var polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(union[maxIdx]));
-                polygon.objectCaching = false;
+                return false;
             }
-            return polygon;
-        }
 
-        console.log("NO UNION FOUND");
-        return null;
+            if (union.length > 1) union = this._unify(union);
+
+            let maxIdx = 0,maxScore = 0;
+            for (let j = 0; j < union.length; j++) {
+                let measure = this._findApproxBoundBoxSize(union[j]);
+                if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
+                let area = measure.diffX * measure.diffY;
+                let score = 2*area + union[j].length;
+                if (score > maxScore) {
+                    maxScore = score;
+                    maxIdx = j;
+                }
+            }
+            this.polygon.set({points: this.simplifier(union[maxIdx])});
+            return true;
+        }
+        return false;
     }
 
     _subtract (nextMousePos) {
-        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return;
+        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
         let radPoints = this.getCircleShape(nextMousePos);
         var polypoints = this.polygon.get("points");
         this.mousePos = nextMousePos;
 
-        let difference = greinerHormann.diff(polypoints, radPoints);
+        try {
+            var difference = greinerHormann.diff(polypoints, radPoints);
+        } catch (e) {
+            console.warn("Unable to diff polygon with tool.", this.polygon, radPoints, e);
+            return false;
+        }
+
         if (difference) {
             let polygon;
             if (typeof difference[0][0] === 'number') { // single linear ring
-                polygon = this._context.polygon.create(this.simplifier(difference), this._context.presets.getAnnotationOptions(this.polygon.isLeftClick));
+                polygon = this.simplifier(difference);
             } else {
                 if (difference.length > 1) difference = this._unify(difference);
 
@@ -226,22 +226,20 @@ OSDAnnotations.FreeFormTool = class {
                 if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
                     delete this.initial.moveCursor;
                     delete this.polygon.moveCursor;
-                    //todo avoid touching history/overlay
-                    this._context.deleteHelperAnnotation(this.polygon);
-                    this._context.history.push(null, this.initial);
+                    this._context.deleteAnnotation(this.polygon);
 
                     this.polygon = null;
                     this.initial = null;
                     this.mousePos = null;
-                    return null;
+                    return true;
                 }
 
-                polygon = this._context.polygonFactory.copy(this.polygon, this.simplifier(difference[maxIdx]));
-                polygon.objectCaching = false;
+                polygon = this.simplifier(difference[maxIdx]);
             }
-            return polygon;
+            this.polygon.set({points: polygon});
+            return true;
         }
-        return null;
+        return false;
     }
 
     //initialize object so that it is ready to be modified

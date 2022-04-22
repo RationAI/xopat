@@ -757,7 +757,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     _updateText(line, text) {
         //todo not accurate, move microns API to the tools
         text.set({
-            text: Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)) + 'ms',
+            text: Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)) + 'mm',
             left: (line.x1 + line.x2) / 2,
             top: (line.y1 + line.y2) / 2,
         });
@@ -767,7 +767,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return [new fabric.Line(parameters, $.extend({
             scaleX: 1,
             scaleY: 1
-        }, options)), new fabric.Text('ms', {
+        }, options)), new fabric.Text('mm', {
             fontSize: 12 / VIEWER.tools.imagePixelSizeOnScreen(),
             textBackgroundColor: "#fff"
 
@@ -1103,10 +1103,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
         if (!theObject.points.every(
             (value, index) => value === this._origPoints[index])) {
-
-            console.log(this._origPoints);
-            console.log(theObject.points);
-
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
             this._context.replaceAnnotation(theObject, newObject, true);
@@ -1713,11 +1709,11 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
     }
 
     toGlobalPointXY (x, y) {
-		return VIEWER.tools.referencedTileSource().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	toGlobalPoint (point) {
-		return VIEWER.tools.referencedTileSource().windowToImageCoordinates(point);
+		return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(point);
 	}
 
 	isValidPixel(eventPosition) {

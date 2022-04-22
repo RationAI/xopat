@@ -110,7 +110,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     });
 
     // Wrap WebGL module into bridge interface to bind to OpenSeadragon
-    let seaGL = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing);
+    let seaGL = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
 
     VIEWER.bridge = seaGL;
     seaGL.addVisualisation(...APPLICATION_CONTEXT.setup.visualizations);
@@ -148,7 +148,16 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     };
 
     // load desired shader upon selection
-    $("#shaders").on("change", function () {
+    let shadersMenu = document.getElementById("shaders");
+    shadersMenu.addEventListener("mousedown", function (e) {
+        if (this.childElementCount < 2) {
+            e.preventDefault();
+            $(this.previousElementSibling).click();
+            return false;
+        }
+    });
+
+    shadersMenu.addEventListener("change", function () {
         let active =  Number.parseInt(this.value);
         APPLICATION_CONTEXT.setOption("activeVisualizationIndex", active);
         seaGL.switchVisualisation(active);
@@ -280,7 +289,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
             //store to the configuration
-            viz.shaders[layerId].setFilterValue(filter, value);
+            viz.shaders[layerId]._renderContext.setFilterValue(filter, value);
             viz.shaders[layerId]._renderContext.resetFilters(viz.shaders[layerId].params);
             seaGL.reorder(null); //force to re-build
         } else {
@@ -348,13 +357,20 @@ onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="To
         //     }
         // }
 
-        let filterUpdate = "";
+        let filterUpdate = [];
         if (!fixed) {
-            Object.keys(WebGLModule.VisualisationLayer.filters).some(key => {
+            for (let key in WebGLModule.VisualisationLayer.filters) {
                 let found = layer.params.hasOwnProperty(key);
-                if (found) filterUpdate = `<span>${WebGLModule.VisualisationLayer.filterNames[key]}:</span><input type="number" value="${layer.params[key]}"
-onchange="APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer('${dataId}', '${key}', Number.parseFloat(this.value));" class="form-control">`;
-                return found;
+                if (found) {
+                    filterUpdate.push('<span>', WebGLModule.VisualisationLayer.filterNames[key],
+                        ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
+                        '" style="width:80px;" onchange="APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer(\'', dataId,
+                        "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
+                }
+            }
+
+            Object.keys(WebGLModule.VisualisationLayer.filters).some(key => {
+                return false;
             });
         }
 
@@ -371,7 +387,7 @@ onchange="APPLICATION_CONTEXT.UTILITIES.changeVisualisationLayer(this, '${dataId
                 ${modeChange}
                 <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
             </div>
-            <div class="non-draggable">${html}${filterUpdate}</div>
+            <div class="non-draggable">${html}${filterUpdate.join("")}</div>
             </div>`;
     }
 })(window);

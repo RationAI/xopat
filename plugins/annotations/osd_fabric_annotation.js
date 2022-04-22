@@ -270,9 +270,10 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_X
 			}
 		});
 
-		return `<div class="position-relative border-md p-1 mx-2 rounded-3 one-liner" style="border-width:3px!important;" 
-onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons" 
-style="color: ${preset.color};">${icon}</span>  ${comment}
+		return `<div class="position-relative border-md p-1 mx-2 rounded-3 px-1" style="border-width:3px!important;"
+onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons pr-0" 
+style="color: ${preset.color};">${icon}</span>  <span class="one-liner d-inline-block v-align-middle" 
+style="width: 115px;">${comment}</span>
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
 	}
 
@@ -335,9 +336,9 @@ style="color: ${preset.color};">${icon}</span>  ${comment}
 	 * @returns {string} HTML
 	 */
 	presetControls() {
-		return `<span id="annotations-left-click" class="position-relative" 
-style="width: 180px; cursor:pointer; display: inline-table;"></span><span id="annotations-right-click" 
-class="position-relative" style="width: 180px; cursor:pointer; display: inline-table;"></span>`;
+		return `<span id="annotations-left-click" class="d-inline-block position-relative" 
+style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
+class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
 	}
 
 	/**
@@ -496,8 +497,8 @@ ${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;"
 ${this.id}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">add</span> New</div>`);
 
 		Dialogs.showCustom("preset-modify-dialog",
-			"<b>Annotations presets</b",
-			html,
+			"<b>Annotations presets</b>",
+			html.join(""),
 			`<div class="d-flex flex-row-reverse">
 <button id="select-annotation-preset-right" onclick="if (${this.id}._presetSelection === 
 undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
@@ -548,8 +549,13 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 		}
 		this.annotationsMenuBuilder.clear();
 
-		//todo cannot use more than one tissue at time
-		this.activeTissue = APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[0].dataReference];
+		//todo cannot use more than one tissue at time, hardcoded :/
+		let bgImage = APPLICATION_CONTEXT.setup.background[0];
+		if (!bgImage) {
+			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
+			return;
+		}
+		this.activeTissue = APPLICATION_CONTEXT.setup.data[bgImage.dataReference];
 
 		const _this = this;
 		PLUGINS.fetchJSON(this._server + "?Annotation=list/" + this.activeTissue
@@ -585,11 +591,10 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 	}
 
 	getAnnotationsHeadMenu(error="") {
+		let upload = error ? "" : `<button class="btn float-right" onclick="${this.id}.uploadAnnotation()">Create: upload current state</button>`;
 		error = error ? `<div class="error-container m-2">${error}</div>` : "";
 		return `<h3 class="f2-light">Annotations</h3>&emsp;<span class="text-small">
-for slide ${this.activeTissue}</span>
-<button class="btn float-right" onclick="${this.id}.uploadAnnotation()">Create: upload current state</button>${error}
-<br><br>
+for slide ${this.activeTissue}</span>${upload}${error}<br><br>
 <button id="downloadAnnotation" onclick="${this.id}.context.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
 <button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 

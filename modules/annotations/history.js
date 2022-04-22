@@ -42,8 +42,6 @@ onclick="if (opener.${this._context.id}.disabledInteraction) return; window.open
 <div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
 <script>
 
-window.confirm = window.opener.confirm;
-
 window.addEventListener('load', (e) => {
     opener.${this._globalSelf}._syncLoad();
 });
@@ -158,7 +156,7 @@ window.addEventListener("beforeunload", (e) => {
     sync() {
         if (this._context.disabledInteraction) return;
 
-        if (!confirm("This will overwrite all properties of all existing annotations - " +
+        if (!window.opener.confirm("This will overwrite all properties of all existing annotations - " +
             "even those manually modified. Do you want to proceed?")) return;
         this._performAtJQNode("annotation-logs", node => node.html(""));
         this._syncLoad();
@@ -241,7 +239,7 @@ window.addEventListener("beforeunload", (e) => {
         cy = Number.parseFloat(cy);
         if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
 
-        let target = VIEWER.tools.referencedTileSource().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy)),
+        let target = VIEWER.tools.referencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy)),
             targetObj = undefined;
         if (objectId !== null) {
             targetObj = this._findObjectOnCanvasById(objectId);

@@ -110,7 +110,6 @@
         }
     }
 
-
     // static counter for multiple overlays differentiation
     var counter = (function () {
         var i = 1;

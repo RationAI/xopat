@@ -12,7 +12,7 @@ OpenSeadragon.Tools = class {
      * multiple tilesources: set your own reference tile source
      */
     linkReferenceTileSourceIndex(index) {
-        this.referencedTileSource = this.viewer.world.getItemAt.bind(this.viewer.world, index);
+        this.referencedTiledImage = this.viewer.world.getItemAt.bind(this.viewer.world, index);
     }
 
     /**
@@ -24,7 +24,7 @@ OpenSeadragon.Tools = class {
         let zoom = viewport.getZoom(true);
         if (this.__cachedZoom !== zoom) {
             this.__cachedZoom = zoom;
-            let tileSource = this.referencedTileSource ? this.referencedTileSource() : viewport; //same API
+            let tileSource = this.referencedTiledImage ? this.referencedTiledImage() : viewport; //same API
             this.__pixelRatio = tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
                 tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
         }
