@@ -1,20 +1,26 @@
 //Not used for now, was meant to configure shader params/inputs in GUI layout (clickable setup)
 var PredefinedShaderControlParameters = {
 
+    //todo replace by ui_components
     _text: function(cls, placeholder, funToCall, ofType, paramName) {
-        return `<input type="text" class="${cls} form-control" placeholder="${placeholder}" onchange="${funToCall}(this, '${ofType}', '${paramName}');">`;
+        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
+        return `<input type="text" class="${cls} form-control" placeholder="${placeholder}" ${funToCall}>`;
     },
     _checkbox: function(cls, funToCall, ofType, paramName) {
-        return `<input type="checkbox" class="${cls} form-control" onchange="${funToCall}(this, '${ofType}', '${paramName}');">`;
+        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
+        return `<input type="checkbox" class="${cls} form-control" ${funToCall}>`;
     },
     _color: function(cls, placeholder, funToCall, ofType, paramName) {
-        return `<input type="color" class="${cls} form-control" placeholder="${placeholder}" onchange="${funToCall}(this, '${ofType}', '${paramName}');">`;
+        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
+        return `<input type="color" class="${cls} form-control" placeholder="${placeholder}" ${funToCall}>`;
     },
     _real: function(cls, placeholder, funToCall, ofType, paramName, def, min, max) {
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" step="0.01" onchange="${funToCall}(this, '${ofType}', '${paramName}');">`;
+        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
+        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" step="0.01" ${funToCall}>`;
     },
     _integer: function(cls, placeholder, funToCall, ofType, paramName, def, min, max) {
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" onchange="${funToCall}(this, '${ofType}', '${paramName}');">`;
+        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
+        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" ${funToCall}>`;
     },
 
 

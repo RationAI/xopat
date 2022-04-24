@@ -21,7 +21,6 @@
 <div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
   <div class="Layout-main ">
   <h1 class="f00-light">Developer visualisation setup</h1>
-
 <br><br>
 <?php
 

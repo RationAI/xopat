@@ -13,8 +13,7 @@ OSDAnnotations.FreeFormTool = class {
         this._created = false;
         this._node = null;
 
-        PLUGINS.addHtml("annotation-cursor",
-            `<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
+        USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
         this._node = document.getElementById("annotation-cursor");
     }

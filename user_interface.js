@@ -1,12 +1,3 @@
-<?php
-/**
- * Application User Interface Implementation
- *  - should be loaded as a first script after main HTML part of DOM
- *
- */
-?>
-<!-- APPLICATION UI COMPONENTS -->
-<script type="text/javascript">
 (function(window) {
 
     window.Dialogs = {
@@ -54,7 +45,7 @@
             this._board.html(text);
             this._icon.html(importance.icon);
             this._body.removeClass(); //all
-            this._body.addClass(`Toast position-fixed ${importance.class}`)
+            this._body.addClass(`Toast position-fixed ${importance.class}`);
             this._body.removeClass("popUpHide");
             this._body.addClass("popUpEnter");
 
@@ -129,10 +120,10 @@
             }
 
             this._showCustomModalImpl(parentId, title, `
-<script type="text/javascript" src="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/external/monaco/loader.js"><\/script>
+<script type="text/javascript" src="${APPLICATION_CONTEXT.rootPath}/external/monaco/loader.js"><\/script>
 <script type="text/javascript">
 require.config({
-  paths: { vs: "<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/external/monaco" }
+  paths: { vs: "${APPLICATION_CONTEXT.rootPath}/external/monaco" }
 });
 
 const DEFAULT_EDITOR_OPTIONS = {
@@ -155,7 +146,7 @@ var editor;
 const onCreated = (_editor) => {
   editor = _editor; //set global ref
   editor.layout();
-}
+};
 
 const save = () => {
     let Diag = window.opener.Dialogs;
@@ -164,7 +155,7 @@ const save = () => {
     } catch(e) {
          Diag.warn("Could not save the code.", 3500, Diag.MSG_ERR);
     }
-}
+};
 
 //Creating the editor & adding Event listeners.
 require(["vs/editor/editor.main"], () => {
@@ -263,8 +254,8 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
 <html lang="en">
     <head>
         <title>${title}</title>
-        <link rel="stylesheet" href="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/style.css">
-        <link rel="stylesheet" href="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/external/primer_css.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/assets/style.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/external/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script>
         <script type="text/javascript">
@@ -336,6 +327,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     }; // end of namespace Dialogs
     Dialogs.init();
 
+    let pluginsToolsBuilder;
+
     window.USER_INTERFACE = {
         /**
          * Workspace (canvas) margins
@@ -392,8 +385,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             },
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-<span class="material-icons inline-arrow plugins-pin pointer" id="${id}-pin" onclick="APPLICATION_CONTEXT.UTILITIES.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
-<h3 class="d-inline-block h3 pointer" onclick="APPLICATION_CONTEXT.UTILITIES.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
+<span class="material-icons inline-arrow plugins-pin pointer" id="${id}-pin" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
+<h3 class="d-inline-block h3 pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
 </div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
             },
             replaceExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
@@ -419,8 +412,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
                 let width = this.opened ? "calc(100% - 400px)" : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
-                if (PLUGINS.__toolsContext) {
-                    PLUGINS.__toolsContext.context.style.width = width;
+                if (pluginsToolsBuilder) {
+                    pluginsToolsBuilder.context.style.width = width;
                 }
             }
         },
@@ -430,36 +423,29 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          */
         Tools: {
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
-                let builder = PLUGINS.__toolsContext;
-                if (!builder) {
-                    builder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
-                    let color = getComputedStyle(document.documentElement)
-                        .getPropertyValue('--color-bg-primary');
-                    PLUGINS.__toolsContext = builder;
+                if (!pluginsToolsBuilder) {
+                    pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
                     //todo set these colors manually in CSS!!! for different themes
-                    PLUGINS.__toolsContext.context.classList.add("bg-opacity");
+                    pluginsToolsBuilder.context.classList.add("bg-opacity");
                     USER_INTERFACE.MainMenu._sync();
                 }
-                builder.set(ownerPluginId, toolsMenuId, title, html, icon);
-                if (PLUGINS.__toolsContext.isVisible) {
-                    USER_INTERFACE.Margins.bottom = PLUGINS.__toolsContext.height;
+                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
+                if (pluginsToolsBuilder.isVisible) {
+                    USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
                 }
             },
             open(toolsId=undefined) {
-                let builder = PLUGINS.__toolsContext;
-                if (builder) {
-                    USER_INTERFACE.Margins.bottom = builder.height;
-                    builder.show(toolsId);
+                if (pluginsToolsBuilder) {
+                    USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
+                    pluginsToolsBuilder.show(toolsId);
                 }
             },
             notify(menuId, symbol=undefined) {
-                let builder = PLUGINS.__toolsContext;
-                if (builder) builder.setNotify(menuId, symbol);
+                if (pluginsToolsBuilder) pluginsToolsBuilder.setNotify(menuId, symbol);
             },
             close() {
-                let builder = PLUGINS.__toolsContext;
                 USER_INTERFACE.Margins.bottom = 0;
-                if (builder) builder.hide();
+                if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
             }
         },
 
@@ -468,7 +454,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             selfContext: new UIComponents.Containers.PanelMenu("fullscreen-menu"),
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="", withSubmenu=true, container=true) {
                 //todo allow multiple main menus for plugin?
-                let plugin = PLUGINS.each[ownerPluginId];
+                let plugin = PLUGINS[ownerPluginId];
                 if (!plugin || !ownerPluginId) return;
                 this._buildMenu(plugin, "__selfMenu", ownerPluginId, plugin.name, ownerPluginId, toolsMenuId, title, html,
                     icon, withSubmenu, container);
@@ -482,7 +468,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             },
             openSubmenu(atPluginId, atSubId=undefined) {
                 this.openMenu(atPluginId);
-                let plugin = PLUGINS.each[atPluginId];
+                let plugin = PLUGINS[atPluginId];
                 if (!plugin) return;
                 let builder = plugin.__selfMenu;
                 if (builder) builder.show(atSubId);
@@ -500,71 +486,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this.selfContext.menuWith1Element = true;
                 this.selfContext.isFullSize = true;
 
-                this._buildMenu(this, "__pMenu", "", "", APPLICATION_CONTEXT.pluginsMenuId,
-                    APPLICATION_CONTEXT.pluginsMenuId, "Plugins",  `<div class="d-flex flex-column-reverse">
-<button onclick="USER_INTERFACE.AdvancedMenu._refreshPageWithSelectedPlugins();" class="btn">Load with selected</button>
-</div><hr>
-<div id='plug-list-content-inner'></div>
-`, 'extension', false, true);
-
-                this.__pBuilder = new UIComponents.Containers.RowPanel("plug-list-content-inner",
-                    UIComponents.Elements.SelectableImageRow,
-                    {multiselect: true, id: 'plug-list-content'});
-
-                for (let pid in PLUGINS.each) {
-                    if (!PLUGINS.each.hasOwnProperty(pid)) continue;
-                    let plugin = PLUGINS.each[pid];
-                    let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
-                    let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
-                    let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="APPLICATION_CONTEXT.UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;
-                    this.__pBuilder.addRow({
-                        title: plugin.name,
-                        author: plugin.author,
-                        details: plugin.description,
-                        customContent: problematic + (plugin.html || ""),
-                        icon: plugin.icon,
-                        value: plugin.id,
-                        selected: plugin.loaded,
-                        contentAction:actionPart
-                    });
-                }
-
-                this._buildMenu(this, "__sMenu", "", "", APPLICATION_CONTEXT.settingsMenuId, APPLICATION_CONTEXT.settingsMenuId, "Settings", this._settingsMenu(), 'settings', false, true);
+                buildMetaDataMenu(this);
+                buildPluginsMenu(this);
+                buildSettingsMenu(this);
 
                 $(this.selfContext.head).prepend('<span class="material-icons pointer mb-2" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
                 $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
-            },
-            _refreshPageWithSelectedPlugins() {
-                let formData = [],
-                    plugins = this.__pBuilder.builder.getSelected();
-
-                for (let plugin of plugins) {
-                    formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
-                }
-                let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-                document.cookie = `_plugins=${pluginCookie}; <?php echo JS_COOKIE_SETUP ?>`;
-                APPLICATION_CONTEXT.UTILITIES.refreshPage(formData.join(""), plugins);
-            },
-            _settingsMenu() {
-                let inputs = UIComponents.Inputs;
-                let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
-                let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
-                let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
-                return `
-<div class="position-absolute top-1 left-1 right-1" style="width: inherit; visibility: hidden;" id="settings-notification">
-<div class="py-1 px-2 rounded-2"
-style="background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;">
-<span class='material-icons' style='font-size: initial; color: var( --color-icon-warning)'>warning</span>
-To apply changes, please <a onclick="APPLICATION_CONTEXT.UTILITIES.refreshPage()" class="pointer">reload the page</a>.</div>
-</div>
-<span class="f3-light header-sep">Appearance</span>
-Theme &emsp; ${inputs.select("select-sm", `${updateOption("theme", true)} APPLICATION_CONTEXT.UTILITIES.updateTheme();`, APPLICATION_CONTEXT.getOption("theme"), {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"})}
-<br> ${inputs.checkBox("", "Show ToolBar", "$('#plugin-tools-menu').toggleClass('d-none')", true)}
-<br> ${inputs.checkBox("", "Show Scale", updateBool("scaleBar", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("scaleBar"))}
-<br><br><span class="f3-light header-sep">Behaviour</span>
-${inputs.checkBox("", "Disable Cookies", updateBool("bypassCookies", true) + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("bypassCookies"))}
-<br> ${inputs.checkBox("", "Debug Mode", updateBool("debugMode") + notifyNeedRefresh, APPLICATION_CONTEXT.getOption("debugMode"))}
-`
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,
                        title, html, icon, withSubmenu, container) {
@@ -582,8 +509,6 @@ ${inputs.checkBox("", "Disable Cookies", updateBool("bypassCookies", true) + not
                         this.selfContext.set(ownerPluginId, parentMenuId, parentMenuTitle,
                             `<div id='advanced-menu-${ownerPluginId}'></div>`);
                         builder = new UIComponents.Containers.PanelMenu(`advanced-menu-${ownerPluginId}`);
-                        let color = getComputedStyle(document.documentElement)
-                            .getPropertyValue('--color-bg-primary');
                         context.__selfMenu = builder;
                     } else {
                         this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon);
@@ -674,7 +599,158 @@ ${inputs.checkBox("", "Disable Cookies", updateBool("bypassCookies", true) + not
                 enjoyhintInstance.run();
                 this.running = false;
             }
-        }
+        },
+
+        /**
+         * Add custom HTML to the DOM selector
+         * @param {string} html to append
+         * @param {string} pluginId owner plugin ID
+         * @param {string} selector jquery selector where to append, default 'body'
+         */
+        addHtml: function(html, pluginId, selector="body") {
+            try {
+                $(html).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                return true;
+            } catch (e) {
+                console.error("Could not attach custom HTML.", e);
+                return false;
+            }
+        },
+
+        clickMenuHeader: function(jQSelf, jQTargetParent) {
+            if (jQTargetParent.hasClass('force-visible')) {
+                jQTargetParent.removeClass('force-visible');
+                jQSelf.removeClass('opened');
+            } else {
+                jQSelf.addClass('opened');
+                jQTargetParent.addClass('force-visible');
+            }
+        },
     };
+
+    /******************* ADVANCED MENUS *********************/
+
+    function buildSettingsMenu(ctx) {
+        let inputs = UIComponents.Elements;
+        let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
+        let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
+        let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
+        let standardBoolInput = (id, title) => inputs.checkBox({
+            label: title, onchange: updateBool(id) + notifyNeedRefresh, default: APPLICATION_CONTEXT.getOption(id)
+        });
+
+        ctx._buildMenu(ctx, "__sMenu", "", "", APPLICATION_CONTEXT.settingsMenuId,
+            APPLICATION_CONTEXT.settingsMenuId, "Settings", `
+<div class="position-absolute top-1 left-1 right-1" style="width: inherit; visibility: hidden;" id="settings-notification">
+<div class="py-1 px-2 rounded-2"
+style="background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;">
+<span class='material-icons' style='font-size: initial; color: var( --color-icon-warning)'>warning</span>
+To apply changes, please <a onclick="UTILITIES.refreshPage()" class="pointer">reload the page</a>.</div>
+</div>
+<span class="f3-light header-sep">Appearance</span>
+Theme &emsp; ${inputs.select({
+                classes: "select-sm",
+                onchange: `${updateOption("theme", true)} UTILITIES.updateTheme();`,
+                default: APPLICATION_CONTEXT.getOption("theme"),
+                options: {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"}
+})}
+<br> ${inputs.checkBox({
+                label: "Show ToolBar",
+                onchange: "$('#plugin-tools-menu').toggleClass('d-none')",
+                default: true
+})}
+<br> ${standardBoolInput("scaleBar", "Show Scale")}
+<br><br><span class="f3-light header-sep">Behaviour</span>
+${standardBoolInput("bypassCookies", "Disable Cookies")}
+<br>${standardBoolInput("debugMode", "Debug Mode")}
+`, 'settings', false, true);
+    }
+
+    let pluginsMenuBuilder;
+    function buildPluginsMenu(ctx) {
+        ctx._buildMenu(ctx, "__pMenu", "", "", APPLICATION_CONTEXT.pluginsMenuId,
+            APPLICATION_CONTEXT.pluginsMenuId, "Plugins",  `<div class="d-flex flex-column-reverse">
+<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">Load with selected</button>
+</div><hr>
+<div id='plug-list-content-inner'></div>
+`, 'extension', false, true);
+
+        pluginsMenuBuilder = new UIComponents.Containers.RowPanel("plug-list-content-inner",
+            UIComponents.Components.SelectableImageRow,
+            {multiselect: true, id: 'plug-list-content'});
+
+        for (let pid in PLUGINS) {
+            if (!PLUGINS.hasOwnProperty(pid)) continue;
+            let plugin = PLUGINS[pid];
+            let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
+            let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
+            let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;
+            pluginsMenuBuilder.addRow({
+                title: plugin.name,
+                author: plugin.author,
+                details: plugin.description,
+                customContent: problematic + (plugin.html || ""),
+                icon: plugin.icon,
+                value: plugin.id,
+                selected: plugin.loaded,
+                contentAction:actionPart
+            });
+        }
+    }
+
+    USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins = function() {
+        let formData = [],
+            plugins = pluginsMenuBuilder.builder.getSelected();
+
+        for (let plugin of plugins) {
+            formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
+        }
+        let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
+        document.cookie = `_plugins=${pluginCookie}; ${APPLICATION_CONTEXT.cookiePolicy}`;
+        UTILITIES.refreshPage(formData.join(""), plugins);
+    };
+
+    /**
+     * Allowed types of page[] are either 'vega', 'columns' or types of UIComponents.Elements
+     *
+     * @type {{}}
+     */
+    let metaContext = {};
+    function buildElements(root) {
+        let html = [];
+        try {
+            switch (root.type) {
+                case 'vega':
+                    html.push("<div class=\"error-container\">Graphs not yet supported.</div>");
+                    break;
+                case 'columns':
+                    html.push('<div class="d-flex">');
+                    for (let col of root.children) {
+                        html.push(...buildElements(col));
+                    }
+                    html.push('</div>');
+                    break;
+                default:
+                    html.push(UIComponents.Elements[root.type](root));
+                    break;
+            }
+        } catch (e) {
+            console.warn("Failed to generate HTML.", root, e);
+            return ["<div class=\"error-container\">Unable to show this field: invalid configuration.</div>"];
+        }
+        return html;
+    }
+    function buildMetaDataMenu(ctx) {
+        for (let key in APPLICATION_CONTEXT.setup.metadata) {
+            let data = APPLICATION_CONTEXT.setup.metadata[key];
+            let html = [];
+
+            for (let element of (data.page || [])) {
+                html.push(...buildElements(element));
+            }
+
+            ctx._buildMenu(metaContext, "__selfMenu", "__meta", "Data", APPLICATION_CONTEXT.metaMenuId,
+                key, data.title || key,  html.join(""), '', true, true);
+        }
+    }
 })(window);
-</script>

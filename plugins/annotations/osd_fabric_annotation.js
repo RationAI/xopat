@@ -6,8 +6,8 @@ class AnnotationsGUI {
 
 	constructor(id, params) {
 		this.id = id;
-		this._server = PLUGINS.each[this.id].server;
-		this._allowedFactories = PLUGINS.each[this.id].factories || ["polygon"];
+		this._server = PLUGINS[this.id].server;
+		this._allowedFactories = PLUGINS[this.id].factories || ["polygon"];
 	}
 
 	/*
@@ -26,6 +26,7 @@ class AnnotationsGUI {
 
 		//init on html sooner than history so it is placed above
 		this.initHTML();
+		this.initHandlers();
 		//after HTML added
 		this.updatePresetsHTML();
 		this.setupTutorials();
@@ -58,6 +59,9 @@ class AnnotationsGUI {
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br><br>${this.presetControls()}
 <a id="download_link1" download="annotations.json" href="" hidden>Download JSON</a>
 <a id="download_link2" download="annotations.xml" href="" hidden>Download XML</a>`,
+// 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
+// ${this.id}.context.createLayer();"><span class="material-icons pointer">add</span> new layer</button>
+// <div id="annotations-layers"></div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -76,10 +80,22 @@ class AnnotationsGUI {
 vertical-align: middle; opacity: 0.3;" class="d-inline-block mx-1"></span>&nbsp;<div id="mode-custom-items" 
 class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
+	}
+
+	initHandlers() {
+		const _this = this;
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		this.context.addHandler('mode-from-auto', this.annotationModeChanged);
 		this.context.addHandler('mode-to-auto', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
+
+		// this.context.forEachLayerSorted(l => {
+		// 	_this.insertLayer(l);
+		// });
+		// this.context.addHandler('layer-added', e => {
+		// 	_this.insertLayer(e.layer, e.layer.name);
+		// });
+
 		//Rewrite mode property so that it gives us the html controls we want
 		let fftMode = this.context.Modes.FREE_FORM_TOOL;
 		fftMode.customHtml = this.freeFormToolControls.bind(this);
@@ -94,7 +110,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	}
 
 	setupTutorials() {
-		PLUGINS.addTutorial(
+		USER_INTERFACE.Tutorials.add(
 			this.id, "Annotations Plugin Overview", "get familiar with the annotations plugin", "draw", [
 			{
 				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
@@ -121,7 +137,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			}]
 		);
 
-		PLUGINS.addTutorial(
+		USER_INTERFACE.Tutorials.add(
 			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
 				{
 					"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click on the canvas allows you to<br>automatically annotate regions."
@@ -139,7 +155,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			]
 		);
 
-		PLUGINS.addTutorial(
+		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
 					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
@@ -153,7 +169,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			]
 		);
 
-		PLUGINS.addTutorial(
+		USER_INTERFACE.Tutorials.add(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
 					"click #fft-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
@@ -171,7 +187,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			]
 		);
 
-		PLUGINS.addTutorial(
+		USER_INTERFACE.Tutorials.add(
 			this.id, "Other UI Controls", "annotations management", "dashboard_customize", [
 				{
 					"next #viewer-container": "There are much more features included."
@@ -235,6 +251,37 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 </label><input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-remove-radio"><label for="fft-mode-remove-radio">
 <span id="fft-mode-remove" onclick="${this.id}.context.modifyTool.setModeAdd(false)" class="material-icons pointer p-1 rounded-2 ${modeRemove}">remove_circle_outline</span>
 </label>`;
+	}
+
+	/******************** LAYERS ***********************/
+
+	// Blending = {
+	// 	DEFAULT: 'source-over',
+	// 	AND: 'source-in',
+	// 	MASK_FG: 'source-atop',
+	// 	DIFF: 'source-out',
+	// 	MASK_AND: 'destination-in',
+	// 	MASK_DIFF: 'destination-out',
+	// 	MASK_BG: 'destination-atop',
+	// 	XOR: 'xor'
+	// };
+	// globalCompositeOperation
+
+	// insertLayer(layer, name) {
+	// 	console.log("ADDED");
+	// 	let container = $('#annotations-layers');
+	// 	name = name || "Layer " + layer.id;
+	// 	container.append(`<div id="a_layer_${layer.id}" onclick="${this.id}.context.setActiveLayer(${layer.id});">${name}</div>`);
+	//
+	// 	this.context.forEachLayerSorted(l => {
+	// 		let ch = container.find(`#a_layer_${l.id}`);
+	// 		container.append(ch);
+	// 	});
+	// }
+
+	setBlending(blending) {
+		this.canvas.globalCompositeOperation = blending;
+		this.canvas.renderAll();
 	}
 
 	/******************** PRESETS ***********************/
@@ -304,7 +351,7 @@ style="width: 115px;">${comment}</span>
 		fileReader.onload = function (e) {
 			try {
 				if (annotations) {
-					_this.context.loadFromJSON(JSON.parse(e.target.result));
+					_this.context.loadObjects(JSON.parse(e.target.result));
 				} else {
 					_this.context.presets.import(e.target.result);
 					_this.updatePresetsHTML();
@@ -519,10 +566,6 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
 	}
 
-	addMetaToPreset(buttonNode, isLeftClick) {
-		Dialogs.show("Not yet implemented,", 1000, Dialogs.MSG_INFO);
-	}
-
 	selectPreset(isLeftClick) {
 		this.context.presets.selectPreset(this._presetSelection, isLeftClick);
 		this.updatePresetsHTML();
@@ -558,7 +601,7 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 		this.activeTissue = APPLICATION_CONTEXT.setup.data[bgImage.dataReference];
 
 		const _this = this;
-		PLUGINS.fetchJSON(this._server + "?Annotation=list/" + this.activeTissue
+		UTILITIES.fetchJSON(this._server + "?Annotation=list/" + this.activeTissue
 		).then(json => {
 			let count = 0;
 			//_this.availableAnnotations = json;
@@ -610,7 +653,7 @@ ${this.presetExportControls()}
 			this._server + "?Annotation=load/" + id,
 			null,
 			function(json) {
-				_this.context.loadFromJSON(json.annotations);
+				_this.context.loadObjects(json.annotations);
 				$('#preset-modify-dialog').remove();
 				_this.context.presets.import(json.presets);
 				_this.updatePresetsHTML();
@@ -696,7 +739,7 @@ ${this.presetExportControls()}
 			return;
 		}
 		const _this = this;
-		PLUGINS.fetchJSON(url, post).then(json => {
+		UTILITIES.fetchJSON(url, post).then(json => {
 			if (!successProperty || json.success) onsuccess(json);
 			else onfail(json);
 		}).catch(e => onfail(e));
@@ -704,4 +747,4 @@ ${this.presetExportControls()}
 }
 
 /*------------ Initialization of OSD Annotations ------------*/
-PLUGINS.register("gui_annotations", AnnotationsGUI);
+addPlugin("gui_annotations", AnnotationsGUI);

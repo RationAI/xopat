@@ -1,10 +1,3 @@
-<?php
-/**
- * Generic UI components used throughout the application
- */
-?>
-<script type="text/javascript">
-
 /**
  * GUI messaging system:
  *  show(...) and hide(...) to post announcement and notices
@@ -21,28 +14,115 @@ var UIComponents = {};
 /**
  * Simplified input controls creation
  */
-UIComponents.Inputs = {
-    text: function(cls, placeholder, funToCall, def) {
-        return `<input type="text" class="${cls} form-control" placeholder="${placeholder}" value="${def}" onchange="${funToCall}">`;
+UIComponents.Elements = {
+    /**
+     * Render TEXT input
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.placeholder hint
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {string || *} options.default default value
+     * @return {string} HTML for input TEXT field
+     */
+    textInput: function(options) {
+        options = $.extend({classes: "",  placeholder: "", onchange: undefined, default: ""}, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        return `<input type="text" class="${options.classes} form-control" 
+placeholder="${options.placeholder}" value="${options.default}" ${options.onchange}>`;
     },
-    checkBox: function(cls, placeholder, funToCall, def) {
-        return `<label style="font-weight: initial;"><input type="checkbox" class="${cls} form-control v-align-middle" ${def?"checked" : ""} onchange="${funToCall}">&nbsp; ${placeholder}</label>`;
+    /**
+     * Render Checkbox button
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.label
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {string || *} options.default default value
+     * @return {string} HTML for checkbox
+     */
+    checkBox: function(options) {
+        options = $.extend({classes: "",  label: "", onchange: undefined, default: true}, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.default === "false") options.default = false;
+        return `<label style="font-weight: initial;"><input type="checkbox" 
+class="${options.classes} form-control v-align-middle" ${options.default?"checked" : ""} ${options.onchange}>&nbsp; 
+${options.label}</label>`;
     },
-    color: function(cls, placeholder, funToCall, def) {
-        return `<input type="color" class="${cls} form-control" value="${def}" placeholder="${placeholder}" onchange="${funToCall}">`;
+    /**
+     * Render color input
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.placeholder hint
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {string || *} options.default default value
+     * @return {string} HTML for color input
+     */
+    colorInput: function(options) {
+        options = $.extend({classes: "",  placeholder: "", onchange: undefined, default: "#ffffff"}, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        return `<input type="color" class="${options.classes} form-control" value="${options.default}" 
+placeholder="${options.placeholder}" ${options.onchange}>`;
     },
-    real: function(cls, placeholder, funToCall, def, min, max) {
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" step="0.01" onchange="${funToCall}">`;
+    /**
+     * Render number input
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.placeholder hint
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {string || *} options.default default value
+     * @param {number} options.min minimum value, default 0
+     * @param {number} options.max maximum value, default 1
+     * @param {number} options.step allowed increase, default 0.1
+     * @return {string} HTML for number input
+     */
+    numberInput: function(options) {
+        options = $.extend({
+            classes: "",  placeholder: "", onchange: undefined, default: 0, min: 0, max: 1, step: 0.1
+        }, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        return `<input type="number" class="${options.classes} form-control" placeholder="${options.placeholder}" 
+min="${options.min}" max="${options.max}" value="${options.default}" step="${options.step}" ${options.onchange}>`;
     },
-    integer: function(cls, placeholder, funToCall, def, min, max) {
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" onchange="${funToCall}">`;
-    },
-    select: function (cls, funToCall, def, values) {
-        let options = [];
-        for (let key in values) {
-            options.push("<option value='", key, "'", key===def ? " selected" : "", ">", values[key], "</option>");
+    /**
+     * Render select input
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.placeholder hint
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {object} options.default default-selected opt_key
+     * @param {object} options.options select options, opt_key: 'option text' map
+     * @return {string} HTML for select input
+     */
+    select: function (options) {
+        options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        let innerContent = [];
+        for (let key in options.options) {
+            innerContent.push("<option value='", key, "'",
+                key===options.default ? " selected" : "", ">", options.options[key], "</option>");
         }
-        return `<select class="${cls} form-control" onchange="${funToCall}">${options.join("")}</select>`;
+        return `<select class="${options.classes} form-control" ${options.onchange}>${innerContent.join("")}</select>`;
+    },
+    /**
+     * Render header
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.title
+     * @return {string} HTML for header
+     */
+    header: function (options) {
+        options = $.extend({classes: "", title: "Title"}, options);
+        return `<div class="${options.classes} header-sep">${options.title}</div>`;
+    },
+    /**
+     * Render text
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.content
+     * @return {string} HTML for content text
+     */
+    text: function (options) {
+        options = $.extend({classes: "", content: ""}, options);
+        return `<p class="${options.classes}">${options.content}</p>`;
     }
 };
 
@@ -55,7 +135,7 @@ UIComponents.Inputs = {
  *  - the same container also has class `[class-name]-container` if SingleComponents.ClassName used
  *  - the content has class `[class-name]`
  */
-UIComponents.Elements = {
+UIComponents.Components = {
 
     ImageRow: class {
         /**
@@ -312,7 +392,7 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
 
     //Enhancement: let creator own builder and just accept plain html
     RowPanel: class {
-        constructor(containerId, builder=UIComponents.Elements.ImageRow, builderOptions={}) {
+        constructor(containerId, builder=UIComponents.Components.ImageRow, builderOptions={}) {
             this.context = document.getElementById(containerId);
             this.builder = new builder(containerId, builderOptions);
             this.uid = containerId;
@@ -336,4 +416,3 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
         }
     },
 };
-</script>

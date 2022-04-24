@@ -35,13 +35,13 @@ if `GET` or `POST` data contains `keyword` with value `1`
 > Everything you define in this file is accessible through `PLUGINS` object interface, so it is a good place to also define your own
 >proprietary static configuration for example.
 
-You can than find the plugin instance stored in `PLUGINS.each["plugin_id"]`.
+You can than find the plugin instance stored in `PLUGINS["plugin_id"]`.
 
 ### Must do's
 - A plugin must have its id in a member variable named after `id` from `includes.json`.
     - e.g. `constructor() { this.id='myPluginId'; }'`
 - A plugin must register itself using the name of its parent class. For more information see below.
-    - if the plugin is based on `MyAwesomePlugin` object, then call `PLUGINS.register(MyAwesomePlugin);` on a global level
+    - if the plugin is based on `MyAwesomePlugin` object, then call `addPlugin('myPluginId', MyAwesomePlugin);` on a global level
 - Any attached HTML to the DOM must be attached by the provided functionality (see `PLUGINS` variable)
 
 
@@ -49,7 +49,7 @@ You can than find the plugin instance stored in `PLUGINS.each["plugin_id"]`.
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 
 be able to work flawlessly.
 
-#### `PLUGINS.register(PluginRootClass)`
+#### `addPlugin(id, PluginRootClass)`
 This function will register the plugin and initialize it. It will make sure that
 - an instance of `PluginRootClass` is created
 - `id` member variable is correctly set
@@ -57,7 +57,7 @@ This function will register the plugin and initialize it. It will make sure that
     - this is mainly for the plugin itself, in case you want to use `on...()` HTML properties where you need to access the plugin from the global scope
     - you can do things like 
       > let html = \`\<tag onclick="${this.id}.callMyPluginFunction(...)"\>\`;
-- `PLUGINS.each[plugin.id].instance` contains the plugin instance
+- `PLUGINS[plugin.id].instance` contains the plugin instance
 - in case `pluginReady` is defined, it will be invoked when the visualisation is ready
 
 #### `YourPLuginClass::pluginReady()`
@@ -70,7 +70,7 @@ in this function instead of the constructor, especially if
 Yup, that's right. It is not safe to access even your own plugin auxiliary classes from constructor.
 There is a deadlock (unless they are in the same file):
  - your plugin inner classes should be registered within one (main) class namespace
- - your main class script (often) calls `PLUGINS.register(...)`
+ - your main class script (often) calls `addPlugin(...)`
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
 
@@ -89,11 +89,11 @@ This global variable contains a lot of useful references, functions require you 
     - `hiddenHtml`: body of the plugin control panel, visible on hover onlyor when pinned
     - `id`: id that is given to the outer container, see *Hints* below for example 
     - `pluginId`: id of your plugin (i.e `this.id` variable within your plugin)
-- `addHtml(containerId, html, pluginId, selector="body")` - append custom `html` to a jQuery `selector`, providing an `pluginId` your plugin ID for safe removal, the html must have `containerId` id container, common root for all the provided html 
+- `addHtml(html, pluginId, selector="body")` - append custom `html` to a jQuery `selector`, providing an `pluginId` your plugin ID for safe removal, the html must have `containerId` id container, common root for all the provided html 
 
 - `postData` - JSON variant of `PHP`'s `$_POST` variable, data sent inside a `POST` request
 - `addPostExport(name, callback, pluginId)` - when the visualisation is being exported, append the output `string` value of `callback` (should not contain `'` character) into `POST` data with name `name` (should be unique)
-    - e.g. if you want to find `myValue` in `postData`, register: `PLUGINS.addPostExport("myValue", this.valueCallback.bind(this));` where we bind this to the callback so that it can access our plugin instance using `this`
+    - e.g. if you want to find `myValue` in `postData`, register: `UTILITIES.addPostExport("myValue", this.valueCallback.bind(this));` where we bind this to the callback so that it can access our plugin instance using `this`
 - `each` - object of **plugin id** to other **plugin data** mapping, contains all available plugins (even those not loaded)
     - if a plugin is loaded, you will find the plugin instance under `PLUGIN.each["pluginId"].instance`
     - there are all variables from plugin's `include.json` file

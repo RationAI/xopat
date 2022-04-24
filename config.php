@@ -37,21 +37,15 @@ define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
  */
 define('VERSION', "1.0.0");
 
-
 /**
  * Default protocol
  * one-liner javascript expression with two available variables:
  *  - path: server URL
  *  - data: requested images ids/paths (comma-separated if multiple)
+ *  - do not use " symbol as this is used to convert the value to string (or escape, e.g. \\")
  */
 define('BG_DEFAULT_PROTOCOL', '`${path}?Deepzoom=\${data}.dzi`');
-define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(\',\')}.dzi`');
-
-//temp solution for now...
-define('USER', 'rationai');
-define('PASSWORD', 'rationai_demo');
-//set to empty string if no authorization
-define('AUTH_HEADER_CONTENT', "Basic " . base64_encode(USER.":".PASSWORD));
+define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(",")}.dzi`');
 
 /**
  * Headers used to fetch data from image servers

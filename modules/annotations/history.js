@@ -187,7 +187,7 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     push(newObject, previous = null) {
-        PLUGINS.setDirty();
+        UTILITIES.setDirty();
         if (newObject) {
             this._addToBoard(newObject);
             this.highlight(newObject);

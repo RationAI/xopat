@@ -1,10 +1,3 @@
-<?php
-/*---------------------------------------------------------*/
-/*------------ DIALOGS ------------------------------------*/
-/*--All PHP variables are inherited from index.php---------*/
-/*---------------------------------------------------------*/
-?>
-<script type="text/javascript">
 (function (window) {
     //We are active!
     window.APPLICATION_CONTEXT.layersAvailable = true;
@@ -40,7 +33,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         },
         visualisationInUse: function(visualisation) {
             enableDragSort("data-layer-options");
-            APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources();
+            UTILITIES.updateUIForMissingSources();
             //called only if everything is fine
             USER_INTERFACE.Errors.hide(); //preventive
 
@@ -71,7 +64,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             if (seaGL.disabled()) {
                 seaGL.enable();
                 VIEWER.addTiledImage({
-                    tileSource : seaGL.urlMaker('<?php echo LAYERS_TILE_SERVER ?>', sources),
+                    tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
                     index: index,
                     opacity: $("#global-opacity").val(),
                     success: function (e) {
@@ -84,7 +77,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                 });
             } else {
                 window.VIEWER.addTiledImage({
-                    tileSource : seaGL.urlMaker('<?php echo LAYERS_TILE_SERVER ?>', sources),
+                    tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
                     index: index,
                     opacity: $("#global-opacity").val(),
                     replace: true,
@@ -122,7 +115,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     }
 
     seaGL.createUrlMaker = function(vis) {
-        seaGL.urlMaker = new Function("path,data", "return " + (vis.protocol || "<?php echo $protoLayers?>"));
+        seaGL.urlMaker = new Function("path,data", "return " + (vis.protocol || APPLICATION_CONTEXT.layersProtocol));
         return seaGL.urlMaker;
     };
 
@@ -130,7 +123,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
 
-    window.APPLICATION_CONTEXT.UTILITIES.makeCacheSnapshot = function() {
+    window.UTILITIES.makeCacheSnapshot = function() {
         if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
             Dialogs.show("Cookies are disabled. You can change this option in 'Settings'.", 5000, Dialogs.MSG_WARN);
             return;
@@ -143,7 +136,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                 APPLICATION_CONTEXT.shadersCache[shaderSettings.name] = shaderSettings.cache;
             }
         }
-        document.cookie = `_cache=${JSON.stringify(APPLICATION_CONTEXT.shadersCache)}; <?php echo JS_COOKIE_SETUP ?>`;
+        document.cookie = `_cache=${JSON.stringify(APPLICATION_CONTEXT.shadersCache)}; ${APPLICATION_CONTEXT.cookiePolicy}`;
         Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
     };
 
@@ -234,7 +227,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         seaGL.reorder(order);
     }
 
-    APPLICATION_CONTEXT.UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
+    UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
         if (self.checked) {
             seaGL.currentVisualisation().shaders[layerId].visible = 1;
             self.parentNode.parentNode.classList.remove("shader-part-error");
@@ -245,7 +238,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         seaGL.reorder(null);
     };
 
-    APPLICATION_CONTEXT.UTILITIES.changeVisualisationLayer = function(self, layerId) {
+    UTILITIES.changeVisualisationLayer = function(self, layerId) {
         let _this = $(self),
             type = _this.val();
         let factoryClass = WebGLModule.ShaderMediator.getClass(type);
@@ -273,7 +266,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         _this.html("");
     };
 
-    APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer = function(layerId) {
+    UTILITIES.changeModeOfLayer = function(layerId) {
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
             let useMask = viz.shaders[layerId].params.use_mode === "mask";
@@ -285,7 +278,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         }
     };
 
-    APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer = function(layerId, filter, value) {
+    UTILITIES.setFilterOfLayer = function(layerId, filter, value) {
         let viz = seaGL.currentVisualisation();
         if (viz.shaders.hasOwnProperty(layerId)) {
             //store to the configuration
@@ -297,7 +290,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         }
     };
 
-    APPLICATION_CONTEXT.UTILITIES.updateUIForMissingSources = function () {
+    UTILITIES.updateUIForMissingSources = function () {
         let layers = seaGL.currentVisualisation().shaders;
         let sources = webglProcessing.getSources();
         let allSources = APPLICATION_CONTEXT.setup.data;
@@ -338,7 +331,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
         let modeChange = fixed ? "" : `<span class="material-icons pointer"
 id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "mask" ? "" : "color: var(--color-icon-tertiary);"}"
-onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
+onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
 
         wasErrorWhenLoading = wasErrorWhenLoading || layer.missingDataSources;
 
@@ -350,7 +343,7 @@ onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="To
 
         // let filterChange = "";
         // if (canChangeFilters) {
-        //     canChangeFilters = "<select onchange='APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer()'>";
+        //     canChangeFilters = "<select onchange='UTILITIES.setFilterOfLayer()'>";
         //     for (let f in WebGLModule.VisualisationLayer.filterNames) {
         //         let selected = available.type() === layer.type ? " selected" : "";
         //         canChangeFilters +=  `<option value="${available.type()}"${selected}>${available.name()}</option>`;
@@ -364,7 +357,7 @@ onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="To
                 if (found) {
                     filterUpdate.push('<span>', WebGLModule.VisualisationLayer.filterNames[key],
                         ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
-                        '" style="width:80px;" onchange="APPLICATION_CONTEXT.UTILITIES.setFilterOfLayer(\'', dataId,
+                        '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
                         "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
                 }
             }
@@ -377,12 +370,12 @@ onclick="APPLICATION_CONTEXT.UTILITIES.changeModeOfLayer('${dataId}')" title="To
         return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
-${wasErrorWhenLoading ? '' : 'disabled'} onchange="APPLICATION_CONTEXT.UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
+${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
               &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
               <div class="d-inline-block label-render-type" style="cursor: pointer; float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="APPLICATION_CONTEXT.UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control input-sm">${availableShaders}</select>
+onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control input-sm">${availableShaders}</select>
                 </div>
                 ${modeChange}
                 <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
@@ -391,4 +384,3 @@ onchange="APPLICATION_CONTEXT.UTILITIES.changeVisualisationLayer(this, '${dataId
             </div>`;
     }
 })(window);
-</script>

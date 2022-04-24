@@ -7,7 +7,7 @@ class Playground  {
         this.strategy = null;
 
         if (!this.setup.hasOwnProperty("server")) this.setup.server = "http://test.muni:8080";
-        this.imageSources = [...PLUGINS.imageSources]; //copy
+        this.imageSources = [...APPLICATION_CONTEXT.setup.data]; //copy
 
         USER_INTERFACE.MainMenu.appendExtended("Python Playground", `
 <span class="material-icons pointer" id="reload-playground" title="Restart" style="float: right;" onclick="${this.id}.refresh();"> refresh</span>
@@ -63,7 +63,7 @@ class Playground  {
     }
 
     createVectorCanvas() {
-        APPLICATION_CONTEXT.UTILITIES.loadModules(function () {
+        UTILITIES.loadModules(function () {
             this.vectorCanvas = VIEWER.fabricjsOverlay({
                 //todo move this to the fabricjs module
                 scale: VIEWER.tools.referencedTiledImage().source.Image.Size.Width,
@@ -173,7 +173,7 @@ class Playground  {
         algoSelect.html("");
 
         const _this = this;
-        PLUGINS.fetchJSON(`${this.setup.server}/prepare?Deepzoom=${data}.dzi`).then(json => {
+        UTILITIES.fetchJSON(`${this.setup.server}/prepare?Deepzoom=${data}.dzi`).then(json => {
             _this.underlyingData = data;
             this._algoJSON = json.algorithms;
             delete json.algorithms;
@@ -281,7 +281,7 @@ class Playground  {
         this.lastConfig = jsonConfig;
         this.activeAlgorithm = algId;
 
-        PLUGINS.fetchJSON(`${this.setup.server}/init/${algId}`, {
+        UTILITIES.fetchJSON(`${this.setup.server}/init/${algId}`, {
             api: ["render", "overlap", "render_type"]
         }).then(json => {
             json = $.extend(true, {output: {"data": "pixels", "layers": 1, "rendering": []}}, json);
@@ -361,4 +361,4 @@ Note that for this plugin to work, you need to run a python playground server by
     }
 }
 
-PLUGINS.register("playground", Playground);
+addPlugin("playground", Playground);

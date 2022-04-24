@@ -92,8 +92,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/******************* EXPORT, IMPORT **********************/
 
 	getObjectContent(...withProperties) {
-		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor',
-			'borderScaleFactor', 'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', ...withProperties]);
+		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor',
+			'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', 'layerId', ...withProperties]);
 	}
 
 	getXMLDocumentContent() {
@@ -143,12 +143,33 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		return new XMLSerializer().serializeToString(this.getXMLDocumentContent());
 	}
 
-	loadFromJSON(annotations, onfinish=function(){}) {
+	loadObjects(annotations, onfinish=function(){}, clear=false) {
 		if (!annotations.objects) return;
-		$.each(annotations.objects, (key, value) => {
-			$.extend(value, OSDAnnotations.PresetManager._commonProperty);
-		});
-		this.canvas.loadFromJSON(annotations, onfinish);
+		this._loadObjects(annotations, onfinish);
+	}
+
+	_loadObjects(input, callback, clear, reviver) {
+		//from loadFromJSON implementation in fabricJS
+		const _this = this.canvas;
+		const annot = this;
+		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
+			if (clear) _this.clear();
+			_this._setBgOverlay(input, function () {
+				enlivenedObjects.forEach(function(obj, index) {
+					$.extend(obj, OSDAnnotations.PresetManager._commonProperty);
+					annot.checkLayer(obj);
+					_this.insertAt(obj, index);
+				});
+				delete input.objects;
+				delete input.backgroundImage;
+				delete input.overlayImage;
+				delete input.background;
+				delete input.overlay;
+				_this._setOptions(input);
+				_this.renderAll();
+				callback && callback();
+			});
+		}, reviver);
 	}
 
 	exportToFile() {
@@ -209,6 +230,61 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	isMouseOSDInteractive() {
 		return this.mouseOSDInteractive;
+	}
+
+	checkLayer(ofObject) {
+		if (ofObject.hasOwnProperty("layerId")) {
+			if (this._layer) ofObject.layerId = this._layer.id;
+		} else if (!this._layers.hasOwnProperty(ofObject.layerId)) {
+			//todo mode?
+			return this.createLayer(ofObject.layerId);
+		}
+	}
+
+	setActiveLayer(layer) {
+		if (typeof layer === 'number') layer = this._layers[layer];
+		if (this._layer) this._layer.setActive(false);
+		this._layer = this._layers[layer.id];
+		this._layer.setActive(true);
+	}
+
+	getLayer(id=undefined) {
+		if (id === undefined) {
+			if (!this._layer) this.createLayer();
+			return this._layer;
+		}
+		return this._layers[id];
+	}
+
+	createLayer(id=Date.now()) {
+		let layer = new OSDAnnotations.Layer(this, id);
+		if (!this._layer) this._layer = layer;
+		this._layers[id] = layer;
+		this.raiseEvent('layer-added', {layer: layer});
+		return layer;
+	}
+
+	deleteLayer(id) {
+		//todo remove all elements of that layer, create new if last one, set
+		//active next highest if active
+		//this.raiseEvent(...)
+	}
+
+	forEachLayerSorted(callback) {
+		let order = Object.keys(this._layers);
+		order.sort((x, y) => this._layers[x] - this._layers[y]);
+		for (let id of order) {
+			callback(this._layers[id]);
+		}
+	}
+
+	sortObjects() {
+		let _this = this;
+		this.canvas._objects.sort((x, y) => {
+			if (!x.hasOwnProperty('layerId') || !y.hasOwnProperty('layerId')) return 0;
+			return _this._layers[x.layerId].position - _this._layers[y.layerId].position;
+		});
+		this.canvas.renderAll();
 	}
 
 	getAnnotationObjectFactory(objectType) {
@@ -500,13 +576,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			"implementation differently other than 'polygon'?";
 		}
 
-		PLUGINS.addPostExport("annotation-list",
+		this._layers = {};
+
+		UTILITIES.addPostExport("annotation-list",
 			_ => JSON.stringify(_this.getObjectContent()), "annotations");
-		let imageJson = PLUGINS.postData["annotation-list"];
+		let imageJson = APPLICATION_CONTEXT.postData["annotation-list"];
 		if (imageJson) {
 			try {
-				this.loadFromJSON(JSON.parse(imageJson), _ => {
-					_this.history.init(50)
+				this.loadObjects(JSON.parse(imageJson), _ => {
+					_this.history.init(50);
 				});
 			} catch (e) {
 				console.warn(e);
@@ -517,10 +595,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			this.history.init(50);
 		}
 
+		if (Object.keys(this._layers).length < 1) this.createLayer();
+
 		//restore presents if any
-		PLUGINS.addPostExport("annotation_presets", this.presets.export.bind(this.presets), "annotations");
-		if (PLUGINS.postData.hasOwnProperty("annotation_presets")) {
-			this.presets.import(PLUGINS.postData["annotation_presets"]);
+		UTILITIES.addPostExport("annotation_presets", this.presets.export.bind(this.presets), "annotations");
+		if (APPLICATION_CONTEXT.postData.hasOwnProperty("annotation_presets")) {
+			this.presets.import(APPLICATION_CONTEXT.postData["annotation_presets"]);
 		} else {
 			this.presets.addPreset();
 		}

@@ -38,8 +38,8 @@ class Presenter {
 
         this._container = $("#playback-timeline");
 
-        PLUGINS.addPostExport("presentation-keyframes", this.exportJSON.bind(this), this.id);
-        let importedJson = PLUGINS.postData["presentation-keyframes"];
+        UTILITIES.addPostExport("presentation-keyframes", this.exportJSON.bind(this), this.id);
+        let importedJson = APPLICATION_CONTEXT.postData["presentation-keyframes"];
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));
@@ -267,4 +267,4 @@ margin-left: ${this._convertValue('delay', record.delay)};"></span>`);
     }
 }
 
-PLUGINS.register("automatic_presentation", Presenter);
+addPlugin("automatic_presentation", Presenter);

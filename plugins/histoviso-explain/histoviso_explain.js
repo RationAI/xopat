@@ -85,7 +85,7 @@ onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(thi
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
 onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
-        PLUGINS.addHtml("histoviso-explain-scripts", "<div id='histoviso-explain-scripts'></div>", this.id);
+        USER_INTERFACE.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
     }
 
     createErrorMenu(html, err=undefined) {
@@ -500,4 +500,4 @@ experiment is '${params.experimentId}'.`);
     }
 }
 
-PLUGINS.register("histoviso_explain", HistovisoExplain);
+addPlugin("histoviso_explain", HistovisoExplain);

@@ -98,6 +98,7 @@ OSDAnnotations.PresetManager = class {
             OSDAnnotations.PresetManager._commonProperty,
             {
                 presetID: preset.presetID,
+                layerId: this._context.getLayer().id,
                 isLeftClick: isLeftClick,
                 opacity: this._context.getOpacity(),
             }
@@ -287,7 +288,35 @@ OSDAnnotations.PresetManager = class {
     }
 };
 
+OSDAnnotations.Layer = class {
 
+    /**
+     * Constructor
+     * @param {OSDAnnotations} context Annotation Plugin Context
+     * @param {number} id
+     */
+    constructor(context, id=Date.now()) {
+        this._context = context;
+        this.id = id;
+
+        this.position = -1;
+        for (let id in context._layers) {
+            this.position = Math.max(this.position, context._layers[id]);
+        }
+        this.position++;
+    }
+
+    setActive(active) {
+        this.iterate((self, object) => object.selectable = active);
+    }
+
+    iterate(callback) {
+        const _this = this;
+        this._context.canvasObjects().forEach(o => {
+            if (o.layerId === _this.id) callback(_this, o);
+        });
+    }
+};
 
 /**
  * It is more an interface rather than actual class.
@@ -298,7 +327,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Constructor
-     * @param {OSDAnnotations} context Annotation Plugin Context (Parent class)
+     * @param {OSDAnnotations} context Annotation Plugin Context
      * @param {AutoObjectCreationStrategy} autoCreationStrategy or an object of similar interface
      * @param {PresetManager} presetManager manager of presets or an object of similar interface
      * @param {string} identifier unique annotation identifier, start with '_' to avoid exporting
@@ -534,7 +563,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
             meta: ofObject.meta,
-            presetID: ofObject.presetID
+            presetID: ofObject.presetID,
+            layerId: ofObject.layerId
         });
     }
 
@@ -687,6 +717,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
+            layerId: ofObject.layerId
         });
     }
 
@@ -860,7 +891,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
             meta: ofObject.meta,
-            presetID: ofObject.presetID
+            presetID: ofObject.presetID,
+            layerId: ofObject.layerId
         });
     }
 
@@ -1027,7 +1059,8 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: ofObject.hasControls,
             lockMovementX: ofObject.lockMovementX,
             lockMovementY: ofObject.lockMovementY,
-            presetID: ofObject.presetID
+            presetID: ofObject.presetID,
+            layerId: ofObject.layerId
         });
     }
 
