@@ -8,6 +8,5 @@
         "histoviso_explain.js",
         "histoviso_explain_annotation_factory_extension.js"
     ],
-    "requires": [],
     "modules": ["annotations", "webgl"]
 }

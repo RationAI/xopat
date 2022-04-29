@@ -48,10 +48,6 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-    constructor(id, options) {
-        super(id, options);
-    }
-
     getFragmentShaderExecution() {
         let varname = `data_${this.uid}`;
         return `
@@ -59,13 +55,13 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
     if (!close(${varname}, .5)) {
         if (${varname} < .5) { 
             ${varname} = ${this.filter(`1.0 - ${varname} * 2.0`)};
-            if (${varname} > ${this.threshold.sample()}) {
-                ${this.render(`vec4( ${this.colorLow.sample()}, ${varname} * ${this.opacity.sample()})`)}
+            if (${varname} > ${this.threshold.sample(varname, 'float')}) {
+                ${this.render(`vec4( ${this.colorLow.sample(varname, 'float')}, ${varname} * ${this.opacity.sample(varname, 'float')})`)}
             } else ${this.render(`vec4(.0)`)}
         } else {  
             ${varname} = ${this.filter(`(${varname} - 0.5) * 2.0`)};
-            if (${varname} > ${this.threshold.sample()}) {
-                ${this.render(`vec4( ${this.colorHigh.sample()}, ${varname} * ${this.opacity.sample()})`)}
+            if (${varname} > ${this.threshold.sample(varname, 'float')}) {
+                ${this.render(`vec4( ${this.colorHigh.sample(varname, 'float')}, ${varname} * ${this.opacity.sample(varname, 'float')})`)}
             } else ${this.render(`vec4(.0)`)}
         }
     }  

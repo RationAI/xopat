@@ -109,6 +109,7 @@ if ($layerVisible) {
  * Plugins+Modules loading: load required parts of the application
  */
 $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
+
 foreach ($PLUGINS as $_ => $plugin) {
     if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
         $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
@@ -226,10 +227,10 @@ foreach ($MODULES as $_ => $mod) {
     <script src="./external/dziexttilesource.js?v=$version"></script>
     <script src="./external/osd_tools.js?v=$version"></script>
     <script src="./external/scalebar.js?v=$version"></script>
+    <script src="./external/scrollTo.min.js"></script>
 
     <!--Tutorials-->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/kineticjs/5.2.0/kinetic.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-scrollTo/2.1.2/jquery.scrollTo.min.js"></script>
+    <script src="./external/kinetic-v5.1.0.min.js"></script>
     <link rel="stylesheet" href="./external/enjoyhint.css">
     <script src="./external/enjoyhint.min.js"></script>
 
@@ -820,7 +821,7 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
 
             let layerWorldItem =  VIEWER.world.getItemAt(layerIDX);
             if (layerWorldItem) {
-                let activeVis = VIEWER.bridge.currentVisualisation();
+                let activeVis = VIEWER.bridge.visualization();
                 if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless && layerWorldItem.source.setFormat) {
                     layerWorldItem.source.setFormat("png");
                 }
@@ -927,7 +928,7 @@ EOF;
                 const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
                 return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
             }).reverse(); //reverse order: last opened IMAGE is the first visible
-            VIEWER.bridge.createUrlMaker(VIEWER.bridge.currentVisualisation());
+            VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
             toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, activeData));
             window.VIEWER.open(toOpen);
     });

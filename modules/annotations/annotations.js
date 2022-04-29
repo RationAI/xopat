@@ -158,6 +158,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 				enlivenedObjects.forEach(function(obj, index) {
 					$.extend(obj, OSDAnnotations.PresetManager._commonProperty);
 					annot.checkLayer(obj);
+					obj.on('selected', annot._objectClicked.bind(annot));
+
 					_this.insertAt(obj, index);
 				});
 				delete input.objects;
@@ -433,6 +435,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	promoteHelperAnnotation(annotation) {
+		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionId = this.session;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
@@ -445,6 +448,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	replaceAnnotation(previous, next, updateHistory=false) {
+		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		if (updateHistory) this.history.push(next, previous);
@@ -527,27 +531,9 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			fireRightClick: true
 		});
 		//if plugin loaded at runtime, 'open' event not called
-		this.overlay.resize();
 		this.overlay.resizecanvas();
 
-		//this.canvas.__eventListeners = {};
-		// const get = this.canvas.getActiveObject.bind(this.canvas);
-		// let self = this;
-		// this.canvas.getActiveObject = function() {
-		// 	let e = get();
-		// 	console.log("GET", e, self.overlay.fabric._activeObject);
-		// 	return e;
-		// };
-		// const set = this.canvas.setActiveObject.bind(this.canvas);
-		// this.canvas.setActiveObject = function(e, t) {
-		// 	console.log("SET", e, t);
-		// 	return set(e, t);
-		// };
-		// const disc = this.canvas._discardActiveObject.bind(this.canvas);
-		// this.canvas._discardActiveObject = function(e, t) {
-		// 	console.log("DISCARD", e, self.overlay.fabric.__eventListeners);
-		// 	return disc(e, t);
-		// };
+		// this._debugActiveObjectBinder();
 
 		// Classes defined in other local JS files
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
@@ -607,6 +593,27 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		this.setMouseOSDInteractive(true);
 		this._setListeners();
+	}
+
+	_debugActiveObjectBinder() {
+		this.canvas.__eventListeners = {};
+		const get = this.canvas.getActiveObject.bind(this.canvas);
+		let self = this;
+		this.canvas.getActiveObject = function() {
+			let e = get();
+			console.log("GET", e ? e.selectable : "", e, self.overlay.fabric._activeObject);
+			return e;
+		};
+		const set = this.canvas.setActiveObject.bind(this.canvas);
+		this.canvas.setActiveObject = function(e, t) {
+			console.log("SET", e, t);
+			return set(e, t);
+		};
+		const disc = this.canvas._discardActiveObject.bind(this.canvas);
+		this.canvas._discardActiveObject = function(e, t) {
+			console.log("DISCARD", e, self.overlay.fabric.__eventListeners);
+			return disc(e, t);
+		};
 	}
 
 	_setListeners() {
@@ -701,14 +708,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.canvas.on('mouse:wheel', function (o) {
 			if (_this.disabledInteraction) return;
 			_this.mode.scroll(o.e, o.e.deltaY);
-		});
-
-		this.canvas.on('object:selected', function (e) {
-			if (e && e.target) {
-				_this._objectClicked(e.target);
-				//keep annotation board selection up to date
-				_this.history.highlight(e.target);
-			}
 		});
 
 		/****** E V E N T  L I S T E N E R S: OSD **********/
@@ -808,6 +807,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_objectClicked(object) {
+		object = object.target;
+		this.history.highlight(object);
 		if (this.history.isOngoingEditOf(object)) {
 			if (this.isMouseOSDInteractive()) {
 				object.set({

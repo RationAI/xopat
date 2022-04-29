@@ -7,6 +7,5 @@
     "includes" : [
         "presenter.js"
     ],
-    "requires": [],
-    "modules": []
+    "modules": ["snapshots"]
 }

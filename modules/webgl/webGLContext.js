@@ -366,7 +366,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         // this.texture.renderOrder = urls;
 
         //since we download for now all data, we can just index the sources...
-        this.texture.loadOrder = this.context.currentVisualisation();
+        this.texture.loadOrder = this.context.visualization();
         for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
             if (this.context._dataSourceMapping[i] === -1) continue;
             samplers += `uniform sampler2D vis_data_sampler_${i};`;

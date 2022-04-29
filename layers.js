@@ -59,8 +59,6 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             let index = seaGL.getWorldIndex(),
                 sources = seaGL.dataImageSources();
 
-
-
             if (seaGL.disabled()) {
                 seaGL.enable();
                 VIEWER.addTiledImage({
@@ -129,7 +127,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             return;
         }
 
-        let active = seaGL.currentVisualisation().shaders;
+        let active = seaGL.visualization().shaders;
         for (let key in active) {
             if (active.hasOwnProperty(key)) {
                 let shaderSettings = active[key];
@@ -151,7 +149,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     });
 
     shadersMenu.addEventListener("change", function () {
-        let active =  Number.parseInt(this.value);
+        let active = Number.parseInt(this.value);
         APPLICATION_CONTEXT.setOption("activeVisualizationIndex", active);
         seaGL.switchVisualisation(active);
     });
@@ -229,10 +227,10 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
     UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
         if (self.checked) {
-            seaGL.currentVisualisation().shaders[layerId].visible = 1;
+            seaGL.visualization().shaders[layerId].visible = 1;
             self.parentNode.parentNode.classList.remove("shader-part-error");
         } else {
-            seaGL.currentVisualisation().shaders[layerId].visible = 0;
+            seaGL.visualization().shaders[layerId].visible = 0;
             self.parentNode.parentNode.classList.add("shader-part-error");
         }
         seaGL.reorder(null);
@@ -243,7 +241,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             type = _this.val();
         let factoryClass = WebGLModule.ShaderMediator.getClass(type);
         if (factoryClass !== undefined) {
-            let viz = seaGL.currentVisualisation();
+            let viz = seaGL.visualization();
             self.dataset.title = factoryClass.name();
             if (viz.shaders.hasOwnProperty(layerId)) {
                 let shaderPart = viz.shaders[layerId];
@@ -267,7 +265,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     };
 
     UTILITIES.changeModeOfLayer = function(layerId) {
-        let viz = seaGL.currentVisualisation();
+        let viz = seaGL.visualization();
         if (viz.shaders.hasOwnProperty(layerId)) {
             let useMask = viz.shaders[layerId].params.use_mode === "mask";
             viz.shaders[layerId].params.use_mode = useMask ? "show" : "mask";
@@ -279,7 +277,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     };
 
     UTILITIES.setFilterOfLayer = function(layerId, filter, value) {
-        let viz = seaGL.currentVisualisation();
+        let viz = seaGL.visualization();
         if (viz.shaders.hasOwnProperty(layerId)) {
             //store to the configuration
             viz.shaders[layerId]._renderContext.setFilterValue(filter, value);
@@ -291,7 +289,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
     };
 
     UTILITIES.updateUIForMissingSources = function () {
-        let layers = seaGL.currentVisualisation().shaders;
+        let layers = seaGL.visualization().shaders;
         let sources = webglProcessing.getSources();
         let allSources = APPLICATION_CONTEXT.setup.data;
         let tiledImage = seaGL.getTiledImage();
@@ -361,10 +359,6 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (defau
                         "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
                 }
             }
-
-            Object.keys(WebGLModule.VisualisationLayer.filters).some(key => {
-                return false;
-            });
         }
 
         return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>

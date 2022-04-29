@@ -202,23 +202,20 @@ form.submit();<\/script>`;
     }
 
 
-    //TODO: also refresh page should not ask to re-send data -> redirect loop instead?
-    function preventDirtyClose(e) {
-        e.preventDefault();
-        if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
-
-        if ( window.history.replaceState ) {
-            window.history.replaceState( null, null, window.location.href );
-        }
-        window.location = window.location.href;
-        return;
-    }
-
-    if (window.addEventListener) {
-        window.addEventListener('beforeunload', preventDirtyClose, true);
-    } else if (window.attachEvent) {
-        window.attachEvent('onbeforeunload', preventDirtyClose);
-    }
+    //Attempt to prevent re-submit, but now it fires two messages - POST resubmit and content..
+    // function preventDirtyClose(e) {
+    //     e.preventDefault();
+    //     if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+    //
+    //     RefreshForm.submit();
+    //     return;
+    // }
+    //
+    // if (window.addEventListener) {
+    //     window.addEventListener('beforeunload', preventDirtyClose, true);
+    // } else if (window.attachEvent) {
+    //     window.attachEvent('onbeforeunload', preventDirtyClose);
+    // }
 
 
     window.UTILITIES = {
@@ -254,6 +251,18 @@ form.submit();<\/script>`;
             } else {
                 document.documentElement.dataset['darkTheme'] = "dark";
                 document.documentElement.dataset['colorMode'] = theme;
+            }
+        },
+
+        getUserMeta: function() {
+            return {
+                appCodeName: navigator["appCodeName"],
+                appName: navigator["appName"],
+                appMinorVersion: navigator["appMinorVersion"],
+                platform: navigator["platform"],
+                appVersion: navigator["appVersion"],
+                userAgent: navigator["userAgent"],
+                cookieEnabled: navigator["cookieEnabled"]
             }
         },
 
@@ -345,11 +354,11 @@ ${constructExportVisualisationForm()}
                 return;
             }
 
-            if (window.removeEventListener) {
-                window.removeEventListener('beforeunload', preventDirtyClose, true);
-            } else if (window.detachEvent) {
-                window.detachEvent('onbeforeunload', preventDirtyClose);
-            }
+            // if (window.removeEventListener) {
+            //     window.removeEventListener('beforeunload', preventDirtyClose, true);
+            // } else if (window.detachEvent) {
+            //     window.detachEvent('onbeforeunload', preventDirtyClose);
+            // }
             $("body").append(UTILITIES.getForm(formData, includedPluginsList, true));
         }
     };

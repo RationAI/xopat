@@ -33,10 +33,6 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-    constructor(id, options) {
-        super(id, options);
-    }
-
     getFragmentShaderDefinition() {
         let defined = this.loadProperty("fs", "");
         if (!defined) {
@@ -87,7 +83,7 @@ float filtered = ${this.filter("0.123456")};
         this.fs.init();
         this.submit.init();
         this.submit.on('submit', function (raw, encoded, ctx)  {
-            _this.build_shaders();
+            _this._rebuild();
             _this.invalidate();
         });
 
@@ -95,14 +91,14 @@ float filtered = ${this.filter("0.123456")};
         this.editor.on('editor', function (raw, encoded, ctx)  {
             //todo dialogs should not be used in webgl module :D
             Dialogs.openEditor(
-                'test',
+                'FS-editor',
                 'Fragment Shader',
                 _this.getFragmentShaderDefinition(),
                 'glsl',
                 code => {
                     _this.storeProperty("fs", code);
                     //_this.fs.init(); //update UI?
-                    _this.build_shaders();
+                    _this._rebuild();
                     _this.invalidate();
                 });
         });

@@ -24,7 +24,8 @@ OSDAnnotations.FreeFormTool = class {
         if (objectFactory !== undefined) {
             if (!objectFactory.isImplicit()) {
                 //object can be used immedietaly
-                this._setupPolygon(object, object);
+                let newPolygon = this._context.polygonFactory.copy(object, object.points);
+                this._setupPolygon(newPolygon, object);
             } else {
                 let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
                 if (points) {
@@ -127,10 +128,9 @@ OSDAnnotations.FreeFormTool = class {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
 
+            this._context.replaceAnnotation(this.polygon, this.initial, false);
             if (this._updatePerformed) {
-                let newPolygon = this._context.polygonFactory.copy(this.polygon, this.polygon.points);
-                this._context.replaceAnnotation(this.polygon, newPolygon, true);
-                this.polygon = newPolygon;
+                this._context.replaceAnnotation(this.initial, this.polygon, true);
             }
 
             this._cachedSelection = this.polygon;
@@ -245,6 +245,7 @@ OSDAnnotations.FreeFormTool = class {
     _setupPolygon(polyObject, original) {
         this.polygon = polyObject;
         this.initial = original;
+        this._context.replaceAnnotation(original, polyObject, false);
 
         polyObject.moveCursor = 'crosshair';
     }
@@ -254,7 +255,6 @@ OSDAnnotations.FreeFormTool = class {
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.factoryId = this._context.polygonFactory.factoryId;
 
-        this._context.replaceAnnotation(object, polygon);
         this._setupPolygon(polygon, object);
     }
 

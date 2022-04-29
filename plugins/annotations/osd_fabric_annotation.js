@@ -578,7 +578,8 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 			annotations: this.context.getObjectContent(),
 			presets: this.context.presets.toObject(),
 			metadata: {
-				exported: new Date().toLocaleString()
+				exported: new Date().toLocaleString(),
+				userAgent: UTILITIES.getUserMeta()
 				//todo other metadata?
 			}
 		};
@@ -612,8 +613,8 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 <span onclick="${this.id}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
 					title: available.name,
-					author: "Who uploaded?",
-					details: "Todo have also some metadata available...",
+					author: "Author",
+					details: `Uploaded ${new Date(available.date).toDateString()}. Client: ${available.user}`,
 					contentAction:actionPart
 				});
 				count++;
@@ -711,14 +712,17 @@ ${this.presetExportControls()}
 
 	uploadAnnotation() {
 		const _this = this;
+		let date = Date.now();
 		this._fetchWorker(
 			this._server,
 			{
 				protocol: 'Annotation',
 				command: 'save',
-				name: "a" + Date.now(),
+				name: "a" + date,
 				tissuePath: this.activeTissue,
-				data: this.getFullExportData()
+				data: this.getFullExportData(),
+				date: date,
+				client: UTILITIES.getUserMeta().userAgent
 			},
 			function() {
 				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);

@@ -82,22 +82,33 @@ OpenSeadragon.Tools = class {
     /**
      * Create viewport screenshot
      * @param toImage true if <img> element should be created, otherwise raw byte array sent
+     * @param {object} size
+     * @param {number} size.width
+     * @param {number} size.height
      * @param {OpenSeadragon.Rect|object|undefined} focus screenshot focus area (screen coordinates)
      */
-    screenshot(toImage, focus=undefined) {
-        return this.constructor.screenshot(this.viewer, toImage, point);
+    screenshot(toImage, size, focus=undefined) {
+        return this.constructor.screenshot(this.viewer, toImage, size, focus);
     }
-    static screenshot(context, toImage, focus) {
+    static screenshot(context, toImage, size, focus) {
         if (context.drawer.canvas.width < 1) return undefined;
         let drawCtx = context.drawer.context;
         if (!drawCtx) throw "OpenSeadragon must render with canvasses!";
+
         if (!focus) focus = new OpenSeadragon.Rect(0, 0, window.innerWidth, window.innerHeight);
+        size.width = size.width || focus.width;
+        size.height = size.height || focus.height;
+        let ar = size.width / size.height;
+        if (focus.width < focus.height) focus.width *= ar;
+        else focus.height /= ar;
+
         let data = drawCtx.getImageData(focus.x,focus.y, focus.width, focus.height);
+
         if (toImage) {
             let canvas = document.createElement('canvas'),
                 ctx = canvas.getContext('2d');
-            canvas.width = focus.width;
-            canvas.height = focus.height;
+            canvas.width = size.width;
+            canvas.height = size.height;
             ctx.putImageData(data, 0, 0);
 
             let img = document.createElement("img");

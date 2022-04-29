@@ -234,9 +234,11 @@ uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN];`;
         return "vec3";
     }
 
-    sample(ratio) {
-        if (!ratio) return "ERROR colormap requires sample(ratio) argument!";
-        return `sample_colormap(${ratio}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.params.continuous})`;
+    sample(value=undefined, valueGlType='void') {
+        if (!value || valueGlType !== 'float') {
+            return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+        }
+        return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.params.continuous})`;
     }
 
     get supports() {
@@ -303,9 +305,11 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
 
     init() {
         this._updatePending = false;
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        //encoded values hold breaks values between min and max,
+        this.encodedValues = this.context.loadProperty(this.name + "_values", this.params.breaks);
         this.mask = this.context.loadProperty(this.name + "_mask", this.params.mask);
 
+        this.value = this.encodedValues.map(this._normalize.bind(this));
         this.value = this.value.slice(0, this.MAX_SLIDERS);
         this.sampleSize = this.value.length;
 
@@ -335,7 +339,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     'max': _this.params.max
                 },
                 step: _this.params.step,
-                start: _this.value,
+                start: _this.encodedValues,
                 margin: _this.params.minGap,
                 limit: limit,
                 connect: _this.connects,
@@ -377,7 +381,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 }
             }
 
-            if (this.params.invertMask) {
+            if (this.params.toggleMask) {
+                this._originalMask = this.mask.map(x => x > 0 ? x : 1);
                 let connects = container.querySelectorAll('.noUi-connect');
                 for (let i = 0; i < connects.length; i++) {
                     connects[i].addEventListener('mouseup', function (e) {
@@ -386,10 +391,13 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                         if (d >= 180) return;
 
                         let idx = Number.parseInt(this.dataset.index);
-                        _this.mask[idx] = 1 - _this.mask[idx];
-                        this.style.background = _this.mask[i] >= 0.5 ? "var(--color-bg-danger-inverse)" : "var(--color-bg-primary)";
+                        _this.mask[idx] = _this.mask[idx] > 0 ? 0 : _this._originalMask[idx];
+                        this.style.background = (!_this.params.inverted && _this.mask[idx] > 0)
+                        || (_this.params.inverted && _this.mask[idx] == 0) ?
+                            "var(--color-bg-danger-inverse)" : "var(--color-bg-primary)";
                         _this.context.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize-1;
+                        _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
                         _this.context.storeProperty(_this.name + "_mask", _this.mask);
                     });
 
@@ -401,18 +409,17 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 }
             }
 
-            container.noUiSlider.on("change", function(values, handle, unencoded, tap, positions, noUiSlider) {
+            container.noUiSlider.on("change", function(strValues, handle, unencoded, tap, positions, noUiSlider) {
                 _this.value[handle] = _this._normalize(unencoded[handle]);
-                _this.encodedValues = values;
+                _this.encodedValues = strValues;
                 if (_this._ignoreNextClick) {
                     _this._ignoreNextClick = false;
                 } else if (!_this._updatePending) {
                     //can be called multiple times upon multiple handle updates, do once if possible
                     _this._updatePending = true;
                     setTimeout(_ => {
-
                         //todo re-scale values or filter out -1ones
-                        _this.changed(_this.name, unencoded, values, _this);
+                        _this.changed(_this.name, _this.value, strValues, _this);
                         _this.context.storeProperty(_this.name, unencoded);
 
                         _this.context.invalidate();
@@ -436,7 +443,9 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
         if (!container) container = document.getElementById(this.id);
         let pips = container.querySelectorAll('.noUi-connect');
         for (let i = 0; i < pips.length; i++) {
-            pips[i].style.background = this.mask[i] >= 0.5 ? "var(--color-bg-danger-inverse)" : "var(--color-bg-primary);";
+            pips[i].style.background = (!this.params.inverted && this.mask[i] > 0)
+            || (this.params.inverted && this.mask[i] == 0) ?
+                "var(--color-bg-danger-inverse)" : "var(--color-bg-primary)";
             pips[i].dataset.index = (i).toString();
         }
     }
@@ -466,23 +475,26 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
         return "float";
     }
 
-    sample(ratio) {
-        if (!ratio) return "ERROR advanced slider requires sample(ratio) argument!";
-        return `sample_advanced_slider(${ratio}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly})`;
+    sample(value=undefined, valueGlType='void') {
+        if (!value || valueGlType !== 'float') {
+            return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+        }
+        return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly})`;
     }
 
     get supports() {
         return {
-            default: [0.2, 0.8],
+            breaks: [0.2, 0.8],
             mask: [1, 0, 1],
             interactive: true,
+            inverted: false,
             maskOnly: true,
-            invertMask: true,
+            toggleMask: true,
             title: "Threshold",
             min: 0,
             max: 1,
             minGap: 0.05,
-            step: -1,
+            step: undefined,
             pips: {
                 mode: 'positions',
                 values: [0, 20, 40, 50, 60, 80, 90, 100],
@@ -609,7 +621,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //         return "float";
 //     }
 //
-//     sample(ratio) {
+//    sample(value=undefined, valueGlType='void') {
 //         if (typeof ratio !== "string") ratio = "tile_texture_coords";
 //         return `filter_${this.context.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
 //     }
@@ -690,7 +702,7 @@ style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled}
         return "text";
     }
 
-    sample(ratio=undefined) {
+    sample(value=undefined, valueGlType='void') {
         return this.value;
     }
 
@@ -762,7 +774,7 @@ ${breakLine ? '<br style="clear: both;">' : ""}`;
         return "action";
     }
 
-    sample(ratio=undefined) {
+    sample(value=undefined, valueGlType='void') {
         return "";
     }
 

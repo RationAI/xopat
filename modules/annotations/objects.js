@@ -7,12 +7,10 @@ OSDAnnotations.Preset = class {
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
-        if (comment) {
-            this.meta.comment = {
-                name: 'Comment',
-                value: comment
-            };
-        }
+        this.meta.comment = {
+            name: 'Comment',
+            value: comment
+        };
     }
 
     fromJSONFriendlyObject(parsedObject, factoryGetter) {
@@ -81,7 +79,7 @@ OSDAnnotations.PresetManager = class {
         this.left = undefined;
         this.right = undefined;
         this._colorSteps = 8;
-        this._colorStep = 1;
+        this._colorStep = 0;
     }
 
     /**
@@ -110,9 +108,8 @@ OSDAnnotations.PresetManager = class {
      * @returns {Preset} newly created preset
      */
     addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "ID ", this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
         this._presets[preset.presetID] = preset;
-        preset.meta.comment.value += preset.presetID;
         return preset;
     }
 
@@ -546,7 +543,6 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             width: parameters.width,
             height: parameters.height,
             fill: ofObject.fill,
-            color: ofObject.color,
             isLeftClick: ofObject.isLeftClick,
             opacity: ofObject.opacity,
             strokeWidth: ofObject.strokeWidth,
@@ -631,7 +627,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return;
-        this._context.promoteHelperAnnotation(obj);
+        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
+        this._context.deleteHelperAnnotation(obj);
+        this._context.addAnnotation(obj);
         this._current = undefined;
     }
 
@@ -694,7 +692,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
         return new fabric.Group([fabric.Line(parameters, {
             fill: line.fill,
-            color: line.color,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
             stroke: line.stroke,
@@ -707,7 +704,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: line.hasControls,
             lockMovementX: line.lockMovementX,
             lockMovementY: line.lockMovementY,
-        }), new fabric.Text(ofObject.measure + 'mm'), {
+        }), new fabric.Text(text.text), {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize
         }], {
@@ -717,7 +714,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
-            layerId: ofObject.layerId
+            layerId: ofObject.layerId,
+            fill: ofObject.fill
         });
     }
 
@@ -766,12 +764,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._context.deleteHelperAnnotation(obj[0]);
         this._context.deleteHelperAnnotation(obj[1]);
 
-        obj =  this._createWrap(obj, this._presets.getCommonProperties());
+        obj = this._createWrap(obj, this._presets.getCommonProperties());
         this._context.addAnnotation(obj);
         this._current = undefined;
     }
-
-    //todo also finish indirect? because what if mode changes?
 
     /**
      * Create array of points - approximation of the object shape
@@ -785,23 +781,44 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return "Ruler";
     }
 
+    _getWithUnit(value, unitSuffix) {
+        if (value < 0.000001) {
+            return value * 1000000000 + " n" + unitSuffix;
+        }
+        if (value < 0.001) {
+            return value * 1000000 + " μ" + unitSuffix;
+        }
+        if (value < 1) {
+            return value * 1000 + " m" + unitSuffix;
+        }
+        if (value >= 1000) {
+            return value / 1000 + " k" + unitSuffix;
+        }
+        return value + " " + unitSuffix;
+    }
+
     _updateText(line, text) {
-        //todo not accurate, move microns API to the tools
-        text.set({
-            text: Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)) + 'mm',
-            left: (line.x1 + line.x2) / 2,
-            top: (line.y1 + line.y2) / 2,
-        });
+        let microns = APPLICATION_CONTEXT.getOption("microns") ?? -1;
+        let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
+            strText;
+        if (microns > 0) {
+            strText = this._getWithUnit(
+                Math.round(d * microns / 10000000) / 100, "m"
+            );
+        } else {
+            strText = Math.round(d) + " px";
+        }
+        text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
     }
 
     _createParts(parameters, options) {
+        options.stroke = options.fill;
         return [new fabric.Line(parameters, $.extend({
             scaleX: 1,
-            scaleY: 1
-        }, options)), new fabric.Text('mm', {
+            scaleY: 1,
+        }, options)), new fabric.Text('', {
             fontSize: 12 / VIEWER.tools.imagePixelSizeOnScreen(),
             textBackgroundColor: "#fff"
-
         })];
     }
 
@@ -810,7 +827,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Group(parts, $.extend({
             factoryId: this.factoryId,
             type: this.type,
-            measure: 0
+            measure: 0,
+            fill: parts[0].fill
         }, options));
     }
 };
@@ -875,7 +893,6 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             originY: ofObject.originY,
             angle: ofObject.angle,
             fill: ofObject.fill,
-            color: ofObject.color,
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             opacity: ofObject.opacity,
@@ -963,7 +980,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return;
-        this._context.promoteHelperAnnotation(obj);
+        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
+        this._context.deleteHelperAnnotation(obj);
+        this._context.addAnnotation(obj);
         this._current = undefined;
     }
 
@@ -1044,7 +1063,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Polygon(parameters, {
             hasRotatingPoint: ofObject.hasRotatingPoint,
             fill: ofObject.fill,
-            color: ofObject.color,
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             isLeftClick: ofObject.isLeftClick,
@@ -1457,7 +1475,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         this._readingKey = "";
         this._customControls = "";
 
-        this._initFromVisualization(VIEWER.bridge.currentVisualisation());
+        this._initFromVisualization(VIEWER.bridge.visualization());
         VIEWER.addHandler('visualisation-used', function (visualisation) {
             _this._initFromVisualization(visualisation);
         });
@@ -1497,7 +1515,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     _beforeAutoMethod() {
-        let vis = VIEWER.bridge.currentVisualisation();
+        let vis = VIEWER.bridge.visualization();
         this._renderEngine._visualisations[0] = {
             shaders: {}
         };
@@ -1571,7 +1589,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
     _setTargetLayer(self) {
         self = $(self);
         this._readingKey = self.val();
-        let layer = VIEWER.bridge.currentVisualisation().shaders[this._readingKey];
+        let layer = VIEWER.bridge.visualization().shaders[this._readingKey];
         this._readingIndex = layer.index;
     }
 

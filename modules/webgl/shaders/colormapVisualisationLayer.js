@@ -69,16 +69,11 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-
-    constructor(id, options) {
-        super(id, options);
-    }
-
     getFragmentShaderExecution() {
         let ratio = `data${this.uid}`;
         return `
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    ${this.render(`vec4(${this.color.sample(ratio)}, step(0.05, ${this.threshold.sample(ratio)}) * ${this.opacity.sample()})`)}
+    ${this.render(`vec4(${this.color.sample(ratio, 'float')}, step(0.05, ${this.threshold.sample(ratio, 'float')}) * ${this.opacity.sample(ratio, 'float')})`)}
 `;
     }
 

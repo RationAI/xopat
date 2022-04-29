@@ -5,7 +5,6 @@
   "description": "A plugin for ROI creation and management.",
   "icon": "",
   "includes" : ["osd_fabric_annotation.js"],
-  "requires": [],
   "modules": ["annotations"],
   "server": "/iipsrv.fcgi",
   "factories": ["polygon", "rect", "ellipse", "ruler"]

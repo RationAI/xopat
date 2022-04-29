@@ -43,14 +43,15 @@
             this._fabricCanvas = new fabric.Canvas(this._canvas);
             // disable fabric selection because default click is tracked by OSD
             this._fabricCanvas.selection = false;
-            // prevent OSD click elements on fabric objects
-            this._fabricCanvas.on('mouse:down', function (options) {
-                if (options.target) {
-                    options.e.preventDefaultAction = true;
-                    options.e.preventDefault();
-                    options.e.stopPropagation();
-                }
-            });
+
+            // prevent OSD click elements on fabric objects todo event name changed - keep? seems working well without
+            // this._fabricCanvas.on('mouse:down', function (options) {
+            //     if (options.target) {
+            //         options.e.preventDefaultAction = true;
+            //         options.e.preventDefault();
+            //         options.e.stopPropagation();
+            //     }
+            // });
 
             this._viewer.addHandler('update-viewport', function () {
                 self.resize();
@@ -103,10 +104,6 @@
                 )
             );
             this._fabricCanvas.renderAll();
-        }
-
-        set interactive(value) {
-            this.disabledInteraction = !value;
         }
     }
 

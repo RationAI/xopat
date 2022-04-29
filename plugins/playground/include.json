@@ -11,6 +11,5 @@
         "workflow.js",
         "ppprotocol.js"
     ],
-    "requires": [],
     "modules": ["webgl"]
 }

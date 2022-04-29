@@ -1,21 +1,23 @@
 class Presenter {
     constructor(id, params) {
         this.id = id;
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
         this._toolsMenuId = "presenter-tools-menu";
-        this.engine = new OpenSeadragon.Tools(VIEWER);
+        this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
     }
 
     pluginReady() {
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
     <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
     <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
+${UIComponents.Elements.checkBox({
+            label: "Capture visualization",
+            onchange: this.id + ".snapshots.captureVisualization = this.checked && this.checked !== 'false';",
+            default: false
+        })}<br>
 <button class='btn' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn' onclick="${this.id}.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
-<button class='btn' onclick="${this.id}.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
-<button class='btn' onclick="${this.id}.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn' onclick="${this.id}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
+<button class='btn' onclick="${this.id}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
+<button class='btn' onclick="${this.id}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
 <button class='btn' onclick="${this.id}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
 <br><br>`,"auto-recorder", this.id);
@@ -38,60 +40,104 @@ class Presenter {
 
         this._container = $("#playback-timeline");
 
-        UTILITIES.addPostExport("presentation-keyframes", this.exportJSON.bind(this), this.id);
-        let importedJson = APPLICATION_CONTEXT.postData["presentation-keyframes"];
-        if (importedJson) {
-            try {
-                this.importJSON(JSON.parse(importedJson));
-            } catch (e) {
-                console.warn(e);
-                Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
-            }
-        }
+        const _this = this;
+        this.snapshots.addHandler('play', function () {
+            $("#presenter-play-icon").addClass("timeline-play");
+            USER_INTERFACE.Tools.notify(this._toolsMenuId, '➤');
+        });
 
-        let _this = this;
-        document.addEventListener("keydown", function(e) {
+        this.snapshots.addHandler('stop', function () {
+            $("#presenter-play-icon").removeClass("timeline-play");
+        });
+
+        this.snapshots.addHandler('enter', function (e) {
+            _this._highlight(e.step, e.index);
+        });
+
+        this.snapshots.addHandler('create', function (e) {
+            USER_INTERFACE.Tools.notify(_this._toolsMenuId);
+
+            //todo create WRT current position
+            _this._container.append(`<span onclick="${_this.id}.selectPoint(this);" style="
+filter: ${_this._convertValue('transition', e.step.transition)};
+width: ${_this._convertValue('duration', e.step.duration)}; 
+height: ${Math.log(e.step.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
+margin-left: ${_this._convertValue('delay', e.step.delay)};"></span>`);
+        });
+
+        VIEWER.addHandler('keydown', function(e) {
+            //if (e.ctrlKey) {
             if (e.code === "KeyN") {
-                _this._idx++;
-                if (_this._idx >= _this._steps.length) _this._idx = 0;
-                _this._jumpAt(_this._idx);
+                _this.snapshots.goToIndex(_this._steps.currentStep + 1);
             } else if (e.code === "KeyS") {
-                _this._idx = 0;
-                _this._jumpAt(_this._idx);
+                _this.snapshots.goToIndex(0);
             }
+            //}
         });
     }
 
     addRecord() {
-        if (this._playing) {
-            return;
-        }
-        let view = VIEWER.viewport;
-        this._addRecord({
-            zoomLevel: view.getZoom(),
-            point: view.getCenter(),
-            delay: parseFloat($("#point-delay").val()),
-            duration: parseFloat($("#point-duration").val()),
-            transition: parseFloat($("#point-spring").val())
-        });
-        USER_INTERFACE.Tools.notify(this._toolsMenuId);
+        this.snapshots.create(
+            parseFloat($("#point-delay").val()),
+            parseFloat($("#point-duration").val()),
+            parseFloat($("#point-spring").val())
+        );
     }
 
-    _addRecord(record) {
-        this._steps.push(record);
-        this._container.append(`<span onclick="${this.id}.selectPoint(this);" style="
-filter: ${this._convertValue('transition', record.transition)};
-width: ${this._convertValue('duration', record.duration)}; 
-height: ${Math.log(record.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
-margin-left: ${this._convertValue('delay', record.delay)};"></span>`);
-        this._highlight(this._steps.length-1);
+    selectPoint(node) {
+        let index = Array.prototype.indexOf.call(node.parentNode.children, node);
+        this.snapshots.goToIndex(index);
     }
 
     setValue(key, value) {
-        if (this._steps.length === 0) return;
-        this._steps[this._idx][key] = value;
-        let node = this._container.children()[this._idx];
-        node.style[this._getStyleFor(key)] = this._convertValue(key, value);
+        if (this.snapshots.snapshotCount < 1) return;
+
+        let index = this.snapshots.currentStepIndex;
+
+        let node = this._container.children()[index];
+        if (node) {
+            this.snapshots.currentStep[key] = value;
+            node.style[this._getStyleFor(key)] = this._convertValue(key, value);
+        }
+    }
+
+    removeHighlightedRecord() {
+        let index = this.snapshots.currentStepIndex;
+        let child = this._container.children()[index];
+        if (child) {
+            this.snapshots.remove(index);
+            $(child).remove();
+        }
+    }
+
+    export() {
+        let output = new Blob([this.snapshots.exportJSON()], { type: 'text/plain' });
+        let downloadURL = window.URL.createObjectURL(output);
+        var downloader = document.getElementById("export-recording");
+        downloader.href = downloadURL;
+        downloader.download = "visualisation-recording.json";
+        downloader.click();
+        URL.revokeObjectURL(downloadURL);
+    }
+
+    import(event) {
+        let file = event.target.files[0];
+        if (!file) return;
+        let fileReader = new FileReader();
+        const _this = this;
+        fileReader.onload = e => _this.snapshots.importJSON(JSON.parse(e.target.result));
+        fileReader.readAsText(file);
+    }
+
+    _highlight(step, index) {
+        if (this._oldHighlight) {
+            this._oldHighlight.removeClass("selected");
+        }
+        this._oldHighlight = $(this._container.children()[index]); //todo just keep no-jquery node?
+        this._oldHighlight.addClass("selected");
+        $("#point-delay").val(step.delay);
+        $("#point-duration").val(step.duration);
+        $("#point-spring").val(step.transition);
     }
 
     _convertValue(key, value) {
@@ -110,160 +156,6 @@ margin-left: ${this._convertValue('delay', record.delay)};"></span>`);
             case 'transition': return "filter";
             default: return value;
         }
-    }
-
-    removeHighlightedRecord() {
-        let child = this._container.children()[this._idx];
-        if (child) {
-            this._steps.splice(this._idx, 1);
-            $(child).remove();
-            if (this._steps.length === 0) return;
-            this._highlight(this._idx++ % this._steps.length);
-        }
-    }
-
-    _findSelfIndex(node) {
-       return Array.prototype.indexOf.call(node.parentNode.children, node);
-    }
-
-    selectPoint(node) {
-        let atIndex = this._findSelfIndex(node);
-        if (this._playing || this._steps.length <= atIndex) {
-            return;
-        }
-        this._idx = atIndex;
-        this._jumpAt(atIndex);
-    }
-
-    _jumpAt(index, direct=true) {
-        if (!this._steps[index] || this._steps.length <= index) {
-            return;
-        }
-        this.engine.focus(this._steps[index]);
-        this._highlight(index);
-    }
-
-    play() {
-        if (this._playing || this._idx === this._steps.length) return;
-
-        $("#presenter-play-icon").addClass("timeline-play");
-        USER_INTERFACE.Tools.notify(this._toolsMenuId, '➤');
-        this.playStep(this._idx);
-        let view = VIEWER.viewport;
-        this._playing = true;
-    }
-
-    playFromIndex(index) {
-        if (this._playing) {
-            return;
-        }
-        this._idx = index;
-        this.play();
-    }
-
-    playStep(index) {
-        while (this._steps.length > index && !this._steps[index]) {
-            index++;
-        }
-
-        if (this._steps.length <= index) {
-            this._currentStep = null;
-            this.stop();
-            return;
-        }
-
-        let prevIdx = index > 0 ? index-1 : 0;
-        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
-        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
-        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
-
-        const _this = this;
-        this._currentStep.promise.then(atIndex => {
-            _this._jumpAt(atIndex);
-            _this._idx  = atIndex + 1;
-            _this.playStep(_this._idx);
-        });
-    }
-
-    stop() {
-        if (!this._playing) {
-            return;
-        }
-
-        if (this._currentStep) {
-            this._currentStep.cancel();
-            this._currentStep = null;
-        }
-        $("#presenter-play-icon").removeClass("timeline-play");
-        this._playing = false;
-    }
-
-    exportJSON() {
-        return JSON.stringify(this._steps);
-    }
-
-    importJSON(json) {
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
-        this._container.html("");
-
-        for (let i = 0; i < json.length; i++) {
-            if (!json[i]) continue;
-            //recreate 'classes'
-            json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
-            json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
-
-            this._addRecord(json[i]);
-        }
-    }
-
-    export() {
-        let output = new Blob([this.exportJSON()], { type: 'text/plain' });
-        let downloadURL = window.URL.createObjectURL(output);
-        var downloader = document.getElementById("export-recording");
-        downloader.href = downloadURL;
-        downloader.download = "visualisation-recording.json";
-        downloader.click();
-        URL.revokeObjectURL(downloadURL);
-    }
-
-    import(event) {
-        let file = event.target.files[0];
-        if (!file) return;
-        let fileReader = new FileReader();
-        const _this = this;
-        fileReader.onload = e => _this.importJSON(JSON.parse(e.target.result));
-        fileReader.readAsText(file);
-    }
-
-    _setDelayed(ms, index) {
-        var timeout;
-        var p = new Promise(function(resolve, reject) {
-            timeout = setTimeout(function() {
-                resolve(index);
-            }, ms);
-        });
-
-        return {
-            promise: p,
-            cancel: function() {
-                clearTimeout(timeout);
-            }
-        };
-    }
-
-    _highlight(index) {
-        if (this._oldHighlight) {
-            this._oldHighlight.removeClass("selected");
-        }
-        this._idx = index;
-        this._oldHighlight = $(this._container.children()[index]);
-        this._oldHighlight.addClass("selected");
-        let data = this._steps[index];
-        $("#point-delay").val(data.delay);
-        $("#point-duration").val(data.duration);
-        $("#point-spring").val(data.transition);
     }
 }
 

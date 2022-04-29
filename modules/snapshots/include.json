@@ -1,0 +1,8 @@
+{
+    "id": "snapshots",
+    "name": "Visualization snapshots",
+    "includes" : [
+        "snapshots.js"
+    ],
+    "requires": []
+}

@@ -43,10 +43,6 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-    constructor(id, options) {
-        super(id, options);
-    }
-
     getFragmentShaderDefinition() {
         return `
 ${this.threshold.define()}
@@ -57,20 +53,22 @@ ${this.color.define()}
 //todo try replace with step function
 float clipToThresholdf_${this.uid}(float value) {
     //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample()} || close(value, ${this.threshold.sample()}))) return 1.0;
+    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample('value', 'float')} || close(value, ${this.threshold.sample('value', 'float')}))) return 1.0;
     return 0.0;
 }
 
 //todo try replace with step function
 int clipToThresholdi_${this.uid}(float value) {
      //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample()} || close(value, ${this.threshold.sample()}))) return 1;
+    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample('value', 'float')} || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
     return 0;
 }
 
 vec4 getBorder_${this.uid}() {
-    float dist = ${this.edgeThickness.sample("sqrt(zoom_level) * 0.005 + 0.008")};
     float mid = ${this.sampleChannel('tile_texture_coords')};
+    if (mid < 1e-6) return vec4(.0);
+    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
+    
     float u = ${this.sampleChannel('vec2(tile_texture_coords.x - dist, tile_texture_coords.y)')};
     float b = ${this.sampleChannel('vec2(tile_texture_coords.x + dist, tile_texture_coords.y)')}; 
     float l = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - dist)')}; 
@@ -92,21 +90,17 @@ vec4 getBorder_${this.uid}() {
     if(counter == 2 || counter == 3) {  //two or three points hit the region
         return vec4(${this.color.sample()}, 1.0); //border
     } else if ((dx < -0.5 || dy < -0.5)) {
-        return vec4(${this.color.sample("0.7")}, .7); //inner border
+        return vec4(${this.color.sample()} * 0.7, .7); //inner border
     } 
-    return vec4(.0, .0, .0, .0);
+    return vec4(.0);
 }
 `;
     }
 
     getFragmentShaderExecution() {
         return `
-    if (${this.threshold.sample()} > 1e-6) {
         vec4 border_${this.uid} = getBorder_${this.uid}();
         ${this.render(`vec4(border_${this.uid}.rgb, border_${this.uid}.a * ${this.opacity.sample()})`)}
-    } else {
-        ${this.render(`vec4(.0)`)}
-    }
 `;
     }
 };

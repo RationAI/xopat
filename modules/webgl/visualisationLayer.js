@@ -66,40 +66,20 @@ WebGLModule.VisualisationLayer = class {
      * @param id unique ID among all webgl instances and shaders
      * @param options
      *  options.channel: "r", "g" or "b" channel to sample, default "r"
+     * @param privateOptions options that should not be touched, necessary for linking the layer to the core
      */
-    constructor(id, options) {
+    constructor(id, options, privateOptions) {
         this.uid = id;
-        if (options.hasOwnProperty("use_channel")) {
-            this.__channel = options.use_channel;
-        }
+        this._setContextVisualisationLayer(privateOptions.layer);
+        this.webglContext = privateOptions.webgl;
+        this.invalidate = privateOptions.invalidate;
+        //use with care...
+        this._rebuild = privateOptions.rebuild;
 
-        if (!this.__channel
-            || typeof this.__channel !== "string"
-            || WebGLModule.VisualisationLayer.__chanPattern.exec(this.__channel) === null) {
-
-            this.__channel = "r";
-        }
-
-        if (this.__channel.length > 1) {
-            console.warn("Shader will sample more dimensions - no such shader is " +
-                "present in default ones: make sure this is a custom implementation.");
-        }
-
-        this.__mode = "show";
-        if (options.hasOwnProperty("use_mode")) {
-            if (options["use_mode"] === "mask") {
-                //option is called 'mask' for the default blending implementation
-                this.__mode = "blend";
-            }
-        }
+        this.resetChannel(options);
+        this.resetMode(options);
         this.resetFilters(options);
         this._buildControls(options);
-    }
-
-    /**
-     * Called once the shader is ready to be used, called only once.
-     */
-    ready() {
     }
 
     /**
@@ -197,10 +177,6 @@ WebGLModule.VisualisationLayer = class {
         }
     }
 
-    _clearCallback(ui) {
-        ui.on
-    }
-
     /**
      * Get the shader UI controls
      * @return {string} HTML controls for the particular shader
@@ -239,6 +215,11 @@ WebGLModule.VisualisationLayer = class {
         use_gamma: "Gamma",
         use_exposure: "Exposure",
         use_logscale: "Logarithmic scale"
+    };
+
+    static modes = {
+        show: "show",
+        mask: "blend"
     };
 
     /**
@@ -396,7 +377,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {string} mode
      */
     get mode() {
-        return this.__mode;
+        return this._mode;
     }
 
     /**
@@ -428,6 +409,45 @@ WebGLModule.VisualisationLayer = class {
      */
     getFilterValue(filter, defaultValue) {
         return this.loadProperty(filter, defaultValue);
+    }
+
+    /**
+     * Set sampling channel
+     * @param options
+     * @param {string} options.use_channel chanel to sample
+     */
+    resetChannel(options) {
+        if (options.hasOwnProperty("use_channel")) {
+            this.__channel = this.loadProperty("use_channel", options.use_channel);
+
+            if (!this.__channel
+                || typeof this.__channel !== "string"
+                || this.constructor.__chanPattern.exec(this.__channel) === null) {
+                console.warn("Invalid channel. Will use RED channel.", this.__channel, options);
+                this.storeProperty("use_channel", "r");
+                this.__channel = "r";
+            }
+
+            if (this.__channel !== options.use_channel) this.storeProperty("use_channel", this.__channel);
+        } else {
+            this.__channel = "r";
+        }
+    }
+
+    /**
+     * Set blending mode
+     * @param options
+     * @param {string} options.use_mode blending mode to use: "show" or "mask"
+     */
+    resetMode(options) {
+        if (options.hasOwnProperty("use_mode")) {
+            this._mode = this.loadProperty("use_mode", options.use_mode);
+            if (this._mode !== options.use_mode) this.storeProperty("use_mode", this._mode);
+        } else {
+            this._mode = "show";
+        }
+
+        this.__mode = this.constructor.modes[this._mode] || "show";
     }
 
     /**
@@ -475,16 +495,6 @@ WebGLModule.VisualisationLayer = class {
         if (!this.__visualisationLayer.cache.hasOwnProperty(this.constructor.type())) {
             this.__visualisationLayer.cache[this.constructor.type()] = {};
         }
-    }
-
-    _setWebglContext(webglContext) {
-        this.webglContext = webglContext;
-    }
-
-    _setResetCallback(reset, rebuild) {
-        this.invalidate = reset;
-        //use with care... (that's why it has more difficult name)
-        this.build_shaders = rebuild;
     }
 };
 
@@ -606,7 +616,7 @@ WebGLModule.UIControls = class {
             && check(uiElement, "glUniformFunName", "glUniformFunName():string")
             && check(uiElement, "decode", "decode(encodedValue):<compatible with glType>")
             && check(uiElement, "normalize", "normalize(value, params):<typeof value>")
-            && check(uiElement, "sample", "sample(name, ratio):glslString")
+            && check(uiElement, "sample", "sample(value, valueGlType):glslString")
             && check(uiElement, "glType", "glType:string")
         ) {
             if (this._items.hasOwnProperty(type)) {
@@ -663,7 +673,7 @@ step="${params.step}" type="number" id="${uniqueId}">`;
                 return  (value - params.min) / (params.max - params.min);
             },
             sample: function(name, ratio) {
-                return `${name} * ${ratio}`;
+                return name;
             },
             glType: "float"
         },
@@ -687,7 +697,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
                 return  (value - params.min) / (params.max - params.min);
             },
             sample: function(name, ratio) {
-                return `${name} * ${ratio}`;
+                return name;
             },
             glType: "float"
         },
@@ -719,7 +729,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
                 return value;
             },
             sample: function(name, ratio) {
-                return `${name} * ${ratio}`;
+                return name;
             },
             glType: "vec3"
         },
@@ -844,11 +854,12 @@ WebGLModule.UIControls.IControl = class {
      *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
      * NOTE: you can define your own global-scope functions to keep one-lined sampling,
      * see this.context.includeGlobalCode(...)
-     * @param {string} ratio openGL float value/variable, ratio used to interpolate the user-defined parameter
-     *        note that shaders extending this interface might extend supported types to be more flexible
-     *        (e.g. support 'undefined' to avoid passing every time "1.0" if you want to just get that value)
+     * @param {string||undefined} value openGL value/variable, used in a way that depends on the UI control currently active
+     *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
+     * @param {string} valueGlType GLSL type of the value
+     * @return {string} valid GLSL oneliner (wihtout ';') for sampling the value, or invalid code (e.g. error message) to signal error
      */
-    sample(ratio) {
+    sample(value=undefined, valueGlType='void') {
         throw "WebGLModule.UIControls.IControl::sample() must be implemented.";
     }
 
@@ -992,9 +1003,9 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         return `uniform ${this.component.glType} ${this.webGLVariableName};`;
     }
 
-    sample(ratio) {
-        if (!ratio) return this.webGLVariableName;
-        return this.component.sample(this.webGLVariableName, ratio);
+    sample(value=undefined, valueGlType='void') {
+        if (!value || valueGlType !== 'float') return this.webGLVariableName;
+        return this.component.sample(this.webGLVariableName, value);
     }
 
     get supports() {

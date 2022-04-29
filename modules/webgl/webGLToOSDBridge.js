@@ -128,11 +128,19 @@ OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Get the current visualisaiton goal object
-     * @returns current visualisaiton goal object
+     * Get a visualisaiton goal object
+     * @returns {object} a visualisaiton goal object
      */
-    currentVisualisation() {
-        return this.webGLEngine.currentVisualisation();
+    visualization(index=undefined) {
+        return this.webGLEngine.visualization(index || this.webGLEngine.currentVisualisationIndex());
+    }
+
+    /**
+     * Get the current visualisaiton goal index
+     * @returns {number} current visualisaiton goal index
+     */
+    currentVisualisationIndex() {
+        return this.webGLEngine.currentVisualisationIndex();
     }
 
     /**
@@ -182,7 +190,8 @@ OpenSeadragon.BridgeGL = class {
 
     /**
      * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLEngine.shaderGenerator
-     * @param {array} order array of strings that refer to ID's in the visualisation data (pyramidal tiff paths in our case)
+     * @param {array} order array of strings that refer to ID's in the visualisation
+     *   data (e.g. pyramidal tiff paths in our case), first is rendered last (top)
      */
     reorder(order) {
         if (!Array.isArray(order)) {

@@ -70,7 +70,6 @@ class WebGLModule {
     reset() {
         this._visualisations = [];
         this._dataSources = [];
-        this._dataProblems = [];
         this._origDataSources = [];
         this._customShaders = [];
         this._programs = {};
@@ -128,7 +127,7 @@ class WebGLModule {
 
     /**
      * Rebuild visualisation and update scene
-     * @param {array} order order in reverse, ID's of data as defined in setup JSON
+     * @param {array} order of shaders, ID's of data as defined in setup JSON, last element is rendered last (top)
      */
     rebuildVisualisation(order) {
         let vis = this._visualisations[this._program];
@@ -150,8 +149,16 @@ class WebGLModule {
      * Get currently used visualisation
      * @return {object} current visualisation
      */
-    currentVisualisation() {
-        return this._visualisations[this._program];
+    visualization(index) {
+        return this._visualisations[Math.min(index, this._visualisations.length-1)];
+    }
+
+    /**
+     * Get currently used visualisation index
+     * @return {number} index of the current visualization
+     */
+    currentVisualisationIndex() {
+        return this._program;
     }
 
     /**
@@ -590,12 +597,12 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             return;
         }
         layer.index = idx;
-        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params);
-
-        layer._renderContext._setContextVisualisationLayer(layer);
-        layer._renderContext._setWebglContext(this.webGLImplementation);
-        layer._renderContext._setResetCallback(this.resetCallback, this.rebuildVisualisation.bind(this, undefined));
-        layer._renderContext.ready();
+        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params, {
+            layer: layer,
+            webgl: this.webGLImplementation,
+            invalidate: this.resetCallback,
+            rebuild: this.rebuildVisualisation.bind(this, undefined)
+        });
     }
 
     _updateRequiredDataSources(vis) {
@@ -644,11 +651,6 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
                 }
             }
-
-            if (!Array.isArray(vis.order) || vis.order.length < 1) {
-                vis.order = Object.keys(vis.shaders);
-            }
-
         } else {
             program = this._programs[idx];
             for (let key in vis.shaders) {
@@ -666,6 +668,10 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }
             }
+        }
+
+        if (!Array.isArray(vis.order) || vis.order.length < 1) {
+            vis.order = Object.keys(vis.shaders);
         }
 
         this._buildVisualisation(vis.order, vis);

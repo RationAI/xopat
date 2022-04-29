@@ -156,7 +156,7 @@ window.addEventListener("beforeunload", (e) => {
     sync() {
         if (this._context.disabledInteraction) return;
 
-        if (!window.opener.confirm("This will overwrite all properties of all existing annotations - " +
+        if (!window.confirm("This will overwrite all properties of all existing annotations - " +
             "even those manually modified. Do you want to proceed?")) return;
         this._performAtJQNode("annotation-logs", node => node.html(""));
         this._syncLoad();
@@ -212,7 +212,10 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     highlight(object) {
-        let board = this._getJQNode("annotation-logs");
+        let ctx = this.winContext();
+        if (!ctx) return;
+        let board = $(ctx.document.getElementById("annotation-logs"));
+
         if (this._boardSelected && board) {
             board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
         }
@@ -226,6 +229,13 @@ window.addEventListener("beforeunload", (e) => {
                 node = board.find(`#log-object-${object.incrementId}`);
             }
             node.css("background", "var(--color-bg-success)");
+            if (node[0]) {
+                let bounds = node[0].getBoundingClientRect();
+                let ctx = this.winContext();
+                if (bounds.top < 0 || bounds.bottom > (ctx.innerHeight || ctx.document.documentElement.clientHeight)) {
+                    board.parents("#window-content").scrollTo(node, 150, {offset: -20});
+                }
+            }
         }
         this._boardSelected = object;
     }
@@ -272,10 +282,10 @@ window.addEventListener("beforeunload", (e) => {
     _setControlsVisuallyEnabled(enabled) {
         let ctx = this.winContext();
         if (ctx) {
-            let header = ctx.document.getElementById(this.containerId + "-header");
+            let header = ctx.document.getElementById("window-header");
             if (enabled) {
                 ctx.document.body.style.background = "transparent";
-                header.readonly = false;
+                header.readonly = false; this._context.canvas.renderAll()
                 header.style.filter = "none";
             } else {
                 ctx.document.body.style.background = "#eb7777";
@@ -286,27 +296,33 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _addToBoard(object) {
-        let desc;
-        let icon = this._getObjectDefaultIcon(object), inputs = [];
+        let desc, inputs = [];
+        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
+        let icon = factory ? factory.getIcon() : "question_mark";
 
         if (!object.hasOwnProperty("incrementId")) {
             object.incrementId = this._autoIncrement++;
         }
 
-        if (object.hasOwnProperty("meta")) {
-            for (let key in object.meta) {
+        let preset = this._context.presets.get(object.presetID);
+        if (preset) {
+            let objmeta = object.meta || {};
+            for (let key in preset.meta) {
+                let metaElement = preset.meta[key];
                 let fn = key === "comment" ? inputs.unshift : inputs.push;
-                fn.apply(inputs, ['<input type="text" class="form-control border-0" readonly class="desc" ',
-                    'style="width: calc(100% - 80px); background:transparent;color: inherit;" value="',
-                    object.meta[key].value, '" name="', key, '">']);
+                fn.apply(inputs, ['<label class="show-hint d-block" data-hint="', metaElement.name,
+                    '"><input type="text" class="form-control border-0 width-full" readonly ',
+                    'style="background:transparent;color: inherit;" value="', objmeta[key] ?? metaElement.value,
+                    '" name="', key, '"></label>']);
             }
         }
 
         //with no metadata, object will receive 'comment' on edit
         if (inputs.length  < 1) {
-            inputs.push('<input type="text" class="form-control border-0" readonly class="desc" ',
-                'style="width: calc(100% - 80px); background:transparent;color: inherit;" value="',
-                this._getObjectDefaultDescription(object), '" name="comment">');
+            inputs.push('<label class="show-hint d-block" data-hint="Comment">',
+                '<input type="text" class="form-control border-0 width-full" readonly ',
+                'style="background:transparent;color: inherit;" value="',
+                this._getObjectDefaultDescription(object), '" name="comment"></label>');
         }
 
         const _this = this;
@@ -314,9 +330,10 @@ window.addEventListener("beforeunload", (e) => {
         this._performAtJQNode("annotation-logs", node => node.prepend(`
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
-<span class="material-icons" style="color: ${object.color}">${icon}</span> 
-${inputs.join("")}
-<span class="material-icons pointer" id="edit-log-object-${object.incrementId}" onclick="let self = $(this); if (self.html() === 'edit') {
+<span class="material-icons" style="vertical-align:super;color: ${object.fill}">${icon}</span> 
+<div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
+<span class="material-icons pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
+onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
     }
@@ -338,8 +355,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
         }
 
         self.parent().find("input").each((e, t) => {
-            //todo does not work
-            t.readonly = false;
+            $(t).attr('readonly', false);
         });
         self.html('save');
 
@@ -375,18 +391,24 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
                 if (newObject) {
                     this._context.replaceAnnotation(obj, newObject, true);
                     obj = newObject;
+                } else {
+                    this._context.canvas.renderAll();
                 }
             } else {
                 obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
             }
 
             let self = this._editSelection.self,
-                inputs = self.parent().find("input");
+                inputs = self.parent().find("input"),
+                preset = this._context.presets.get(obj.presetID),
+                metadata = preset ? preset.meta : {};
             if (obj) {
                 if (!obj.meta) obj.meta = {};
                 inputs.each((e, t) => {
-                    obj.meta[t.name] = t.value;
-                    t.readonly = true;
+                    if (!metadata[t.name] || metadata[t.name].value != t.value) {
+                        obj.meta[t.name] = t.value;
+                    }
+                    $(t).attr('readonly', true);
                 });
                 console.log(obj.meta);
             } else {
@@ -413,14 +435,6 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             return factory.getDescription(object);
         }
         return undefined;
-    }
-
-    _getObjectDefaultIcon(object) {
-        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
-        if (factory !== undefined) {
-            return factory.getIcon();
-        }
-        return "question_mark";
     }
 
     async _performSwap(canvas, toAdd, toRemove) {

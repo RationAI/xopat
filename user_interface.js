@@ -9,12 +9,11 @@
 
         init: function() {
             $("body").append(`<div id="dialogs-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
-          <span class="Toast-icon"><svg width="12" height="16" id="notification-bar-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
-          <span id="system-notification" class="Toast-content v-align-middle height-full position-relative" style="max-width: 350px;"></span>
-          <button class="Toast-dismissButton" onclick="Dialogs._hideImpl(false);">
-          <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
-          </button>
-          </div>`);
+<span class="Toast-icon"><svg width="12" height="16" id="notification-bar-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
+<span id="system-notification" class="Toast-content v-align-middle height-full position-relative" style="max-width: 350px;"></span>
+<button class="Toast-dismissButton" onclick="Dialogs._hideImpl(false);">
+<svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
+</button></div>`);
 
             this._body = $("#dialogs-container");
             this._board = $("#system-notification");
@@ -94,6 +93,9 @@
          *  note: the window context does not have to be immediately available
          *  to get the window context, call getModalContext(..)
          *  to perform event-like calls, use the context and register appropriate events on the new window
+         * Header is put into #window-header container
+         * Content is put into #window-content container
+         *
          * @param parentId unique ID to the modals context (does not have to be unique in this DOM, it has a different one)
          * @param title non-formatted title string (for messages, window title tag...)
          * @param header HTML content to put in the header
@@ -303,11 +305,11 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             return `<div id="${parentId}" data-dialog="true" ${positionStrategy}>
 <details-dialog class="${diaClasses} d-flex flex-column" ${limits}>
-    <div class="Box-header noselect" id="${parentId}-header">
+    <div id="window-header" class="Box-header noselect" id="${parentId}-header">
       ${close}
       <h3 class="Box-title">${title}</h3>
     </div>
-    <div class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
+    <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
       <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
 	  ${content}
 	  </div>
@@ -434,24 +436,53 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
                 }
             },
+            /**
+             * Show desired toolBar menu. Also opens the toolbar if closed.
+             * @param {string|undefined} toolsId menu id to open at
+             */
             open(toolsId=undefined) {
                 if (pluginsToolsBuilder) {
                     USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
                     pluginsToolsBuilder.show(toolsId);
                 }
             },
+            /**
+             * Notify menu. The menu tab will receive a counter that notifies the user something has happened.
+             * @param {string} menuId menu id to open at
+             * @param {string} symbol a html symbol (that can be set as data- attribute) to show, shows increasing
+             *  counter if undefined (e.g. 3 if called 3 times)
+             */
             notify(menuId, symbol=undefined) {
                 if (pluginsToolsBuilder) pluginsToolsBuilder.setNotify(menuId, symbol);
             },
+            /**
+             * Close the menu, so that it is not visible at all.
+             */
             close() {
                 USER_INTERFACE.Margins.bottom = 0;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
             }
         },
 
+        /**
+         * Menu that covers most of the screen and hides more advanced UI elements and other features
+         */
         AdvancedMenu: {
             self: $("#fullscreen-menu"),
             selfContext: new UIComponents.Containers.PanelMenu("fullscreen-menu"),
+            /**
+             * Add menu
+             * @param {string} ownerPluginId context ID: the ID of plugin the menu belongs to
+             *  e.g. should be called once if withSubmenu=false, the last call is the only menu shown under this ID
+             *  e.g. can be called many times if withSubmenu=true, then all menus are treated as submenus
+             * @param {string} toolsMenuId menu ID: should be unique across menus
+             * @param {string} title menu title as shown in the menu tab
+             * @param {string} html menu content
+             * @param {string} icon google icon tag
+             * @param {boolean} withSubmenu true if the menu allows submenus: in that case, all added menus with the
+             *  same owner ID are actually submenus
+             * @param {boolean} container true if a common container should be added (i.e. margins/padding)
+             */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="", withSubmenu=true, container=true) {
                 //todo allow multiple main menus for plugin?
                 let plugin = PLUGINS[ownerPluginId];
@@ -459,6 +490,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this._buildMenu(plugin, "__selfMenu", ownerPluginId, plugin.name, ownerPluginId, toolsMenuId, title, html,
                     icon, withSubmenu, container);
             },
+            /**
+             * Open the Menu UI at desired tab
+             * @param {string|undefined} atPluginId menu tab to open
+             */
             openMenu(atPluginId=undefined) {
                 this.selfContext.show(atPluginId);
                 if (window.innerWidth < 1150) {
@@ -466,6 +501,11 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     USER_INTERFACE.MainMenu.close();
                 }
             },
+            /**
+             * Open the Menu UI at desired sub-menu tab
+             * @param {string} atPluginId menu tab to open
+             * @param {string|undefined} atSubId sub-menu tab to open
+             */
             openSubmenu(atPluginId, atSubId=undefined) {
                 this.openMenu(atPluginId);
                 let plugin = PLUGINS[atPluginId];
@@ -473,6 +513,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 let builder = plugin.__selfMenu;
                 if (builder) builder.show(atSubId);
             },
+            /**
+             * Close the menu.
+             */
             close() {
                 this.selfContext.hide();
                 if (this._closedMm) {
