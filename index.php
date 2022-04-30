@@ -182,46 +182,7 @@ foreach ($MODULES as $_ => $mod) {
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 
     <!-- OSD -->
-    <!-- <script src="./osd/openseadragon.min.js"></script> -->
-
-    <script src="./osd_debug/src/openseadragon.js?v=$version"></script>
-
-    <script src="./osd_debug/src/eventsource.js"></script>
-    <script src="./osd_debug/src/rectangle.js"></script>
-    <script src="./osd_debug/src/tile.js?v=$version"></script>
-    <script src="./osd_debug/src/tilecache.js?v=$version"></script>
-    <script src="./osd_debug/src/tiledimage.js?v=$version"></script>
-    <script src="./osd_debug/src/tilesource.js?v=$version"></script>
-    <script src="./osd_debug/src/button.js"></script>
-    <script src="./osd_debug/src/buttongroup.js"></script>
-    <script src="./osd_debug/src/control.js"></script>
-    <script src="./osd_debug/src/controldock.js"></script>
-    <script src="./osd_debug/src/displayrectangle.js"></script>
-
-    <script src="./osd_debug/src/imageloader.js"></script>
-    <script src="./osd_debug/src/drawer.js"></script>
-
-    <script src="./osd_debug/src/dzitilesource.js"></script>
-    <script src="./osd_debug/src/fullscreen.js"></script>
-    <script src="./osd_debug/src/iiiftilesource.js"></script>
-    <script src="./osd_debug/src/imagetilesource.js"></script>
-    <script src="./osd_debug/src/legacytilesource.js"></script>
-    <script src="./osd_debug/src/mousetracker.js"></script>
-    <script src="./osd_debug/src/viewer.js"></script>
-    <script src="./osd_debug/src/navigator.js"></script>
-    <script src="./osd_debug/src/osmtilesource.js"></script>
-    <script src="./osd_debug/src/overlay.js"></script>
-    <script src="./osd_debug/src/placement.js"></script>
-    <script src="./osd_debug/src/point.js"></script>
-    <script src="./osd_debug/src/profiler.js"></script>
-    <script src="./osd_debug/src/referencestrip.js"></script>
-    <script src="./osd_debug/src/spring.js"></script>
-    <script src="./osd_debug/src/strings.js"></script>
-    <script src="./osd_debug/src/tilesourcecollection.js"></script>
-    <script src="./osd_debug/src/tmstilesource.js"></script>
-    <script src="./osd_debug/src/viewport.js"></script>
-    <script src="./osd_debug/src/world.js"></script>
-    <script src="./osd_debug/src/zoomifytilesource.js"></script>
+    <script src="./openseadragon/build/openseadragon/openseadragon.js"></script>
 
     <!--Extensions/modifications-->
     <script src="./external/dziexttilesource.js?v=$version"></script>
@@ -500,7 +461,7 @@ EOF;
     // Initialize viewer - OpenSeadragon
     window.VIEWER = OpenSeadragon({
         id: "osd",
-        prefixUrl: "osd/images/",
+        prefixUrl: "openseadragon/build/openseadragon/images",
         showNavigator: true,
         maxZoomPixelRatio: 1,
         blendTime: 0,

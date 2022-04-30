@@ -1,0 +1,3 @@
+[submodule "openseadragon"]
+	path = openseadragon
+	url = https://github.com/Aiosa/openseadragon.git
