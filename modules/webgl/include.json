@@ -5,6 +5,7 @@
         "webGLWrapper.js",
         "visualisationLayer.js",
         "advancedControls.js",
+        "dataLoader.js",
         "shaders/bipolarHeatmapVisualisationLayer.js",
         "shaders/edgeVisualisationLayer.js",
         "shaders/heatmapVisualisationLayer.js",

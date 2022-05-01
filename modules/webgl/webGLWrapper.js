@@ -621,12 +621,14 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         this._dataSources = [];
         this._dataSourceMapping = new Array(this._origDataSources.length).fill(-1);
         for (let id of usedIds) {
+            //todo isn't dataSrouceMapping just identity?
             this._dataSourceMapping[id] = this._dataSources.length;
             this._dataSources.push(this._origDataSources[id]);
             while (id > this._dataSourceMapping.length) {
                 this._dataSourceMapping.push(-1);
             }
         }
+        console.log(this._dataSourceMapping);
     }
 
     _processVisualisation(vis, idx) {

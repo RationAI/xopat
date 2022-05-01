@@ -4,7 +4,7 @@
   "author": "Jirka Horák",
   "description": "A plugin for ROI creation and management.",
   "icon": "",
-  "includes" : ["osd_fabric_annotation.js"],
+  "includes" : ["annotationsGUI.js", "dataLoader.js"],
   "modules": ["annotations"],
   "server": "/iipsrv.fcgi",
   "factories": ["polygon", "rect", "ellipse", "ruler"]

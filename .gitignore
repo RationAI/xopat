@@ -1,11 +1,10 @@
 *.txt
 *.old
-old_trials/**
-webgl/shaders/**
 .idea/
 Thumbs.db
 
-external/monaco/*
-
 osd_debug/*
 openseadragon/*
+osd_debug/
+/openseadragon/package.json
+/openseadragon/package-lock.json

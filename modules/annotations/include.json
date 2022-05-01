@@ -4,7 +4,6 @@
     "description": "A module that brings annotations functionality.",
     "includes" : [
         "ext/greiner-hormann.min.js",
-        "ext/hull.js",
         "annotations.js",
         "objects.js",
         "free_form_tool.js",

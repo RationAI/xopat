@@ -49,11 +49,10 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             shadersCache = {};
         for (let key of vis.order) {
             if (vis.shaders.hasOwnProperty(key) && vis.shaders[key].rendering) {
+                //maybe somehow change on active snapshot change... active node overrides cache setup here ... :O
                 shadersCache[key] = $.extend(true, {}, vis.shaders[key].cache);
             }
         }
-
-        //todo test when disabling/enabling
         return {
             index: this.viewer.bridge.currentVisualisationIndex(),
             cache: shadersCache,
@@ -147,8 +146,8 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         if (!step || this._steps.length <= index) {
             return;
         }
-        this._utils.focus(step);
         if (step.visualization) this._setVisualization(step.visualization);
+        this._utils.focus(step);
         this.raiseEvent("enter", {
             index: index,
             immediate: direct,
@@ -160,7 +159,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         let bridge = this.viewer.bridge,
             curIdx = bridge.currentVisualisationIndex(),
             curVis = bridge.visualization(from.index),
-            needsRefresh = this._equalOrder(curVis.order, from.order);
+            needsRefresh = !this._equalOrder(curVis.order, from.order);
 
         for (let key in curVis.shaders) {
             let shaderSetup = curVis.shaders[key];

@@ -206,92 +206,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
-        this.texture = {
-            debug: $("#debug"),
-            debug2: $("#debug2"),
-            _units: [],
-            context: context,
-
-            init: function() {
-                this.canvas = document.createElement('canvas');
-                this.canvasReader = this.canvas.getContext('2d');
-
-                this.canvasConverter = document.createElement('canvas');
-                this.canvasConverterReader = this.canvasConverter.getContext('2d');
-            },
-
-            toBuffers: function (gl, wrap, filter, visualisation) {
-                this.wrap = wrap;
-                this.filter = filter;
-            },
-
-            toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-                let index = 0;
-                tileBounds.width = Math.round(tileBounds.width);
-                tileBounds.height = Math.round(tileBounds.height);
-
-                //we read from here
-                this.canvas.width = image.width;
-                this.canvas.height = image.height;
-                this.canvasReader.drawImage(image, 0, 0);
-
-                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
-                //Allowed texture size dimension only 256+ and power of two...
-
-                //it worked for arbitrary size until we begun with image arrays... is it necessary?
-                const IMAGE_SIZE = image.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(image.width)));
-                this.canvasConverter.width = IMAGE_SIZE;
-                this.canvasConverter.height = IMAGE_SIZE;
-
-                //just load all images and let shaders reference them...
-                for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
-                    if (this.context._dataSourceMapping[i] < 0) {
-                        continue;
-                    }
-                    if (index >= NUM_IMAGES) {
-                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
-                        return;
-                    }
-
-                    //create textures
-                    while (index >= this._units.length) {
-                        this._units.push(gl.createTexture());
-                    }
-                    let bindConst = `TEXTURE${index}`;
-                    gl.activeTexture(gl[bindConst]);
-                    let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
-                    gl.uniform1i(location, index);
-
-                    gl.bindTexture(gl.TEXTURE_2D, this._units[index]);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, this.wrap);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, this.wrap);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.filter);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.filter);
-                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-
-                    var pixels;
-                    if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                        this.canvasConverterReader.drawImage(this.canvas, 0, this.context._dataSourceMapping[i]*tileBounds.height,
-                            tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
-
-                        pixels = this.canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
-                    } else {
-                        //load data
-                        pixels = this.canvasReader.getImageData(0,
-                            this.context._dataSourceMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
-                    }
-
-                    gl.texImage2D(gl.TEXTURE_2D,
-                        0,
-                        gl.RGBA,
-                        gl.RGBA,
-                        gl.UNSIGNED_BYTE,
-                        pixels);
-                    index++;
-                }
-            }
-        };
-        this.texture.init();
+        this.texture = new WebGLModule.DataLoader.V1_0(gl, index => `vis_data_sampler_${index}`);
     }
 
     getVersion() {
@@ -382,7 +297,6 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
     }
 
     getFragmentShader(samplers, definition, execution, globalScopeCode) {
-
         return `
 precision mediump float;
 uniform float pixel_size_in_fragments;
@@ -451,7 +365,6 @@ void main() {
         var bytes = buffer.BYTES_PER_ELEMENT;
         var count = 4;
 
-        // Get uniform term
         gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.width, gl.canvas.height);
 
         // Get attribute terms
@@ -462,7 +375,7 @@ void main() {
             return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
-        this.texture.toBuffers(gl, this.wrap, this.filter);
+        this.texture.toBuffers(this.context, gl, this.wrap, this.filter, currentVisualisation);
 
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 
@@ -473,7 +386,6 @@ void main() {
 
     toCanvas(program, currentVisualisation, imageElement, tileDimension, zoomLevel, pixelSize) {
         if (!this.context.running) return;
-        // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
         let context = this.context,
             gl = this.gl;
@@ -493,8 +405,9 @@ void main() {
         gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
         // Upload textures
-        this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, context.gl);
-        // Draw everything needed to canvas
+        this.texture.toCanvas(context, context._dataSourceMapping,
+            currentVisualisation, imageElement, tileDimension, program, context.gl);
+
         gl.drawArrays.apply(gl, this._drawArrays);
         return gl.canvas;
     }
@@ -509,47 +422,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         this.wrap = gl.MIRRORED_REPEAT;
         this.filter = gl.NEAREST;
         this.emptyBuffer = gl.createBuffer();
-
-        this.texture = {
-            init: function (gl) {
-                this.textureId = gl.createTexture();
-            },
-
-            toBuffers: function (gl, wrap, filter, visualisation) {
-                this.wrap = wrap;
-                this.filter = filter;
-            },
-
-            toCanvas: function (context, visualisation, image, tileBounds, program, gl) {
-                // use canvas to get the pixel data array of the image
-                const NUM_IMAGES = Math.round(image.height / tileBounds.height);
-
-                if (NUM_IMAGES < this.imageCount) {
-                     console.warn("Incoming data does not contain necessary number of images!");
-                }
-
-                //Init Texture
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, this.filter);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, this.filter);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, this.wrap);
-                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, this.wrap);
-                gl.texImage3D(
-                    gl.TEXTURE_2D_ARRAY,
-                    0,
-                    gl.R8,
-                    tileBounds.width,
-                    tileBounds.height,
-                    NUM_IMAGES,
-                    0,
-                    gl.RED,
-                    gl.UNSIGNED_BYTE,
-                    image
-                );
-            }
-        };
-        this.texture.init(gl);
+        this.texture = new WebGLModule.DataLoader.V2_0(gl, "vis_data_sampler_array");
     }
 
     getVersion() {
@@ -619,9 +492,6 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         //         indicesMapping[layer.index] = urls.length-1;
         //     }
         // }
-        //this.texture.imageCount = urls.length;
-
-        this.texture.imageCount = this.context._dataSources.length;
 
         return {
             vertex_shader: this.getVertexShader(),
@@ -720,9 +590,7 @@ void main() {
         //Note that the drawing strategy is not to resize canvas, and simply draw everyhing on squares
         //The resizing in border tiles is done when the GL canvas is rendered to the output canvas
         gl.uniform2f(gl.getUniformLocation(program, 'u_tile_size'), gl.canvas.width, gl.canvas.height);
-
-        //Init textures
-        this.texture.toBuffers(gl, this.wrap, this.filter);
+        this.texture.toBuffers(context, gl, this.wrap, this.filter, currentVisualisation);
 
         //Empty ARRAY: get the vertices directly from the shader
         gl.bindBuffer(gl.ARRAY_BUFFER, this.emptyBuffer);
@@ -745,7 +613,9 @@ void main() {
         gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
         // Upload textures
-        this.texture.toCanvas(context, currentVisualisation, imageElement, tileDimension, program, gl);
+        this.texture.toCanvas(context, context._dataSourceMapping, currentVisualisation,
+            imageElement, tileDimension, program, gl);
+
         // Draw three points (obtained from gl_VertexID from a static array in vertex shader)
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         return gl.canvas;

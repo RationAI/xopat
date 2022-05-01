@@ -2,9 +2,7 @@
 * Bridge between WebGLModule and OSD. Registers appropriate callbacks.
 * Written by Jiří Horák, 2021
 *
-* Based on OpenSeadragonGL plugin
-* https://github.com/thejohnhoffer/viaWebGL
-*
+* Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
 */
 
@@ -35,33 +33,21 @@ OpenSeadragon.BridgeGL = class {
      */
     addLayer(idx) {
         let existing = this._rendering[idx];
-        let layer = this.openSD.world.getItemAt(idx);
-        if (!layer) throw "Invalid index: no Tiled Image with index " + idx;
+        let tiledImage = this.openSD.world.getItemAt(idx);
+        if (!tiledImage) throw "Invalid index: no Tiled Image with index " + idx;
         if (existing) {
-            if (existing == layer) return;
+            if (existing == tiledImage) return;
             else this.removeLayer(idx);
         }
-        this._rendering[idx] = layer;
+        this._rendering[idx] = tiledImage;
 
         if (!this.uid) {
             //enable on the source by overriding its member functions
             this._bindToTiledImage(idx);
+        } else {
+            tiledImage._bridgeId = this.uid;
         }
         //else... the other approach is based on events, no need to enable on the element
-    }
-
-    /**
-     * Check whether a TiledImage instance is being post-processed
-     * @param tiledImage instance to check
-     * @return {boolean} true if bound by this bridge
-     */
-    hasImageAssigned(tiledImage) {
-        for (let key in this._rendering) {
-            if (this._rendering.hasOwnProperty(key) && this._rendering[key].source == tiledImage.source) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -362,12 +348,7 @@ OpenSeadragon.BridgeGL = class {
     _tileLoaded(e) {
         if (! e.image) return;
 
-        let loaded= this.hasImageAssigned(e.tiledImage);
-        if (!loaded) {
-            console.log(loaded, this.hasImageAssigned(e.tiledImage), e);
-        }
-
-        if (this.hasImageAssigned(e.tiledImage) && !e.tile.webglId) {
+        if (this.uid === e.tiledImage._bridgeId && !e.tile.webglId) {
             e.tile.webglId = this.uid;
             //todo necessary to set?!?! I thougth OSD does this automatically
             e.tile.image = e.image;
@@ -388,7 +369,7 @@ OpenSeadragon.BridgeGL = class {
             //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
-            let imageData = e.tile.imageData();
+            let imageData = e.tile.image;
 
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,

@@ -1567,7 +1567,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.imageData(), tile.sourceBounds, 0, this._currentPixelSize
+                tile.image, tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;
@@ -1805,7 +1805,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 		let y = eventPosition.y - this._currentTile.position.y;
 
 		// get position on DZI tile (usually 257*257)
-        let canvasCtx = this._currentTile.canvasContext();
+        let canvasCtx = this._currentTile.canvasContext;
 		let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
 		let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
 

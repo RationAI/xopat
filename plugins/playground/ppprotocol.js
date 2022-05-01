@@ -506,7 +506,7 @@ Playground.SelfServingProtocol = class extends Playground.Protocol {
         function drawTile(tile) {
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.imageData(), tile.sourceBounds, 0, this._currentPixelSize
+                tile.image, tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;
