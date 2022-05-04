@@ -188,7 +188,7 @@ window.addEventListener("beforeunload", (e) => {
          * TODO sometimes ctx.window valid but does not have getElementByID etc... fix
          *
          * @param id id used to create the window
-         * @returns {{self}|{window}|null} window context or undefined
+         * @returns {window || undefined || null} window context or undefined
          */
         getModalContext: function(id) {
             let ctx = this._modals[id];

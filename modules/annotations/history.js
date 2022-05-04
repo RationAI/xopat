@@ -1,4 +1,10 @@
 OSDAnnotations.History = class {
+    /**
+     * Create a history annotation manager
+     * @param {string} selfName name of the property 'self' in parent
+     * @param {OSDAnnotations} context
+     * @param {OSDAnnotations.PresetManager} presetManager
+     */
     constructor(selfName, context, presetManager) {
         this._globalSelf = `${context.id}['${selfName}']`;
         this._buffer = [];
@@ -12,10 +18,18 @@ OSDAnnotations.History = class {
         this.containerId = "bord-for-annotations";
     }
 
-    init(historySize = 30) {
-        this.BUFFER_LENGTH = historySize;
+    /**
+     * Set the number of steps possible to go in the past
+     * @param {number} value size of the history
+     */
+    set size(value) {
+        this.BUFFER_LENGTH = Math.max(2, value);
     }
 
+    /**
+     * Open external menu window with the history toolbox
+     * focuses window if already opened.
+     */
     openHistoryWindow() {
         let ctx = this.winContext(true);
         if (ctx) {
@@ -34,8 +48,6 @@ onclick="opener.${this._globalSelf}.back()" id="history-undo">undo</span>
 onclick="opener.${this._globalSelf}.redo()" id="history-redo">redo</span>
 <span id="history-refresh" class="material-icons pointer" onclick="opener.${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-<span id="history-sync" class="material-icons pointer" onclick="opener.${this._globalSelf}.sync()" 
-id="history-sync" title="Apply changes on presets to existing objects.">leak_add</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (opener.${this._context.id}.disabledInteraction) return; window.opener.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
             `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
@@ -71,10 +83,17 @@ window.addEventListener("beforeunload", (e) => {
         if (active) this.highlight(active);
     }
 
-    winContext(required=false) {
+    /**
+     * Get current window context reference
+     * @return {window || undefined || null} current window if opened, or undefined/null otherwise
+     */
+    winContext() {
         return Dialogs.getModalContext(this.containerId);
     }
 
+    /**
+     * Go step back in the history. Focuses the undo operation, updates window if opened.
+     */
     back() {
         if (this._context.disabledInteraction) return;
 
@@ -102,6 +121,9 @@ window.addEventListener("beforeunload", (e) => {
         );
     }
 
+    /**
+     * Go step forward in the history. Focuses the redo operation, updates window if opened.
+     */
     redo() {
         if (this._context.disabledInteraction) return;
 
@@ -121,25 +143,9 @@ window.addEventListener("beforeunload", (e) => {
         }
     }
 
-    _performAtJQNode(id, callback) {
-        let ctx = this.winContext();
-        if (ctx) {
-            callback($(ctx.document.getElementById(id)));
-        }
-    }
-
-    _getJQNode(id) {
-        let ctx = this.winContext();
-        if (!ctx) return undefined;
-        return $(ctx.document.getElementById(id));
-    }
-
-    _getNode(id) {
-        let ctx = this.winContext();
-        if (!ctx) return undefined;
-        return ctx.document.getElementById(id);
-    }
-
+    /**
+     * Refreshes window content (fix inconsistencies)
+     */
     refresh() {
         if (this._context.disabledInteraction) return;
 
@@ -153,39 +159,11 @@ window.addEventListener("beforeunload", (e) => {
         });
     }
 
-    sync() {
-        if (this._context.disabledInteraction) return;
-
-        if (!window.confirm("This will overwrite all properties of all existing annotations - " +
-            "even those manually modified. Do you want to proceed?")) return;
-        this._performAtJQNode("annotation-logs", node => node.html(""));
-        this._syncLoad();
-        //todo change in color not propagated, set dirty?
-        this._context.canvas.renderAll();
-    }
-
-    _syncLoad() {
-        let _this = this;
-        this._context.canvasObjects().some(o => {
-            if (o.presetID) {
-                if (!o.incrementId || isNaN(o.incrementId)) {
-                    o.incrementId = _this._autoIncrement++;
-                }
-                let preset = this._presets.get(o.presetID);
-                if (preset) {
-                    if (typeof o.fill === 'string') {
-                        o.fill = preset.color;
-                    }
-                    o.color = preset.color;
-                }
-                _this._addToBoard(o);
-            } else if (o.incrementId && !isNaN(o.incrementId)) {
-                _this._addToBoard(o);
-            }
-            return false;
-        });
-    }
-
+    /**
+     * Add new event to the history, at least one object should be specified
+     * @param {object || null} newObject, if undefined it is deletion (no new object)
+     * @param {object || null} previous, if undefined it is creation (no old object)
+     */
     push(newObject, previous = null) {
         UTILITIES.setDirty();
         if (newObject) {
@@ -206,11 +184,10 @@ window.addEventListener("beforeunload", (e) => {
         this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-tertiary)"));
     }
 
-    pushWithoutUpdate(newObject, previous = null) {
-        this._buffer[this._buffidx].forward = newObject;
-        if (previous) this._buffer[this._buffidx].back = previous;
-    }
-
+    /**
+     * Focus object - updates viewport and UI highlight
+     * @param {object} object fabricjs object to highlight
+     */
     highlight(object) {
         let ctx = this.winContext();
         if (!ctx) return;
@@ -240,8 +217,67 @@ window.addEventListener("beforeunload", (e) => {
         this._boardSelected = object;
     }
 
+    /**
+     * Check whether an edit operation is in progress
+     * @param {object} ofObject fabricjs object
+     * @return {boolean} true if currently editing
+     */
     isOngoingEditOf(ofObject) {
         return this._editSelection && this._editSelection.incrementId === ofObject.incrementId;
+    }
+
+    /**
+     * Start edit object, a bit unsafe (maybe remove) - no save action
+     * is available (UI takes care of it), however, it could happen
+     * that the window is closed and the client gets stuck...
+     * @param {object} object fabricjs object
+     */
+    itemEdit(object) {
+        let node = this._getNode(`edit-log-object-${object.incrementId}`);
+        if (node) {
+            this._boardItemEdit(node, object.x, object.y);
+        }
+    }
+
+    _performAtJQNode(id, callback) {
+        let ctx = this.winContext();
+        if (ctx) {
+            callback($(ctx.document.getElementById(id)));
+        }
+    }
+
+    _getJQNode(id) {
+        let ctx = this.winContext();
+        if (!ctx) return undefined;
+        return $(ctx.document.getElementById(id));
+    }
+
+    _getNode(id) {
+        let ctx = this.winContext();
+        if (!ctx) return undefined;
+        return ctx.document.getElementById(id);
+    }
+
+    _syncLoad() {
+        let _this = this;
+        this._context.canvasObjects().some(o => {
+            if (o.presetID) {
+                if (!o.incrementId || isNaN(o.incrementId)) {
+                    o.incrementId = _this._autoIncrement++;
+                }
+                let preset = this._presets.get(o.presetID);
+                if (preset) {
+                    if (typeof o.fill === 'string') {
+                        o.fill = preset.color;
+                    }
+                    o.color = preset.color; //todo color not supported anymore
+                }
+                _this._addToBoard(o);
+            } else if (o.incrementId && !isNaN(o.incrementId)) {
+                _this._addToBoard(o);
+            }
+            return false;
+        });
     }
 
     _focus(cx, cy, objectId = null) {
@@ -319,7 +355,7 @@ window.addEventListener("beforeunload", (e) => {
 
         //with no metadata, object will receive 'comment' on edit
         if (inputs.length  < 1) {
-            inputs.push('<label class="show-hint d-block" data-hint="Comment">',
+            inputs.push('<label class="show-hint d-block" data-hint="Category">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
                 this._getObjectDefaultDescription(object), '" name="comment"></label>');
@@ -333,16 +369,9 @@ onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.i
 <span class="material-icons" style="vertical-align:super;color: ${object.fill}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 <span class="material-icons pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
-onclick="let self = $(this); if (self.html() === 'edit') {
+title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
-    }
-
-    itemEdit(object) {
-        let node = this._getNode(`edit-log-object-${object.incrementId}`);
-        if (node) {
-            this._boardItemEdit(node, object.x, object.y);
-        }
     }
 
     _boardItemEdit(self, cx, cy, object) {

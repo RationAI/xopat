@@ -1,31 +1,44 @@
-/**
- * Preset: object that pre-defines the type of annotation to be created, along with its parameters
- */
 OSDAnnotations.Preset = class {
+    /**
+     * Preset: object that pre-defines the type of annotation to be created, along with its parameters
+     * @param {number} id
+     * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
+     * @param {string} comment default comment meta data
+     * @param {string} color fill color
+     */
     constructor(id, objectFactory = null, comment = "", color = "") {
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
         this.meta.comment = {
-            name: 'Comment',
+            name: 'Category',
             value: comment
         };
     }
 
-    fromJSONFriendlyObject(parsedObject, factoryGetter) {
-        this.objectFactory = factoryGetter(parsedObject.factoryID);
-        if (this.objectFactory === undefined) {
+    /**
+     * Create the object from JSON representation
+     * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
+     * @param {function} factoryGetter function able to get object factory from id
+     * @return {OSDAnnotations.Preset} instantiated preset
+     */
+    static fromJSONFriendlyObject(parsedObject, factoryGetter) {
+        let factory = factoryGetter(parsedObject.factoryID);
+        if (factory === undefined) {
             console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
                 "No factory for such object available.");
-            this.objectFactory = factoryGetter("polygon"); //rely on polygon presence
+            factory = factoryGetter("polygon"); //rely on polygon presence
         }
-        this.color = parsedObject.color;
-        this.presetID = parsedObject.presetID;
-        this.meta = parsedObject.meta || {};
-        return this;
+        let preset = new this(parsedObject.presetID, factory, "", parsedObject.color);
+        preset.meta = parsedObject.meta || {};
+        return preset;
     }
 
+    /**
+     * Convert the preset to JSON-friendly object
+     * @return {{color: string, factoryID: string, meta: {}, presetID: number}}
+     */
     toJSONFriendlyObject() {
         return {
             color: this.color,
@@ -35,10 +48,20 @@ OSDAnnotations.Preset = class {
         };
     }
 
+    /**
+     * Read name of a meta value
+     * @param {string} key meta key
+     * @return {string} meta name
+     */
     getMetaName(key) {
         return this.meta[key] ? this.meta[key].name : undefined;
     }
 
+    /**
+     * Read value of a metadata
+     * @param {string} key meta key
+     * @return {string} meta value
+     */
     getMetaValue(key) {
         return this.meta[key] ? this.meta[key].value : undefined;
     }
@@ -113,27 +136,9 @@ OSDAnnotations.PresetManager = class {
         return preset;
     }
 
-    _randomColorHexString() {
-        // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
-        let r, g, b;
-        let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
-        let i = ~~(h * 6);
-        let f = h * 6 - i;
-        let q = 1 - f;
-        switch(i % 6){
-            case 0: r = 1; g = f; b = 0; break;
-            case 1: r = q; g = 1; b = 0; break;
-            case 2: r = 0; g = 1; b = f; break;
-            case 3: r = 0; g = q; b = 1; break;
-            case 4: r = f; g = 0; b = 1; break;
-            case 5: r = 1; g = 0; b = q; break;
-        }
-        let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
-                        + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
-                        + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
-        return (c);
-    }
-
+    /**
+     * Alias for static _commonProperty
+     */
     getCommonProperties() {
         return this.constructor._commonProperty;
     }
@@ -248,9 +253,10 @@ OSDAnnotations.PresetManager = class {
     /**
      * Import presets
      * @param {string|object} presets JSON to decode
+     * @param {Boolean} overwrite true if existing presets should be replaced upon ID match
      * @return {OSDAnnotations.Preset|undefined} preset
      */
-    import(presets) {
+    import(presets, overwrite=false) {
         this._presets = {};
         let first;
 
@@ -260,12 +266,13 @@ OSDAnnotations.PresetManager = class {
 
         if (typeof presets === 'object') {
             for (let i = 0; i < presets.length; i++) {
-                let p = new OSDAnnotations.Preset().fromJSONFriendlyObject(
+                let p = OSDAnnotations.Preset.fromJSONFriendlyObject(
                     presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
                 );
-                this._presets[p.presetID] = p;
-
-                if (!first) first = p;
+                if (overwrite || ! this._presets.hasOwnProperty(p.presetID)) {
+                    this._presets[p.presetID] = p;
+                    if (!first) first = p;
+                }
             }
         } else {
             first = this.addPreset();
@@ -275,13 +282,34 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Select preset as active.
-     * @param id preset id
+     * @param {number} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
     selectPreset(id, isLeftClick) {
         if (!this._presets[id]) return;
         if (isLeftClick) this.left = this._presets[id];
         else this.right = this._presets[id];
+    }
+
+    _randomColorHexString() {
+        // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
+        let r, g, b;
+        let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
+        let i = ~~(h * 6);
+        let f = h * 6 - i;
+        let q = 1 - f;
+        switch(i % 6){
+            case 0: r = 1; g = f; b = 0; break;
+            case 1: r = q; g = 1; b = 0; break;
+            case 2: r = 0; g = 1; b = f; break;
+            case 3: r = 0; g = q; b = 1; break;
+            case 4: r = f; g = 0; b = 1; break;
+            case 5: r = 1; g = 0; b = q; break;
+        }
+        let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
+            + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
+            + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
+        return (c);
     }
 };
 
@@ -952,11 +980,11 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
-        this._origX = x;
-        this._origY = y;
+        this._origX = x-1;
+        this._origY = y-1;
         this._current = this.create({
-            left: x,
-            top: y,
+            left: x-1,
+            top: y-1,
             rx: 1,
             ry: 1
         }, this._presets.getAnnotationOptions(isLeftClick));
@@ -965,16 +993,13 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateCreate(x, y) {
         if (!this._current) return;
-
-        if (this._origX > x) {
-            this._current.set({ left: Math.abs(x) });
-        }
-        if (this._origY > y) {
-            this._current.set({ top: Math.abs(y) });
-        }
-        let width = Math.abs(x - this._origX) / 2;
-        let height = Math.abs(y - this._origY) / 2;
-        this._current.set({ rx: width, ry: height });
+        let width = Math.abs(x - this._origX);
+        let height = Math.abs(y - this._origY);
+        this._current.set({
+            left:this._origX - width,
+            top:this._origY - height,
+            rx: width, ry: height
+        });
     }
 
     finishDirect() {
@@ -1805,7 +1830,7 @@ type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchan
 		let y = eventPosition.y - this._currentTile.position.y;
 
 		// get position on DZI tile (usually 257*257)
-        let canvasCtx = this._currentTile.canvasContext;
+        let canvasCtx = this._currentTile.getCanvasContext();
 		let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
 		let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
 

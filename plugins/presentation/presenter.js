@@ -2,10 +2,11 @@ class Presenter {
     constructor(id, params) {
         this.id = id;
         this._toolsMenuId = "presenter-tools-menu";
-        this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
     }
 
     pluginReady() {
+        this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
+
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
     <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
     <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
@@ -58,17 +59,20 @@ ${UIComponents.Elements.checkBox({
             USER_INTERFACE.Tools.notify(_this._toolsMenuId);
 
             //todo create WRT current position
-            _this._container.append(`<span onclick="${_this.id}.selectPoint(this);" style="
-filter: ${_this._convertValue('transition', e.step.transition)};
-width: ${_this._convertValue('duration', e.step.duration)}; 
-height: ${Math.log(e.step.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
-margin-left: ${_this._convertValue('delay', e.step.delay)};"></span>`);
+            _this._addUIStepFrom(e.step);
         });
+
+        console.log(this.snapshots._steps);
+        //todo create event fired during instantiation possibly --> now hotfix add them here
+        for (let step of this.snapshots._steps) {
+            _this._addUIStepFrom(step);
+            console.log(step);
+        }
 
         VIEWER.addHandler('keydown', function(e) {
             //if (e.ctrlKey) {
             if (e.code === "KeyN") {
-                _this.snapshots.goToIndex(_this._steps.currentStep + 1);
+                _this.snapshots.goToIndex(_this.snapshots.currentStep + 1);
             } else if (e.code === "KeyS") {
                 _this.snapshots.goToIndex(0);
             }
@@ -138,6 +142,15 @@ margin-left: ${_this._convertValue('delay', e.step.delay)};"></span>`);
         $("#point-delay").val(step.delay);
         $("#point-duration").val(step.duration);
         $("#point-spring").val(step.transition);
+    }
+
+    _addUIStepFrom(step) {
+        this._container.append(`<span onclick="${this.id}.selectPoint(this);" style="
+filter: ${this._convertValue('transition', step.transition)};
+width: ${this._convertValue('duration', step.duration)}; 
+height: ${Math.log(step.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
+margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
+        this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
     }
 
     _convertValue(key, value) {

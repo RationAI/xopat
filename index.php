@@ -179,7 +179,9 @@ foreach ($MODULES as $_ => $mod) {
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
     <!-- jquery -->
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"
+        integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
+        crossorigin="anonymous"></script>
 
     <!-- OSD -->
     <script src="./openseadragon/build/openseadragon/openseadragon.js"></script>
@@ -345,7 +347,7 @@ EOF;
     </div>
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
-    <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
+    <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
 
     <!-- Values Initialization -->
     <script type="text/javascript">

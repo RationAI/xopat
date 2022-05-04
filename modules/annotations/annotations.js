@@ -1,21 +1,10 @@
 var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
-	static __self = undefined;
-
-	constructor() {
-		super();
-		if (this.constructor.__self) {
-			throw "Annotation system is not instantiable. Instead, use OSDAnnotations::instance().";
-		}
-
-		//possibly try to avoid in the future accessing self through a global
-		window.Annotations = this;
-		this.id = "Annotations";
-		this.session = Date.now();
-		this.constructor.__self = this;
-		this._init();
-	}
-
+	/**
+	 * Get instance of the annotations manger, a singleton
+	 * (only one instance can run since it captures mouse events)
+	 * @return {OSDAnnotations} manager instance
+	 */
 	static instance() {
 		if (this.__self) {
 			return this.__self;
@@ -53,8 +42,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/**
 	 * Add custom mode to the annotations and activate
 	 * please, thoroughly study other modes when they activate/deactivate so that no behavioral collision occurs
-	 * @param id mode id, must not collide with existing mode ID's (e.g. avoid pre-defined mode id's)
-	 * @param ModeClass class that implements OSDAnnotations.AnnotationState
+	 * @param {string} id mode id, must not collide with existing mode ID's (e.g. avoid pre-defined mode id's)
+	 * @param {OSDAnnotations.AnnotationState} ModeClass class that extends (and implements) AnnotationState
 	 */
 	setCustomModeUsed(id, ModeClass) {
 		if (this.Modes.hasOwnProperty(id)) {
@@ -68,7 +57,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Register Factory for an annotation object type
-	 * @param FactoryClass factory that extends OSDAnnotations.AnnotationObjectFactory
+	 * @param {OSDAnnotations.AnnotationObjectFactory} FactoryClass factory that extends AnnotationObjectFactory
 	 * @param {boolean} atRuntime true if the factory is registered at runtime
 	 */
 	static registerAnnotationFactory(FactoryClass, atRuntime=true) {
@@ -91,11 +80,20 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/******************* EXPORT, IMPORT **********************/
 
+	/**
+	 * Export objects in a fabricjs manner (actually just forwards the export command)
+	 * @param {string[]} withProperties list of extra properties to export
+	 * @return {object} exported canvas content
+	 */
 	getObjectContent(...withProperties) {
 		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor',
 			'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', 'layerId', ...withProperties]);
 	}
 
+	/**
+	 * ASAP Annotations export, kept from the old version, not really tested
+	 * @return {Document} XML export
+	 */
 	getXMLDocumentContent() {
 		// first, create xml dom
 		let doc = document.implementation.createDocument("", "", null);
@@ -139,51 +137,23 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		return doc;
 	}
 
+	/**
+	 * ASAP Annotations export as string, kept from the old version, not really tested
+	 * @return {string} serialized XML export
+	 */
 	getXMLStringContent() {
 		return new XMLSerializer().serializeToString(this.getXMLDocumentContent());
 	}
 
+	/**
+	 * Load objects, must keep the same structure that comes from 'export'
+	 * @param {object} annotations objects to import
+	 * @param {function} onfinish
+	 * @param {Boolean} clear true if existing objects should be removed, default false
+	 */
 	loadObjects(annotations, onfinish=function(){}, clear=false) {
 		if (!annotations.objects) return;
 		this._loadObjects(annotations, onfinish);
-	}
-
-	_loadObjects(input, callback, clear, reviver) {
-		//from loadFromJSON implementation in fabricJS
-		const _this = this.canvas;
-		const annot = this;
-		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
-			if (clear) _this.clear();
-			_this._setBgOverlay(input, function () {
-				enlivenedObjects.forEach(function(obj, index) {
-					$.extend(obj, OSDAnnotations.PresetManager._commonProperty);
-					annot.checkLayer(obj);
-					obj.on('selected', annot._objectClicked.bind(annot));
-
-					_this.insertAt(obj, index);
-				});
-				delete input.objects;
-				delete input.backgroundImage;
-				delete input.overlayImage;
-				delete input.background;
-				delete input.overlay;
-				_this._setOptions(input);
-				_this.renderAll();
-				callback && callback();
-			});
-		}, reviver);
-	}
-
-	exportToFile() {
-		function download(id, content) {
-			let data = new Blob([content], { type: 'text/plain' });
-			let downloadURL = window.URL.createObjectURL(data);
-			document.getElementById(id).href = downloadURL;
-			document.getElementById(id).click();
-			URL.revokeObjectURL(downloadURL);
-		}
-		download("download_link1", JSON.stringify(this.getObjectContent())); //json, containing all necessary properties
-		download("download_link2", this.getXMLStringContent()); //asap xml
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -209,7 +179,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			this.setOSDTracking(true);
 
 			if (changeCursor) {
-				this.canvas.defaultCursor = "crosshair";
+				this.canvas.defaultCursor = "grab";
 				this.canvas.hoverCursor = "pointer";
 			}
 
@@ -448,15 +418,16 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	replaceAnnotation(previous, next, updateHistory=false) {
+		//todo check whether this does not bind twice, e.g. set only if not set
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		if (updateHistory) this.history.push(next, previous);
-		//else this.history.pushWithoutUpdate(next, previous);
 		this.canvas.renderAll();
 	}
 
 	deleteAnnotation(annotation) {
+		annotation.off('selected');
 		this.canvas.remove(annotation);
 		this.history.push(null, annotation);
 		this.canvas.renderAll();
@@ -570,15 +541,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (imageJson) {
 			try {
 				this.loadObjects(JSON.parse(imageJson), _ => {
-					_this.history.init(50);
+					_this.history.size = 50;
 				});
 			} catch (e) {
 				console.warn(e);
 				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide means how the visualisation was loaded.", 20000, Dialogs.MSG_ERR);
-				this.history.init(50);
+				_this.history.size = 50;
 			}
 		} else {
-			this.history.init(50);
+			_this.history.size = 50;
 		}
 
 		if (Object.keys(this._layers).length < 1) this.createLayer();
@@ -623,7 +594,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			_this._keyDownHandler(e);
 		});
 		VIEWER.addHandler('key-up', function (e) {
-			if (!e.focusCanvas) return;
 			_this._keyUpHandler(e);
 		});
 		//Window switch alt+tab makes the mode stuck
@@ -763,6 +733,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		this.mode.setToAuto();
 		this.mode = this.Modes.AUTO;
+		this.canvas.hoverCursor = "pointer";
+		this.canvas.defaultCursor = "grab";
 	}
 
 	_getModeByKeyEvent(e) {
@@ -794,6 +766,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			return;
 		}
 
+		if (!e.ctrlKey && !e.altKey && e.code === "Escape") {
+			this.history._boardItemSave();
+			this.setMode(this.Modes.AUTO);
+			return;
+		}
+
 		if (e.ctrlKey && e.code === "KeyY") {
 			if (e.shiftKey) this.history.redo();
 			else this.history.back();
@@ -817,14 +795,51 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 					lockMovementY: true
 				});
 			}
-			// Do not allow on click changing edit
-			// else {
-			// 	this.history.itemEdit(object);
-			// }
 		} else {
 			let factory = this.getAnnotationObjectFactory(object.factoryId);
 			if (factory) factory.selected(object);
 		}
+	}
+
+	_loadObjects(input, callback, clear, reviver) {
+		//from loadFromJSON implementation in fabricJS
+		const _this = this.canvas;
+		const annot = this;
+		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
+			if (clear) _this.clear();
+			_this._setBgOverlay(input, function () {
+				enlivenedObjects.forEach(function(obj, index) {
+					$.extend(obj, OSDAnnotations.PresetManager._commonProperty);
+					annot.checkLayer(obj);
+					obj.on('selected', annot._objectClicked.bind(annot));
+
+					_this.insertAt(obj, index);
+				});
+				delete input.objects;
+				delete input.backgroundImage;
+				delete input.overlayImage;
+				delete input.background;
+				delete input.overlay;
+				_this._setOptions(input);
+				_this.renderAll();
+				callback && callback();
+			});
+		}, reviver);
+	}
+
+	static __self = undefined;
+	constructor() {
+		super();
+		if (this.constructor.__self) {
+			throw "Annotation system is not instantiable. Instead, use OSDAnnotations::instance().";
+		}
+
+		//possibly try to avoid in the future accessing self through a global
+		window.Annotations = this;
+		this.id = "Annotations";
+		this.session = Date.now();
+		this.constructor.__self = this;
+		this._init();
 	}
 };
 
@@ -1034,10 +1049,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		let currentObject = this.context.overlay.fabric.getActiveObject(),
 			created = false;
 
-		if (!currentObject && this.context.modifyTool._cachedSelection) {
-			currentObject = this.context.modifyTool._cachedSelection;
-			this.context.modifyTool._cachedSelection = null;
-		}
+		// if (!currentObject && this.context.modifyTool._cachedSelection) {
+		// 	currentObject = this.context.modifyTool._cachedSelection;
+		// 	this.context.modifyTool._cachedSelection = null;
+		// }
 
 		if (!currentObject) {
 			if (!this.context.modifyTool.modeAdd) {
@@ -1055,6 +1070,17 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 				h = bounds.top + bounds.height + radius;
 			bounds.left -= radius;
 			bounds.right -= radius;
+
+			// let closest = -1,
+			// 	dist = Infinity;
+			// if (currentObject.points) {
+			// 	for (let i = 0; i < currentObject.points.length; i++) {
+			// 		let p = currentObject.points[i];
+			// 		//todo
+			// 	}
+			// }
+
+
 			if (o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w) {
 				//todo search surrounding objects whether they contain a polygon to update?
 				//could be fairly expensive, probably need to loop through all objects :/
@@ -1069,7 +1095,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			}
 		}
 
-		this.context.modifyTool.init(currentObject, point, created);
+		this.context.modifyTool.init(currentObject, created);
 		this.context.modifyTool.update(point);
 	}
 
@@ -1099,13 +1125,13 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.modifyTool._cachedSelection = this.context.canvas.getActiveObject();
 		this.context.setOSDTracking(false);
 		this.context.canvas.hoverCursor = "crosshair";
+		this.context.canvas.defaultCursor = "crosshair";
 		this.context.modifyTool.setModeAdd(true);
 		this.context.modifyTool.recomputeRadius();
 		this.context.modifyTool.showCursor();
 	}
 
 	setToAuto() {
-		this.context.canvas.hoverCursor = "pointer";
 		this.context.modifyTool.hideCursor();
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
@@ -1174,6 +1200,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	setFromAuto(mode) {
 		this.context.setOSDTracking(false);
 		//deselect active if present
+		this.context.canvas.hoverCursor = "crosshair";
+		this.context.canvas.defaultCursor = "crosshair";
 		this.context.canvas.discardActiveObject();
 	}
 

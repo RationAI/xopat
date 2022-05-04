@@ -1,6 +1,11 @@
-//tool for object modification: draw on canvas to add (add=true) or remove (add=false) parts of fabric.js object
-//any object is first converted to polygon
 OSDAnnotations.FreeFormTool = class {
+    /**
+     * Create manager for object modification: draw on canvas to add (add=true) or remove (add=false)
+     *   parts of fabric.js object, non-vertex-lie objects implement 'toPointArray' to convert them to polygon
+     *   (or can return null, in that case it is not possible to use it)
+     * @param {string} selfName name of the (self) element property inside parent (not used)
+     * @param {OSDAnnotations} context
+     */
     constructor(selfName, context) {
         this.polygon = null;
         this.modeAdd = true;
@@ -17,14 +22,20 @@ OSDAnnotations.FreeFormTool = class {
             this._context.id);
         this._node = document.getElementById("annotation-cursor");
     }
-    //initialize any object for cursor-drawing modification
-    init(object, atPosition, created=false) {
+
+    /**
+     * Initialize object for modification
+     * @param {object} object fabricjs object
+     * @param {boolean} created true if the object has been just created, e.g.
+     *    set to false if you want the history to preserve the previous object shape,
+     *    if true, the given object is modified directly, not copied (unless it is an implicit object)
+     */
+    init(object, created=false) {
 
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryId);
         if (objectFactory !== undefined) {
-            if (!objectFactory.isImplicit()) {
-                //object can be used immedietaly
-                let newPolygon = this._context.polygonFactory.copy(object, object.points);
+            if (!objectFactory.isImplicit()) {  //object can be used immedietaly
+                let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
                 this._setupPolygon(newPolygon, object);
             } else {
                 let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
@@ -46,6 +57,9 @@ OSDAnnotations.FreeFormTool = class {
         this._updatePerformed = false;
     }
 
+    /**
+     * Update cursor indicator radius
+     */
     updateCursorRadius() {
         let screenRadius = this.radius * VIEWER.tools.imagePixelSizeOnScreen() * 2;
         if (this._node) {
@@ -54,6 +68,9 @@ OSDAnnotations.FreeFormTool = class {
         }
     }
 
+    /**
+     * Show cursor radius indicator
+     */
     showCursor() {
         if (this._listener) return;
         this._node.style.display = "block";
@@ -69,6 +86,9 @@ OSDAnnotations.FreeFormTool = class {
         window.addEventListener("mousemove", this._listener);
     }
 
+    /**
+     * Hide cursor radius indicator
+     */
     hideCursor() {
         if (!this._listener) return;
         this._node.style.display = "none";
@@ -76,10 +96,19 @@ OSDAnnotations.FreeFormTool = class {
         this._listener = null;
     }
 
+    /**
+     * Get current mode
+     * @return {boolean} true if mode 'add' is active
+     */
     get isModeAdd() {
         return this._update === this._subtract;
     }
 
+    /**
+     * Set the mode to add/subtract
+     * @param {Boolean} isModeAdd true if the mode is adding
+     * @event free-form-tool-mode-add
+     */
     setModeAdd(isModeAdd) {
         this.modeAdd = isModeAdd;
         if (isModeAdd) this._update = this._union;
@@ -87,14 +116,26 @@ OSDAnnotations.FreeFormTool = class {
         this._context.raiseEvent('free-form-tool-mode-add', {isModeAdd: isModeAdd});
     }
 
+    /**
+     * Refresh radius computation.
+     */
     recomputeRadius() {
         this.setSafeRadius(this.screenRadius);
     }
 
-    setSafeRadius(radius) {
-        this.setRadius(Math.min(Math.max(radius, 3), 100));
+    /**
+     * Set radius with bounds checking
+     * @param {number} radius radius to set, in screen space
+     * @param {number} max maximum value allowed, default 100
+     */
+    setSafeRadius(radius, max=100) {
+        this.setRadius(Math.min(Math.max(radius, 3), max));
     }
 
+    /**
+     * Set the tool radius, in screen coordinates
+     * @param {number} radius in screen pixels
+     */
     setRadius (radius) {
         let imageTileSource = VIEWER.tools.referencedTiledImage();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
@@ -106,7 +147,34 @@ OSDAnnotations.FreeFormTool = class {
         this._context.raiseEvent('free-form-tool-radius', {radius: radius});
     }
 
-    //update step meant to be executed on mouse move event
+    /**
+     * Get a polygon points approximating current tool radius
+     * @param {object} fromPoint center in image space
+     * @param {number} fromPoint.x
+     * @param {number} fromPoint.y
+     * @return {{x: number, y: number}[]} points
+     */
+    getCircleShape(fromPoint) {
+        let diagonal = this.radius * this.SQRT2DIV2;
+        return [
+            { x: fromPoint.x - this.radius, y: fromPoint.y },
+            { x: fromPoint.x - diagonal, y: fromPoint.y + diagonal },
+            { x: fromPoint.x, y: fromPoint.y + this.radius },
+            { x: fromPoint.x + diagonal, y: fromPoint.y + diagonal },
+            { x: fromPoint.x + this.radius, y: fromPoint.y },
+            { x: fromPoint.x + diagonal, y: fromPoint.y - diagonal },
+            { x: fromPoint.x, y: fromPoint.y - this.radius },
+            { x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
+        ]
+    }
+
+    /**
+     * Update polygon adjustment by current mouse position, a radius
+     * is measured and the circle added to / removed from the current volume
+     * @param {object} point point in image space (absolute pixels)
+     * @param {number} point.x
+     * @param {number} point.y
+     */
     update(point) {
         //todo check if contains NaN values and exit if so abort
         if (!this.polygon) {
@@ -122,18 +190,32 @@ OSDAnnotations.FreeFormTool = class {
         }
     }
 
-    //final step
+    /**
+     * Finalize the object modification
+     * @return {fabricjs.Polygon || null} polygon if successfully updated
+     */
     finish () {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
 
-            this._context.replaceAnnotation(this.polygon, this.initial, false);
-            if (this._updatePerformed) {
-                this._context.replaceAnnotation(this.initial, this.polygon, true);
-            }
+            //if (!this._created) {
+                this._context.replaceAnnotation(this.polygon, this.initial, false);
+                if (this._updatePerformed) {
+                    this._context.replaceAnnotation(this.initial, this.polygon, true);
+                }
+            //} else {
+                //just a hotfix todo find out how to not to lose interaction with object without copy
+                // let polygon = this._context.polygonFactory.copy(this.polygon, this.polygon.points);
+                // polygon.incrementId = this.polygon.incrementId;
+                // polygon.sessionId = this.polygon.sessionId;
+                // this._context.replaceAnnotation(this.polygon, polygon, false);
+                // this.polygon = polygon;
+                //this._context.canvas.requestRenderAll();
+            //}
 
-            this._cachedSelection = this.polygon;
+            //todo disabled cached selection
+            //this._cachedSelection = this.polygon;
             this._created = false;
             let outcome = this.polygon;
             this.polygon = null;
@@ -147,13 +229,13 @@ OSDAnnotations.FreeFormTool = class {
 
     //TODO sometimes the greinerHormann cycling, vertices are NaN values, do some measurement and kill after it takes too long (2+s ?)
     _union (nextMousePos) {
-        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
         let radPoints = this.getCircleShape(nextMousePos);
         //console.log(radPoints);
         var polypoints = this.polygon.get("points");
         //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-        if (this.toDistancePointsAsObjects(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
+        if (this._toDistancePointsAsObjects(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
         this.mousePos = nextMousePos;
 
         //compute union
@@ -188,8 +270,53 @@ OSDAnnotations.FreeFormTool = class {
         return false;
     }
 
+    //initialize object so that it is ready to be modified
+    _setupPolygon(polyObject, original) {
+        this.polygon = polyObject;
+        this.initial = original;
+
+        //todo implement this
+        //if (!this._created)
+            this._context.replaceAnnotation(original, polyObject, false);
+        polyObject.moveCursor = 'crosshair';
+    }
+
+    //create polygon from points and initialize so that it is ready to be modified
+    _createPolygonAndSetupFrom(points, object) {
+        let polygon = this._context.polygonFactory.copy(object, points);
+        polygon.factoryId = this._context.polygonFactory.factoryId;
+        this._setupPolygon(polygon, object);
+    }
+
+    //try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
+    _unify(unions) {
+        let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
+
+        unions.forEach(u => {
+            primary.push(this.simplifier(u));
+        });
+        while (i < len) {
+            if (primary.length < 2) break;
+
+            i++;
+            let j = 0;
+            for (; j < primary.length - 1; j += 2) {
+                let ress = greinerHormann.union(primary[j], primary[j + 1]);
+
+                if (typeof ress[0][0] === 'number') {
+                    ress = [ress];
+                }
+                secondary = ress.concat(secondary); //reverse order for different union call in the next loop
+            }
+            if (j === primary.length - 1) secondary.push(primary[j]);
+            primary = secondary;
+            secondary = [];
+        }
+        return primary;
+    }
+
     _subtract (nextMousePos) {
-        if (!this.polygon || this.toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
         let radPoints = this.getCircleShape(nextMousePos);
         var polypoints = this.polygon.get("points");
@@ -241,50 +368,6 @@ OSDAnnotations.FreeFormTool = class {
         return false;
     }
 
-    //initialize object so that it is ready to be modified
-    _setupPolygon(polyObject, original) {
-        this.polygon = polyObject;
-        this.initial = original;
-        this._context.replaceAnnotation(original, polyObject, false);
-
-        polyObject.moveCursor = 'crosshair';
-    }
-
-    //create polygon from points and initialize so that it is ready to be modified
-    _createPolygonAndSetupFrom(points, object) {
-        let polygon = this._context.polygonFactory.copy(object, points);
-        polygon.factoryId = this._context.polygonFactory.factoryId;
-
-        this._setupPolygon(polygon, object);
-    }
-
-    //try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
-    _unify(unions) {
-        let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
-
-        unions.forEach(u => {
-            primary.push(this.simplifier(u));
-        });
-        while (i < len) {
-            if (primary.length < 2) break;
-
-            i++;
-            let j = 0;
-            for (; j < primary.length - 1; j += 2) {
-                let ress = greinerHormann.union(primary[j], primary[j + 1]);
-
-                if (typeof ress[0][0] === 'number') {
-                    ress = [ress];
-                }
-                secondary = ress.concat(secondary); //reverse order for different union call in the next loop
-            }
-            if (j === primary.length - 1) secondary.push(primary[j]);
-            primary = secondary;
-            secondary = [];
-        }
-        return primary;
-    }
-
     //when removing parts of polygon, decide which one has smaller area and will be removed
     _findApproxBoundBoxSize (points) {
         if (points.length < 3) return { diffX: 0, diffY: 0 };
@@ -298,22 +381,7 @@ OSDAnnotations.FreeFormTool = class {
         return { diffX: maxX - minX, diffY: maxY - minY };
     }
 
-    toDistancePointsAsObjects(pointA, pointB) {
+    _toDistancePointsAsObjects(pointA, pointB) {
         return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
-    }
-
-    //create approximated polygon of drawing tool
-    getCircleShape(fromPoint) {
-        let diagonal = this.radius * this.SQRT2DIV2;
-        return [
-            { x: fromPoint.x - this.radius, y: fromPoint.y },
-            { x: fromPoint.x - diagonal, y: fromPoint.y + diagonal },
-            { x: fromPoint.x, y: fromPoint.y + this.radius },
-            { x: fromPoint.x + diagonal, y: fromPoint.y + diagonal },
-            { x: fromPoint.x + this.radius, y: fromPoint.y },
-            { x: fromPoint.x + diagonal, y: fromPoint.y - diagonal },
-            { x: fromPoint.x, y: fromPoint.y - this.radius },
-            { x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
-        ]
     }
 };

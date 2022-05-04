@@ -179,7 +179,8 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
      */
     getTilePostData(level, x, y) {
         this.owner.setStatus(`Loading tile ${level}/${x}-${y}`, {loading: true});
-        let data = this.owner.getPostData();
+        let data = $.extend({}, this.owner.getPostData());
+
         data.dx = x;
         data.dy = y;
         data.level = level;
@@ -237,29 +238,28 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
         return false;
     }
 
-    /**
-     * Download tile data
-     * @param {ImageJob} context job context that you have to call finish(...) on. It also contains abort(...) function
-     *   that can be called to abort the job.
-     * @param {String} [context.src] - URL of image to download.
-     * @param {String} [context.loadWithAjax] - Whether to load this image with AJAX.
-     * @param {String} [context.ajaxHeaders] - Headers to add to the image request if using AJAX.
-     * @param {String} [context.crossOriginPolicy] - CORS policy to use for downloads
-     * @param {String} [context.postData] - HTTP POST data (usually but not necessarily in k=v&k2=v2... form,
-     *      see TileSrouce::getPostData) or null
-     * @param {Function} [context.callback] - Called once image has been downloaded.
-     * @param {Function} [context.abort] - Called when this image job is aborted.
-     * @param {Number} [context.timeout] - The max number of milliseconds that this image job may take to complete.
-     */
     downloadTileStart(context) {
-        context.image = new Image();
+        var dataStore = context.userData,
+            image = new Image();
 
-        context.image.onload = function(){
-            context.finish(true);
+        dataStore.image = image;
+        dataStore.request = null;
+
+        var finish = function(error) {
+            if (!image) {
+                context.finish(null, dataStore.request, "Image load failed: undefined Image instance.");
+                return;
+            }
+            image.onload = image.onerror = image.onabort = null;
+            context.finish(error ? null : image, dataStore.request, error);
         };
-        context.image.onabort = context.image.onerror = function() {
-            context.finish(false, "Image load aborted");
+        image.onload = function () {
+            finish();
         };
+        image.onabort = image.onerror = function() {
+            finish("Image load aborted.");
+        };
+
         const _this = this;
         if (context.loadWithAjax) {
             context.request = OpenSeadragon.makeAjaxRequest({
@@ -290,7 +290,7 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
                     }
                     // If the blob is empty for some reason consider the image load a failure.
                     if (blb.size === 0) {
-                        context.finish(false, "Empty image response.");
+                        context.finish("Empty image response.");
                     } else {
                         context.image.src = (window.URL || window.webkitURL).createObjectURL(blb);
                     }
@@ -302,10 +302,10 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
                             blob.text().then(t => _this.owner.setStatus(t, {loading: false}));
                             context.image.src = _this._emptyPlaceholder;
                         } catch (e) {
-                            context.finish(false, e);
+                            context.finish(e);
                         }
                     } else {
-                        context.finish(false, "Image load aborted - XHR error");
+                        context.finish("Image load aborted - XHR error");
                     }
                 }
             });
@@ -327,6 +327,10 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
         return cache._data;
     }
 
+    getTileCacheDataAsImage() {
+        return cache._data;
+    }
+
     getTileCacheDataAsContext2D(cache) {
         if (!cache._renderedContext) {
             var canvas = document.createElement( 'canvas' );
@@ -334,17 +338,134 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
             canvas.height = this._data.height;
             cache._renderedContext = canvas.getContext('2d');
             cache._renderedContext.drawImage( cache._data, 0, 0 );
-            //since we are caching the prerendered image on a canvas
-            //allow the image to not be held in memory
-
-            //TODO this is a possible bug since DIV drawing strategy uses getImage(...)
-            //I know that div drawing strategy probably does not call getRenderedContext but
-            //it is certainly a not good code design...
-            cache._image = null;
         }
         return cache._renderedContext;
     }
 };
+
+
+Playground.Fractal = class extends Playground.Protocol {
+    /**
+     * Taken from DZI processing, the same
+     */
+    constructor(options) {
+        super(options);
+    }
+
+    /**
+     * Must use AJAX in order to work, i.e. loadTilesWithAjax : true is set.
+     * It should return url-encoded string with the following structure:
+     *   key=value&key2=value2...
+     * or null in case GET is used instead.
+     * @param level
+     * @param x
+     * @param y
+     * @return {string || null} post data to send with tile configuration request
+     */
+    getTilePostData(level, x, y) {
+        return {
+            dx : x,
+            dy: y,
+            level: level
+        };
+    }
+
+    maxIterations =100;
+
+    iterateMandelbrot(refPoint) {
+        var squareAndAddPoint = function(z, point) {
+            let a = Math.pow(z.a,2)-Math.pow(z.b, 2) + point.a;
+            let b = 2*z.a*z.b + point.b;
+            z.a = a;
+            z.b = b;
+        };
+
+        var length = function(z) {
+            return Math.sqrt(Math.pow(z.a, 2) + Math.pow(z.b, 2));
+        };
+
+        let z = {a: 0, b: 0};
+        for(let i=0;i<this.maxIterations;i++){
+            squareAndAddPoint(z, refPoint);
+            if(length(z)>8) return i/this.maxIterations;
+        }
+        return 1.0;
+    }
+
+    /**
+     * Download tile data
+     * @param {ImageJob} context job context that you have to call finish(...) on. It also contains abort(...) function
+     *   that can be called to abort the job.
+     * @param {String} [context.src] - URL of image to download.
+     * @param {String} [context.loadWithAjax] - Whether to load this image with AJAX.
+     * @param {String} [context.ajaxHeaders] - Headers to add to the image request if using AJAX.
+     * @param {String} [context.crossOriginPolicy] - CORS policy to use for downloads
+     * @param {String} [context.postData] - HTTP POST data (usually but not necessarily in k=v&k2=v2... form,
+     *      see TileSrouce::getPostData) or null
+     * @param {Function} [context.callback] - Called once image has been downloaded.
+     * @param {Function} [context.abort] - Called when this image job is aborted.
+     * @param {Number} [context.timeout] - The max number of milliseconds that this image job may take to complete.
+     */
+    downloadTileStart(context) {
+        let size = this.getTileBounds(context.postData.level, context.postData.dx, context.postData.dy, true);
+        let bounds = this.getTileBounds(context.postData.level, context.postData.dx, context.postData.dy, false);
+        let canvas = document.createElement("canvas");
+        let ctx = canvas.getContext('2d');
+
+        size.width = Math.floor(size.width);
+        size.height = Math.floor(size.height);
+
+        if (size.width < 1 || size.height < 1) {
+            canvas.width = 1;
+            canvas.height = 1;
+            context.finish(ctx);
+            return;
+        } else {
+            canvas.width = size.width;
+            canvas.height = size.height;
+        }
+
+        bounds.x = bounds.x*2 - 1;
+        bounds.width = bounds.width * 2;
+
+        var imagedata = ctx.createImageData(size.width, size.height);
+        for (let x = 0; x < size.width; x++) {
+
+            for (let y = 0; y < size.height; y++) {
+                let index = (y * size.width + x) * 4;
+                imagedata.data[index] = Math.floor(this.iterateMandelbrot({
+                    a: bounds.x + bounds.width * ((x + 1) / size.width),
+                    b: bounds.y + bounds.height * ((y + 1) / size.height)
+                }) * 255);
+
+                imagedata.data[index+3] = 255;
+            }
+        }
+        ctx.putImageData(imagedata, 0, 0);
+        context.finish(ctx);
+    }
+
+    createTileCache(cache, data) {
+        cache._data = data;
+    }
+
+    destroyTileCache(cache) {
+        cache._data = null;
+    }
+
+    getTileCacheData(cache) {
+        return cache._data;
+    }
+
+    getTileCacheDataAsImage() {
+        throw "Lazy to implement";
+    }
+
+    getTileCacheDataAsContext2D(cache) {
+        return cache._data;
+    }
+};
+
 
 
 Playground.VectorProtocol = class extends Playground.Protocol {

@@ -1,8 +1,8 @@
 {
   "id": "gui_annotations",
-  "name": "Annotations for Pathopus",
+  "name": "Annotations",
   "author": "Jirka Horák",
-  "description": "A plugin for ROI creation and management.",
+  "description": "A plugin for annotations creation, management and sharing.",
   "icon": "",
   "includes" : ["annotationsGUI.js", "dataLoader.js"],
   "modules": ["annotations"],

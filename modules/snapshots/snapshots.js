@@ -11,16 +11,20 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         this.id = "Snaphots";
         this.viewer = viewer;
         this.constructor.__self = this;
-        this._init();
 
         this._idx = 0;
         this._steps = [];
         this._currentStep = null;
+        this._init();
         this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
 
         this.captureVisualization = false;
     }
 
+    /**
+     * Singleton getter.
+     * @return {OpenSeadragon.Snapshots}
+     */
     static instance() {
         if (this.__self) {
             return this.__self;
@@ -85,12 +89,9 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         this._idx = 0;
         this._steps = [];
         this._currentStep = null;
-        this._container.html("");
-
         for (let i = 0; i < json.length; i++) {
             if (!json[i]) continue;
             //recreate 'classes'
-            json[i].bounds = new OpenSeadragon.Rect(json[i].bounds.x, json[i].bounds.y, json[i].bounds.width, json[i].bounds.height);
             json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
             this._add(json[i]);
         }
@@ -98,13 +99,14 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     _init() {
         UTILITIES.addPostExport("snapshot-keyframes", this.exportJSON.bind(this), this.id);
-        let importedJson = APPLICATION_CONTEXT.postData["presentation-keyframes"];
+        let importedJson = APPLICATION_CONTEXT.postData["snapshot-keyframes"];
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));
             } catch (e) {
                 console.warn(e);
                 //todo message to plugin since plugin has export controls
+                //or add option to download file - extracted keframes from post
                 Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
             }
         }
@@ -146,7 +148,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         if (!step || this._steps.length <= index) {
             return;
         }
-        if (step.visualization) this._setVisualization(step.visualization);
+        if (step.visualization) this._setVisualization(step);
         this._utils.focus(step);
         this.raiseEvent("enter", {
             index: index,
@@ -155,8 +157,9 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         });
     }
 
-    _setVisualization(from) {
+    _setVisualization(step) {
         let bridge = this.viewer.bridge,
+            from = step.visualization,
             curIdx = bridge.currentVisualisationIndex(),
             curVis = bridge.visualization(from.index),
             needsRefresh = !this._equalOrder(curVis.order, from.order);
@@ -174,17 +177,13 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             }
         }
 
-        for (let key in from.cache) {
-
-        }
-
         if (curIdx !== from.index) {
             //refetch (todo update select)
             curVis.order = from.order;
             bridge.switchVisualisation(from.index);
         } else if (needsRefresh) {
             bridge.webGLEngine.rebuildVisualisation(from.order);
-            bridge.redraw();
+            bridge.invalidate(step.duration * 900); //50% od the duration allowed to be constantly updated
         }
     }
 

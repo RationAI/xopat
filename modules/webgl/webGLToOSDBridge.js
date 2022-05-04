@@ -15,7 +15,8 @@ OpenSeadragon.BridgeGL = class {
         webGLEngine.resetCallback = _ => _this.redraw();
         this._disabled = true; //so that first enable call is executed
         this.webGLEngine = webGLEngine;
-        this.upToDateTStamp = Date.now();
+        this._refreshTimeStamp = Date.now();
+        this._randomDelay = 0;
 
         if (!cachedMode) {
             this.uid = OpenSeadragon.BridgeGL.getUniqueId();
@@ -189,17 +190,44 @@ OpenSeadragon.BridgeGL = class {
         this.redraw();
     }
 
-    /**
-     * Redraw the scene using cached images.
-     */
-    redraw() {
-        // var imageTile = this.getTiledImage();
-        // if (!imageTile) return;
+    get timeStamp() {
+        if (this._randomDelay < 1) return this._refreshTimeStamp;
+        return Math.random() * this._randomDelay + this._refreshTimeStamp;
+    }
 
+    get highestTimestamp() {
+        return this._refreshTimeStamp + this._randomDelay + 10;
+    }
+
+    /**
+     * Invalidate all post-processed results, does not update/draw viewport
+     * @param {number} randomDelay - time in milliseconds, tile updates can randomly occur within randomDelay
+     *   note: it is not guaranteed to be updated, e.g. if you need to have ALL finished after
+     *   the time has elapsed, make sure to call draw() at the end (e.g. setTimer....)
+     */
+    invalidate(randomDelay=0) {
         // Raise tstamp to force redraw
-        this.upToDateTStamp = Date.now();
+        this._refreshTimeStamp = Date.now();
+        this._randomDelay = Math.max(0, randomDelay);
+    }
+
+    /**
+     * Draw/update viewport, does not invalidate last post-processed results
+     */
+    draw() {
         this.openSD.world.draw();
         this.openSD.navigator.world.draw();
+    }
+
+    /**
+     * Redraw the scene to reflect the latest visualization changes.
+     * @param {number} randomDelay - time in milliseconds, tile updates can randomly occur within randomDelay
+     *   note: it is not guaranteed to be updated, e.g. if you need to have ALL
+     *   tiles updated after 'randomDelay', call draw() after the time has elapsed
+     */
+    redraw(randomDelay=0) {
+        this.invalidate(randomDelay);
+        this.draw();
     }
 
     /**
@@ -362,9 +390,8 @@ OpenSeadragon.BridgeGL = class {
     }
 
     _tileDrawing(e) {
-        if (e.tile.webglId !== this.uid) return;
-        if (e.tile.webglRefresh <= this.upToDateTStamp) {
-            e.tile.webglRefresh = this.upToDateTStamp + 1;
+        if (e.tile.webglId === this.uid && e.tile.webglRefresh <= this.timeStamp) {
+            e.tile.webglRefresh = this.highestTimestamp;
 
             //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
@@ -422,8 +449,8 @@ OpenSeadragon.BridgeGL = class {
                 cache._renderedContext = canvas.getContext('2d');
             }
 
-            if (cache.webglRefresh <= _context.upToDateTStamp) {
-                cache.webglRefresh = _context.upToDateTStamp + 1;
+            if (cache.webglRefresh <= _context.timeStamp) {
+                cache.webglRefresh = _context.highestTimestamp;
 
                 //todo make it such that it is called just once
                 _context.webGLEngine.setDimensions(cache._dim.width, cache._dim.height);

@@ -628,7 +628,6 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 this._dataSourceMapping.push(-1);
             }
         }
-        console.log(this._dataSourceMapping);
     }
 
     _processVisualisation(vis, idx) {

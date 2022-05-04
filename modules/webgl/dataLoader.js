@@ -173,9 +173,10 @@ WebGLModule.DataLoader = {
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             const NUM_IMAGES = Math.round(data.height / tileBounds.height);
 
-            if (NUM_IMAGES < dataIndexMapping.length) {
-                console.warn("Incoming data does not contain necessary number of images!");
-            }
+            //todo starts with -1 -> bug
+            // if (NUM_IMAGES < dataIndexMapping.length) {
+            //     console.warn("Incoming data does not contain necessary number of images!", NUM_IMAGES, dataIndexMapping);
+            // }
 
             //Just load the texture since it comes as an Image element concatenated below each other
             //in the correct order --> directly loadable to GPU

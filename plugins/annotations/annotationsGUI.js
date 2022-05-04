@@ -8,7 +8,6 @@ class AnnotationsGUI {
 		this.id = id;
 		this._server = PLUGINS[this.id].server;
 		this._allowedFactories = PLUGINS[this.id].factories || ["polygon"];
-		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 	}
 
 	/*
@@ -22,6 +21,8 @@ class AnnotationsGUI {
 		this.context.setModeUsed("FREE_FORM_TOOL");
 		//by default no preset is active, make one
 		this.context.setPreset();
+
+		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 
 		const _this = this;
 
@@ -367,9 +368,24 @@ style="width: 115px;">${comment}</span>
 	}
 
 	/**
-	 * Makes the browser download the export() output
+	 * Export annotations and download them
 	 */
 	exportToFile() {
+		function download(id, content) {
+			let data = new Blob([content], { type: 'text/plain' });
+			let downloadURL = window.URL.createObjectURL(data);
+			document.getElementById(id).href = downloadURL;
+			document.getElementById(id).click();
+			URL.revokeObjectURL(downloadURL);
+		}
+		download("download_link1", JSON.stringify(this.getObjectContent())); //json, containing all necessary properties
+		download("download_link2", this.getXMLStringContent()); //asap xml
+	}
+
+	/**
+	 * Makes the browser download the export() output
+	 */
+	exportPresetsToFile() {
 		let output = new Blob([this.context.presets.export()], { type: 'text/plain' });
 		let downloadURL = window.URL.createObjectURL(output);
 		var downloader = document.getElementById("presets-export");
@@ -395,7 +411,7 @@ class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"><
 	 */
 	presetExportControls() {
 		return `
-<button id="presets-download" onclick="${this.id}.exportToFile();" class="btn">Export presets.</button>&nbsp;
+<button id="presets-download" onclick="${this.id}.exportPresetsToFile();" class="btn">Export presets.</button>&nbsp;
 <a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a>
 <button id="presets-upload" onclick="this.nextElementSibling.click();" class="btn">Import presets.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 
@@ -460,7 +476,7 @@ ${this.id}.updatePreset(${preset.presetID}, {objectFactory:
 ${this.id}.context.getAnnotationObjectFactory(this.value)});">${select}</select></span>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
 onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
-<br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new meta" style="width: 140px;">
+<br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
 <span class="material-icons pointer" onclick="${this.id}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
 	}
 
@@ -492,7 +508,7 @@ onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" val
 			input.value = "";
 			return;
 		}
-		Dialogs.show("Failed to create new meta field " + name, 2500, Dialogs.MSG_ERR);
+		Dialogs.show("Failed to create new metadata field " + name, 2500, Dialogs.MSG_ERR);
 	}
 
 	deletePresetMeta(inputNode, presetId, key) {
@@ -541,7 +557,7 @@ ${this.id}.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject
 		});
 
 		html.push(`<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
-${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer;" onclick="
+${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer; border-color: var(--color-text-primary);" onclick="
 ${this.id}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">add</span> New</div>`);
 
 		Dialogs.showCustom("preset-modify-dialog",
@@ -639,7 +655,7 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
         error = error ? `<div class="error-container m-2">${error}</div>` : "";
         return `<h3 class="f2-light">Annotations</h3>&emsp;<span class="text-small">
 for slide ${this.activeTissue}</span>${upload}${error}<br><br>
-<button id="downloadAnnotation" onclick="${this.id}.context.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
+<button id="downloadAnnotation" onclick="${this.id}.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
 <button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 
 onchange="${this.id}.importFromFile(event);$(this).val('');" />&nbsp;
@@ -662,7 +678,7 @@ ${this.presetExportControls()}
 			e => {
                 console.error(e);
                 Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
-                    `<a onclick=\"${_this.id}.context.exportToFile()\">exported file</a>.`,
+                    `<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
                     20000, Dialogs.MSG_ERR);
             }
         );
@@ -677,7 +693,7 @@ ${this.presetExportControls()}
 			},
 			e => {
 				Dialogs.show(`Failed to upload annotations. You can 
-<a onclick="${_this.id}.context.exportToFile()">Export them instead</a>, and upload later.`,
+<a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
 					7000, Dialogs.MSG_ERR);
 				console.error("Failed to update annotation id " + id, e);
 			}
@@ -708,7 +724,7 @@ ${this.presetExportControls()}
 			},
 			e => {
 				Dialogs.show(`Failed to upload annotations. You can 
-<a onclick="${_this.id}.context.exportToFile()">Export them instead</a>, and upload later.`,
+<a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
 					7000, Dialogs.MSG_ERR);
 				console.error("Failed to upload annotations.", e);
 			}

@@ -214,14 +214,14 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-readable" 
+        if (!this.params.interactive) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-white-shadow" 
 style="width: 60%;">${this.params.default}</div>`;
 
         if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
             this.params.pallete = "OrRd";
         }
 
-        return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-readable" 
+        return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
 style="width: 60%;"></select><br>`;
     }
 

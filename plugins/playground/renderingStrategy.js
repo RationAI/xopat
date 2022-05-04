@@ -3,20 +3,27 @@ Playground.ServerPixelStrategy = class {
         this.context = context;
         this.layerIndex = -1;
 
+        this.fractal = true;
         if (!this.context.webGLEngine) this.context.createWebGLEngine();
 
-        this.seaGL = new OpenSeadragon.BridgeGL(VIEWER, this.context.webglEngine, "cache");
+        if (!this.fractal) this.seaGL = new OpenSeadragon.BridgeGL(VIEWER, this.context.webglEngine, "cache");
     }
 
     prepareVisualization(visualization, source, imageCount) {
+        if (this.fractal)  return;
         this.seaGL.reset();
         this.seaGL.addVisualisation(visualization);
-
         //todo allow just not setting at all if not needed
         this.seaGL.addData(...new Array(imageCount).fill("_g_"));
     }
 
     initVisualization(onloaded) {
+        if (this.fractal) {
+            onloaded();
+            return;
+        }
+
+
         const _this = this;
         this.seaGL.loadShaders(0,function() {
             _this.seaGL.initAfterOpen();
@@ -33,7 +40,8 @@ Playground.ServerPixelStrategy = class {
         options.algorithm = algorithmId;
         options.owner = this.context;
         //todo if json says render pixel render pixel, else geometry
-        this._addTileSource(isPixels ? new Playground.Protocol(options) : new Playground.VectorProtocol(options));
+        this._addTileSource(this.fractal ? (new Playground.Fractal(options))
+            : (isPixels ? new Playground.Protocol(options) : new Playground.VectorProtocol(options)));
     }
 
     refresh() {
@@ -62,7 +70,8 @@ Playground.ServerPixelStrategy = class {
             let src = this._findSelfSource();
             tileSource = tileSource || src;
         }
-        if (tileSource){
+
+        if (!this.fractal && tileSource){
             let size = tileSource.getTileSize();
             this.seaGL.webGLEngine.setDimensions(size, size);
         }
@@ -70,7 +79,7 @@ Playground.ServerPixelStrategy = class {
         const _this = this;
         if (this.layerIndex >= 0) {
             if (!tileSource) tileSource = VIEWER.world.getItemAt(this.layerIndex);
-            this.seaGL.removeLayer(this.layerIndex);
+            if (!this.fractal) this.seaGL.removeLayer(this.layerIndex);
 
             VIEWER.addTiledImage({
                 tileSource: tileSource,
@@ -79,7 +88,7 @@ Playground.ServerPixelStrategy = class {
                 replace: true,
                 success: function () {
                     _this._findSelfSource();
-                    _this.seaGL.addLayer(_this.layerIndex);
+                    if (!_this.fractal) _this.seaGL.addLayer(_this.layerIndex);
                 }
             });
         } else {
@@ -90,7 +99,7 @@ Playground.ServerPixelStrategy = class {
                 opacity: 1,
                 success: function () {
                     _this._findSelfSource();
-                    _this.seaGL.addLayer(_this.layerIndex);
+                    if (!_this.fractal) _this.seaGL.addLayer(_this.layerIndex);
                 }
             });
         }
