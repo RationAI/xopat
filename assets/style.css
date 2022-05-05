@@ -97,7 +97,7 @@
 .show-hint {
     position: relative;
 }
-.show-hint:before {
+.show-hint::before {
     content: attr(data-hint);
     position: absolute;
     font-size: xx-small;
@@ -210,6 +210,17 @@
     user-select: none; /* Non-prefixed version, currently supported by Chrome, Edge, Opera and Firefox */
 }
 
+/**
+  Selectable multi-icon buttons (use with input radio or checkbox)
+  Use (strictly follow this):
+    <input id="id" type="radio" name="name" class="switch d-none">
+    <label for="id"><span class="material-icons">icon_name</span></label>
+ */
+input.switch:checked + label span {
+    background: var(--color-bg-tertiary);
+    color: var(--color-state-focus-border);
+}
+
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
@@ -229,9 +240,9 @@
 .inner-panel-visible {padding: 0 5px 0 9px;}
 .inner-panel-hidden {max-height: 0;padding: 0 5px 0 9px;transition: max-height 0.15s ease-in-out;overflow: hidden;
     background-image: linear-gradient(to top, #85858514 , var(--color-bg-primary));border-radius: 6px;}
-.inner-panel.loading:before {content: '';position: absolute;width: 100%;height: 100%;
+.inner-panel.loading::before {content: '';position: absolute;width: 100%;height: 100%;
     background: rgba(34, 34, 34, 0.68);top: 0;left: 0;}
-.inner-panel.loading:after {content: '';position: absolute;width: 75px;height: 75px;display: inline-block;
+.inner-panel.loading::after {content: '';position: absolute;width: 75px;height: 75px;display: inline-block;
     border-width: 2px;border-color: rgba(255, 255, 255, 0.05);border-top-color: #fff;border-radius: 100%;
     border-style: solid;animation: spin 1s infinite linear;top: calc(50% - 37px);left: calc(50% - 37px);}
 @keyframes spin { 100% {transform: rotate(360deg);} }
@@ -291,8 +302,6 @@ a {cursor: pointer;}
     -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
     font-feature-settings: 'liga';}
 .material-icons.pointer:hover, .material-icons.pointer.selected {color:var(--color-state-focus-border);}
-input[type=radio].switch:checked + label span {background: var(--color-bg-primary);
-    color:var(--color-state-focus-border);}
 
 /* For somre reason Github css does not style input range */
 input[type=range] { height: 25px;  -webkit-appearance: none; margin: 3px 0; width: 65%; background: transparent;

@@ -18,7 +18,9 @@ class AnnotationsGUI {
 		this.context = OSDAnnotations.instance();
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
-		this.context.setModeUsed("FREE_FORM_TOOL");
+		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
+		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
+
 		//by default no preset is active, make one
 		this.context.setPreset();
 
@@ -74,7 +76,7 @@ class AnnotationsGUI {
 			mode = this.context.Modes[mode];
 			let selected = mode.default() ? "checked" : "";
 			modeOptions.push(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
-<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode" onclick="${this.id}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
+<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.id}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
 		}
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
@@ -98,9 +100,10 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		// 	_this.insertLayer(e.layer, e.layer.name);
 		// });
 
-		//Rewrite mode property so that it gives us the html controls we want
-		let fftMode = this.context.Modes.FREE_FORM_TOOL;
-		fftMode.customHtml = this.freeFormToolControls.bind(this);
+		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
+			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
+				this.freeFormToolControls.bind(this);
+
 		//FFt handlers
 		this.context.addHandler('free-form-tool-mode-add', function (e) {
 			if (e.isModeAdd) $("#fft-mode-add-radio").prop('checked', true);
@@ -241,18 +244,10 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	/******************** Free Form Tool ***********************/
 
 	freeFormToolControls() {
-		let modeRemove = this.context.modifyTool.modeAdd ? "" : "checked";
-		let modeAdd = this.context.modifyTool.modeAdd ? "checked" : "";
-
-		return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush used to modify annotations areas.">Brush radius:</span>
-        <input class="form-control" title="Size of a brush used to modify annotations areas." type="number" min="5" max="100" 
-        step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}"
-        style="height: 22px; width: 60px;" onchange="${this.id}.context.modifyTool.setSafeRadius(Number.parseInt(this.value));">
-        <input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-add-radio"><label for="fft-mode-add-radio">
-<span id="fft-mode-add" onclick="${this.id}.context.modifyTool.setModeAdd(true)" class="material-icons pointer p-1 rounded-2 ${modeAdd}">add_circle_outline</span>
-</label><input type="radio" class="d-none switch" name="fft-mode" id="fft-mode-remove-radio"><label for="fft-mode-remove-radio">
-<span id="fft-mode-remove" onclick="${this.id}.context.modifyTool.setModeAdd(false)" class="material-icons pointer p-1 rounded-2 ${modeRemove}">remove_circle_outline</span>
-</label>`;
+		return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush (scroll to change).">Brush radius:</span>
+<input class="form-control" title="Size of a brush (scroll to change)." type="number" min="5" max="100" 
+step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}"
+style="height: 22px; width: 60px;" onchange="${this.id}.context.modifyTool.setSafeRadius(Number.parseInt(this.value));">`;
 	}
 
 	/******************** LAYERS ***********************/

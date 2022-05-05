@@ -364,7 +364,7 @@ ${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
             let sizeD;
             if (this.fullbody) sizeD = "width-full height-full";
             else sizeD = this.horizontal ? "width-full" : "height-full";
-            let overflow = this.horizontal ? "overflow-x:auto;" : "overflow-y:auto;";
+            let overflow = this.horizontal ? "overflow-x:auto;overflow-y:hidden;" : "overflow-y:auto;overflow-x:hidden;";
 
             let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">${this._getBody(pluginId, id, html, true)}</div>`;
             this.context.innerHTML = `<div class="panel-menu d-flex ${sizeD} ${flexD}">${head + body}</div>`;

@@ -29,9 +29,14 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 					this.Modes.CUSTOM = new OSDAnnotations.StateCustomCreate(this);
 				}
 				break;
-			case "FREE_FORM_TOOL":
+			case "FREE_FORM_TOOL_ADD":
 				if (!this.Modes.hasOwnProperty("FREE_FORM_TOOL")) {
-					this.Modes.FREE_FORM_TOOL = new OSDAnnotations.StateFreeFormTool(this);
+					this.Modes.FREE_FORM_TOOL_ADD = new OSDAnnotations.StateFreeFormToolAdd(this);
+				}
+				break;
+			case "FREE_FORM_TOOL_REMOVE":
+				if (!this.Modes.hasOwnProperty("FREE_FORM_TOOL_REMOVE")) {
+					this.Modes.FREE_FORM_TOOL_REMOVE = new OSDAnnotations.StateFreeFormToolRemove(this);
 				}
 				break;
 			default:
@@ -346,16 +351,20 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 	}
 
+	isModeAuto() {
+		return this.mode === this.Modes.AUTO;
+	}
+
 	setMode(mode) {
 		if (mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
 		} else if (mode !== this.Modes.AUTO) {
-			this._setModeToAuto();
+			this._setModeToAuto(true);
 			this._setModeFromAuto(mode);
 		} else {
-			this._setModeToAuto();
+			this._setModeToAuto(false);
 		}
 	}
 
@@ -717,24 +726,26 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_setModeFromAuto(mode) {
-		//must be early due to custom HTML controls that might be used later
-		this.raiseEvent('mode-from-auto', {mode: mode});
+		if (mode.setFromAuto()) {
+			//must be early due to custom HTML controls that might be used later
+			this.raiseEvent('mode-from-auto', {mode: mode});
 
-		mode.setFromAuto();
-		this.mode = mode;
+			this.mode = mode;
+		}
 	}
 
-	_setModeToAuto() {
-		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+	_setModeToAuto(switching) {
+		if (this.mode.setToAuto(switching)) {
+			if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
+			if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
-		//must be early due to custom HTML controls that might be used later
-		this.raiseEvent('mode-to-auto', {mode: this.Modes.AUTO});
+			//must be early due to custom HTML controls that might be used later
+			this.raiseEvent('mode-to-auto', {mode: this.Modes.AUTO});
 
-		this.mode.setToAuto();
-		this.mode = this.Modes.AUTO;
-		this.canvas.hoverCursor = "pointer";
-		this.canvas.defaultCursor = "grab";
+			this.mode = this.Modes.AUTO;
+			this.canvas.hoverCursor = "pointer";
+			this.canvas.defaultCursor = "grab";
+		}
 	}
 
 	_getModeByKeyEvent(e) {
@@ -752,7 +763,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (this.cursor.isDown || this.disabledInteraction) return;
 
 		let modeFromCode = this._getModeByKeyEvent(e);
-		if (modeFromCode && this.mode === this.Modes.AUTO) {
+		if (modeFromCode) {
 			this.setMode(modeFromCode);
 			e.preventDefault();
 		}
@@ -845,6 +856,14 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 
 OSDAnnotations.AnnotationState = class {
+	/**
+	 * Constructor for an abstract class of the Annotation Mode. Extending modes
+	 * should have only one parameter in constructor which is 'context'
+	 * @param {string} id unique id
+	 * @param {string} icon icon to use with this mode
+	 * @param {string} description description of this mode
+	 * @param {OSDAnnotations} context passed to constructor of children as the only argument
+	 */
 	constructor(id, icon, description, context) {
 		this._id = id;
 		this.icon = icon;
@@ -948,21 +967,34 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * What happens when the mode is being entered in
 	 * e.g. disable OSD mouse navigation (this.context.setOSDTracking(..)), prepare variables...
+	 *  (previous mode can be obtained from the this.context.mode variable, still not changed)
+	 * @return {Boolean} true if the procedure should proceed, e.g. mode <this> is accepted
 	 */
 	setFromAuto() {
-		//pass
+		return true;
 	}
 
 	/**
 	 * What happens when the mode is being exited
 	 * e.g. enable OSD mouse navigation (this.context.setOSDTracking(..)), clear variables...
+	 * @param {Boolean} temporary true if the change is temporary
+	 * 	optimization parameter, safe way of changing mode is to go MODE1 --> AUTO --> MODE2
+	 * 	however, you can avoid this by returning false if temporary == true, e.g. allow MODE2 to be
+	 * 	turned on immediately. This feature is used everywhere in provided modes since all are
+	 * 	compatible without problems.
+	 * @return {Boolean} true if the procedure should proceed, e.g. mode AUTO is accepted
 	 */
-	setToAuto() {
-		//pass
+	setToAuto(temporary) {
+		return true;
 	}
 
 	/**
-	 * Predicate that returns true if the mode is enabled by the key event
+	 * Predicate that returns true if the mode is enabled by the key event,
+	 * 	by default it is not tested whether the mode from which we go was
+	 * 	AUTO mode (safe approach), so you can test this by this.context.isModeAuto()
+	 *
+	 * NOTE: these methods should be as specific as possible, e.g. test also that
+	 * no ctrl/alt/shift key is held if you do not require them to be on
 	 * @param e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
@@ -1029,8 +1061,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 };
 
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
-	constructor(context) {
-		super("fft", "brush", "draw or adjust annotations by hand (shift)", context);
+	constructor(id, icon, description, context) {
+		super(id, icon, description, context);
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1080,7 +1112,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			// 	}
 			// }
 
-
 			if (o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w) {
 				//todo search surrounding objects whether they contain a polygon to update?
 				//could be fairly expensive, probably need to loop through all objects :/
@@ -1126,32 +1157,63 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.setOSDTracking(false);
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
-		this.context.modifyTool.setModeAdd(true);
 		this.context.modifyTool.recomputeRadius();
 		this.context.modifyTool.showCursor();
+		return true;
 	}
 
-	setToAuto() {
+	setToAuto(temporary) {
+		if (temporary) return false;
 		this.context.modifyTool.hideCursor();
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
+		return true;
+	}
+};
+
+OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
+
+	constructor(context) {
+		super("fft-add", "brush", "draw annotations by hand (shift)", context);
+	}
+
+	setFromAuto() {
+		this.context.modifyTool.setModeAdd(true);
+		return super.setFromAuto();
 	}
 
 	accepts(e) {
-		//in case event occurs that we would like to treat as our own but change only the mode of working inside
-		//note: mode will not be changed as this mode is already set
-		if (this.context.mode === this && e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
-			this.context.modifyTool.setModeAdd(false);
+		if (this.context.mode === this.context.Modes.FREE_FORM_TOOL_REMOVE
+			&& e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
+
 			return true;
 		}
 		return e.key === "Shift" && !e.altKey && !e.ctrlKey;
 	}
 
 	rejects(e) {
-		if (this.context.mode === this && e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
-			this.context.modifyTool.setModeAdd(true);
-			return false; //we do not reject this mode, just change the behaviour
-		}
+		return e.key === "Shift";
+	}
+};
+
+OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
+
+	constructor(context) {
+		super("fft-remove", "brush", "remove annotation parts by hand (shift + alt to switch)", context);
+	}
+
+	setFromAuto() {
+		this.context.modifyTool.setModeAdd(false);
+		return super.setFromAuto();
+	}
+
+	accepts(e) {
+		return !e.ctrlKey
+			&& (this.context.mode === this.context.Modes.FREE_FORM_TOOL_ADD || e.shiftKey)
+			&& e.code === "AltLeft";
+	}
+
+	rejects(e) {
 		return e.key === "Shift";
 	}
 };
@@ -1197,16 +1259,19 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		updater.finishDirect();
 	}
 
-	setFromAuto(mode) {
+	setFromAuto() {
 		this.context.setOSDTracking(false);
 		//deselect active if present
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
 		this.context.canvas.discardActiveObject();
+		return true;
 	}
 
-	setToAuto() {
+	setToAuto(temporary) {
+		if (temporary) return false;
 		this.context.setOSDTracking(true);
+		return true;
 	}
 
 	accepts(e) {

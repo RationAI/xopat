@@ -2,7 +2,7 @@
   cursor: pointer;
 }
 
-#annotations-left-click:hover:before {
+#annotations-left-click:hover::before {
   content: "Left mouse button";
   position: absolute;
   font-size: smaller;
@@ -11,7 +11,7 @@
   z-index: 21;
 }
 
-#annotations-right-click:hover:before {
+#annotations-right-click:hover::before {
   content: "Right mouse button";
   position: absolute;
   font-size: smaller;
@@ -67,4 +67,23 @@
   height: 35px;
   backdrop-filter: blur(8px);
   user-select:none;
+}
+
+#fft-add-annotation-mode + label::after {
+  content: '+';
+  font-size: 16pt;
+  right: 1px;
+  bottom: -12px;
+  position: absolute;
+  color: inherit;
+  cursor: pointer;
+}
+#fft-remove-annotation-mode + label::after {
+  content: '-';
+  font-size: 18pt;
+  right: 3px;
+  position: absolute;
+  bottom: -14px;
+  color: inherit;
+  cursor: pointer;
 }
