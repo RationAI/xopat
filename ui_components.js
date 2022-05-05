@@ -123,6 +123,13 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
     text: function (options) {
         options = $.extend({classes: "", content: ""}, options);
         return `<p class="${options.classes}">${options.content}</p>`;
+    },
+    /**
+     * Render newline
+     * @param options no options supported as of now
+     */
+    newline: function (options) {
+        return '<br style="clear: both">';
     }
 };
 

@@ -133,6 +133,34 @@ foreach ($PLUGINS as $_ => $plugin) {
 $visualisation = json_encode($parsedParams);
 $cookie_setup = JS_COOKIE_SETUP;
 
+function getAttributes($source, ...$properties) {
+    $html = "";
+    foreach ($properties as $property) {
+        if (isset($source->{$property})) {
+            $html .= " $property=\"{$source->{$property}}\"";
+        }
+    }
+    return $html;
+}
+
+function printDependencies($directory, $item) {
+    global $version;
+    //add module style sheet if exists
+    if (isset($item->styleSheet)) {
+        echo "<link rel=\"stylesheet\" href=\"$item->styleSheet\" type='text/css'>\n";
+    }
+    foreach ($item->includes as $__ => $file) {
+        if (is_string($file)) {
+            echo "    <script src=\"$directory/{$item->directory}/$file?v=$version\"></script>\n";
+        } else if (is_object($file)) {
+            echo "    <script" . getAttributes($file, 'async', 'crossorigin', 'use-credentials',
+                    'defer', 'integrity', 'referrerpolicy', 'src') . "></script>";
+        } else {
+            //todo ignore? error?
+        }
+    }
+}
+
 //make sure all modules required by other modules are loaded
 foreach ($MODULES as $_ => $mod) {
     if (file_exists(MODULES_FOLDER . "/" . $mod->directory . "/style.css")) {
@@ -204,13 +232,7 @@ foreach ($MODULES as $_ => $mod) {
     <?php
     foreach ($MODULES as $_ => $mod) {
         if ($mod->loaded) {
-            //add module style sheet if exists
-            if (isset($mod->styleSheet)) {
-                echo "<link rel=\"stylesheet\" href=\"$mod->styleSheet\" type='text/css'>\n";
-            }
-            foreach ($mod->includes as $__ => $file) {
-                echo "    <script src=\"" . MODULES_FOLDER . "/" . $mod->directory . "/$file?v=$version\"></script>\n";
-            }
+            printDependencies(MODULES_FOLDER, $mod);
         }
     }
 
@@ -446,12 +468,6 @@ EOF;
 (function (window) {
 
     /*---------------------------------------------------------*/
-    /*------------ Initialization of UI -----------------------*/
-    /*---------------------------------------------------------*/
-
-    USER_INTERFACE.AdvancedMenu._build();
-
-    /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
     /*---------------------------------------------------------*/
 
@@ -599,18 +615,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
      *
      * Enhancement: use Premise API instead
      * @param pluginId plugin that uses particular script
-     * @param src script URL
+     * @param properties script attributes to set
      * @param onload function to call on success
      */
-    window.attachScript = function(pluginId, src, onload) {
-        let container = document.getElementById(`script-section-${pluginId}`);
-        if (!container) {
-            $("body").append(`<div id="script-section-${pluginId}"></div>`);
-            container = document.getElementById(`script-section-${pluginId}`);
-        }
-        let script = document.createElement("script");
-        script.async = false;
-
+    window.attachScript = function(pluginId, properties, onload) {
         let errHandler = function (e) {
             window.onerror = null;
             if (LOADING_PLUGIN) {
@@ -620,13 +628,29 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             }
         };
 
+        if (!properties.hasOwnProperty('src')) {
+            errHandler("Script property must contain 'src' attribute!");
+            return;
+        }
+
+        let container = document.getElementById(`script-section-${pluginId}`);
+        if (!container) {
+            $("body").append(`<div id="script-section-${pluginId}"></div>`);
+            container = document.getElementById(`script-section-${pluginId}`);
+        }
+        let script = document.createElement("script");
+        for (let key in properties) {
+            if (key === 'src') continue;
+            script[key] = properties[key];
+        }
+        script.async = false;
         script.onload = function () {
             window.onerror = null;
             onload();
         };
         script.onerror = errHandler;
         window.onerror = errHandler;
-        script.src = src;
+        script.src = properties.src;
         container.append(script);
         return true;
     };
@@ -653,12 +677,28 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         return imageFilePath.substr(begin, imageFilePath.length - begin - 4);
     }
 
+    function extendIfContains(target, source, ...properties) {
+        for (let property of properties) {
+            if (source.hasOwnProperty(property)) target[property] = source[property];
+        }
+    }
+
     function chainLoad(id, sources, index, onSuccess, folder='<?php echo PLUGINS_FOLDER ?>') {
         if (index >= sources.includes.length) {
             onSuccess();
         } else {
-            attachScript(id,
-                `${folder}/${sources.directory}/${sources.includes[index]}?v=<?php echo $version?>`,
+            let toLoad = sources.includes[index],
+                properties = {};
+            if (typeof toLoad === "string") {
+                properties.src = `${folder}/${sources.directory}/${toLoad}?v=<?php echo $version?>`;
+            } else if (typeof toLoad === "object") {
+                extendIfContains(properties, toLoad, 'async', 'crossorigin', 'use-credentials', 'defer', 'integrity',
+                    'referrerpolicy', 'src')
+            } else {
+                throw "Invalid dependency: invalid type " + (typeof toLoad);
+            }
+
+            attachScript(id, properties,
                 _ => chainLoad(id, sources, index+1, onSuccess, folder));
         }
     }
@@ -855,6 +895,12 @@ EOF;
         ?>
     }
     window.VIEWER.addHandler('open', fireTheVisualization);
+
+    /*---------------------------------------------------------*/
+    /*------------ Initialization of UI -----------------------*/
+    /*---------------------------------------------------------*/
+
+    USER_INTERFACE.AdvancedMenu._build();
 })(window);
     </script>
 
@@ -863,14 +909,7 @@ EOF;
     foreach ($PLUGINS as $_ => $plugin) {
         if ($plugin->loaded) {
             echo "<div id='script-section-{$plugin->id}'>";
-            //add plugin style sheet if exists
-            if (isset($plugin->styleSheet)) {
-                echo "<link rel=\"stylesheet\" href=\"{$plugin->styleSheet}\">\n";
-            }
-            //add plugin includes
-            foreach ($plugin->includes as $__ => $file) {
-                echo "<script src=\"" . PLUGINS_FOLDER . "/" . $plugin->directory . "/$file?v=$version\"></script>\n";
-            }
+            printDependencies(PLUGINS_FOLDER, $plugin);
             echo "</div>";
         }
     }

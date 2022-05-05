@@ -753,22 +753,29 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         UTILITIES.refreshPage(formData.join(""), plugins);
     };
 
+    let metaContext = {};
+    let vegaInit = {};
+
     /**
-     * Allowed types of page[] are either 'vega', 'columns' or types of UIComponents.Elements
-     *
+     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
+     * Columns
+     * todo some sanitization of raw fields, e.g. 'classes'
      * @type {{}}
      */
-    let metaContext = {};
     function buildElements(root) {
         let html = [];
+        root.classes = root.classes || "m-2 px-1";
         try {
             switch (root.type) {
                 case 'vega':
-                    html.push("<div class=\"error-container\">Graphs not yet supported.</div>");
+                    let uid = `vega-${Date.now()}`;
+                    html.push(`<div class="${root.classes}" id="${uid}"></div>`);
+                    vegaInit[uid] = root;
                     break;
                 case 'columns':
-                    html.push('<div class="d-flex">');
+                    html.push(`<div class="d-flex ${root.classes}">`);
                     for (let col of root.children) {
+                        col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
                         html.push(...buildElements(col));
                     }
                     html.push('</div>');
@@ -783,6 +790,21 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         }
         return html;
     }
+    function loadVega(initialized) {
+        for (let id in vegaInit) {
+            let object = vegaInit[id];
+            if (object.view) continue;
+            if (!initialized) {
+                UTILITIES.loadModules(function() {
+                    loadVega(true);
+                }, 'vega');
+                return;
+            }
+
+            object.view = new vega.View(vega.parse(object.specs), {renderer: 'canvas', container: `#${id}`, hover: true});
+            object.view.runAsync();
+        }
+    }
     function buildMetaDataMenu(ctx) {
         for (let key in APPLICATION_CONTEXT.setup.metadata) {
             let data = APPLICATION_CONTEXT.setup.metadata[key];
@@ -795,5 +817,6 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
             ctx._buildMenu(metaContext, "__selfMenu", "__meta", "Data", APPLICATION_CONTEXT.metaMenuId,
                 key, data.title || key,  html.join(""), '', true, true);
         }
+        loadVega(false);
     }
 })(window);

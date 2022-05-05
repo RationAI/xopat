@@ -799,7 +799,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_objectClicked(object) {
-		console.log(object);
 		object = object.target;
 		this.history.highlight(object);
 		if (this.history.isOngoingEditOf(object)) {

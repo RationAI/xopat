@@ -292,7 +292,7 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
                     if (blb.size === 0) {
                         context.finish("Empty image response.");
                     } else {
-                        context.image.src = (window.URL || window.webkitURL).createObjectURL(blb);
+                        image.src = (window.URL || window.webkitURL).createObjectURL(blb);
                     }
                 },
                 error: function(request) {
@@ -300,7 +300,7 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
                         try {
                             let blob = new window.Blob([request.response]);
                             blob.text().then(t => _this.owner.setStatus(t, {loading: false}));
-                            context.image.src = _this._emptyPlaceholder;
+                            image.src = _this._emptyPlaceholder;
                         } catch (e) {
                             context.finish(e);
                         }
@@ -387,7 +387,7 @@ Playground.Fractal = class extends Playground.Protocol {
         let z = {a: 0, b: 0};
         for(let i=0;i<this.maxIterations;i++){
             squareAndAddPoint(z, refPoint);
-            if(length(z)>8) return i/this.maxIterations;
+            if(length(z)>2) return i/this.maxIterations;
         }
         return 1.0;
     }

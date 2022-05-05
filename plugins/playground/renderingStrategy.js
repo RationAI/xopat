@@ -3,7 +3,7 @@ Playground.ServerPixelStrategy = class {
         this.context = context;
         this.layerIndex = -1;
 
-        this.fractal = true;
+        this.fractal = false;
         if (!this.context.webGLEngine) this.context.createWebGLEngine();
 
         if (!this.fractal) this.seaGL = new OpenSeadragon.BridgeGL(VIEWER, this.context.webglEngine, "cache");

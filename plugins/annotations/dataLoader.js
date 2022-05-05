@@ -23,7 +23,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure  call on failure with the error object
      */
     loadAnnotation(server, annotationId, onSuccess, onFailure) {
-        this._fetchWorker(server + "?Annotation=load/" + annotationId, null, onSuccess, onFailure);
+        this._fetchWorker(server + "?Annotation=load/" + annotationId, null, onSuccess, onFailure, false);
     }
 
     /**
