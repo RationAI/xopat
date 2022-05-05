@@ -551,7 +551,7 @@ ${this.id}.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject
 			counter++;
 		});
 
-		html.push(`<div id="preset-add-new" class="border-md border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
+		html.push(`<div id="preset-add-new" class="border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
 ${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer; border-color: var(--color-text-primary);" onclick="
 ${this.id}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">add</span> New</div>`);
 
@@ -559,17 +559,24 @@ ${this.id}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">
 			"<b>Annotations presets</b>",
 			html.join(""),
 			`<div class="d-flex flex-row-reverse">
-<button id="select-annotation-preset-right" onclick="if (${this.id}._presetSelection === 
-undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
-return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
-${this.id}.selectPreset(false); }, 150);" class="btn m-2">Set for right click 
-</button>
-<button id="select-annotation-preset-left" onclick="if (${this.id}._presetSelection === 
-undefined) { Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN); 
-return false;} setTimeout(function(){ Dialogs.closeWindow('preset-modify-dialog'); 
-${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click 
-</button>
+<button id="select-annotation-preset-right" onclick="return ${this.id}._clickPresetSelect(false);" 
+oncontextmenu="return ${this.id}._clickPresetSelect(false);" class="btn m-2">Set for right click </button>
+<button id="select-annotation-preset-left" onclick="return ${this.id}._clickPresetSelect(true);" 
+class="btn m-2">Set for left click </button>
 </div>`);
+	}
+
+	_clickPresetSelect(isLeft) {
+		if (this._presetSelection === undefined) {
+			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
+			return false;
+		}
+		const _this = this;
+		setTimeout(function() {
+			Dialogs.closeWindow('preset-modify-dialog');
+			_this.selectPreset(isLeft);
+		}, 150);
+		return false;
 	}
 
 	createNewPreset(buttonNode, isLeftClick) {

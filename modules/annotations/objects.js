@@ -376,6 +376,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Some annotation objects might not allow to be edited (e.g. images), specify here
+     * @return {boolean}
+     */
+    isEditable() {
+        return true;
+    }
+
+    /**
      * Get icon for the object
      * @param ofObject object to describe
      * @returns {string} pluggable to current icon system (see https://fonts.google.com/icons?selected=Material+Icons)
@@ -493,6 +501,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * If the object is defined implicitly (e.g. control points + formula)
+     * if returns false, a 'points' property of the object should exist where its shape is stored
      * @returns {boolean} true if the shape is not an explicit point array
      */
     isImplicit() {
@@ -699,6 +708,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getCurrentObject() {
         return this._current;
+    }
+
+    isEditable() {
+        return false;
     }
 
     /**

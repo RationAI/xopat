@@ -27,8 +27,8 @@ OSDAnnotations.FreeFormTool = class {
      * Initialize object for modification
      * @param {object} object fabricjs object
      * @param {boolean} created true if the object has been just created, e.g.
-     *    set to false if you want the history to preserve the previous object shape,
-     *    if true, the given object is modified directly, not copied (unless it is an implicit object)
+     *    the object is yet not on the canvas, the given object is appended to the canvas and modified directly,
+     *    not copied (unless it is an implicit object)
      */
     init(object, created=false) {
 
@@ -183,8 +183,11 @@ OSDAnnotations.FreeFormTool = class {
 
         try {
             this._updatePerformed = this._update(point) || this._updatePerformed;
-            this.polygon._setPositionDimensions({});
-            this._context.canvas.renderAll();
+
+            if (this.polygon) {
+                this.polygon._setPositionDimensions({});
+                this._context.canvas.renderAll();
+            }
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
         }
@@ -194,28 +197,25 @@ OSDAnnotations.FreeFormTool = class {
      * Finalize the object modification
      * @return {fabricjs.Polygon || null} polygon if successfully updated
      */
-    finish () {
+    finish (_withDeletion=false) {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
 
-            //if (!this._created) {
+            //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
+            if (_withDeletion) {
+                //cannot happen the created annotation was removed since only mode add can create
+                this._context.replaceAnnotation(this.polygon, this.initial, false);
+                this._context.deleteAnnotation(this.initial);
+            } else if (!this._created) {
                 this._context.replaceAnnotation(this.polygon, this.initial, false);
                 if (this._updatePerformed) {
                     this._context.replaceAnnotation(this.initial, this.polygon, true);
                 }
-            //} else {
-                //just a hotfix todo find out how to not to lose interaction with object without copy
-                // let polygon = this._context.polygonFactory.copy(this.polygon, this.polygon.points);
-                // polygon.incrementId = this.polygon.incrementId;
-                // polygon.sessionId = this.polygon.sessionId;
-                // this._context.replaceAnnotation(this.polygon, polygon, false);
-                // this.polygon = polygon;
-                //this._context.canvas.requestRenderAll();
-            //}
-
-            //todo disabled cached selection
-            //this._cachedSelection = this.polygon;
+            } else {
+                this._context.deleteHelperAnnotation(this.polygon);
+                this._context.addAnnotation(this.polygon);
+            }
             this._created = false;
             let outcome = this.polygon;
             this.polygon = null;
@@ -275,9 +275,12 @@ OSDAnnotations.FreeFormTool = class {
         this.polygon = polyObject;
         this.initial = original;
 
-        //todo implement this
-        //if (!this._created)
+        if (!this._created) {
             this._context.replaceAnnotation(original, polyObject, false);
+        } else {
+            this._context.addHelperAnnotation(polyObject);
+        }
+
         polyObject.moveCursor = 'crosshair';
     }
 
@@ -352,11 +355,7 @@ OSDAnnotations.FreeFormTool = class {
                 if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
                     delete this.initial.moveCursor;
                     delete this.polygon.moveCursor;
-                    this._context.deleteAnnotation(this.polygon);
-
-                    this.polygon = null;
-                    this.initial = null;
-                    this.mousePos = null;
+                    this.finish(true);
                     return true;
                 }
 
@@ -383,5 +382,133 @@ OSDAnnotations.FreeFormTool = class {
 
     _toDistancePointsAsObjects(pointA, pointB) {
         return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
+    }
+
+    polygonsIntersect(p1, p2) {
+       /**
+        *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
+        *  To detect intersection with another Polygon object, this
+        *  function uses the Separating Axis Theorem. It returns false
+        *  if there is no intersection, or an object if there is. The object
+        *  contains 2 fields, overlap and axis. Moving the polygon by overlap
+        *  on axis will get the polygons out of intersection.
+        *
+        *  @jirka Cleaned. Honestly, why people who are good at math cannot keep their code clean.
+        */
+
+        let axis = {x: 0, y: 0},
+            tmp, minA, maxA, minB, maxB, side, i,
+            smallest = null,
+            overlap = 99999999,
+            p1Pts = p1.points, p2Pts = p2.points;
+
+        /* test polygon A's sides */
+        for (side = 0; side < p1Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p1Pts[p1Pts.length - 1].y - p1Pts[0].y;
+                axis.y = p1Pts[0].x - p1Pts[p1Pts.length - 1].x;
+            } else {
+                axis.x = p1Pts[side - 1].y - p1Pts[side].y;
+                axis.y = p1Pts[side].x - p1Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++) {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA) maxA = tmp;
+                else if (tmp < minA) minA = tmp;
+            }
+            /* correct for offset */
+            tmp = axis.x +  axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++) {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x +  axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                let o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+
+        /* test polygon B's sides */
+        for (side = 0; side < p2Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p2Pts[p2Pts.length - 1].y - p2Pts[0].y;
+                axis.y = p2Pts[0].x - p2Pts[p2Pts.length - 1].x;
+            } else {
+                axis.x = p2Pts[side - 1].y - p2Pts[side].y;
+                axis.y = p2Pts[side].x - p2Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++)
+            {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA)
+                    maxA = tmp;
+                else if (tmp < minA)
+                    minA = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++)
+            {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                var o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+        return overlap;
     }
 };

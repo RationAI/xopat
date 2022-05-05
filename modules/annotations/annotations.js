@@ -414,6 +414,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	promoteHelperAnnotation(annotation) {
+		//todo better way?
+		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionId = this.session;
 		this.history.push(annotation);
@@ -427,7 +429,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	replaceAnnotation(previous, next, updateHistory=false) {
-		//todo check whether this does not bind twice, e.g. set only if not set
+		//todo better way?
+		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
@@ -735,10 +738,10 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_setModeToAuto(switching) {
-		if (this.mode.setToAuto(switching)) {
-			if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-			if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
+		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
+		if (this.mode.setToAuto(switching)) {
 			//must be early due to custom HTML controls that might be used later
 			this.raiseEvent('mode-to-auto', {mode: this.Modes.AUTO});
 
@@ -796,6 +799,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_objectClicked(object) {
+		console.log(object);
 		object = object.target;
 		this.history.highlight(object);
 		if (this.history.isOngoingEditOf(object)) {
@@ -1081,47 +1085,41 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		let currentObject = this.context.overlay.fabric.getActiveObject(),
 			created = false;
 
-		// if (!currentObject && this.context.modifyTool._cachedSelection) {
-		// 	currentObject = this.context.modifyTool._cachedSelection;
-		// 	this.context.modifyTool._cachedSelection = null;
-		// }
-
 		if (!currentObject) {
 			if (!this.context.modifyTool.modeAdd) {
 				//subtract needs active object
 				this.abortClick();
 				return;
 			}
-			currentObject = this._initPlain(point, isLeftClick);
+			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick);
 			created = true;
 		} else {
-			let bounds = currentObject.getBoundingRect();
-			let radius = this.context.modifyTool.screenRadius*1.5;
+			let	factory = this.context.getAnnotationObjectFactory(currentObject.factoryId),
+				willModify, newPolygonPoints;
 
-			let w = bounds.left + bounds.width + radius,
-				h = bounds.top + bounds.height + radius;
-			bounds.left -= radius;
-			bounds.right -= radius;
+			//treat as polygon
+			if (!factory.isEditable()) {
+				willModify = false;
+			} else if (factory.isImplicit()) {
+				//let radius = this.context.modifyTool.screenRadius*1.5;
+				// let bounds = currentObject.getBoundingRect();
+				// let w = bounds.left + bounds.width + radius,
+				// 	h = bounds.top + bounds.height + radius;
+				// bounds.left -= radius;
+				// bounds.right -= radius;
+				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
+			} else {
+				newPolygonPoints = this._geCirclePoints(point);
+				willModify = this.context.modifyTool.polygonsIntersect({points: newPolygonPoints}, currentObject);
+			}
 
-			// let closest = -1,
-			// 	dist = Infinity;
-			// if (currentObject.points) {
-			// 	for (let i = 0; i < currentObject.points.length; i++) {
-			// 		let p = currentObject.points[i];
-			// 		//todo
-			// 	}
-			// }
-
-			if (o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w) {
-				//todo search surrounding objects whether they contain a polygon to update?
-				//could be fairly expensive, probably need to loop through all objects :/
-
+			if (!willModify) {
 				if (!this.context.modifyTool.modeAdd) {
 					//subtract needs active object
 					this.abortClick();
 					return;
 				}
-				currentObject = this._initPlain(point, isLeftClick);
+				currentObject = this._initFromPoints(newPolygonPoints || this._geCirclePoints(point), isLeftClick);
 				created = true;
 			}
 		}
@@ -1130,12 +1128,12 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.modifyTool.update(point);
 	}
 
-	_initPlain(point, isLeftClick) {
-		let currentObject = this.context.polygonFactory.create(
-			this.context.modifyTool.getCircleShape(point), this.context.presets.getAnnotationOptions(isLeftClick)
-		);
-		this.context.addAnnotation(currentObject);
-		return currentObject;
+	_geCirclePoints(point) {
+		return this.context.modifyTool.getCircleShape(point);
+	}
+
+	_initFromPoints(points, isLeftClick) {
+		return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(isLeftClick));
 	}
 
 	_finish() {
@@ -1152,8 +1150,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	setFromAuto() {
-		//dirty but when a mouse is clicked, for some reason active object is deselected
-		this.context.modifyTool._cachedSelection = this.context.canvas.getActiveObject();
 		this.context.setOSDTracking(false);
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
