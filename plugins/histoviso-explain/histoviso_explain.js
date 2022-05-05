@@ -13,7 +13,7 @@ class HistovisoExplain  {
     pluginReady() {
         const _this = this;
         USER_INTERFACE.MainMenu.append("Neural Network (NN) inspector",
-            `<span class="material-icons pointer" id="show-histoviso-board" title="Show board" 
+            `<span class="material-icons btn-pointer" id="show-histoviso-board" title="Show board" 
 style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>`,
             "Waiting for the server...", "feature-maps", this.id);
 

@@ -69,21 +69,21 @@
   user-select:none;
 }
 
-#fft-add-annotation-mode + label::after {
+#fft-add-annotation-mode + label::before {
   content: '+';
   font-size: 16pt;
   right: 1px;
   bottom: -12px;
   position: absolute;
   color: inherit;
-  cursor: pointer;
+  pointer-events: none;
 }
-#fft-remove-annotation-mode + label::after {
+#fft-remove-annotation-mode + label::before {
   content: '-';
   font-size: 18pt;
   right: 3px;
   position: absolute;
   bottom: -14px;
   color: inherit;
-  cursor: pointer;
+  pointer-events: none;
 }

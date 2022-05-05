@@ -387,8 +387,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             },
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-<span class="material-icons inline-arrow plugins-pin pointer" id="${id}-pin" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
-<h3 class="d-inline-block h3 pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
+<span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
+<h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
 </div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
             },
             replaceExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
@@ -533,7 +533,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 buildPluginsMenu(this);
                 buildSettingsMenu(this);
 
-                $(this.selfContext.head).prepend('<span class="material-icons pointer mb-2" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
+                $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
                 $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,

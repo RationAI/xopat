@@ -42,11 +42,11 @@ OSDAnnotations.History = class {
 
         Dialogs.showCustomModal(this.containerId, "Annotations Board",
             `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
-<span id="history-undo" class="material-icons pointer" style="${undoCss}" 
+<span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" 
 onclick="opener.${this._globalSelf}.back()" id="history-undo">undo</span>
-<span id="history-redo" class="material-icons pointer" style="color: var(--color-icon-tertiary);" 
+<span id="history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-tertiary);" 
 onclick="opener.${this._globalSelf}.redo()" id="history-redo">redo</span>
-<span id="history-refresh" class="material-icons pointer" onclick="opener.${this._globalSelf}.refresh()" 
+<span id="history-refresh" class="material-icons btn-pointer" onclick="opener.${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
 <button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (opener.${this._context.id}.disabledInteraction) return; window.opener.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
@@ -368,7 +368,7 @@ window.addEventListener("beforeunload", (e) => {
 onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
 <span class="material-icons" style="vertical-align:super;color: ${object.fill}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
-<span class="material-icons pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
+<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
 title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));

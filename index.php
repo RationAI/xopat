@@ -244,13 +244,13 @@ foreach ($MODULES as $_ => $mod) {
 </div>
 
 <!-- Main Panel -->
-<span id="main-panel-show" class="material-icons pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
+<span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="background: var(--color-bg-primary); width: 400px;">
 
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
         <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
-            <span id="main-panel-hide" class="material-icons pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
+            <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
 
             <!--TODO export also these values? -->
             <?php
@@ -269,14 +269,14 @@ EOF;
 EOF;
             }?>
 
-            <span class="material-icons pointer ml-2" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
+            <span class="material-icons btn-pointer ml-2" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
         </div><!--end of general controls-->
 
         <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
             <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
-            <span id="navigator-pin" class="material-icons pointer inline-pin position-absolute right-2 top-2" onclick="
+            <span id="navigator-pin" class="material-icons btn-pointer inline-pin position-absolute right-2 top-2" onclick="
  let self = $(this);
  if (self.hasClass('pressed')) {
     self.removeClass('pressed');
@@ -295,8 +295,8 @@ EOF;
         <div id="panel-images" class="inner-panel mt-2">
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
-                        <span id="images-pin" class="material-icons pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                        <h3 class="d-inline-block pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
+                        <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
+                        <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
                     </div>
 
                     <div id="image-layer-options" class="inner-panel-hidden">
@@ -316,12 +316,12 @@ EOF;
                 <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
-                        <span id="shaders-pin" class="material-icons pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); USER_INTERFACE.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+                        <span id="shaders-pin" class="material-icons btn-pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); USER_INTERFACE.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
                         document.cookie = `_shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
+                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
                     </div>
 
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
@@ -336,13 +336,13 @@ EOF;
             <!-- Appended controls for other plugins -->
         </div>
 
-        <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 pointer bg-opacity fixed-bg-opacity" style="width: 400px;">
-            <span id="copy-url" class="pl-1" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1 pointer" style="font-size: 22px;">link</span>URL</span>
-            <span id="global-export" class="pl-1" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1 pointer" style="font-size: 22px;">download</span>Export</span>
+        <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
+            <span id="copy-url" class="pl-1 btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1" style="font-size: 22px;">link</span>URL</span>
+            <span id="global-export" class="pl-1 btn-pointer" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1" style="font-size: 22px;">download</span>Export</span>
             <a style="display:none;" id="export-visualisation"></a> &emsp;
-            <span id="add-plugins" class="pl-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1 pointer" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
-            <span id="global-help" class="pl-1" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
-            <span id="settings" class="p-0 material-icons" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>&emsp;
+            <span id="add-plugins" class="pl-1 btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
+            <span id="global-help" class="pl-1 btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
+            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>&emsp;
         </div>
     </div>
 

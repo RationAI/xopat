@@ -327,7 +327,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
 
         let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
-        let modeChange = fixed ? "" : `<span class="material-icons pointer"
+        let modeChange = fixed ? "" : `<span class="material-icons btn-pointer"
 id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "mask" ? "" : "color: var(--color-icon-tertiary);"}"
 onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
 
@@ -366,10 +366,10 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (defau
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
               &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
-              <div class="d-inline-block label-render-type" style="cursor: pointer; float: right;">
+              <div class="d-inline-block label-render-type pointer" style="float: right;">
                   <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none; cursor: pointer;" class="form-control input-sm">${availableShaders}</select>
+onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
                 </div>
                 ${modeChange}
                 <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>

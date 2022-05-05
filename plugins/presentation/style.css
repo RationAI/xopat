@@ -24,7 +24,7 @@
     background: var(--color-bg-danger-inverse);
 }
 
-.timeline-play {
+.timeline-play, .timeline-play.span {
     color: var( --color-icon-danger) !important;
 }
 

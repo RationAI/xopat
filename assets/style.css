@@ -19,9 +19,16 @@
     cursor: auto;
 }
 /*Pointer cursor*/
-.pointer {
+.pointer, .btn-pointer {
     cursor: pointer;
 }
+/*Use with material icons class 'pointer' to make them highlight on hover, add class 'selected' to highlight,
+the same with span but class 'btn-pointer' */
+.btn-pointer:hover, .btn-pointer.selected,
+.btn-pointer:hover .material-icons, .btn-pointer.selected .material-icons {
+    color:var(--color-state-focus-border) !important;
+}
+
 /*stolen from github sourcecode page (flash.scss) use <div class="blob-code"><div class="blob-code-inner"></div></div>*/
 .blob-code-inner {
     overflow: visible;
@@ -301,7 +308,6 @@ a {cursor: pointer;}
     word-wrap: normal;white-space: nowrap;direction: ltr;vertical-align: middle;padding: 0 5px;
     -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
     font-feature-settings: 'liga';}
-.material-icons.pointer:hover, .material-icons.pointer.selected {color:var(--color-state-focus-border);}
 
 /* For somre reason Github css does not style input range */
 input[type=range] { height: 25px;  -webkit-appearance: none; margin: 3px 0; width: 65%; background: transparent;

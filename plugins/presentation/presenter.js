@@ -7,25 +7,25 @@ class Presenter {
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
 
-        USER_INTERFACE.MainMenu.append("Recorder", `<span style='cursor:pointer;float:right;' onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
-    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
+        USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
+    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
+    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
 ${UIComponents.Elements.checkBox({
             label: "Capture visualization",
             onchange: this.id + ".snapshots.captureVisualization = this.checked && this.checked !== 'false';",
             default: false
         })}<br>
-<button class='btn' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn' onclick="${this.id}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
-<button class='btn' onclick="${this.id}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
-<button class='btn' onclick="${this.id}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn' onclick="${this.id}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
+<button class='btn btn-pointer' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn btn-pointer' onclick="${this.id}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
+<button class='btn btn-pointer' onclick="${this.id}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
+<button class='btn btn-pointer' onclick="${this.id}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' onclick="${this.id}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
 <br><br>`,"auto-recorder", this.id);
 
         USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
             `<div class="d-flex">
-<span class="material-icons timeline-play-small pointer" onclick="${this.id}.addRecord();">radio_button_checked</span>
+<span class="material-icons timeline-play-small btn-pointer" onclick="${this.id}.addRecord();">radio_button_checked</span>
 <div class='d-inline-block timeline-path'>
 <div class="d-inline-block"><span style="font-size: xx-small">Delay</span><br>
 <input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.id}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>

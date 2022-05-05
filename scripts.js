@@ -349,7 +349,7 @@ ${constructExportVisualisationForm()}
          */
         refreshPage: function(formData="", includedPluginsList=undefined) {
             if (APPLICATION_CONTEXT.setup.dirty) {
-                Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.setup.dirty = false; UTILITIES.refreshPage();" class='pointer'>Reload now.</a>.`,
+                Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.setup.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
                     15000, Dialogs.MSG_WARN);
                 return;
             }

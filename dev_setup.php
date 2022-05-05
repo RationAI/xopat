@@ -91,7 +91,7 @@ function hasKey($array, $key) {
 </textarea>
       <form method="POST" target="_blank" action="<?php echo VISUALISATION_ROOT_ABS_PATH; ?>/index.php" id="custom-request">
           <input type="hidden" name="visualisation" id="custom-visualisation" value=''>
-          <button class="btn" type="submit" value="Ready!" style="cursor: pointer;">Ready!</button>&emsp;
+          <button class="btn pointer" type="submit" value="Ready!">Ready!</button>&emsp;
       </form>
 
           <br><br>

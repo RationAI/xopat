@@ -54,17 +54,17 @@ class AnnotationsGUI {
 		USER_INTERFACE.MainMenu.append(
 			"Annotations",
 			`
-<span class="material-icons pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
-<span class="material-icons pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
-<span class="material-icons pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
-<span class="material-icons pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
+<span class="material-icons btn-pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
+<span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
+<span class="material-icons btn-pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
+<span class="material-icons btn-pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
 			`
 <span>Opacity: &emsp;</span>
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br><br>${this.presetControls()}
 <a id="download_link1" download="annotations.json" href="" hidden>Download JSON</a>
 <a id="download_link2" download="annotations.xml" href="" hidden>Download XML</a>`,
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
-// ${this.id}.context.createLayer();"><span class="material-icons pointer">add</span> new layer</button>
+// ${this.id}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
 			"annotations-panel",
 			this.id
@@ -76,7 +76,7 @@ class AnnotationsGUI {
 			mode = this.context.Modes[mode];
 			let selected = mode.default() ? "checked" : "";
 			modeOptions.push(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
-<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.id}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
+<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.id}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
 		}
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
@@ -464,7 +464,7 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 
 		return `${html} style="cursor:pointer; margin: 5px;" 
 onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
-${this.id}._presetSelection = ${preset.presetID}"><span class="material-icons pointer position-absolute top-0 right-0 px-0" 
+${this.id}._presetSelection = ${preset.presetID}"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
 onclick="${this.id}.removePreset(this, ${preset.presetID});">delete</span>
 <span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
 ${this.id}.updatePreset(${preset.presetID}, {objectFactory: 
@@ -472,7 +472,7 @@ ${this.id}.context.getAnnotationObjectFactory(this.value)});">${select}</select>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
 onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
 <br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
-<span class="material-icons pointer" onclick="${this.id}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
+<span class="material-icons btn-pointer" onclick="${this.id}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
 	}
 
 	removePreset(buttonNode, presetId) {
@@ -523,7 +523,7 @@ onchange="${this.id}.updatePreset(${preset.presetID}, {color: this.value});" val
 
 	_metaFieldHtml(presetId, key, metaObject, allowDelete=true) {
 		let delButton = allowDelete ? `<span 
-class="material-icons pointer position-absolute right-0" style="font-size: 17px;"
+class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.id}.deletePresetMeta(this, ${presetId}, '${key}')">delete</span>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
@@ -619,9 +619,9 @@ ${this.id}.selectPreset(true); }, 150);" class="btn m-2">Set for left click
 			//_this.availableAnnotations = json;
 			for (let available of json.annotations) {
 				let actionPart = `
-<span onclick="${this.id}.loadAnnotation('${available.id}');return false;" title="Download" class="material-icons pointer">download</span>&nbsp;
-<span onclick="${this.id}.updateAnnotation('${available.id}');return false;" title="Update" class="material-icons pointer">update</span>&nbsp;
-<span onclick="${this.id}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons pointer">delete</span>`;
+<span onclick="${this.id}.loadAnnotation('${available.id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
+<span onclick="${this.id}.updateAnnotation('${available.id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
+<span onclick="${this.id}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
 					title: available.name,
 					author: "Author",

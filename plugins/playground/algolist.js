@@ -27,7 +27,7 @@ Playground.AlgorithmMenu = class {
 
         const _this = this;
         Dialogs.showCustomModal(this.windowId, "Available algorithms", `
-        <span class='f3-light'>Available Algorithms</span> <span style="float: right;" class="material-icons pointer" onclick="${this.refreshFormsCall}()">refresh</span>`,
+        <span class='f3-light'>Available Algorithms</span> <span style="float: right;" class="material-icons btn-pointer" onclick="${this.refreshFormsCall}()">refresh</span>`,
             `<div id="content">${parsed[0]}</div>
 <style>
 img { width:75px; min-height: 60px; border: 1px solid var(--color-bg-tertiary); }

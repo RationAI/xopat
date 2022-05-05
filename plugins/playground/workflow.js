@@ -23,7 +23,7 @@ Playground.WorkFlow = class {
             return;
         }
         Dialogs.showCustomModal(this.windowId, "Available algorithms", `
-        <span class='f3-light'>Workflow</span> <span class="material-icons pointer" id="enable-disable-playground" title="Enable/disable" style="float: right;" data-ref="on" onclick="
+        <span class='f3-light'>Workflow</span> <span class="material-icons btn-pointer" id="enable-disable-playground" title="Enable/disable" style="float: right;" data-ref="on" onclick="
         let self = $(this);
         if (self.attr('data-ref') === 'on'){
             ${this.id}.setEnabled(false); self.css('color', ''); self.attr('data-ref', 'off');
