@@ -108,7 +108,7 @@ float filtered = ${this.filter("0.123456")};
         return [
             `<span class="blob-code"><span class="blob-code-inner pl-0">//the output of 'render_${this.uid}()' is rendered</span></span>`,
             this.fs.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;height: 170px;"),
-            this.editor.toHtml(false, "style='float: left;'"),
+            this.editor.toHtml(false, "float: left;"),
             this.submit.toHtml()
         ].join("");
     }

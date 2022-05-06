@@ -1,3 +1,19 @@
+/**
+ * Data loader to the annotations interface, for annotations sharing
+ * map received data to the expected data structure
+ * data: {
+       annotations: object (see fabricJS canvas export structure)
+	   presets: object (see OSDAnnotations.PresetManager) export structure
+	   metadata: {
+	            name: string
+				exported: string
+				userAgent: string
+	   }
+ *
+ * }
+ * default implementation: identity
+ * @type {AnnotationsGUI.DataLoader}
+ */
 AnnotationsGUI.DataLoader = class {
 
     constructor(context) {
@@ -55,26 +71,22 @@ AnnotationsGUI.DataLoader = class {
      * @param {string} server URL to the annotations server
      * @param {string} tissueId tissue ID, usually a path to the file
      * @param {object} data annotations data, export from the module
-     * @param {object} clientData data about the client
      * @param {function} onSuccess  call with object - data from the response, in expected format
      * @param {function} onFailure  call on failure with the error object
      */
-    uploadAnnotation(server, tissueId, data, clientData, onSuccess, onFailure) {
+    uploadAnnotation(server, tissueId, data, onSuccess, onFailure) {
         let date = Date.now();
         this._fetchWorker(server, {
                 protocol: 'Annotation',
                 command: 'save',
-                name: "a" + date,
                 tissuePath: tissueId,
                 data: data,
-                date: date,
-                client: clientData
             }, onSuccess, onFailure
         );
     }
 
     _fetchWorker(url, post, onsuccess, onfail, successProperty=true) {
-        if (this.context.disabledInteraction) {
+        if (this.context.context.disabledInteraction) {
             Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
             return;
         }

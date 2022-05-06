@@ -660,7 +660,7 @@ WebGLModule.UIControls = class {
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input class="form-control input-sm" ${css} min="${params.min}" max="${params.max}" 
+                return `${title}<input class="form-control input-sm" style="${css}" min="${params.min}" max="${params.max}" 
 step="${params.step}" type="number" id="${uniqueId}">`;
             },
             glUniformFunName: function () {
@@ -684,7 +684,7 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="range" ${css} 
+                return `${title}<input type="range" style="${css}" 
 class="with-direct-input" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
             },
             glUniformFunName: function () {
@@ -708,7 +708,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="color" id="${uniqueId}" class="form-control input-sm">`;
+                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="form-control input-sm">`;
             },
             glUniformFunName: function () {
                 return "uniform3fv";
@@ -742,7 +742,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 let value = params.default && params.default !== "false" ? "checked" : "";
                 //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
-                return `${title}<input type="checkbox" id="${uniqueId}" ${value}
+                return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
 class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
             },
             glUniformFunName: function () {
@@ -995,7 +995,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
 
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
-        return this.component.html(this.id, this.params, `style="${controlCss}"`)
+        return this.component.html(this.id, this.params, controlCss)
             + (breakLine ? "<br>" : "");
     }
 

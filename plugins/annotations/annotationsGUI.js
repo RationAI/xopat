@@ -592,13 +592,15 @@ class="btn m-2">Set for left click </button>
 
 	/*** GETTERS **/
 
-	getFullExportData() {
-		return{
+	getFullExportData(name) {
+		let now = Date.now();
+		return {
 			annotations: this.context.getObjectContent(),
 			presets: this.context.presets.toObject(),
 			metadata: {
-				exported: new Date().toLocaleString(),
-				userAgent: UTILITIES.getUserMeta()
+				name: name || `a${now}`,
+				exported: new Date(now).toLocaleString(),
+				userAgent: UTILITIES.getUserMeta().userAgent
 				//todo other metadata?
 			}
 		};
@@ -625,14 +627,15 @@ class="btn m-2">Set for left click </button>
 			let count = 0;
 			//_this.availableAnnotations = json;
 			for (let available of json.annotations) {
+				let meta = available.metadata;
 				let actionPart = `
 <span onclick="${this.id}.loadAnnotation('${available.id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
 <span onclick="${this.id}.updateAnnotation('${available.id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
 <span onclick="${this.id}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
-					title: available.name,
+					title: meta.name,
 					author: "Author",
-					details: `Uploaded ${new Date(available.date).toDateString()}. Client: ${available.user}`,
+					details: `Uploaded ${new Date(meta.exported).toDateString()}. Client: ${meta.userAgent ? meta.userAgent.split(" ")[0] : "undefined"}`,
 					contentAction:actionPart
 				});
 				count++;
@@ -719,7 +722,6 @@ ${this.presetExportControls()}
     uploadAnnotation() {
         const _this = this;
         this.dataLoader.uploadAnnotation(this._server, this.activeTissue, this.getFullExportData(),
-			UTILITIES.getUserMeta().userAgent,
 			json => {
 				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();

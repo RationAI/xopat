@@ -340,3 +340,10 @@ input[type=range]:focus::-ms-fill-upper { background: #b9b9b9;}
     -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);}
 ::-webkit-scrollbar-button {width: 0;height: 0;display: none;}
 ::-webkit-scrollbar-corner {background-color: transparent;}
+input[type=color] {cursor: pointer}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {-webkit-appearance: none;margin: 0;}
+input[type=number] {-moz-appearance:textfield;}
+@-moz-document url-prefix() {
+    input[type=color] {padding: 7px 14px;width: 50px;}
+}

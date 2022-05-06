@@ -39,8 +39,8 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
     toHtml(breakLine=true, controlCss="") {
         if (!this._c1.params.interactive) return "";
         let cls = breakLine ? "" : "class='d-inline-block'";
-        return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'style="width: 48%;"')}
-        ${this._c2.toHtml(false, 'style="width: 12%;"')}</div>`;
+        return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'width: 48%;')}
+        ${this._c2.toHtml(false, 'width: 12%;')}</div>`;
     }
 
     define() {
@@ -761,7 +761,7 @@ WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
 
     toHtml(breakLine=true, controlCss="") {
         let disabled = this.params.interactive ? "" : "disabled";
-        let css = controlCss ? controlCss : 'style="float: right;"';
+        let css = `style="${controlCss ? controlCss : ""}float: right;"`;
         return `<button id="${this.id}" ${css} class="btn" ${disabled}></button>
 ${breakLine ? '<br style="clear: both;">' : ""}`;
     }
