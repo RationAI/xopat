@@ -1058,8 +1058,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	customHtml() {
-		return this.context.autoSelectionEnabled ?
-			this.context.automaticCreationStrategy.sensitivityControls() : "";
+		return "PRDEL";
 	}
 };
 

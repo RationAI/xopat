@@ -309,13 +309,7 @@ form.submit();<\/script>`;
 ${constructExportVisualisationForm()}
 </body></html>`;
             APPLICATION_CONTEXT.setup.params.viewport = oldViewport;
-            let output = new Blob([doc], { type: 'text/html' });
-            let downloadURL = window.URL.createObjectURL(output);
-            var downloader = document.getElementById("export-visualisation");
-            downloader.href = downloadURL;
-            downloader.download = "export.html";
-            downloader.click();
-            URL.revokeObjectURL(downloadURL);
+            UTILITIES.downloadAsFile("export.html", doc);
             APPLICATION_CONTEXT.setup.dirty = false;
         },
 
@@ -360,8 +354,25 @@ ${constructExportVisualisationForm()}
             //     window.detachEvent('onbeforeunload', preventDirtyClose);
             // }
             $("body").append(UTILITIES.getForm(formData, includedPluginsList, true));
+        },
+
+        /**
+         * Download string as file
+         * @param {string} filename filename
+         * @param {string} content file content
+         */
+        downloadAsFile: function(filename, content) {
+            let data = new Blob([content], { type: 'text/plain' });
+            let downloadURL = window.URL.createObjectURL(data);
+            let elem = document.getElementById('link-download-helper');
+            elem.href = downloadURL;
+            elem.setAttribute('download', filename);
+            elem.click();
+            URL.revokeObjectURL(downloadURL);
         }
     };
+
+    $("body").append("<a id='link-download-helper' class='d-none'></a>");
 
     UTILITIES.updateTheme();
 })(window);

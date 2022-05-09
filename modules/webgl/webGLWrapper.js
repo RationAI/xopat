@@ -154,7 +154,7 @@ class WebGLModule {
     }
 
     /**
-     * Get currently used visualisation index
+     * Get currently used visualisation ilayer.params,ndex
      * @return {number} index of the current visualization
      */
     currentVisualisationIndex() {
@@ -512,17 +512,19 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
 <br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, this.jsonReplacer)}</code>
 <br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
-            } else {
-                data.dziExtendedUrl = data.dataUrls.join(",");
-                visualisation._built = data;
-
-                //preventive
-                delete visualisation.error;
-                delete visualisation.desc;
+                return null;
             }
+            data.dziExtendedUrl = data.dataUrls.join(",");
+            visualisation._built = data;
+
+            //preventive
+            delete visualisation.error;
+            delete visualisation.desc;
+            return data;
         } catch (error) {
             this._buildFailed(visualisation, error);
         }
+        return null;
     }
 
     _detachShader(program, type) {
@@ -597,7 +599,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             return;
         }
         layer.index = idx;
-        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params, {
+        layer.visible = layer.visible ?? true;
+        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params || {}, {
             layer: layer,
             webgl: this.webGLImplementation,
             invalidate: this.resetCallback,

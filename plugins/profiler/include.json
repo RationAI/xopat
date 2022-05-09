@@ -1,0 +1,8 @@
+{
+    "id": "profiler",
+    "name": "Measure tile loading time and run profiler",
+    "includes" : [
+        "profile.js"
+    ],
+    "modules": ["snapshots"]
+}

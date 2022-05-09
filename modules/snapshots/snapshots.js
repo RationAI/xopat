@@ -8,7 +8,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             throw "Snaphots are not instantiable. Instead, use OpenSeadragon.Snapshots::instance().";
         }
 
-        this.id = "Snaphots";
+        this.id = "snaphots";
         this.viewer = viewer;
         this.constructor.__self = this;
 

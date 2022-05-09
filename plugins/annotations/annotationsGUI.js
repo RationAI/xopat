@@ -28,9 +28,9 @@ class AnnotationsGUI {
 
 		const _this = this;
 
+		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
-		this.initHandlers();
 		//after HTML added
 		this.updatePresetsHTML();
 		this.setupTutorials();
@@ -78,6 +78,7 @@ class AnnotationsGUI {
 			modeOptions.push(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
 <label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.id}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
 		}
+
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
 			`<div class="px-2 py-1">${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
@@ -88,6 +89,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
 	initHandlers() {
 		const _this = this;
+
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		this.context.addHandler('mode-from-auto', this.annotationModeChanged);
 		this.context.addHandler('mode-to-auto', this.annotationModeChanged);
@@ -100,15 +102,18 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		// 	_this.insertLayer(e.layer, e.layer.name);
 		// });
 
+		let strategy = this.context.automaticCreationStrategy;
+		if (strategy && this.context.autoSelectionEnabled) {
+			this.context.Modes.AUTO.customHtml = this.getAutoCreationStrategyControls.bind(this);
+			//on visualisation change update auto UI
+			VIEWER.addHandler('visualisation-used', function (visualisation) {
+				_this.updateAutoSelect(visualisation);
+			});
+		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
 				this.freeFormToolControls.bind(this);
 
-		//FFt handlers
-		this.context.addHandler('free-form-tool-mode-add', function (e) {
-			if (e.isModeAdd) $("#fft-mode-add-radio").prop('checked', true);
-			else $("#fft-mode-remove-radio").prop('checked', true);
-		});
 		this.context.addHandler('free-form-tool-radius', function (e) {
 			$("#fft-size").val(e.radius);
 		});
@@ -275,10 +280,65 @@ style="height: 22px; width: 60px;" onchange="${this.id}.context.modifyTool.setSa
 	// 		container.append(ch);
 	// 	});
 	// }
+	//
+	// setBlending(blending) {
+	// 	this.canvas.globalCompositeOperation = blending;
+	// 	this.canvas.renderAll();
+	// }
 
-	setBlending(blending) {
-		this.canvas.globalCompositeOperation = blending;
-		this.canvas.renderAll();
+	/******************** AUTO DETECTION ***********************/
+
+	getDetectionControlOptions(visualisation) {
+		let autoStrategy = this.context.automaticCreationStrategy;
+		if (!autoStrategy.running) return "";
+		let html = "";
+
+		let index = -1;
+		let layer = null;
+		let key = "";
+		for (key in visualisation.shaders) {
+			if (!visualisation.shaders.hasOwnProperty(key)) continue;
+			layer = visualisation.shaders[key];
+			if (isNaN(layer.index)) continue;
+
+			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
+			let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
+			let selected = "";
+
+			if (layer.index === autoStrategy.getLayerIndex()) {
+				index = layer.index;
+				autoStrategy.setLayer(index, key);
+				selected = "selected";
+			}
+			html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
+		}
+
+		if (index < 0) {
+			if (!layer) return;
+			autoStrategy.setLayer(layer.index, key);
+			html = "<option selected " + html.substr(8);
+		}
+		return html;
+	}
+
+	updateAutoSelect(visualisation) {
+		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualisation));
+	}
+
+	getAutoCreationStrategyControls() {
+		let strategy = this.context.automaticCreationStrategy;
+		if (!strategy || !strategy.running) return "";
+		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
+annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
+type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.id}.setAutoTargetLayer(this);">
+${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
+	}
+
+	setAutoTargetLayer(self) {
+		self = $(self);
+		let key = self.val(),
+		   layer = VIEWER.bridge.visualization().shaders[key];
+		this.context.automaticCreationStrategy.setLayer(layer.index, key);
 	}
 
 	/******************** PRESETS ***********************/
@@ -366,28 +426,15 @@ style="width: 115px;">${comment}</span>
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		function download(id, content) {
-			let data = new Blob([content], { type: 'text/plain' });
-			let downloadURL = window.URL.createObjectURL(data);
-			document.getElementById(id).href = downloadURL;
-			document.getElementById(id).click();
-			URL.revokeObjectURL(downloadURL);
-		}
-		download("download_link1", JSON.stringify(this.getObjectContent())); //json, containing all necessary properties
-		download("download_link2", this.getXMLStringContent()); //asap xml
+		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.getObjectContent()));
+		UTILITIES.downloadAsFile("annotations_asap_xml_export.json", this.context.getXMLStringContent());
 	}
 
 	/**
 	 * Makes the browser download the export() output
 	 */
 	exportPresetsToFile() {
-		let output = new Blob([this.context.presets.export()], { type: 'text/plain' });
-		let downloadURL = window.URL.createObjectURL(output);
-		var downloader = document.getElementById("presets-export");
-		downloader.href = downloadURL;
-		downloader.download = "annotation-presets.json";
-		downloader.click();
-		URL.revokeObjectURL(downloadURL);
+		UTILITIES.downloadAsFile("annotation-presets.json", this.context.presets.export());
 	}
 
 	/**
@@ -407,7 +454,6 @@ class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"><
 	presetExportControls() {
 		return `
 <button id="presets-download" onclick="${this.id}.exportPresetsToFile();" class="btn">Export presets.</button>&nbsp;
-<a style="display:none;" id="presets-export"  HTTP-EQUIV="Content-Disposition" CONTENT="attachment; filename=whatever.pdf"></a>
 <button id="presets-upload" onclick="this.nextElementSibling.click();" class="btn">Import presets.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 
 onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;

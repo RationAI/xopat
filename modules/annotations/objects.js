@@ -1493,7 +1493,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 //maybe notify
             },
             onFatalError: function (error) {
-                Dialogs.show("Error with automatic detection: this feature wil be disabled.");
+                console.error("Error with automatic detection: this feature wil be disabled.");
                 _this._running = false;
             }
         });
@@ -1511,45 +1511,19 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         this._currentTile = "";
         this._readingIndex = 0;
         this._readingKey = "";
-        this._customControls = "";
-
-        this._initFromVisualization(VIEWER.bridge.visualization());
-        VIEWER.addHandler('visualisation-used', function (visualisation) {
-            _this._initFromVisualization(visualisation);
-        });
     }
 
-    _initFromVisualization(visualisation) {
-        let html = "";
+    get running() {
+        return this._running;
+    }
 
-        let index = -1;
-        let layer = null;
-        let key = "";
-        for (key in visualisation.shaders) {
-            if (!visualisation.shaders.hasOwnProperty(key)) continue;
-            layer = visualisation.shaders[key];
-            if (isNaN(layer.index)) continue;
+    getLayerIndex() {
+        return this._readingIndex;
+    }
 
-            let errIcon = this.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
-            let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
-            let selected = "";
-
-            if (layer.index === this._readingIndex) {
-                index = layer.index;
-                this._readingKey = key;
-                selected = "selected";
-            }
-            html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
-        }
-
-        if (index < 0) {
-            if (!layer) return;
-            this._readingIndex = layer.index;
-            this._readingKey = key;
-            html = "<option selected " + html.substr(8);
-        }
-        this._customControls = html;
-        $("#sensitivity-auto-outline").html(html);
+    setLayer(index, key) {
+        this._readingIndex = index;
+        this._readingKey = key;
     }
 
     _beforeAutoMethod() {
@@ -1615,20 +1589,6 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 
     _afterAutoMethod() {
         delete this._renderEngine._visualisations[0];
-    }
-
-    //todo better approach this relies on ID's and any plugin can re-use it :/ maybe move to GUI
-    sensitivityControls() {
-        return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
-annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
-type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this._globalSelf}._setTargetLayer(this);">${this._customControls}</select>`;
-    }
-
-    _setTargetLayer(self) {
-        self = $(self);
-        this._readingKey = self.val();
-        let layer = VIEWER.bridge.visualization().shaders[this._readingKey];
-        this._readingIndex = layer.index;
     }
 
     approximateBounds(point, growY=true) {

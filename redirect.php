@@ -11,7 +11,6 @@ require_once("config.php");
 <form method="POST" action="<?php echo VISUALISATION_ROOT_ABS_PATH ?>/index.php" id="redirect">
     <input type="hidden" name="visualisation" id="visualisation" value=''>
 </form>
-<a style="display:none;" id="export-visualisation"></a>
 <script type="text/javascript">
     try {
         var url = new URL(window.location.href);

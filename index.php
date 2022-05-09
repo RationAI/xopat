@@ -37,7 +37,8 @@ function ensureDefined($object, $property, $default) {
  * Redirection: based on parameters, either setup visualisation or redirect
  */
 
-$visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] : false;
+$visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
+    (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
 throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
         print_r($_POST, true));
 
@@ -54,7 +55,7 @@ ensureDefined($parsedParams, "data", array());
 ensureDefined($parsedParams, "background", array());
 ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
-ensureDefined($parsedParams, "metadata", (object)array());
+ensureDefined($parsedParams, "dataPage", (object)array());
 
 $bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
@@ -359,12 +360,11 @@ EOF;
         </div>
 
         <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
-            <span id="copy-url" class="pl-1 btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1" style="font-size: 22px;">link</span>URL</span>
-            <span id="global-export" class="pl-1 btn-pointer" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1" style="font-size: 22px;">download</span>Export</span>
-            <a style="display:none;" id="export-visualisation"></a> &emsp;
+            <span id="copy-url" class="pl-1 btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1" style="font-size: 22px;">link</span>URL</span>&emsp;
+            <span id="global-export" class="pl-1 btn-pointer" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1" style="font-size: 22px;">download</span>Export</span>&emsp;
             <span id="add-plugins" class="pl-1 btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
             <span id="global-help" class="pl-1 btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
-            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>&emsp;
+            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>
         </div>
     </div>
 
@@ -582,7 +582,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             return;
         }
 
-        if (plugin.id !== id) plugin.id = id; //silently set
+        plugin.id = id; //silently set
         if (window[plugin.id]) {
             console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, window[id]);
             Dialogs.show(`Plugin ${plugin.name} could not be loaded: please, contact administrator.`, 7000, Dialogs.MSG_WARN);
@@ -763,7 +763,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             LOADING_PLUGIN = false;
 
             //loaded after page load
-            if (!initializePlugin(PLUGINS[id].instance)) return;
+            if (!initializePlugin(PLUGINS[id].instance)) {
+                Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> could not be loaded.`, 2500, Dialogs.MSG_WARN);
+                return;
+            }
             Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
 
             if (meta.styleSheet) {  //load css if necessary
@@ -781,6 +784,19 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         };
         LOADING_PLUGIN = true;
         chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
+    };
+
+    /**
+     * Check whether component is loaded
+     * @param {string} id component id
+     * @param {Boolean} isPlugin true if check for plugins
+     */
+    UTILITIES.isLoaded = function (id, isPlugin=false) {
+        if (isPlugin) {
+            let plugin = PLUGINS[id];
+            return plugin.loaded && plugin.instance;
+        }
+        return MODULES[id].loaded;
     };
 
     function fireTheVisualization() {
@@ -815,47 +831,26 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
         //this is the largest image layer
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
 
-        let layerIDX = setup.hasOwnProperty("visualizations") ? setup.background.length : -1;
-        if (layerIDX !== -1) {
-            if (layerIDX !== i) {
-                console.warn("Invalid initialization: layer index should be ", i);
-                layerIDX = i;
-            }
+        //private API
+        if (setup.hasOwnProperty("visualizations") && VIEWER.bridge) {
+            VIEWER.bridge._onload(i);
+        }
 
-            let layerWorldItem =  VIEWER.world.getItemAt(layerIDX);
-            if (layerWorldItem) {
-                let activeVis = VIEWER.bridge.visualization();
-                if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless && layerWorldItem.source.setFormat) {
-                    layerWorldItem.source.setFormat("png");
-                }
-                layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
-            }
-
-            let microns = APPLICATION_CONTEXT.getOption("microns");
-            if (microns && APPLICATION_CONTEXT.getOption("scaleBar")) {
-                VIEWER.scalebar({
-                    pixelsPerMeter: microns * 1e3,
-                    sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
-                    stayInsideImage: false,
-                    location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
-                    xOffset: 5,
-                    yOffset: 10,
-                    // color: "var(--color-text-primary)",
-                    // fontColor: "var(--color-text-primary)",
-                    backgroundColor: "rgba(255, 255, 255, 0.5)",
-                    fontSize: "small",
-                    barThickness: 2
-                });
-            }
-
-            <?php
-            if ($layerVisible) {
-                echo <<<EOF
-                VIEWER.bridge.addLayer(layerIDX);
-                VIEWER.bridge.initAfterOpen();
-EOF;
-            }
-            ?>
+        let microns = APPLICATION_CONTEXT.getOption("microns");
+        if (microns && APPLICATION_CONTEXT.getOption("scaleBar")) {
+            VIEWER.scalebar({
+                pixelsPerMeter: microns * 1e3,
+                sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
+                stayInsideImage: false,
+                location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+                xOffset: 5,
+                yOffset: 10,
+                // color: "var(--color-text-primary)",
+                // fontColor: "var(--color-text-primary)",
+                backgroundColor: "rgba(255, 255, 255, 0.5)",
+                fontSize: "small",
+                barThickness: 2
+            });
         }
 
         //Notify plugins OpenSeadragon is ready
@@ -893,6 +888,7 @@ EOF;
             }, 2000);";
         }
         ?>
+        VIEWER.raiseEvent('loaded');
     }
     window.VIEWER.addHandler('open', fireTheVisualization);
 
@@ -933,13 +929,6 @@ EOF;
             VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
             toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, activeData));
             window.VIEWER.open(toOpen);
-    });
-
-    //todo better error system :(
-     window.VIEWER.addHandler('open-failed', function(e) {
-        let sources = []; //todo create valid urls again
-        USER_INTERFACE.Errors.show("No valid images.", `We were unable to open provided image sources. 
-Url's are probably invalid. <br><code>\${sources.join(", ")}</code>`, true);
     });
 
 </script>

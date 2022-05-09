@@ -149,7 +149,6 @@ class Playground  {
     }
 
     postProcessHeader(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
-        //wasErrorWhenLoading = wasErrorWhenLoading || layer.missingDataSources;
         let shader = WebGLModule.ShaderMediator.getClass(layer.type);
 
         return `<div class="shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2">

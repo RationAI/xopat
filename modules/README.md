@@ -1,22 +1,16 @@
 # Modules
 
-Dynamic `PHP` scripting allows for painless module insertion. A module is just a wrapping flexibility over javascript
- libraries that are not necessarily loaded and on which some plugins or the visualization might be dependent (otherwise, 
- always-required JS files are manually added to the html `<head>`).
- Each module must be in its own folder placed here. Inside, one file must exist (otherwise the module won't load):
+Are basically plugins for plugins - available extensions and libraries.
+For the available API you can see README of plugins, but anything related to
+MUST DO's or plugin ID does not apply.
 
-## Available modules
-
-### - `webgl`
-Module for WebGL-based post-processing of images. Supports arrays of images concatenated into one image vertically.
-Multiple images can be post-processed using various strategies (which can be dynamically changed) and the result is
-blended into one resulting image. Works both with WebGL2 and WebGL1 (fallback strategy). This module is
-heavily used in the core visualisation in case `visualization` parameter is set.
 
 
 ## `include.json`
-Since we're in `JavaScript`, a `JSON` file is required that defines the module and it's inclusion:
-
+It's structure is similar, however, you have no access to the values of
+this configuration at runtime and the set-up should be more or less static,
+so that plugins can rely on the behaviour. Instead of `modules` here we can
+define a dependency on other modules with `requires` list.
 ````json
 {
     "id": "module_id",
@@ -29,8 +23,3 @@ Since we're in `JavaScript`, a `JSON` file is required that defines the module a
     "requires": []
 }
 ````
-- `id` is a required value that defines module's ID
-- `name` is the module name 
-- `includes` is a list of JavaScript files relative to the module folder to include 
-- `requries` array of id's of another modules that must be already loaded before this module 
-

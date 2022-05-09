@@ -1,10 +1,12 @@
 # Plugins
 
-Dynamic `PHP` scripting allows for painless plugin creation, insertion and dependency deduction. A plugin must be in its own folder placed
- here (`./plugins/`). Inside, one file must exist (otherwise the plugin won't load):
+It is easy to create and plug-in a plugin. 
+ 
+Each plugin must be in its own folder placed here (`./plugins/`). 
+Inside, one file must exist (otherwise the plugin won't load):
  
 ### `include.json`
-Since we're in `JavaScript`, a `JSON` file is required that defines the plugin and it's inclusion:
+A `JSON` file is required that defines the plugin and it's inclusion:
 
 ````json
 {
@@ -16,8 +18,6 @@ Since we're in `JavaScript`, a `JSON` file is required that defines the plugin a
         "dependency2.js",
         "implementation.js"
     ],
-    "flag": null,
-    "requires": [],
     "modules": []
 }
 ````
@@ -25,88 +25,104 @@ Since we're in `JavaScript`, a `JSON` file is required that defines the plugin a
 - `name` is the plugin name 
 - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
 - `includes` is a list of JavaScript files relative to the plugin folder to include 
-- `flag` can be either `null` (the plugin is included implicitly) or a keyword, in that case the plugin is included only and only
-if `GET` or `POST` data contains `keyword` with value `1`
-- `requries` array of id's of all plugins that must be already loaded before this plugin, because this plugin uses them
-    - note that these plugins might not be loaded at all, the plugin must be able to handle it
 - `modules` array of id's of required modules (libraries)
-    - note that in case the library is probably not useful to the whole system, include it internally via the plugin's `"includes"` list
+    - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
+    instead of creating a module for it
 
 > Everything you define in this file is accessible through `PLUGINS` object interface, so it is a good place to also define your own
->proprietary static configuration for example.
+>proprietary configuration options.
 
-You can than find the plugin instance stored in `PLUGINS["plugin_id"]`.
+You can than find the plugin instance stored in `PLUGINS["plugin_id"].instance`. `PLUGINS["plugin_id"]` mirrors
+the plugin `include.json` content with additional data (such as `loaded` flag).
 
 ### Must do's
-- A plugin must have its id in a member variable named after `id` from `includes.json`.
-    - e.g. `constructor() { this.id='myPluginId'; }'`
 - A plugin must register itself using the name of its parent class. For more information see below.
-    - if the plugin is based on `MyAwesomePlugin` object, then call `addPlugin('myPluginId', MyAwesomePlugin);` on a global level
-- Any attached HTML to the DOM must be attached by the provided functionality (see `PLUGINS` variable)
-
+    - if the plugin is based on `MyAwesomePlugin` object/class, then call `addPlugin('myPluginId', MyAwesomePlugin);` on a global level
+- Any attached HTML to the DOM must be attached by the provided API (see `USER_INTERFACE` global variable)
+- A plugin must have its id in a member variable named after `id` from `includes.json`. This is done automatically after the plugin instantiation, just make sure you
+don't use `id` for anything else
+- The plugin main class should be visible from the global scope. However, try not to pollute the global namespace 
+and define other classes in closures or as a properties of the parent class.
 
 ### Global interface
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 
 be able to work flawlessly.
 
+
 #### `addPlugin(id, PluginRootClass)`
 This function will register the plugin and initialize it. It will make sure that
 - an instance of `PluginRootClass` is created
-- `id` member variable is correctly set
+- `id` member variable is set
 - global space contains the plugin instance in a variable named after `plugin.id`
-    - this is mainly for the plugin itself, in case you want to use `on...()` HTML properties where you need to access the plugin from the global scope
+    - this is mainly for the plugin itself, in case you want to use `on...=""` HTML attributes where you need to access the plugin from the global scope
     - you can do things like 
       > let html = \`\<tag onclick="${this.id}.callMyPluginFunction(...)"\>\`;
 - `PLUGINS[plugin.id].instance` contains the plugin instance
 - in case `pluginReady` is defined, it will be invoked when the visualisation is ready
 
+#### `YourPLuginClass::constructor(id, params)`
+The plugin main class is given it's `id` and `params` object, use them as you wish
+
 #### `YourPLuginClass::pluginReady()`
 Because of dynamic loading and behaviour, it is necessary that you do most initialization
 in this function instead of the constructor, especially if
- - you access any **properties from the visualisation API**
- - you access any **properties of other plugins**
+ - you access **the global API**
+ - you access any **API of other plugins/modules**
  - you access global scope **of your own plugin's _other files_**!
 
-Yup, that's right. It is not safe to access even your own plugin auxiliary classes from constructor.
-There is a deadlock (unless they are in the same file):
+Yup, that's right. It might not be safe to access even your own plugin auxiliary classes from the main class constructor.
+There is a deadlock (unless you break it somehow, e.g. by splitting the main class definition and implementation):
  - your plugin inner classes should be registered within one (main) class namespace
  - your main class script (often) calls `addPlugin(...)`
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
 
+### API
+Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
+approaches - first, get familiar with:
+ - `window.VIEWER` 
+    - OpenSeadragon and `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API
+    - WebGL API of the layers group (accessible through `VIEWER.bridge`)
+    - events invoked on the VIEWER
+ - `window.APPLICATION_CONTEXT`
+    - note that this interface is meant for inner logic and you probably do not need to access it
+    - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.setup`
+    - to access the viewer parameters, use `[set|get]Option(...)` method
+ - `window.USER_INTERFACE`
+    - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
+ - `window.UIComponents`
+    - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks
+ - `window.UTILITIES`
+    - functional API - exporting, downloading files, refreshing page and many other useful utilities
+  
+And also available modules. Each module provides it's own way of enriching the environment, 
+such as pre-defined color maps, webgl processing, fabricJS canvas, annotation logic or snapshots.   
 
-#### `PLUGINS`
-This global variable contains a lot of useful references, functions require you to pass `pluginId` parameter so that in case of failure, your plugin can be safely removed from the application:
-- `osd` Instance of underlying OpenSeadragon
-- `seaGL` Instance of underlying OpenSeadragon GL library
-- `addTutorial(pluginId, title, description, icon, steps)` - add tutorial series, icon is an identifier icon string from material design (google) icons, steps is an array of objects that define the tutorial, for more info see [how are steps defined](https://github.com/xbsoftware/enjoyhint).
-- `appendToMainMenu(title, titleHtml, html, id, pluginId)` - both this and following two functions below allow for insertion of `HTML` into the Main Panel
-- `appendToMainMenuRaw(html, id, pluginId)` - if you need more freedom, we recommend using one of the other two functions
-- `appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId)`
-    - `title`: plugin title to display
-    - `titleHtml`: html to append after title
-    - `html`: body of the plugin control panel, always visible
-    - `hiddenHtml`: body of the plugin control panel, visible on hover onlyor when pinned
-    - `id`: id that is given to the outer container, see *Hints* below for example 
-    - `pluginId`: id of your plugin (i.e `this.id` variable within your plugin)
-- `addHtml(html, pluginId, selector="body")` - append custom `html` to a jQuery `selector`, providing an `pluginId` your plugin ID for safe removal, the html must have `containerId` id container, common root for all the provided html 
-
-- `postData` - JSON variant of `PHP`'s `$_POST` variable, data sent inside a `POST` request
-- `addPostExport(name, callback, pluginId)` - when the visualisation is being exported, append the output `string` value of `callback` (should not contain `'` character) into `POST` data with name `name` (should be unique)
-    - e.g. if you want to find `myValue` in `postData`, register: `UTILITIES.addPostExport("myValue", this.valueCallback.bind(this));` where we bind this to the callback so that it can access our plugin instance using `this`
-- `each` - object of **plugin id** to other **plugin data** mapping, contains all available plugins (even those not loaded)
-    - if a plugin is loaded, you will find the plugin instance under `PLUGIN.each["pluginId"].instance`
-    - there are all variables from plugin's `include.json` file
-    - `loaded` indicate whether the plugin was loaded
-- `setDirty()` that makes the application to prevent from accidental closing, unless it ahs been exported
-
-### Available functionality (hard-wired modules)
+### Third-party (hard-wired modules)
 You can use
  - [jQuery](https://jquery.com/), 
- - [OpenSeadragon](https://openseadragon.github.io/docs/) utilities (working with points etc.), 
  - [Material design icons](https://fonts.google.com/icons?selected=Material+Icons)
  for icons (use `<span>`) and 
  - [Primer CSS bootstrap](https://primer.style/css).
+ 
+### `includes` property
+In fact, the plugin can either specify a string value to indicate local file, 
+or an object to specify a file on the web. The object properties (almost) map to
+ supported attributes of `<script>` element. In case you will attach a file, 
+ make sure you also set `integrity` property.
+````json
+{
+    "id": "plugin_id",
+    "includes" : [
+        {
+            "src": "https://host.xy/file.js",
+            "integrity": "hashofthefilesothatitsintegrityisverified",
+            "crossorigin": "anonymous"
+        }
+    ]
+}
+```` 
+  
  
 ### Hints
 If you have a panel registered under your ID, you can use `loading` class to show a loading spinner
@@ -114,19 +130,21 @@ If you have a panel registered under your ID, you can use `loading` class to sho
 appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
 $(`#${id}`).addClass("loading");
 ````
----
-It is a good idea to perform most of the initialization bussiness logic in `pluginReady()` function, rather than constructor.
-Use the constructor to initialize your objects, add your UI to the main panel etc.
+And remove it after you are done. In fact, do not be shy and open `assets/custom.css`
+file to see pre-defined classes for uniform UI (button hovering, error message containers and more).  
+
 ---
 Use 
 ````JavaScript
 let html = `<button class="btn" onclick="${this.id}.myPluginRootClassMethod();">Click me</button>`;
 ````
 to call your plugin's methods from the UI. Alternatively, fetch your element by it's ID and add
-the event programmatically. `this.id` should be set (by the API design) to your plugin ID, as registered in
-the `include.json` file.
+the event programmatically. `this.id` should be set (automatically) to your plugin ID, as called
+with: `addPlugin(...)`.
 
 ### Styling with CSS
-If you want to use CSS, please, first rely on _Primer CSS_ bootstrap (https://primer.style/css) using class styling. 
-If you need your own CSS file anyway, you can create in your plugin root directory `style.css` - this file will be
+If you want to use CSS, please, first rely on _Primer CSS_ bootstrap (https://primer.style/css) using class styling
+and `assets/custom.css` pre-defined classes. 
+
+If you need your own CSS file anyway, you can create in your plugin root directory file `style.css` - it will be
 automatically included.

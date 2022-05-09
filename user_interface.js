@@ -790,11 +790,13 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         }
         return html;
     }
-    function loadVega(initialized) {
+    function loadVega(initialized=false) {
         for (let id in vegaInit) {
             let object = vegaInit[id];
             if (object.view) continue;
-            if (!initialized) {
+            if (!window.vega || !window.vega.View) {
+                if (initialized) throw "Could not load vega: ignoring vega components.";
+
                 UTILITIES.loadModules(function() {
                     loadVega(true);
                 }, 'vega');
@@ -806,8 +808,8 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         }
     }
     function buildMetaDataMenu(ctx) {
-        for (let key in APPLICATION_CONTEXT.setup.metadata) {
-            let data = APPLICATION_CONTEXT.setup.metadata[key];
+        for (let key in APPLICATION_CONTEXT.setup.dataPage) {
+            let data = APPLICATION_CONTEXT.setup.dataPage[key];
             let html = [];
 
             for (let element of (data.page || [])) {
@@ -815,8 +817,8 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
             }
 
             ctx._buildMenu(metaContext, "__selfMenu", "__meta", "Data", APPLICATION_CONTEXT.metaMenuId,
-                key, data.title || key,  html.join(""), '', true, true);
+                key + "-menu-data-page", data.title || key,  html.join(""), '', true, true);
         }
-        loadVega(false);
+        loadVega();
     }
 })(window);

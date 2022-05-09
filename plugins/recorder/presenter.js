@@ -2,6 +2,8 @@ class Presenter {
     constructor(id, params) {
         this.id = id;
         this._toolsMenuId = "presenter-tools-menu";
+
+        this.playOnEnter = params.playEnterDelay ?? -1;
     }
 
     pluginReady() {
@@ -9,7 +11,7 @@ class Presenter {
 
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
     <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
-    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span><a style="display:none;" id="export-recording"></a>`, `
+    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
 ${UIComponents.Elements.checkBox({
             label: "Capture visualization",
             onchange: this.id + ".snapshots.captureVisualization = this.checked && this.checked !== 'false';",
@@ -66,7 +68,6 @@ ${UIComponents.Elements.checkBox({
         //todo create event fired during instantiation possibly --> now hotfix add them here
         for (let step of this.snapshots._steps) {
             _this._addUIStepFrom(step);
-            console.log(step);
         }
 
         VIEWER.addHandler('keydown', function(e) {
@@ -78,6 +79,12 @@ ${UIComponents.Elements.checkBox({
             }
             //}
         });
+
+        if (Number.isInteger(this.playOnEnter) && this.playOnEnter >= 0) {
+            setTimeout(function() {
+                _this.snapshots.playFromIndex(0);
+            }, this.playOnEnter);
+        }
     }
 
     addRecord() {
@@ -115,13 +122,7 @@ ${UIComponents.Elements.checkBox({
     }
 
     export() {
-        let output = new Blob([this.snapshots.exportJSON()], { type: 'text/plain' });
-        let downloadURL = window.URL.createObjectURL(output);
-        var downloader = document.getElementById("export-recording");
-        downloader.href = downloadURL;
-        downloader.download = "visualisation-recording.json";
-        downloader.click();
-        URL.revokeObjectURL(downloadURL);
+        UTILITIES.downloadAsFile("visualisation-recording.json", this.snapshots.exportJSON());
     }
 
     import(event) {
@@ -172,4 +173,4 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
     }
 }
 
-addPlugin("automatic_presentation", Presenter);
+addPlugin("recorder", Presenter);

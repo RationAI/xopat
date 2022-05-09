@@ -117,6 +117,19 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         return seaGL.urlMaker;
     };
 
+    seaGL._onload = function(firstLayerWorldIndex) {
+        let layerWorldItem = VIEWER.world.getItemAt(firstLayerWorldIndex);
+        if (layerWorldItem) {
+            let activeVis = seaGL.visualization();
+            if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless && layerWorldItem.source.setFormat) {
+                layerWorldItem.source.setFormat("png");
+            }
+            layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+        }
+        seaGL.addLayer(firstLayerWorldIndex);
+        seaGL.initAfterOpen();
+    };
+
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
@@ -227,10 +240,10 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
     UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
         if (self.checked) {
-            seaGL.visualization().shaders[layerId].visible = 1;
+            seaGL.visualization().shaders[layerId].visible = true;
             self.parentNode.parentNode.classList.remove("shader-part-error");
         } else {
-            seaGL.visualization().shaders[layerId].visible = 0;
+            seaGL.visualization().shaders[layerId].visible = false;
             self.parentNode.parentNode.classList.add("shader-part-error");
         }
         seaGL.reorder(null);
@@ -330,8 +343,6 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         let modeChange = fixed ? "" : `<span class="material-icons btn-pointer"
 id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "mask" ? "" : "color: var(--color-icon-tertiary);"}"
 onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
-
-        wasErrorWhenLoading = wasErrorWhenLoading || layer.missingDataSources;
 
         let availableShaders = "";
         for (let available of WebGLModule.ShaderMediator.availableShaders()) {

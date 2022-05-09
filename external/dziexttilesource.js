@@ -355,14 +355,12 @@ function configureFromXML( tileSource, xmlDoc ){
  */
 function configureFromObject( tileSource, configuration ){
     var firstImage    = configuration.ImageArray[0],
-        tilesUrl      = firstImage.Url,
         fileFormat    = firstImage.Format,
-        sizeData      = firstImage.Size,
         dispRectData  = configuration.DisplayRect || [],
-        width         = parseInt( sizeData.Width, 10 ),
-        height        = parseInt( sizeData.Height, 10 ),
-        tileSize      = parseInt( firstImage.TileSize, 10 ),
-        tileOverlap   = parseInt( firstImage.Overlap, 10 ),
+        width         = Infinity,
+        height        = Infinity,
+        tileSize      = undefined,
+        tileOverlap   = undefined,
         displayRects  = [],
         rectData,
         i;
@@ -370,38 +368,32 @@ function configureFromObject( tileSource, configuration ){
     for (let image of configuration.ImageArray) {
         let imageWidth = parseInt( image.Size.Width, 10 ),
             imageHeight = parseInt( image.Size.Height, 10 ),
-            imageTileSize = parseInt( firstImage.TileSize, 10 ),
-            imageTileOverlap = parseInt( firstImage.Overlap, 10 );
+            imageTileSize = parseInt( image.TileSize, 10 ),
+            imageTileOverlap = parseInt( image.Overlap, 10 );
 
-        if (imageTileSize !== tileSize) {
-            image.error = "Incompatible images: the rendering might contain artifacts.";
-        }
-
-        if (imageTileOverlap !== tileOverlap) {
-            image.error = "Incompatible images: the rendering might contain artifacts.";
-        }
-
-        if (imageWidth <= 0 || imageHeight <= 0) {
+        if (imageWidth < 1 || imageHeight < 1) {
             image.error = "Missing image data.";
-        } else if (imageWidth < width || imageHeight < height) {
+            continue;
+        }
+
+        if (tileSize === undefined) {
+            tileSize = imageTileSize;
+        }
+
+        if (tileOverlap === undefined) {
+            tileOverlap = imageTileOverlap;
+        }
+
+        if (imageTileSize !== tileSize || imageTileOverlap !== tileOverlap) {
+            image.error = "Incompatible layer: the rendering might contain artifacts.";
+        }
+
+        if (imageWidth < width || imageHeight < height) {
             //todo possibly experiment with taking maximum
             width = imageWidth;
             height = imageHeight;
         }
     }
-
-    //TODO: need to figure out out to better handle image format compatibility
-    //      which actually includes additional file formats like xml and pdf
-    //      and plain text for various tilesource implementations to avoid low
-    //      level errors.
-    //
-    //      For now, just don't perform the check.
-    //
-    /*if ( !imageFormatSupported( fileFormat ) ) {
-        throw new Error(
-            $.getString( "Errors.ImageFormat", fileFormat.toUpperCase() )
-        );
-    }*/
 
     for ( i = 0; i < dispRectData.length; i++ ) {
         rectData = dispRectData[ i ].Rect;
@@ -423,7 +415,6 @@ function configureFromObject( tileSource, configuration ){
         tileOverlap: tileOverlap, /* tileOverlap *required */
         minLevel: null, /* minLevel */
         maxLevel: null, /* maxLevel */
-        tilesUrl: tilesUrl, /* tilesUrl */
         fileFormat: fileFormat, /* fileFormat */
         imageArray: configuration.ImageArray,
         displayRects: displayRects /* displayRects */
