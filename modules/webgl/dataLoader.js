@@ -7,12 +7,23 @@
  */
 WebGLModule.DataLoader = {
     /**
+     * In case the system is fed by anything but 'Image' data object,
+     * implement here conversion so that debug mode can draw it.
+     * @param {*} data
+     * @return {Image}
+     */
+    dataToImage: function (data) {
+        return data;
+    },
+
+    /**
      * Data loader for WebGL 1.0. Must load the data based on dataIndexMapping:
      *  for (first) texture at index 0, obtain its global index at dataIndexMapping[0]
      *  use the global index to localize the texture chunk in the data
      *  use the local index to get the texture name the chunk must be loaded to.
      *
      * For details, please, see the implementation.
+     * @type WebGLModule.DataLoader.V1_0
      */
     V1_0: class {
         /**
@@ -48,7 +59,7 @@ WebGLModule.DataLoader = {
          * Called when tile is processed
          * @param {WebGLModule} context
          * @param {array} dataIndexMapping mapping of array indices to data indices, e.g. texture 0 for
-         *   this shader corresponds to index dataIndexMapping[0] in the data array
+         *   this shader corresponds to index dataIndexMapping[0] in the data array, -1 value used for textures not loaded
          * @param {object} visualisation reference to the current active visualisation object
          * @param {*} data data object, must contain all the data listed in WebGLModule.prototype.getSources() in
          *   the respective order, dataIndexMapping then points with index to this data; by default an Image object
@@ -131,6 +142,7 @@ WebGLModule.DataLoader = {
      * the z-stacking is defined in dataIndexMapping.
      *
      * For details, please, see the implementation.
+     * @type WebGLModule.DataLoader.V2_0
      */
     V2_0: class {
         /**
@@ -160,7 +172,7 @@ WebGLModule.DataLoader = {
          * Called when tile is processed
          * @param {WebGLModule} context context renderer reference
          * @param {array} dataIndexMapping mapping of array indices to data indices, e.g. texture 0 for
-         *   this shader corresponds to index dataIndexMapping[0] in the data array
+         *   this shader corresponds to index dataIndexMapping[0] in the data array, -1 value used for textures not loaded
          * @param {object} visualisation reference to the current active visualisation object
          * @param {*} data data object, must contain all the data listed in WebGLModule.prototype.getSources() in
          *   the respective order, dataIndexMapping then points with index to this data; by default an Image object
@@ -173,13 +185,13 @@ WebGLModule.DataLoader = {
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             const NUM_IMAGES = Math.round(data.height / tileBounds.height);
 
-            //todo starts with -1 -> bug
-            // if (NUM_IMAGES < dataIndexMapping.length) {
+            // Texture checking disabled due to performance reasons
+            // if (NUM_IMAGES < dataIndexMapping.reduce((sum, val, _i, _a) => sum + (val >= 0 ? 1 : 0), 0).length) {
             //     console.warn("Incoming data does not contain necessary number of images!", NUM_IMAGES, dataIndexMapping);
             // }
 
             //Just load the texture since it comes as an Image element concatenated below each other
-            //in the correct order --> directly loadable to GPU
+            //in the correct order --> directly to GPU
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, this.filter);

@@ -1,24 +1,47 @@
+/**
+ * Shader sharing point
+ * @type {WebGLModule.ShaderMediator}
+ */
 WebGLModule.ShaderMediator = class {
 
     static _layers = {};
 
+    /**
+     * Register shader
+     * @param {function} LayerRendererClass class extends WebGLModule.VisualisationLayer
+     */
     static registerLayer(LayerRendererClass) {
-        if (WebGLModule.ShaderMediator._layers.hasOwnProperty(LayerRendererClass.type())) {
+        if (this._layers.hasOwnProperty(LayerRendererClass.type())) {
             console.warn("Registering an already existing layer renderer:", LayerRendererClass.type());
         }
-        WebGLModule.ShaderMediator._layers[LayerRendererClass.type()] = LayerRendererClass;
+        if (!WebGLModule.VisualisationLayer.isPrototypeOf(LayerRendererClass)) {
+            throw `${LayerRendererClass} does not inherit from VisualisationLayer!`;
+        }
+        this._layers[LayerRendererClass.type()] = LayerRendererClass;
     }
 
+    /**
+     * Get the shader class by type id
+     * @param {string} id
+     * @return {function} class extends WebGLModule.VisualisationLayer
+     */
     static getClass(id) {
-        return WebGLModule.ShaderMediator._layers[id];
+        return this._layers[id];
     }
 
+    /**
+     * Get all available shaders
+     * @return {function[]} classes that extend WebGLModule.VisualisationLayer
+     */
     static availableShaders() {
-        return Object.values(WebGLModule.ShaderMediator._layers);
+        return Object.values(this._layers);
     }
 };
 
-
+/**
+ * Abstract interface to any Shader
+ * @type {WebGLModule.VisualisationLayer}
+ */
 WebGLModule.VisualisationLayer = class {
 
     /**
@@ -58,15 +81,16 @@ WebGLModule.VisualisationLayer = class {
                required: {type: <> ...} [OPTIONAL]
      *     }, ...
      * }
+     * @member {object}
      */
     static defaultControls = {};
 
     /**
      * Global supported options
-     * @param id unique ID among all webgl instances and shaders
-     * @param options
+     * @param {string} id unique ID among all webgl instances and shaders
+     * @param {object} options
      *  options.channel: "r", "g" or "b" channel to sample, default "r"
-     * @param privateOptions options that should not be touched, necessary for linking the layer to the core
+     * @param {object} privateOptions options that should not be touched, necessary for linking the layer to the core
      */
     constructor(id, options, privateOptions) {
         this.uid = id;
@@ -94,6 +118,7 @@ WebGLModule.VisualisationLayer = class {
      *  DO NOT SAMPLE TEXTURE MANUALLY: use
      *  this.sample(...) or this.sampleChannel(...) to generate the code
      *
+     * @return {string}
      */
     getFragmentShaderDefinition() {
         let controls = this.constructor.defaultControls,
@@ -116,6 +141,7 @@ WebGLModule.VisualisationLayer = class {
      *  DO NOT SAMPLE TEXTURE MANUALLY: use
      *  this.sample(...) or this.sampleChannel(...) to generate the code
      *
+     * @return {string}
      */
     getFragmentShaderExecution() {
         throw "This function must be implemented!";
@@ -123,9 +149,11 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Called when an image is rendered
-     * @param program WebglProgram instance
-     * @param dimension canvas dimension {width, height}
-     * @param gl WebGL Context
+     * @param {WebGLProgram} program WebglProgram instance
+     * @param {object} dimension canvas dimension {width, height}
+     * @param {number} dimension.width
+     * @param {number} dimension.height
+     * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
      */
     glDrawing(program, dimension, gl) {
         let controls = this.constructor.defaultControls,
@@ -139,8 +167,8 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Called when associated webgl program is switched to
-     * @param program WebglProgram instance
-     * @param gl WebGL Context
+     * @param {WebGLProgram} program WebglProgram instance
+     * @param {WebGLRenderingContext|WebGL2RenderingContext} gl WebGL Context
      */
     glLoaded(program, gl) {
         let controls = this.constructor.defaultControls,
@@ -167,16 +195,6 @@ WebGLModule.VisualisationLayer = class {
         }
     }
 
-    clearUiCallbacks() {
-        let controls = this.constructor.defaultControls,
-            html = [];
-        for (let control in controls) {
-            if (this.hasOwnProperty(control)) {
-                this[control].init();
-            }
-        }
-    }
-
     /**
      * Get the shader UI controls
      * @return {string} HTML controls for the particular shader
@@ -192,10 +210,8 @@ WebGLModule.VisualisationLayer = class {
         return html.join("");
     }
 
-    ////////////////////////////////////
-    ////////// AVAILABLE API ///////////
-    ////////////////////////////////////
-
+    /************************** FILTERING ****************************/
+    //not really modular
     //add your filters here if you want... function that takes parameter (number)
     //and returns prefix and suffix to compute oneliner filter
     //should start as 'use_[name]' for namespace collision avoidance (params object)
@@ -203,20 +219,28 @@ WebGLModule.VisualisationLayer = class {
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
     //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
     static filters = {
-        use_gamma: (x) => ["exp(log(", `) / ${this.toShaderFloatString(x, "1.0")})`],
-        use_exposure: (x) => ["(1.0 - exp(-(", `)* ${this.toShaderFloatString(x, "1.0")}))`],
+        use_gamma: (x) => ["exp(log(", `) / ${this.toShaderFloatString(x, 1)})`],
+        use_exposure: (x) => ["(1.0 - exp(-(", `)* ${this.toShaderFloatString(x, 1)}))`],
         use_logscale: (x) => {
-            x = this.toShaderFloatString(x, "1.0");
+            x = this.toShaderFloatString(x, 1);
             return [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`]
         }
     };
 
+    /**
+     * Available filters (use_[name])
+     * @type {{use_exposure: string, use_gamma: string, use_logscale: string}}
+     */
     static filterNames = {
         use_gamma: "Gamma",
         use_exposure: "Exposure",
         use_logscale: "Logarithmic scale"
     };
 
+    /**
+     * Available use_mode modes
+     * @type {{show: string, mask: string}}
+     */
     static modes = {
         show: "show",
         mask: "blend"
@@ -226,8 +250,8 @@ WebGLModule.VisualisationLayer = class {
      * Include GLSL shader code on global scope
      * (e.g. define function that is repeatedly used)
      * does not have to use unique ID extended names as this code is included only once
-     * @param key a key under which is the code stored, so that the same key is not loaded twice
-     * @param code code to add to the shader
+     * @param {string} key a key under which is the code stored, so that the same key is not loaded twice
+     * @param {string} code GLSL code to add to the shader
      */
     includeGlobalCode(key, code) {
         let container = this.constructor.__globalIncludes;
@@ -236,6 +260,10 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Parses value to a float string representation with given precision (length after decimal)
+     * @param {number} value value to convert
+     * @param {number} defaultValue default value on failure
+     * @param {number} precisionLen number of decimals
+     * @return {string}
      */
     toShaderFloatString(value, defaultValue, precisionLen=5) {
         return this.constructor.toShaderFloatString(value, defaultValue, precisionLen);
@@ -243,9 +271,13 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Parses value to a float string representation with given precision (length after decimal)
+     * @param {number} value value to convert
+     * @param {number} defaultValue default value on failure
+     * @param {number} precisionLen number of decimals
+     * @return {string}
      */
     static toShaderFloatString(value, defaultValue, precisionLen=5) {
-        if (isNaN(Number.parseInt(precisionLen)) || precisionLen < 0 || precisionLen > 9) {
+        if (!Number.isInteger(precisionLen) || precisionLen < 0 || precisionLen > 9) {
             precisionLen = 5;
         }
         try {
@@ -352,8 +384,8 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Store value, useful for controls value caching
-     * @param name value name
-     * @param value value
+     * @param {string} name value name
+     * @param {*} value value
      */
     storeProperty(name, value) {
         this.__visualisationLayer.cache[this.constructor.type()][name] = value;
@@ -413,7 +445,7 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Set sampling channel
-     * @param options
+     * @param {object} options
      * @param {string} options.use_channel chanel to sample
      */
     resetChannel(options) {
@@ -436,7 +468,7 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Set blending mode
-     * @param options
+     * @param {object} options
      * @param {string} options.use_mode blending mode to use: "show" or "mask"
      */
     resetMode(options) {
@@ -452,7 +484,7 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Can be used to re-set filters for a shader
-     * @param options filters configuration, currently supported are
+     * @param {object} options filters configuration, currently supported are
      *  'use_gamma', 'use_exposure', 'use_logscale'
      */
     resetFilters(options) {
@@ -522,14 +554,14 @@ WebGLModule.UIControls = class {
     /**
      * Get an element used to create simple controls, if you want
      * an implementation of the controls themselves (IControl), use build(...) to instantiate
-     * @param id type of the control
+     * @param {string} id type of the control
      * @return {*}
      */
     static getUiElement(id) {
-        let ctrl = WebGLModule.UIControls._items[id];
+        let ctrl = this._items[id];
         if (!ctrl) {
             console.error("Invalid control: " + id);
-            ctrl = WebGLModule.UIControls._items["number"];
+            ctrl = this._items["number"];
         }
         return ctrl;
     }
@@ -537,14 +569,14 @@ WebGLModule.UIControls = class {
     /**
      * Get an element used to create advanced controls, if you want
      * an implementation of simple controls, use build(...) to instantiate
-     * @param id type of the control
+     * @param {string} id type of the control
      * @return {WebGLModule.UIControls.IControl}
      */
     static getUiClass(id) {
-        let ctrl = WebGLModule.UIControls._impls[id];
+        let ctrl = this._impls[id];
         if (!ctrl) {
             console.error("Invalid control: " + id);
-            ctrl = WebGLModule.UIControls._impls["colormap"];
+            ctrl = this._impls["colormap"];
         }
         return ctrl;
     }

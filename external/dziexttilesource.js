@@ -1,3 +1,5 @@
+// noinspection JSUnresolvedVariable
+
 /*
  * OpenSeadragon - ExtendedDziTileSource
  *
@@ -39,17 +41,9 @@
  * @class ExtendedDziTileSource
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
- * @param {Number|Object} width - the pixel width of the image or the idiomatic
- *      options object which is used instead of positional arguments.
- * @param {Number} height
- * @param {Number} tileSize
- * @param {Number} tileOverlap
- * @param {String} tilesUrl
- * @param {String} fileFormat
- * @param {OpenSeadragon.DisplayRect[]} displayRects
+ * @param {object} options configuration, output object of configureFromObject()
  * @property {String} tilesUrl
  * @property {String} fileFormat
- * @property {OpenSeadragon.DisplayRect[]} displayRects
  */
 $.ExtendedDziTileSource = function( options ) {
     var i,
@@ -84,15 +78,14 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     /**
      * Determine if the data and/or url imply the image service is supported by
      * this tile source.
-     * @function
      * @param {Object|Array} data
-     * @param {String} optional - url
+     * @param {String} url
      */
     supports: function( data, url ){
         var ns;
-        if ( data.Image ) {
+        if ( data.ImageArray ) {
             ns = data.Image.xmlns;
-        } else if ( data.documentElement) {
+        } else if ( data.documentElement ) {
             if ("ImageArray" == data.documentElement.localName || "ImageArray" == data.documentElement.tagName) {
                 ns = data.documentElement.namespaceURI;
             }
@@ -132,10 +125,10 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     },
 
     /**
-     * @function
      * @param {Number} level
      * @param {Number} x
      * @param {Number} y
+     * @return {string}
      */
     getTileUrl: function( level, x, y ) {
         return this.postData ? `${this.tilesUrl}${this.queryParams}`
@@ -192,7 +185,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} y
      */
     tileExists: function( level, x, y ) {
-        var rects = this._levelRects[ level ],
+        let rects = this._levelRects[ level ],
             rect,
             scale,
             xMin,
@@ -281,6 +274,7 @@ function configureFromXML( tileSource, xmlDoc ){
                 let height = parseInt( sizeNode.getAttribute( "Height" ), 10 );
 
                 if ( !$.imageFormatSupported( root.getAttribute( "Format" ) ) ) {
+                    // noinspection ExceptionCaughtLocallyJS
                     throw new Error(
                         $.getString( "Errors.ImageFormat", root.getAttribute( "Format" ).toUpperCase() )
                     );
@@ -340,8 +334,9 @@ function configureFromXML( tileSource, xmlDoc ){
     } else if ( rootName == "Collection" ) {
         throw new Error( $.getString( "Errors.Dzc" ) );
     } else if ( rootName == "Error" ) {
-        var messageNode = root.getElementsByTagName("Message")[0];
-        var message = messageNode.firstChild.nodeValue;
+        root = imagesArray.childNodes[0];
+        let messageNode = root.getElementsByTagName("Message")[0];
+        let message = messageNode.firstChild.nodeValue;
         throw new Error(message);
     }
 
@@ -389,7 +384,7 @@ function configureFromObject( tileSource, configuration ){
         }
 
         if (imageWidth < width || imageHeight < height) {
-            //todo possibly experiment with taking maximum
+            //possibly experiment with taking maximum
             width = imageWidth;
             height = imageHeight;
         }

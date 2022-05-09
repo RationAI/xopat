@@ -91,8 +91,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		const _this = this;
 
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
-		this.context.addHandler('mode-from-auto', this.annotationModeChanged);
-		this.context.addHandler('mode-to-auto', this.annotationModeChanged);
+		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 
 		// this.context.forEachLayerSorted(l => {
@@ -251,8 +250,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	freeFormToolControls() {
 		return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush (scroll to change).">Brush radius:</span>
 <input class="form-control" title="Size of a brush (scroll to change)." type="number" min="5" max="100" 
-step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.modifyTool.screenRadius}"
-style="height: 22px; width: 60px;" onchange="${this.id}.context.modifyTool.setSafeRadius(Number.parseInt(this.value));">`;
+step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.freeFormTool.screenRadius}"
+style="height: 22px; width: 60px;" onchange="${this.id}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">`;
 	}
 
 	/******************** LAYERS ***********************/

@@ -1,26 +1,5 @@
 OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
-    static __self = undefined;
-
-    constructor(viewer) {
-        super();
-        if (this.constructor.__self) {
-            throw "Snaphots are not instantiable. Instead, use OpenSeadragon.Snapshots::instance().";
-        }
-
-        this.id = "snaphots";
-        this.viewer = viewer;
-        this.constructor.__self = this;
-
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
-        this._init();
-        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
-
-        this.captureVisualization = false;
-    }
-
     /**
      * Singleton getter.
      * @return {OpenSeadragon.Snapshots}
@@ -32,6 +11,12 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         return new OpenSeadragon.Snapshots(VIEWER);
     }
 
+    /**
+     * Create a snapshot
+     * @param {number} delay delay before the current snapshot is run when played, in seconds
+     * @param {number} duration transition duration, in seconds
+     * @param {number} transition transition style, 1 - linear; >1 - ease-out default 1.6
+     */
     create(delay=0, duration=0.5, transition=1.6) {
         if (this._playing) {
             return;
@@ -44,6 +29,148 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             duration: duration,
             transition: transition,
             visualization: this._getVisualizationSnapshot()
+        });
+    }
+
+    /**
+     * Delete snapshot
+     * @param {number} index optional, deleted current if unspecified
+     */
+    remove(index=undefined) {
+        index = index ?? this._idx;
+
+        let step = this._steps[index];
+        this._steps.splice(index, 1);
+        this._idx = this._idx % this._steps.length;
+        this.raiseEvent("remove", {
+            index: index,
+            step: step
+        });
+    }
+
+    /**
+     * Get number of snapshots
+     * @return {number}
+     */
+    get snapshotCount() {
+        return this._steps.length;
+    }
+
+    /**
+     * Get current step/snapshot
+     * @return {object} current step with its data
+     */
+    get currentStep() {
+        return this._steps[this._idx];
+    }
+
+    /**
+     * Get current step/snapshot index
+     * @return {number}
+     */
+    get currentStepIndex() {
+        return this._idx;
+    }
+
+    /**
+     * Check whether playback is running
+     * @return {boolean} true if playing
+     */
+    get playing() {
+        return this._playing;
+    }
+
+    /**
+     * Play the sequence. Does nothing when already playing.
+     */
+    play() {
+        if (this._playing) return;
+        if (this._idx >= this._steps.length) {
+            this._idx = this._steps.length-1;
+        }
+        this.raiseEvent("play");
+        this._playStep(this._idx);
+        this._playing = true;
+    }
+
+    /**
+     * Play from index.
+     * @param {number} index to start from snapshot
+     */
+    playFromIndex(index) {
+        if (this._playing) {
+            return;
+        }
+        this._idx = index;
+        this.play();
+    }
+
+    /**
+     * Stop current playback.
+     */
+    stop() {
+        if (!this._playing) return;
+
+        if (this._currentStep) {
+            this._currentStep.cancel();
+            this._currentStep = null;
+        }
+
+        this._playing = false;
+        this.raiseEvent("stop");
+    }
+
+    /**
+     * Toggle capturing of the current visualization
+     * todo debug
+     * @param {boolean} value
+     */
+    set captureVisualization(value) {
+        this._captureVisualization = value && this.viewer.hasOwnProperty("bridge");
+    }
+
+    exportJSON() {
+        return JSON.stringify(this._steps);
+    }
+
+    importJSON(json) {
+        this._idx = 0;
+        this._steps = [];
+        this._currentStep = null;
+        for (let i = 0; i < json.length; i++) {
+            if (!json[i]) continue;
+            //recreate 'classes'
+            json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
+            this._add(json[i]);
+        }
+    }
+
+    _playStep(index) {
+        while (this._steps.length > index && !this._steps[index]) {
+            index++;
+        }
+
+        if (this._steps.length <= index) {
+            this._currentStep = null;
+            this.stop();
+            return;
+        }
+
+        let prevIdx = index > 0 ? index-1 : 0;
+        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
+        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
+
+        this.raiseEvent("before-enter", {
+            index: index,
+            step: this._currentStep
+        });
+
+        const _this = this;
+        this._currentStep.promise.then(atIndex => {
+            _this._jumpAt(atIndex);
+            _this._idx  = atIndex + 1;
+            _this._playStep(_this._idx);
         });
     }
 
@@ -62,38 +189,6 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             cache: shadersCache,
             order: [...vis.order],
             screenshot: this._utils.screenshot(true, {width: 120, height: 120})
-        }
-    }
-
-    remove(index=undefined) {
-        index = index ?? this._idx;
-
-        let step = this._steps[index];
-        this._steps.splice(index, 1);
-        this._idx = this._idx % this._steps.length;
-        this.raiseEvent("remove", {
-            index: index,
-            step: step
-        });
-    }
-
-    set captureVisualization(value) {
-        this._captureVisualization = value && this.viewer.hasOwnProperty("bridge");
-    }
-
-    exportJSON() {
-        return JSON.stringify(this._steps);
-    }
-
-    importJSON(json) {
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
-        for (let i = 0; i < json.length; i++) {
-            if (!json[i]) continue;
-            //recreate 'classes'
-            json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
-            this._add(json[i]);
         }
     }
 
@@ -219,78 +314,29 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         return true;
     }
 
-    get snapshotCount() {
-        return this._steps.length;
-    }
 
-    get currentStep() {
-        return this._steps[this._idx];
-    }
+    static __self = undefined;
 
-    get currentStepIndex() {
-        return this._idx;
-    }
-
-    get playing() {
-        return this._playing;
-    }
-
-    play() {
-        if (this._playing) return;
-        if (this._idx >= this._steps.length) {
-            this._idx = this._steps.length-1;
-        }
-        this.raiseEvent("play");
-        this.playStep(this._idx);
-        this._playing = true;
-    }
-
-    playFromIndex(index) {
-        if (this._playing) {
-            return;
-        }
-        this._idx = index;
-        this.play();
-    }
-
-    playStep(index) {
-        while (this._steps.length > index && !this._steps[index]) {
-            index++;
+    /**
+     * @private
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    constructor(viewer) {
+        super();
+        if (this.constructor.__self) {
+            throw "Snaphots are not instantiable. Instead, use OpenSeadragon.Snapshots::instance().";
         }
 
-        if (this._steps.length <= index) {
-            this._currentStep = null;
-            this.stop();
-            return;
-        }
+        this.id = "snaphots";
+        this.viewer = viewer;
+        this.constructor.__self = this;
 
-        let prevIdx = index > 0 ? index-1 : 0;
-        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
-        let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
-        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
+        this._idx = 0;
+        this._steps = [];
+        this._currentStep = null;
+        this._init();
+        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
 
-        this.raiseEvent("before-enter", {
-            index: index,
-            step: this._currentStep
-        });
-
-        const _this = this;
-        this._currentStep.promise.then(atIndex => {
-            _this._jumpAt(atIndex);
-            _this._idx  = atIndex + 1;
-            _this.playStep(_this._idx);
-        });
-    }
-
-    stop() {
-        if (!this._playing) return;
-
-        if (this._currentStep) {
-            this._currentStep.cancel();
-            this._currentStep = null;
-        }
-
-        this._playing = false;
-        this.raiseEvent("stop");
+        this.captureVisualization = false;
     }
 };

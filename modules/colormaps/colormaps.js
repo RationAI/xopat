@@ -5,8 +5,7 @@
  *
  * Some ColorSchemes are taken from Matlab
  *
- * TODO include our own color schemes [yellow + tyrkys]
- * TODO exclude usseles schemes
+ * TODO exclude usseles schemes, include our own color schemes [yellow + tyrkys]
  */
 ColorMaps = {
     defaults: {

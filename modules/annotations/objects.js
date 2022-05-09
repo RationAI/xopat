@@ -1,3 +1,5 @@
+// noinspection JSUnresolvedVariable
+
 OSDAnnotations.Preset = class {
     /**
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
@@ -108,7 +110,7 @@ OSDAnnotations.PresetManager = class {
     /**
      * Get data to set as annotation properties (look, metadata...)
      * @param {boolean} isLeftClick true if the data should be with preset data bound to the left mouse button
-     * @returns {Object} data to populate fabric object with (parameter 'options'
+     * @returns {object} data to populate fabric object with (parameter 'options'
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
@@ -128,11 +130,13 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Add new preset with default values
+     * @event preset-create
      * @returns {Preset} newly created preset
      */
     addPreset() {
         let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
         this._presets[preset.presetID] = preset;
+        this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
     }
 
@@ -145,7 +149,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Presets getter
-     * @param {Number} id preset id
+     * @param {number} id preset id
      * @returns {Preset} preset instance
      */
     get(id) {
@@ -154,7 +158,8 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Safely remove preset
-     * @param {Number} id preset id
+     * @event preset-delete
+     * @param {number} id preset id
      * @returns deleted preset or false if deletion failed
      */
     removePreset(id) {
@@ -168,15 +173,16 @@ OSDAnnotations.PresetManager = class {
                 8000, Dialogs.MSG_WARN);
             return undefined;
         }
-
         delete this._presets[id];
+        this._context.raiseEvent('preset-delete', {preset: toDelete});
         return toDelete;
     }
 
     /**
-     *
-     * @param {Number} id preset id
-     * @param {Object} properties to update in the preset (keys must match)
+     * Update preset properties
+     * @event preset-update
+     * @param {number} id preset id
+     * @param {object} properties to update in the preset (keys must match)
      * @return updated preset in case any value changed, false otherwise
      */
     updatePreset(id, properties) {
@@ -199,9 +205,18 @@ OSDAnnotations.PresetManager = class {
                 }
             }
         }
+        if (needsRefresh) this._context.raiseEvent('preset-update', {preset: preset});
         return needsRefresh ? preset : undefined;
     }
 
+    /**
+     * Add new metadata field to preset
+     * @event preset-meta-add
+     * @param {string} id preset id
+     * @param {string} name new meta field name
+     * @param {string} value default value
+     * @return {string} the new meta id
+     */
     addCustomMeta(id, name, value) {
         let preset = this._presets[id];
         let key = "k"+Date.now();
@@ -209,18 +224,30 @@ OSDAnnotations.PresetManager = class {
             name: name,
             value: value
         };
+        this._context.raiseEvent('preset-meta-add', {preset: preset});
         return key;
     }
 
+    /**
+     * Add new metadata field to preset
+     * @event preset-meta-remove
+     * @param {string} id preset id
+     * @param {string} key meta key
+     */
     deleteCustomMeta(id, key) {
         let preset = this._presets[id];
         if (preset && preset.meta[key]) {
             delete preset.meta[key];
             return true;
         }
+        this._context.raiseEvent('preset-meta-remove', {preset: preset});
         return false;
     }
 
+    /**
+     * Iterate call for each preset
+     * @param {function} call
+     */
     foreach(call) {
         for (let id in this._presets) {
             if (!this._presets.hasOwnProperty(id)) continue;
@@ -253,7 +280,7 @@ OSDAnnotations.PresetManager = class {
     /**
      * Import presets
      * @param {string|object} presets JSON to decode
-     * @param {Boolean} overwrite true if existing presets should be replaced upon ID match
+     * @param {boolean} overwrite true if existing presets should be replaced upon ID match
      * @return {OSDAnnotations.Preset|undefined} preset
      */
     import(presets, overwrite=false) {
@@ -313,6 +340,10 @@ OSDAnnotations.PresetManager = class {
     }
 };
 
+/**
+ * A bit new feature, not really used (still)
+ * @type {OSDAnnotations.Layer}
+ */
 OSDAnnotations.Layer = class {
 
     /**
@@ -331,13 +362,22 @@ OSDAnnotations.Layer = class {
         this.position++;
     }
 
+    /**
+     * Set elements of this layer selectable/active
+     * not optimal if called for each layer
+     * @param {boolean} active
+     */
     setActive(active) {
         this.iterate((self, object) => object.selectable = active);
     }
 
+    /**
+     * Iterate over all object of this layer
+     * @param {function} callback
+     */
     iterate(callback) {
         const _this = this;
-        this._context.canvasObjects().forEach(o => {
+        this._context.canvas.getObjects().forEach(o => {
             if (o.layerId === _this.id) callback(_this, o);
         });
     }
@@ -385,7 +425,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Get icon for the object
-     * @param ofObject object to describe
+     * @param {fabric.Object} ofObject object to describe
      * @returns {string} pluggable to current icon system (see https://fonts.google.com/icons?selected=Material+Icons)
      */
     getDescription(ofObject) {
@@ -403,7 +443,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Create an annotation object from given parameters, used mostly privately
      * @param {*} parameters geometry, depends on the object type
-     * @param {Object} options FbaricJS and custom options to set
+     * @param {object} options FbaricJS and custom options to set
      * @returns
      */
     create(parameters, options) {
@@ -412,7 +452,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Create copy of an object
-     * @param {Object} ofObject object to copy
+     * @param {fabric.Object} ofObject object to copy
      * @param {*} parameters internal variable, should not be used
      * @returns
      */
@@ -460,14 +500,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Update the object coordinates by user interaction
-     * @param theObject recalculate the object that has been modified
+     * @param {fabric.Object} theObject recalculate the object that has been modified
      */
     edit(theObject) {
     }
 
     /**
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
-     * @param theObject recalculate the object that has been modified
+     * @param {fabric.Object} theObject recalculate the object that has been modified
      */
     recalculate(theObject) {
     }
@@ -483,14 +523,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was enforced by the environment (i.e.
      * performed by the user indirectly).
-     * @return {string} ASAP XML Name
      */
     finishIndirect() {
     }
 
     /**
      * Called when object is selected
-     * @param theObject selected fabricjs object
+     * @param {fabric.Object} theObject selected fabricjs object
      */
     selected(theObject) {
     }
@@ -510,22 +549,28 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Create array of points - approximation of the object shape
-     * @param {Object} obj object that is being approximated
-     * @param {function} converter take two elements and convert and return item
+     * @param {fabric.Object} obj object that is being approximated
+     * @param {function} converter take two elements and convert and return item, see
+     *  withObjectPoint, withArrayPoint
      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
     }
 
+    /**
+     * Strategy convertor, passed to toPointArray method, creates points as objects
+     */
     static withObjectPoint(x, y) {
         return {x: x, y: y};
     }
+    /**
+     * Strategy convertor, passed to toPointArray method, creates points as 2d arrays
+     */
     static withArrayPoint(x, y) {
         return [x, y];
     }
 };
-
 
 OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
@@ -1026,7 +1071,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * Create array of points - approximation of the object shape
-     * @param {fabricjs.Ellipse} obj object that is being approximated
+     * @param {fabric.Ellipse} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item
      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
@@ -1170,14 +1215,14 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _anchorWrapper(anchorIndex, fn) {
         return function(eventData, transform, x, y) {
-            var fabricObject = transform.target,
+            let fabricObject = transform.target,
                 absolutePoint = fabric.util.transformPoint({
                     x: (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x),
                     y: (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y),
                 }, fabricObject.calcTransformMatrix()),
-                actionPerformed = fn(eventData, transform, x, y),
-                newDim = fabricObject._setPositionDimensions({}),
-                polygonBaseSize = fabricObject._getNonTransformedDimensions(),
+                actionPerformed = fn(eventData, transform, x, y);
+            fabricObject._setPositionDimensions({});
+            let polygonBaseSize = fabricObject._getNonTransformedDimensions(),
                 newX = (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x) / polygonBaseSize.x,
                 newY = (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y) / polygonBaseSize.y;
             fabricObject.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
@@ -1207,7 +1252,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         let result = /*await*/ _this._auto.createOutline(screenPoint);
 
         if (!result || result.length < 3) return false;
-        result = _this.simplify(result);
+        result = OSDAnnotations.PolygonUtilities.simplify(result);
         _this._context.addAnnotation(
             _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
         );
@@ -1277,7 +1322,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             dy = last.y - y,
             dx = last.x - x;
 
-        let powRad = this.getRelativePixelDiffDistSquared(10);
+        let powRad = this._getRelativePixelDiffDistSquared(10);
         //startPoint is twice the radius of distance with relativeDiff 10, if smaller
         //the drag could end inside finish zone
         if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)) {
@@ -1289,7 +1334,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         return false;
     }
 
-    // generate finished polygon
     finishIndirect() {
         if (!this._current) return;
 
@@ -1298,14 +1342,14 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         if (this._followPoint) this._context.deleteHelperAnnotation(this._followPoint);
         this._context.deleteHelperAnnotation(this._current);
         if (points.length < 3) {
-            this._initialize(false); //clear
+            this._initialize(false);
             return;
         }
 
-        this._current = this.create(this.simplify(points),
+        this._current = this.create(OSDAnnotations.PolygonUtilities.simplify(points),
             this._presets.getAnnotationOptions(this._current.isLeftClick));
         this._context.addAnnotation(this._current);
-        this._initialize(false); //clear
+        this._initialize(false);
     }
 
     /**
@@ -1317,7 +1361,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     toPointArray(obj, converter, quality=1) {
         let points = obj.get("points");
-        if (quality < 1) points = this.simplifyQuality(points, quality);
+        if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary
         if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
@@ -1349,19 +1393,57 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         }));
     }
 
+    _getRelativePixelDiffDistSquared(relativeDiff) {
+        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
+    }
+};
+
+OSDAnnotations.PolygonUtilities = {
+
+    simplify: function (points, highestQuality = false) {
+        // both algorithms combined for performance, simplifies the object based on zoom level
+        if (points.length <= 2) return points;
+
+        let tolerance = Math.pow(3 / VIEWER.tools.imagePixelSizeOnScreen(), 2);
+        points = highestQuality ? points : this._simplifyRadialDist(points, tolerance);
+        points = this._simplifyDouglasPeucker(points, tolerance);
+
+        return points;
+    },
+
+    simplifyQuality: function (points, quality) {
+        if (points.length <= 2) return points;
+
+        //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
+        let tolerance = Math.pow((10 - 9*quality) / VIEWER.tools.imagePixelSizeOnScreen(), 2);
+        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
+    },
+
+    approximatePolygonArea: function (points) {
+        if (points.length < 3) return { diffX: 0, diffY: 0 };
+        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
+        for (let i = 1; i < points.length; i++) {
+            maxX = Math.max(maxX, points[i].x);
+            maxY = Math.max(maxY, points[i].y);
+            minX = Math.min(minX, points[i].x);
+            minY = Math.min(minY, points[i].y);
+        }
+        return { diffX: maxX - minX, diffY: maxY - minY };
+    },
+
     /**
      * THE FOLLOWING PRIVATE CODE: POLY SIMPLIFICATION CODE HAS BEEN COPIED OUT FROM A LIBRARY
      * (c) 2017, Vladimir Agafonkin
      * Simplify.js, a high-performance JS polyline simplification library
      * mourner.github.io/simplify-js
      */
-    _getSqDist(p1, p2) {
+    _getSqDist: function (p1, p2) {
         let dx = p1.x - p2.x,
             dy = p1.y - p2.y;
         return dx * dx + dy * dy;
-    }
+    },
 
-    _getSqSegDist(p, p1, p2) {
+    _getSqSegDist: function (p, p1, p2) {
         let x = p1.x,
             y = p1.y,
             dx = p2.x - x,
@@ -1379,9 +1461,9 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         dx = p.x - x;
         dy = p.y - y;
         return dx * dx + dy * dy;
-    }
+    },
 
-    _simplifyRadialDist(points, sqTolerance) {
+    _simplifyRadialDist: function (points, sqTolerance) {
 
         let prevPoint = points[0],
             newPoints = [prevPoint],
@@ -1395,13 +1477,11 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
                 prevPoint = point;
             }
         }
-
         if (prevPoint !== point) newPoints.push(point);
-
         return newPoints;
-    }
+    },
 
-    _simplifyDPStep(points, first, last, sqTolerance, simplified) {
+    _simplifyDPStep: function (points, first, last, sqTolerance, simplified) {
         let maxSqDist = sqTolerance,
             index;
 
@@ -1419,10 +1499,9 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             simplified.push(points[index]);
             if (last - index > 1) this._simplifyDPStep(points, index, last, sqTolerance, simplified);
         }
-    }
+    },
 
-    // simplification using Ramer-Douglas-Peucker algorithm
-    _simplifyDouglasPeucker(points, sqTolerance) {
+    _simplifyDouglasPeucker: function (points, sqTolerance) {
         let last = points.length - 1;
 
         let simplified = [points[0]];
@@ -1430,33 +1509,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         simplified.push(points[last]);
 
         return simplified;
-    }
-
-    /**
-     * END
-     */
-
-    getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
-    }
-
-    simplify(points, highestQuality = false) {
-        // both algorithms combined for performance, simplifies the object based on zoom level
-        if (points.length <= 2) return points;
-
-        let tolerance = this.getRelativePixelDiffDistSquared(3);
-        points = highestQuality ? points : this._simplifyRadialDist(points, tolerance);
-        points = this._simplifyDouglasPeucker(points, tolerance);
-
-        return points;
-    }
-
-    simplifyQuality(points, quality) {
-        if (points.length <= 2) return points;
-
-        //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = this.getRelativePixelDiffDistSquared(10 - 9*quality);
-        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
     }
 };
 
@@ -1745,15 +1797,8 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         }
         this._afterAutoMethod();
 
-        if (points.length < 3) return null;
-        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-        for (let i = 1; i < points.length; i++) {
-            maxX = Math.max(maxX, points[i].x);
-            maxY = Math.max(maxY, points[i].y);
-            minX = Math.min(minX, points[i].x);
-            minY = Math.min(minY, points[i].y);
-        }
-        if (maxX - minX < 5*this._currentPixelSize && maxY - minY < 5*this._currentPixelSize) return null;
+        let area = OSDAnnotations.PolygonUtilities.approximatePolygonArea(points);
+        if (area.diffX < 5*this._currentPixelSize && area.diffY < 5*this._currentPixelSize) return null;
         return points;
     }
 

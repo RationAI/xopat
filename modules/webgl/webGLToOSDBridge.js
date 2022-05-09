@@ -190,11 +190,20 @@ OpenSeadragon.BridgeGL = class {
         this.redraw();
     }
 
+    /**
+     * Get current timestamp
+     * @return {number}
+     */
     get timeStamp() {
         if (this._randomDelay < 1) return this._refreshTimeStamp;
         return Math.random() * this._randomDelay + this._refreshTimeStamp;
     }
 
+    /**
+     * Get next timestamp which is guaranteed to be higher than or equal to any
+     * timestamp set to processed entity
+     * @return {number}
+     */
     get highestTimestamp() {
         return this._refreshTimeStamp + this._randomDelay + 10;
     }
@@ -238,13 +247,17 @@ OpenSeadragon.BridgeGL = class {
         return this.webGLEngine.getSources();
     }
 
+    /**
+     * Get active shader index
+     * @return {number}
+     */
     activeShaderIndex() {
         return this.webGLEngine._program;
     }
 
     /**
      * Access to webGL context
-     * @returns webGL context
+     * @returns {WebGLRenderingContext|WebGLRenderingContext} context
      */
     GL() {
         return this.webGLEngine.gl;
@@ -255,7 +268,7 @@ OpenSeadragon.BridgeGL = class {
      * unlike the WebGL's init() can (and should) be called immediately after preparation (loadShaders)
      * - awaits the OSD opening
      *
-     * @param layerLoaded
+     * @param {function} layerLoaded callback on load
      * @return {OpenSeadragon.BridgeGL}
      */
     initBeforeOpen(layerLoaded=()=>{}) {

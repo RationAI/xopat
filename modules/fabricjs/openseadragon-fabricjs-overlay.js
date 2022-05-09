@@ -15,23 +15,21 @@
      *      Fabric 'virtual' canvas size, for creating objects
      **/
     OpenSeadragon.Viewer.prototype.fabricjsOverlay = function(options) {
-        this._fabricjsOverlayInfo = new FabricOverlay(this);
-        this._fabricjsOverlayInfo._scale = options.scale;
-
+        this._fabricjsOverlayInfo = new FabricOverlay(this, options.scale);
         return this._fabricjsOverlayInfo;
     };
 
-    // ----------
     class FabricOverlay {
-        constructor(viewer) {
+        constructor(viewer, scale) {
             var self = this;
             this._viewer = viewer;
+            this._scale = scale;
             this._containerWidth = 0;
             this._containerHeight = 0;
             this._canvasdiv = document.createElement('div');
             this._canvasdiv.style.position = 'absolute';
-            this._canvasdiv.style.left = 0;
-            this._canvasdiv.style.top = 0;
+            this._canvasdiv.style.left = "0";
+            this._canvasdiv.style.top = "0";
             this._canvasdiv.style.width = '100%';
             this._canvasdiv.style.height = '100%';
             this._viewer.canvas.appendChild(this._canvasdiv);
@@ -43,15 +41,6 @@
             this._fabricCanvas = new fabric.Canvas(this._canvas);
             // disable fabric selection because default click is tracked by OSD
             this._fabricCanvas.selection = false;
-
-            // prevent OSD click elements on fabric objects todo event name changed - keep? seems working well without
-            // this._fabricCanvas.on('mouse:down', function (options) {
-            //     if (options.target) {
-            //         options.e.preventDefaultAction = true;
-            //         options.e.preventDefault();
-            //         options.e.stopPropagation();
-            //     }
-            // });
 
             this._viewer.addHandler('update-viewport', function () {
                 self.resize();
@@ -115,5 +104,4 @@
             return i++;
         }
     })();
-
 })();

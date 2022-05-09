@@ -1,6 +1,8 @@
 /**
  * Modular behaviour of the WebGL plugin.
  * provide your OWN rendering behaviour using a GPU.
+ *
+ * @typedef {{glContext: function, webGLImplementation: function}} GlContextMaker
  */
 WebGLModule.GlContextFactory = class {
 
@@ -26,8 +28,8 @@ WebGLModule.GlContextFactory = class {
 
     /**
      * Register custom WebGL renderers
-     * @param version version to register (can override)
-     * @param maker maker object
+     * @param {string} version version to register (can override)
+     * @param {GlContextMaker} maker maker object
      * @param {function} maker.glContext returns WebGL context
      * @param {function} maker.webGLImplementation returns class extending WebGLImplementation
      */
@@ -45,8 +47,8 @@ WebGLModule.GlContextFactory = class {
 
     /**
      * Create WebGL context and corresponding implementation (State pattern & Factory method)
-     * @param wrapper {WebGLModule}
-     * @param versions {string} array of considered versions in the preferred order
+     * @param {WebGLModule} wrapper
+     * @param {string} versions considered versions in the preferred order
      *      currently supported "1.0", "2.0"
      * @throws
      */
@@ -140,8 +142,8 @@ WebGLModule.WebGLImplementation = class {
 
     /**
      * Called once program is switched to: initialize all necessary items
-     * @param program  used program
-     * @param currentVisualisation  JSON parameters used for this visualisation
+     * @param {WebGLProgram} program  used program
+     * @param {Visualization} currentVisualisation  JSON parameters used for this visualisation
      */
     toBuffers(program, currentVisualisation) {
         console.error("::toBuffers() must be implemented!");
@@ -149,8 +151,8 @@ WebGLModule.WebGLImplementation = class {
 
     /**
      * Draw on the canvas using given program
-     * @param program  used program
-     * @param {object} currentVisualisation  JSON parameters used for this visualisation
+     * @param {WebGLProgram} program  used program
+     * @param {Visualization} currentVisualisation  JSON parameters used for this visualisation
      * @param {object} imageElement image data
      * @param {object} tileDimension
      * @param {number} tileDimension.width width of the result
@@ -166,7 +168,7 @@ WebGLModule.WebGLImplementation = class {
 
     /**
      * Code to be included only once, required by given shader type (keys are considered global)
-     * @param type shader type
+     * @param {string} type shader type
      * @returns {object} global-scope code used by the shader in <key: code> format
      */
     globalCodeRequiredByShaderType(type) {

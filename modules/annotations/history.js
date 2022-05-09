@@ -31,13 +31,13 @@ OSDAnnotations.History = class {
      * focuses window if already opened.
      */
     openHistoryWindow() {
-        let ctx = this.winContext(true);
+        let ctx = this.winContext();
         if (ctx) {
             ctx.window.focus();
             return;
         }
 
-        let undoCss = this._context.canvasObjects().length > 0 ?
+        let undoCss = this._context.canvas.getObjects().length > 0 ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
         Dialogs.showCustomModal(this.containerId, "Annotations Board",
@@ -151,7 +151,7 @@ window.addEventListener("beforeunload", (e) => {
 
         this._performAtJQNode("annotation-logs", node => node.html(""));
         let _this = this;
-        this._context.canvasObjects().some(o => {
+        this._context.canvas.getObjects().some(o => {
             if (!isNaN(o.incrementId)) {
                 _this._addToBoard(o);
             }
@@ -219,7 +219,7 @@ window.addEventListener("beforeunload", (e) => {
 
     /**
      * Check whether an edit operation is in progress
-     * @param {object} ofObject fabricjs object
+     * @param {fabric.Object} ofObject fabricjs object
      * @return {boolean} true if currently editing
      */
     isOngoingEditOf(ofObject) {
@@ -260,7 +260,7 @@ window.addEventListener("beforeunload", (e) => {
 
     _syncLoad() {
         let _this = this;
-        this._context.canvasObjects().some(o => {
+        this._context.canvas.getObjects().some(o => {
             if (o.presetID) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
@@ -388,7 +388,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
         });
         self.html('save');
 
-        let objectId = -1;
+        let objectId;
         if (typeof object !== "object") {
             objectId = object;
             object = this._focus(cx, cy, objectId) || this._context.canvas.getActiveObject();
@@ -492,7 +492,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
     _findObjectOnCanvasById(id) {
         //todo fabric.js should have some way how to avoid linear iteration over all objects...
         let target = null;
-        this._context.canvasObjects().some(o => {
+        this._context.canvas.getObjects().some(o => {
             if (o.incrementId === id) {
                 target = o;
                 return true;

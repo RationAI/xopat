@@ -789,7 +789,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
     /**
      * Check whether component is loaded
      * @param {string} id component id
-     * @param {Boolean} isPlugin true if check for plugins
+     * @param {boolean} isPlugin true if check for plugins
      */
     UTILITIES.isLoaded = function (id, isPlugin=false) {
         if (isPlugin) {

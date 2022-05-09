@@ -1,8 +1,15 @@
+/**
+ * Annotations functionality to the viewer - mouse interaction, events, interfaces, exporting...
+ * @type {OSDAnnotations}
+ *
+ * @typedef {{x: number, y: number}} Point
+ */
 var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Get instance of the annotations manger, a singleton
 	 * (only one instance can run since it captures mouse events)
+	 * @static
 	 * @return {OSDAnnotations} manager instance
 	 */
 	static instance() {
@@ -48,7 +55,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * Add custom mode to the annotations and activate
 	 * please, thoroughly study other modes when they activate/deactivate so that no behavioral collision occurs
 	 * @param {string} id mode id, must not collide with existing mode ID's (e.g. avoid pre-defined mode id's)
-	 * @param {OSDAnnotations.AnnotationState} ModeClass class that extends (and implements) AnnotationState
+	 * @param {function} ModeClass class that extends (and implements) OSDAnnotations.AnnotationState
 	 */
 	setCustomModeUsed(id, ModeClass) {
 		if (this.Modes.hasOwnProperty(id)) {
@@ -62,7 +69,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Register Factory for an annotation object type
-	 * @param {OSDAnnotations.AnnotationObjectFactory} FactoryClass factory that extends AnnotationObjectFactory
+	 * @static
+	 * @param {function} FactoryClass factory that extends AnnotationObjectFactory
 	 * @param {boolean} atRuntime true if the factory is registered at runtime
 	 */
 	static registerAnnotationFactory(FactoryClass, atRuntime=true) {
@@ -123,6 +131,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 				xml_annotation.setAttribute("Type", "Rectangle"); //todo ???
 				coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
 			}
+			// noinspection JSUnresolvedVariable
 			xml_annotation.setAttribute("PartOfGroup", obj.a_group);
 			xml_annotation.setAttribute("Color", obj.color);
 
@@ -131,7 +140,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			// create new coordinate element for each coordinate
 			for (let j = 0; j < coordinates.length; j++) {
 				let xml_coordinate = doc.createElement("Coordinate");
-				xml_coordinate.setAttribute("Order", j);
+				xml_coordinate.setAttribute("Order", (j).toString());
 				xml_coordinate.setAttribute("X", coordinates[j][0]);
 				xml_coordinate.setAttribute("Y", coordinates[j][1]);
 				xml_coordinates.appendChild(xml_coordinate);
@@ -154,7 +163,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * Load objects, must keep the same structure that comes from 'export'
 	 * @param {object} annotations objects to import
 	 * @param {function} onfinish
-	 * @param {Boolean} clear true if existing objects should be removed, default false
+	 * @param {boolean} clear true if existing objects should be removed, default false
 	 */
 	loadObjects(annotations, onfinish=function(){}, clear=false) {
 		if (!annotations.objects) return;
@@ -163,6 +172,11 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/******************* SETTERS, GETTERS **********************/
 
+	/**
+	 * Set the annotations canvas overlay opacity
+	 * @event opacity-changed
+	 * @param {number} opacity
+	 */
 	setOpacity(opacity) {
 		this.opacity = opacity;
 		//this does not work for overlapping annotations:
@@ -170,128 +184,87 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.canvas.forEachObject(function (obj) {
 			obj.opacity = opacity;
 		});
+		this.raiseEvent('opacity-changed', {opacity: this.opacity});
 		this.canvas.renderAll();
 	}
 
+	/**
+	 * Get current opacity
+	 * @return {number}
+	 */
 	getOpacity() {
 		return this.opacity;
 	}
 
-	setMouseOSDInteractive(isOSDInteractive, changeCursor=true) {
+	/**
+	 * Change the interactivity - enable or disable navigation in OpenSeadragon
+	 * this is a change meant to be performed from the outside (correctly update pointer etc.)
+	 * @event osd-interactivity-toggle
+	 * @param {boolean} isOSDInteractive
+	 * @param _raise @private
+	 */
+	setMouseOSDInteractive(isOSDInteractive, _raise=true) {
 		if (this.mouseOSDInteractive === isOSDInteractive) return;
 
 		if (isOSDInteractive) {
 			this.setOSDTracking(true);
-
-			if (changeCursor) {
-				this.canvas.defaultCursor = "grab";
-				this.canvas.hoverCursor = "pointer";
-			}
+			this.canvas.defaultCursor = "grab";
+			this.canvas.hoverCursor = "pointer";
 
 			if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
 			if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
-
-			// let active = this.canvas.getActiveObject();
-			// if (active) active.hasControls = false;
 		} else {
 			this.setOSDTracking(false);
-			if (changeCursor) {
-				this.canvas.defaultCursor = "auto";
-			}
-
-			// let active = this.canvas.getActiveObject();
-			// if (active) active.hasControls = true;
+			this.canvas.defaultCursor = "crosshair";
+			this.canvas.hoverCursor = "pointer";
 		}
 		this.mouseOSDInteractive = isOSDInteractive;
+		if (_raise) this.raiseEvent('osd-interactivity-toggle');
 	}
 
+	/**
+	 * Change the interactivity - enable or disable navigation in OpenSeadragon
+	 * does not fire events, does not update anything, meant to be called from AnnotationState
+	 * or internally.
+	 * @package-private
+	 * @param {boolean} tracking
+	 */
+	setOSDTracking(tracking) {
+		VIEWER.setMouseNavEnabled(tracking);
+	}
+
+	/**
+	 * Check for OSD interactivity
+	 * @return {boolean}
+	 */
 	isMouseOSDInteractive() {
 		return this.mouseOSDInteractive;
 	}
 
-	checkLayer(ofObject) {
-		if (ofObject.hasOwnProperty("layerId")) {
-			if (this._layer) ofObject.layerId = this._layer.id;
-		} else if (!this._layers.hasOwnProperty(ofObject.layerId)) {
-			//todo mode?
-			return this.createLayer(ofObject.layerId);
-		}
-	}
-
-	setActiveLayer(layer) {
-		if (typeof layer === 'number') layer = this._layers[layer];
-		if (this._layer) this._layer.setActive(false);
-		this._layer = this._layers[layer.id];
-		this._layer.setActive(true);
-	}
-
-	getLayer(id=undefined) {
-		if (id === undefined) {
-			if (!this._layer) this.createLayer();
-			return this._layer;
-		}
-		return this._layers[id];
-	}
-
-	createLayer(id=Date.now()) {
-		let layer = new OSDAnnotations.Layer(this, id);
-		if (!this._layer) this._layer = layer;
-		this._layers[id] = layer;
-		this.raiseEvent('layer-added', {layer: layer});
-		return layer;
-	}
-
-	deleteLayer(id) {
-		//todo remove all elements of that layer, create new if last one, set
-		//active next highest if active
-		//this.raiseEvent(...)
-	}
-
-	forEachLayerSorted(callback) {
-		let order = Object.keys(this._layers);
-		order.sort((x, y) => this._layers[x] - this._layers[y]);
-		for (let id of order) {
-			callback(this._layers[id]);
-		}
-	}
-
-	sortObjects() {
-		let _this = this;
-		this.canvas._objects.sort((x, y) => {
-			if (!x.hasOwnProperty('layerId') || !y.hasOwnProperty('layerId')) return 0;
-			return _this._layers[x.layerId].position - _this._layers[y.layerId].position;
-		});
-		this.canvas.renderAll();
-	}
-
+	/**
+	 * Get object factory for given object type (stored in object.factoryId)
+	 * @param {string} objectType the type is stored as a factoryId property
+	 * @return {OSDAnnotations.AnnotationObjectFactory | undefined}
+	 */
 	getAnnotationObjectFactory(objectType) {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
 		return undefined;
 	}
 
-	setFabricCanvasInteractivity(boolean) {
-		this.canvas.forEachObject(function (object) {
-			object.selectable = boolean;
-		});
-	}
-
+	/**
+	 * FabricJS context
+	 * @member OSDAnnotations
+	 * @return {*} //todo fabric.Canvas type not recognized
+	 */
 	get canvas() {
 		return this.overlay.fabric;
 	}
 
-	canvasObjects() {
-		return this.canvas.getObjects();
-	}
-
-	setOSDTracking(tracking) {
-		VIEWER.setMouseNavEnabled(tracking);
-	}
-
-	presetManager() {
-		return this.presets;
-	}
-
+	/**
+	 * Hide or show annotations
+	 * @param {boolean} on
+	 */
 	enableAnnotations(on) {
 		let objects = this.canvas.getObjects();
 		this.enableInteraction(on);
@@ -331,6 +304,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.canvas.renderAll();
 	}
 
+	/**
+	 * Enable or disable interaction with this module,
+	 * sets also AUTO mode
+	 * @event enabled
+	 * @param {boolean} on
+	 */
 	enableInteraction(on) {
 		this.disabledInteraction = !on;
 		this.raiseEvent('enabled', {isEnabled: on});
@@ -339,22 +318,19 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.setMode(this.Modes.AUTO);
 	}
 
-	setModeById(id) {
-		let _this = this;
-		for (let mode in this.Modes) {
-			if (!this.Modes.hasOwnProperty(mode)) continue;
-			mode = this.Modes[mode];
-			if (mode.getId() === id) {
-				_this.setMode(mode);
-				break;
-			}
-		}
-	}
-
+	/**
+	 * Check whether auto, default mode, is on
+	 * @return {boolean}
+	 */
 	isModeAuto() {
 		return this.mode === this.Modes.AUTO;
 	}
 
+	/**
+	 * Set mode by object
+	 * @event mode-changed
+	 * @param {OSDAnnotations.AnnotationState} mode
+	 */
 	setMode(mode) {
 		if (mode === this.mode) return;
 
@@ -369,6 +345,24 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Set current mode by mode id
+	 * @event mode-changed
+	 * @param {string} id
+	 */
+	setModeById(id) {
+		let _this = this;
+		for (let mode in this.Modes) {
+			if (!this.Modes.hasOwnProperty(mode)) continue;
+			mode = this.Modes[mode];
+			if (mode.getId() === id) {
+				_this.setMode(mode);
+				break;
+			}
+		}
+	}
+
+	/**
+	 * Get a reference to currently active preset
 	 * @param left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined}
 	 */
@@ -403,33 +397,165 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		return original;
 	}
 
+	/************************ Layers *******************************/
+
+	/**
+	 * Check annotation for layer, assign if not assigned
+	 * @param {fabric.Object} ofObject
+	 * @return {OSDAnnotations.Layer} layer it belongs to
+	 */
+	checkLayer(ofObject) {
+		if (!ofObject.hasOwnProperty("layerId")) {
+			if (this._layer) ofObject.layerId = this._layer.id;
+		} else if (!this._layers.hasOwnProperty(ofObject.layerId)) {
+			//todo mode?
+			return this.createLayer(ofObject.layerId);
+		}
+	}
+
+	/**
+	 * Set current active layer
+	 * @param layer layer to set
+	 */
+	setActiveLayer(layer) {
+		if (typeof layer === 'number') layer = this._layers[layer];
+		if (this._layer) this._layer.setActive(false);
+		this._layer = this._layers[layer.id];
+		this._layer.setActive(true);
+	}
+
+	/**
+	 * Get layer by id
+	 * @param {number|string} id
+	 * @return {OSDAnnotations.Layer | undefined}
+	 */
+	getLayer(id=undefined) {
+		if (id === undefined) {
+			if (!this._layer) this.createLayer();
+			return this._layer;
+		}
+		return this._layers[id];
+	}
+
+	/**
+	 * Create new layer
+	 * @event layer-added
+	 * @param {number|string} id optional
+	 * @return {OSDAnnotations.Layer}
+	 */
+	createLayer(id=Date.now()) {
+		let layer = new OSDAnnotations.Layer(this, id);
+		if (!this._layer) this._layer = layer;
+		this._layers[id] = layer;
+		this.raiseEvent('layer-added', {layer: layer});
+		return layer;
+	}
+
+	/**
+	 * Delete layer
+	 * @param id
+	 */
+	deleteLayer(id) {
+		let layer = this._layers[id];
+		if (!layer) return;
+
+		const _this = this;
+		this.canvas.forEachObject(function (obj) {
+			if (obj.layerId === layer.id) _this.deleteObject(obj, false);
+		});
+		this.raiseEvent('layer-removed', {layer: layer});
+		this.canvas.renderAll();
+	}
+
+	/**
+	 * Iterate layers
+	 * @param {function} callback called on layer instances (descending order)
+	 */
+	forEachLayerSorted(callback) {
+		let order = Object.keys(this._layers);
+		order.sort((x, y) => this._layers[x] - this._layers[y]);
+		for (let id of order) {
+			callback(this._layers[id]);
+		}
+	}
+
+	/**
+	 * Sort annotations to reflect current order of layers
+	 */
+	sortObjects() {
+		let _this = this;
+		this.canvas._objects.sort((x, y) => {
+			if (!x.hasOwnProperty('layerId') || !y.hasOwnProperty('layerId')) return 0;
+			return _this._layers[x.layerId].position - _this._layers[y.layerId].position;
+		});
+		this.canvas.renderAll();
+	}
+
 	/************************ Canvas object modification utilities *******************************/
 
+	/**
+	 * Add annotation to the canvas without registering it with with available features (history, events...)
+	 * @param {fabric.Object} annotation
+	 */
 	addHelperAnnotation(annotation) {
 		this.canvas.add(annotation);
 	}
 
-	deleteHelperAnnotation(annotation) {
-		this.canvas.remove(annotation);
-	}
-
-	promoteHelperAnnotation(annotation) {
-		//todo better way?
+	/**
+	 * Convert helper annotation to fully-fledged annotation
+	 * @param {fabric.Object} annotation helper annotation
+	 * @param _raise @private
+	 */
+	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionId = this.session;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
+
+		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 		this.canvas.renderAll();
 	}
 
-	addAnnotation(annotation) {
+	/**
+	 * Add annotation to the canvas
+	 * @param {fabric.Object} annotation
+	 * @param _raise @private
+	 */
+	addAnnotation(annotation, _raise=true) {
 		this.addHelperAnnotation(annotation);
-		this.promoteHelperAnnotation(annotation);
+		this.promoteHelperAnnotation(annotation, _raise);
 	}
 
+	/**
+	 * Delete helper annotation, should not be used on normal annotation
+	 * @param {fabric.Object} annotation helper annotation
+	 */
+	deleteHelperAnnotation(annotation) {
+		this.canvas.remove(annotation);
+	}
+
+	/**
+	 * Delete annotation
+	 * @param {fabric.Object} annotation
+	 * @param _raise @private
+	 */
+	deleteAnnotation(annotation, _raise=true) {
+		annotation.off('selected');
+		this.canvas.remove(annotation);
+		this.history.push(null, annotation);
+		this.canvas.renderAll();
+		if (_raise) this.raiseEvent('annotation-delete', {object: annotation});
+	}
+
+	/**
+	 * Replace annotation with different one
+	 * @param {fabric.Object} previous
+	 * @param {fabric.Object} next
+	 * @param {boolean} updateHistory false to ignore the history change, creates artifacts if used incorrectly
+	 * 	e.g. redo/undo buttons duplicate objects
+	 */
 	replaceAnnotation(previous, next, updateHistory=false) {
-		//todo better way?
 		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
@@ -438,37 +564,54 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.canvas.renderAll();
 	}
 
-	deleteAnnotation(annotation) {
-		annotation.off('selected');
-		this.canvas.remove(annotation);
-		this.history.push(null, annotation);
-		this.canvas.renderAll();
+	/**
+	 * Check whether object is not a helper annotation
+	 * @param {fabric.Object} o
+	 * @return {boolean}
+	 */
+	isAnnotation(o) {
+		return o.hasOwnProperty("incrementId");
 	}
 
-	clearAnnotationSelection() {
+	/**
+	 * Delete object without knowledge of its identity (fully-fledged annotation or helper one)
+	 * @param {fabric.Object} o
+	 * @param _raise @private
+	 */
+	deleteObject(o, _raise=true) {
+		if (this.isAnnotation(o)) this.deleteAnnotation(o, _raise);
+		else this.deleteHelperAnnotation(o);
+	}
+
+	/**
+	 * Clear fabric selection (of any kind)
+	 */
+	clearSelection() {
 		this.canvas.selection = false;
 	}
 
+	/**
+	 * Deselect active object (single)
+	 */
 	deselectFabricObjects() {
 		this.canvas.discardActiveObject().renderAll();
 	}
 
+	/**
+	 * Delete currently active object
+	 */
 	removeActiveObject() {
 		let toRemove = this.canvas.getActiveObject();
 		if (toRemove) {
-			this.canvas.remove(toRemove);
-			//presetID is set to objects that are fully functional annotations
-			//incrementId is set to objects by History
-			if (toRemove.hasOwnProperty("presetID") && toRemove.hasOwnProperty("incrementId")) {
-				this.history.push(null, toRemove);
-			}
-			this.canvas.renderAll();
+			this.deleteObject(toRemove);
 		} else {
 			Dialogs.show("Please select the annotation you would like to delete", 3000, Dialogs.MSG_INFO);
 		}
 	}
 
-	// Get all objects from canvas
+	/**
+	 * Delete all annotations
+	 */
 	deleteAllAnnotations() {
 		for (let facId in this.objectFactories) {
 			if (!this.objectFactories.hasOwnProperty(facId)) continue;
@@ -480,20 +623,19 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		let objectsLength = objects.length;
 		for (let i = 0; i < objectsLength; i++) {
-			this.history.push(null, objects[objectsLength - i - 1]);
-			this.canvas.remove(objects[objectsLength - i - 1]);
+			this.deleteObject(objects[objectsLength - i - 1]);
 		}
 	}
 
 	/********************* PRIVATE **********************/
 
 	_init() {
-		//http://fabricjs.com/custom-control-render can maybe attach 'edit' button controls to object...
-		//note the board would have to reflect the UI state when opening
+		//Consider http://fabricjs.com/custom-control-render
+		// can maybe attach 'edit' button controls to object...
+		// note the board would have to reflect the UI state when opening
 
-		/* Annotation property related data */
 		this.Modes = {
-			AUTO: new OSDAnnotations.AnnotationState("", "", "", this),
+			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
 		this.opacity = 0.6;
@@ -505,23 +647,35 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			isDown: false,  //FABRIC handler click down recognition
 		};
 
-
-		/* OSD values used by annotations */
 		let refTileImage = VIEWER.tools.referencedTiledImage();
 		this.overlay = VIEWER.fabricjsOverlay({
 			scale: refTileImage.source.dimensions ?
 				refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
 			fireRightClick: true
 		});
-		//if plugin loaded at runtime, 'open' event not called
-		this.overlay.resizecanvas();
+		this.overlay.resizecanvas(); //if plugin loaded at runtime, 'open' event not called
 
 		// this._debugActiveObjectBinder();
 
-		// Classes defined in other local JS files
+		/**
+		 * Preset Manager reference
+		 * @member {OSDAnnotations.PresetManager}
+		 */
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
+		/**
+		 * History reference
+		 * @member {OSDAnnotations.History}
+		 */
 		this.history = new OSDAnnotations.History("history", this, this.presets);
-		this.modifyTool = new OSDAnnotations.FreeFormTool("modifyTool", this);
+		/**
+		 * FreeFormTool reference
+		 * @member {OSDAnnotations.FreeFormTool}
+		 */
+		this.freeFormTool = new OSDAnnotations.FreeFormTool("freeFormTool", this);
+		/**
+		 * Automatic object creation strategy reference
+		 * @member {OSDAnnotations.AutoObjectCreationStrategy}
+		 */
 		this.automaticCreationStrategy = VIEWER.bridge ?
 			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
 			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
@@ -533,6 +687,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+
+		/**
+		 * Polygon factory, the only factory required within the module
+		 * @type {OSDAnnotations.AnnotationObjectFactory}
+		 */
+		this.polygonFactory = null;
 
 		//Polygon presence is a must
 		if (this.objectFactories.hasOwnProperty("polygon")) {
@@ -574,7 +734,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			this.presets.addPreset();
 		}
 
-		this.setMouseOSDInteractive(true);
+		this.setMouseOSDInteractive(true, false);
 		this._setListeners();
 	}
 
@@ -617,6 +777,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		   Input must be always the event invoked by the user input and point in the image coordinates
 		   (absolute pixel position in the scan)
 		**************************************************************************************************/
+
 		let screenToPixelCoords = function (x, y) {
 			//cannot use VIEWER.tools.imagePixelSizeOnScreen() because of canvas margins
 			return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
@@ -664,7 +825,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			_this.mode.handleClickDown(event, point, true, factory);
 		}
 
-		/****** E V E N T  L I S T E N E R S: FABRIC **********/
+		/****** E V E N T  L I S T E N E R S: FABRIC (called when not navigating) **********/
 
 		let annotationCanvas = this.canvas.upperCanvasEl;
 		annotationCanvas.addEventListener('mousedown', function (event) {
@@ -681,7 +842,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			else if (event.which === 3) handleRightClickUp(event);
 		});
 
-		//Update object when user hodls ALT and moving with mouse (this.isMouseOSDInteractive() == true)
 		this.canvas.on('mouse:move', function (o) {
 			if (_this.disabledInteraction || !_this.cursor.isDown) return;
 			_this.mode.handleMouseMove(screenToPixelCoords(o.e.x, o.e.y));
@@ -692,7 +852,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			_this.mode.scroll(o.e, o.e.deltaY);
 		});
 
-		/****** E V E N T  L I S T E N E R S: OSD **********/
+		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
 		VIEWER.addHandler("canvas-press", function (e) {
 			if (_this.disabledInteraction) return;
@@ -730,8 +890,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	_setModeFromAuto(mode) {
 		if (mode.setFromAuto()) {
-			//must be early due to custom HTML controls that might be used later
-			this.raiseEvent('mode-from-auto', {mode: mode});
+			this.raiseEvent('mode-changed', {mode: mode});
 
 			this.mode = mode;
 		}
@@ -742,8 +901,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
 		if (this.mode.setToAuto(switching)) {
-			//must be early due to custom HTML controls that might be used later
-			this.raiseEvent('mode-to-auto', {mode: this.Modes.AUTO});
+			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
 
 			this.mode = this.Modes.AUTO;
 			this.canvas.hoverCursor = "pointer";
@@ -857,17 +1015,20 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 };
 
-
+/**
+ * Default annotation state parent class, also a valid mode (does nothing).
+ * @type {OSDAnnotations.AnnotationState}
+ */
 OSDAnnotations.AnnotationState = class {
 	/**
 	 * Constructor for an abstract class of the Annotation Mode. Extending modes
 	 * should have only one parameter in constructor which is 'context'
+	 * @param {OSDAnnotations} context passed to constructor of children as the only argument
 	 * @param {string} id unique id
 	 * @param {string} icon icon to use with this mode
 	 * @param {string} description description of this mode
-	 * @param {OSDAnnotations} context passed to constructor of children as the only argument
 	 */
-	constructor(id, icon, description, context) {
+	constructor(context, id, icon, description) {
 		this._id = id;
 		this.icon = icon;
 		this.context = context;
@@ -876,10 +1037,10 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Perform action on mouse up event
-	 * @param o original js event
-	 * @param point mouse position in image coordinates (pixels)
-	 * @param isLeftClick true if left mouse button
-	 * @param objectFactory factory currently bound to the button
+	 * @param {Event} o original js event
+	 * @param {Point} point mouse position in image coordinates (pixels)
+	 * @param {boolean} isLeftClick true if left mouse button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		//do nothing
@@ -887,10 +1048,10 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Perform action on mouse down event
-	 * @param o original js event
-	 * @param point mouse position in image coordinates (pixels)
-	 * @param isLeftClick true if left mouse button
-	 * @param objectFactory factory currently bound to the button
+	 * @param {Event} o original js event
+	 * @param {Point} point mouse position in image coordinates (pixels)
+	 * @param {boolean} isLeftClick true if left mouse button
+	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
 	 */
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		//do nothing
@@ -899,7 +1060,7 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * Handle mouse moving event while the OSD navigation is disabled
 	 * NOTE: mouse move in navigation mode is used to navigate, not available
-	 * @param point mouse position in image coordinates (pixels)
+	 * @param {Point} point mouse position in image coordinates (pixels)
 	 */
 	handleMouseMove(point) {
 		//do nothing
@@ -908,8 +1069,8 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * Handle scroll event while the OSD navigation is disabled
 	 * NOTE: scroll in navigation mode is used to zoom, not available
-	 * @param event original MouseWheel event
-	 * @param delta event.deltaY property, copied out since this is the value we are interested in
+	 * @param {Event} event original MouseWheel event
+	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
 	 */
 	scroll(event, delta) {
 		//do nothing
@@ -971,7 +1132,7 @@ OSDAnnotations.AnnotationState = class {
 	 * What happens when the mode is being entered in
 	 * e.g. disable OSD mouse navigation (this.context.setOSDTracking(..)), prepare variables...
 	 *  (previous mode can be obtained from the this.context.mode variable, still not changed)
-	 * @return {Boolean} true if the procedure should proceed, e.g. mode <this> is accepted
+	 * @return {boolean} true if the procedure should proceed, e.g. mode <this> is accepted
 	 */
 	setFromAuto() {
 		return true;
@@ -980,12 +1141,12 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * What happens when the mode is being exited
 	 * e.g. enable OSD mouse navigation (this.context.setOSDTracking(..)), clear variables...
-	 * @param {Boolean} temporary true if the change is temporary
+	 * @param {boolean} temporary true if the change is temporary
 	 * 	optimization parameter, safe way of changing mode is to go MODE1 --> AUTO --> MODE2
 	 * 	however, you can avoid this by returning false if temporary == true, e.g. allow MODE2 to be
 	 * 	turned on immediately. This feature is used everywhere in provided modes since all are
 	 * 	compatible without problems.
-	 * @return {Boolean} true if the procedure should proceed, e.g. mode AUTO is accepted
+	 * @return {boolean} true if the procedure should proceed, e.g. mode AUTO is accepted
 	 */
 	setToAuto(temporary) {
 		return true;
@@ -998,7 +1159,7 @@ OSDAnnotations.AnnotationState = class {
 	 *
 	 * NOTE: these methods should be as specific as possible, e.g. test also that
 	 * no ctrl/alt/shift key is held if you do not require them to be on
-	 * @param e key down event
+	 * @param {KeyboardEvent} e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
 	accepts(e) {
@@ -1007,7 +1168,7 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Predicate that returns true if the mode is disabled by the key event
-	 * @param e key up event
+	 * @param {KeyboardEvent} e key up event
 	 * @return {boolean} true if the key up event should disable this mode
 	 */
 	rejects(e) {
@@ -1017,7 +1178,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super("auto", "open_with", "navigate and create automatic annotations", context);
+		super(context, "auto", "open_with", "navigate and create automatic annotations");
 		this.clickInBetweenDelta = 0;
 	}
 
@@ -1058,13 +1219,13 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	customHtml() {
-		return "PRDEL";
+		return "";
 	}
 };
 
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
-	constructor(id, icon, description, context) {
-		super(id, icon, description, context);
+	constructor(context, id, icon, description) {
+		super(context, id, icon, description);
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1076,7 +1237,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleMouseMove(point) {
-		this.context.modifyTool.update(point);
+		this.context.freeFormTool.update(point);
 	}
 
 	_init(o, point, isLeftClick) {
@@ -1084,7 +1245,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			created = false;
 
 		if (!currentObject) {
-			if (!this.context.modifyTool.modeAdd) {
+			if (!this.context.freeFormTool.modeAdd) {
 				//subtract needs active object
 				this.abortClick();
 				return;
@@ -1099,7 +1260,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!factory.isEditable()) {
 				willModify = false;
 			} else if (factory.isImplicit()) {
-				//let radius = this.context.modifyTool.screenRadius*1.5;
+				//let radius = this.context.freeFormTool.screenRadius*1.5;
 				// let bounds = currentObject.getBoundingRect();
 				// let w = bounds.left + bounds.width + radius,
 				// 	h = bounds.top + bounds.height + radius;
@@ -1108,26 +1269,30 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
 			} else {
 				newPolygonPoints = this._geCirclePoints(point);
-				willModify = this.context.modifyTool.polygonsIntersect({points: newPolygonPoints}, currentObject);
+				willModify = this.context.freeFormTool.polygonsIntersect(
+					{points: newPolygonPoints}, currentObject
+				);
 			}
 
 			if (!willModify) {
-				if (!this.context.modifyTool.modeAdd) {
+				if (!this.context.freeFormTool.modeAdd) {
 					//subtract needs active object
 					this.abortClick();
 					return;
 				}
-				currentObject = this._initFromPoints(newPolygonPoints || this._geCirclePoints(point), isLeftClick);
+				currentObject = this._initFromPoints(
+					newPolygonPoints || this._geCirclePoints(point), isLeftClick
+				);
 				created = true;
 			}
 		}
 
-		this.context.modifyTool.init(currentObject, created);
-		this.context.modifyTool.update(point);
+		this.context.freeFormTool.init(currentObject, created);
+		this.context.freeFormTool.update(point);
 	}
 
 	_geCirclePoints(point) {
-		return this.context.modifyTool.getCircleShape(point);
+		return this.context.freeFormTool.getCircleShape(point);
 	}
 
 	_initFromPoints(points, isLeftClick) {
@@ -1135,7 +1300,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	_finish() {
-		let result = this.context.modifyTool.finish();
+		let result = this.context.freeFormTool.finish();
 		if (result) {
 			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
@@ -1144,21 +1309,21 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	scroll(event, delta) {
 		//subtract delta - scroll up means increase
-		this.context.modifyTool.setSafeRadius(this.context.modifyTool.screenRadius - delta / 100);
+		this.context.freeFormTool.setSafeRadius(this.context.freeFormTool.screenRadius - delta / 100);
 	}
 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
-		this.context.modifyTool.recomputeRadius();
-		this.context.modifyTool.showCursor();
+		this.context.freeFormTool.recomputeRadius();
+		this.context.freeFormTool.showCursor();
 		return true;
 	}
 
 	setToAuto(temporary) {
 		if (temporary) return false;
-		this.context.modifyTool.hideCursor();
+		this.context.freeFormTool.hideCursor();
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
 		return true;
@@ -1168,11 +1333,11 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super("fft-add", "brush", "draw annotations by hand (shift)", context);
+		super(context, "fft-add", "brush", "draw annotations by hand (shift)");
 	}
 
 	setFromAuto() {
-		this.context.modifyTool.setModeAdd(true);
+		this.context.freeFormTool.setModeAdd(true);
 		return super.setFromAuto();
 	}
 
@@ -1193,11 +1358,11 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super("fft-remove", "brush", "remove annotation parts by hand (shift + alt to switch)", context);
+		super(context, "fft-remove", "brush", "remove annotation parts by hand (shift + alt to switch)");
 	}
 
 	setFromAuto() {
-		this.context.modifyTool.setModeAdd(false);
+		this.context.freeFormTool.setModeAdd(false);
 		return super.setFromAuto();
 	}
 
@@ -1214,7 +1379,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super("custom", "format_shapes","create annotations manually (alt)", context);
+		super(context, "custom", "format_shapes","create annotations manually (alt)");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {

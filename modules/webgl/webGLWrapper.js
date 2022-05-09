@@ -1,13 +1,41 @@
-/*
+/**
 * Wrapping the funcionality of WebGL to be suitable for the visualisation.
 * Written by Jiří Horák, 2021
 *
 * Originally based on viaWebGL (and almost nothing-alike as of now)
 * Built on 2016-9-9
 * http://via.hoff.in
+*
+* @typedef {{
+*  name: string,
+*  lossless: boolean,
+*  shaders: object
+* }} Visualization
+*
+* @typedef {{
+*   name: string,
+*   type: string,
+*   visible: boolean,
+*   dataReferences: number[],
+*   params: object
+*  }} Layer
 */
 
 class WebGLModule {
+    /**
+     * @param {object} incomingOptions
+     * @param {function} incomingOptions.htmlControlsId: "data-layer-options",
+     * @param {function} incomingOptions.htmlShaderPartHeader function that generates particular layer HTML:
+     *  signature: f({string} title,{string} html,{string} dataId,{boolean} isVisible,{Layer} layer, {boolean} wasErrorWhenLoading)
+     * @param {boolean} incomingOptions.debug debug mode default false
+     * @param {function} incomingOptions.ready function called when ready
+     * @param {function} incomingOptions.resetCallback function called when user input changed, e.g. changed output of the current rendering
+     * @param {function} incomingOptions.visualisationInUse function called when visualisation is initialized and run
+     * @param {function} incomingOptions.visualisationChanged function called when a visualization swap is performed:
+     *   signature f({Visualization} oldVisualisation,{Visualization} newVisualisation)
+     * @param {function} incomingOptions.onFatalError called when this module is unable to run
+     * @param {function} incomingOptions.onError called when a problem occurs, but other parts of the system still might work
+     */
     constructor(incomingOptions) {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Default values overrideable from incomingOptions  /////////////////
@@ -37,12 +65,30 @@ class WebGLModule {
         ///////////// Incoming Values ///////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
 
+        /**
+         * Debug mode.
+         * @member {boolean}
+         */
+        this.debug = false;
+
         // Assign from incoming terms
         for (let key in incomingOptions) {
             if (incomingOptions.hasOwnProperty(key)) {
                 this[key] = incomingOptions[key];
             }
         }
+
+        /**
+         * Current rendering context
+         * @member {WebGLModule.WebGLImplementation}
+         */
+        this.webGLImplementation = null;
+
+        /**
+         * WebGL context
+         * @type {WebGLRenderingContext|WebGL2RenderingContext}
+         */
+        this.gl = null;
 
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Internals /////////////////////////////////////////////////////////
@@ -79,17 +125,25 @@ class WebGLModule {
         this._initialized = false;
     }
 
+    /**
+     * Check if prepare() was called.
+     * @return {boolean}
+     */
     get isPrepared() {
         return this._prepared;
     }
 
+    /**
+     * Check if init() was called.
+     * @return {boolean}
+     */
     get isInitialized() {
         return this._initialized;
     }
 
     /**
      * Set program shaders. Vertex shader is set by default a square.
-     * @param {object} visualisations - objects that define the visualisation (see Readme)
+     * @param {Visualization} visualisations - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      */
     addVisualisation(...visualisations) {
@@ -127,9 +181,9 @@ class WebGLModule {
 
     /**
      * Rebuild visualisation and update scene
-     * @param {array} order of shaders, ID's of data as defined in setup JSON, last element is rendered last (top)
+     * @param {string[]|undefined} order of shaders, ID's of data as defined in setup JSON, last element is rendered last (top)
      */
-    rebuildVisualisation(order) {
+    rebuildVisualisation(order=undefined) {
         let vis = this._visualisations[this._program];
 
         if (order) {
@@ -201,18 +255,18 @@ class WebGLModule {
 
     /**
      * Renders data using WebGL
-     * @param {<img>} imageElement image data
+     * @param {object} data image data
      * @param tileDimension expected dimension of the output (canvas)
      * @param zoomLevel value passed to the shaders as zoom_level
      * @param pixelSize value passed to the shaders as pixel_size_in_fragments
      * @returns canvas (with transparency) with the data rendered based on current program
      *          null if willUseWebGL(imageElement, e) would return false
      */
-    processImage(imageElement, tileDimension, zoomLevel, pixelSize) {
+    processImage(data, tileDimension, zoomLevel, pixelSize) {
         let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
-            imageElement, tileDimension, zoomLevel, pixelSize);
+            data, tileDimension, zoomLevel, pixelSize);
 
-        if (this.debug) this._renderDebugIO(imageElement, result);
+        if (this.debug) this._renderDebugIO(data, result);
         return result;
     }
 
@@ -409,8 +463,9 @@ class WebGLModule {
      * program is currently active, good if you need 'gl-loaded' to be
      * invoked (e.g. some uniform variables changed)
      * @param {Number} i program index or null if you wish to re-initialize the current one
+     * @param _reset @private
      */
-    _forceSwitchShader(i, reset=true) {
+    _forceSwitchShader(i, _reset=true) {
         if (isNaN(i) || i === null || i === undefined) i = this._program;
 
         if (i >= this._visualisations.length) {
@@ -441,7 +496,7 @@ class WebGLModule {
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
             this._loadDebugInfo();
             if (!this._loadScript(i, this._program)) {
-                if (!reset) throw "Could not build visualization";
+                if (!_reset) throw "Could not build visualization";
                 return this._forceSwitchShader(i, false); //force reset in errors
             }
             this._toBuffers(this._programs[i], target);
@@ -484,7 +539,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
         input.innerHTML = "";
-        input.append(inputData);
+        input.append(WebGLModule.DataLoader.dataToImage(inputData));
 
         if (outputData) {
             output.innerHTML = "";
@@ -548,14 +603,9 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             headers: headers
         }).then(response => {
             if (response.status < 200 || response.status > 299) {
-                return response.text()
-                    .then(e => {
-                        console.error("Fetching of the shader failed.", e);
-                        throw new Error("There was an error when fetching the shader source: " + url);
-                    });
-            } else {
-                return response.text();
+                throw new Error("There was an error when fetching the shader source: " + url);
             }
+            return response.text();
         }).then(text => {
             let script = document.createElement("script");
             script.type = "text/javascript";
@@ -733,7 +783,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 }
 
-/**Not a part of API, static functionality to process polygons, not yet implemented.**/
+/**Not a part of API, static functionality to process polygons, not yet fully implemented.**/
 WebGLModule.Rasterizer = class {
     constructor() {
         this.canvas = document.createElement("canvas");

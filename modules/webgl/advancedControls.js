@@ -69,6 +69,10 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
 };
 WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.SliderWithInput);
 
+/**
+ * ColorMap Input
+ * @type {WebGLModule.UIControls.ColorMap}
+ */
 WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
@@ -651,6 +655,10 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 // };
 // WebGLModule.UIControls.registerClass("kernel", WebGLModule.UIControls.Kernel);
 
+/**
+ * Text area input
+ * @type {WebGLModule.UIControls.TextArea}
+ */
 WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
@@ -725,6 +733,10 @@ style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled}
 };
 WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextArea);
 
+/**
+ * Button Input
+ * @type {WebGLModule.UIControls.Button}
+ */
 WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);

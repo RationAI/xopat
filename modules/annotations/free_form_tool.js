@@ -52,7 +52,7 @@ OSDAnnotations.FreeFormTool = class {
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
-        this.simplifier = this._context.polygonFactory.simplify.bind(this._context.polygonFactory);
+        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(this._context.polygonFactory);
         this._created = created;
         this._updatePerformed = false;
     }
@@ -106,7 +106,7 @@ OSDAnnotations.FreeFormTool = class {
 
     /**
      * Set the mode to add/subtract
-     * @param {Boolean} isModeAdd true if the mode is adding
+     * @param {boolean} isModeAdd true if the mode is adding
      * @event free-form-tool-mode-add
      */
     setModeAdd(isModeAdd) {
@@ -195,7 +195,7 @@ OSDAnnotations.FreeFormTool = class {
 
     /**
      * Finalize the object modification
-     * @return {fabricjs.Polygon || null} polygon if successfully updated
+     * @return {fabric.Polygon | null} polygon if successfully updated
      */
     finish (_withDeletion=false) {
         if (this.polygon) {
@@ -233,14 +233,16 @@ OSDAnnotations.FreeFormTool = class {
 
         let radPoints = this.getCircleShape(nextMousePos);
         //console.log(radPoints);
-        var polypoints = this.polygon.get("points");
+        let polyPoints = this.polygon.get("points");
         //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-        if (this._toDistancePointsAsObjects(polypoints[0], polypoints[polypoints.length - 1]) < this.radius) polypoints.pop();
+        if (this._toDistancePointsAsObjects(polyPoints[0], polyPoints[polyPoints.length - 1]) < this.radius) polyPoints.pop();
         this.mousePos = nextMousePos;
+
+        let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
 
         //compute union
         try {
-            var union = greinerHormann.union(polypoints, radPoints);
+            var union = greinerHormann.union(polyPoints, radPoints);
         } catch (e) {
             console.warn("Unable to unify polygon with tool.", this.polygon, radPoints, e);
             return false;
@@ -255,7 +257,7 @@ OSDAnnotations.FreeFormTool = class {
 
             let maxIdx = 0,maxScore = 0;
             for (let j = 0; j < union.length; j++) {
-                let measure = this._findApproxBoundBoxSize(union[j]);
+                let measure = calcSize(union[j]);
                 if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
                 let area = measure.diffX * measure.diffY;
                 let score = 2*area + union[j].length;
@@ -322,11 +324,13 @@ OSDAnnotations.FreeFormTool = class {
         if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
         let radPoints = this.getCircleShape(nextMousePos);
-        var polypoints = this.polygon.get("points");
+        let polyPoints = this.polygon.get("points");
         this.mousePos = nextMousePos;
 
+        let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
+
         try {
-            var difference = greinerHormann.diff(polypoints, radPoints);
+            var difference = greinerHormann.diff(polyPoints, radPoints);
         } catch (e) {
             console.warn("Unable to diff polygon with tool.", this.polygon, radPoints, e);
             return false;
@@ -341,7 +345,7 @@ OSDAnnotations.FreeFormTool = class {
 
                 let maxIdx = 0, maxArea = 0, maxScore = 0;
                 for (let j = 0; j < difference.length; j++) {
-                    let measure = this._findApproxBoundBoxSize(difference[j]);
+                    let measure = calcSize(difference[j]);
                     if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
                     let area = measure.diffX * measure.diffY;
                     let score = 2*area + difference[j].length;
@@ -365,19 +369,6 @@ OSDAnnotations.FreeFormTool = class {
             return true;
         }
         return false;
-    }
-
-    //when removing parts of polygon, decide which one has smaller area and will be removed
-    _findApproxBoundBoxSize (points) {
-        if (points.length < 3) return { diffX: 0, diffY: 0 };
-        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-        for (let i = 1; i < points.length; i++) {
-            maxX = Math.max(maxX, points[i].x);
-            maxY = Math.max(maxY, points[i].y);
-            minX = Math.min(minX, points[i].x);
-            minY = Math.min(minY, points[i].y);
-        }
-        return { diffX: maxX - minX, diffY: maxY - minY };
     }
 
     _toDistancePointsAsObjects(pointA, pointB) {

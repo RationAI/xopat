@@ -120,7 +120,7 @@ We will use [R] for required and [O] for optional parameters.
         - NOTE: this value must equal to the shader id registered in the `ShaderMediator`, see `./webgl/shaders/`
     - [O]`headers` - arbitrary headers
 - [O]`visualization` - array of objects that define visualisations (sometimes we say _visualization goals_) of the **data** group,
-it is an inherited configuration interface of the WebGL module extended by option `fixed`
+it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
     - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
         - [R]`dataReferences` - indices **array** to the `data` array

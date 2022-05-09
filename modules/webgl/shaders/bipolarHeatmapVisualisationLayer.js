@@ -72,7 +72,7 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return [
             this.colorHigh.toHtml(true),
             this.colorLow.toHtml(true),
-            this.opacity.toHtml(true, this._invertOpacity ? "direction: rtl;" : ""),
+            this.opacity.toHtml(true),
             this.threshold.toHtml(true)
         ].join("");
     }
