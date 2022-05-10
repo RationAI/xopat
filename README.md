@@ -12,7 +12,7 @@ various libraries. Automated building and testing is not yet available; you can 
 Later, automated testing and minification will be included.
 
 ## Setup
-There are _docker_ composite builds available, although still not yet published. Will get to it asap.
+There are _docker_ composite builds available: https://github.com/RationAI/pathopus-docker.
 
 #### DYI - Backend
 The trickiest part is to set a correct configuration.
@@ -87,10 +87,6 @@ Example configuration:
     }    
 }
 ````
-The parameters shown above are inherited from the WebGL-based module, extended with the properties of
-this application. Although the module was written for this application, it was designed so that it can be
-re-used. The module is closely described in `./webgl/` folder.
-
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
 - [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
@@ -113,7 +109,7 @@ We will use [R] for required and [O] for optional parameters.
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
-    - [O]`protocol` - see protocol construction below
+    - [O]`protocol` - see protocol construction below in advanced details
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation
     - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
@@ -132,6 +128,7 @@ it is an inherited configuration interface of the WebGL module extended by optio
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
     - [O]`name` - visualisation goal name 
     - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
+    - [O]`protocol` - see protocol construction below in advanced details
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
 - [O]`dataPage` - an unique page ID to object mapping, each object consists of
     - [O]`title` - the page menu button title
