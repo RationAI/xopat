@@ -14,9 +14,14 @@ class Presenter {
     <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
 ${UIComponents.Elements.checkBox({
             label: "Capture visualization",
-            onchange: this.id + ".snapshots.captureVisualization = this.checked && this.checked !== 'false';",
-            default: false
-        })}<br>
+            onchange: this.id + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
+            default: this.snapshots.capturesVisualization
+        })}&emsp;
+${UIComponents.Elements.checkBox({
+            label: "Capture Viewport",
+            onchange: this.id + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
+            default: this.snapshots.capturesViewport
+        })}<br><br>
 <button class='btn btn-pointer' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn btn-pointer' onclick="${this.id}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
 <button class='btn btn-pointer' onclick="${this.id}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
@@ -146,10 +151,22 @@ ${UIComponents.Elements.checkBox({
     }
 
     _addUIStepFrom(step) {
+        let color = "#000";
+        if (this.snapshots.stepCapturesVisualization(step)) {
+            color = this.snapshots.stepCapturesViewport(step) ? "#ff8800" : "#9dff00";
+        } else if (this.snapshots.stepCapturesViewport(step)) {
+            color = "#00d0ff";
+        }
+
+        let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
+            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
+
         this._container.append(`<span onclick="${this.id}.selectPoint(this);" style="
-filter: ${this._convertValue('transition', step.transition)};
+background: ${color};
+border-color: ${color};
+border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; 
-height: ${Math.log(step.zoomLevel) / Math.log(VIEWER.viewport.getMaxZoom()) * 20 + 12}px; 
+height: ${height}px; 
 margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
     }
@@ -158,7 +175,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         switch (key) {
             case 'delay': return `${value * 2}px`;
             case 'duration': return `${value * 4 + 6}px`;
-            case 'transition': return `brightness(${(value - 1) / 9})`;
+            case 'transition': return `${value}px`;
             default: return value;
         }
     }
@@ -167,7 +184,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         switch (key) {
             case 'delay': return "margin-left";
             case 'duration': return "width";
-            case 'transition': return "filter";
+            case 'transition': return "border-bottom-left-radius";
             default: return value;
         }
     }

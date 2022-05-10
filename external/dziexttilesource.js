@@ -168,7 +168,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
 
     //TO-DOCS describe how meta is handled and error property treated
     getImageMetaAt: function(index) {
-        return this.imageArray[index];
+        return this.ImageArray[index];
     },
     setFormat: function(format) {
         this.fileFormat = format;
@@ -360,8 +360,9 @@ function configureFromObject( tileSource, configuration ){
         rectData,
         i;
 
-    for (let image of configuration.ImageArray) {
-        let imageWidth = parseInt( image.Size.Width, 10 ),
+    for (let i = 0; i < configuration.ImageArray.length; i++) {
+        let image = configuration.ImageArray[i],
+            imageWidth = parseInt( image.Size.Width, 10 ),
             imageHeight = parseInt( image.Size.Height, 10 ),
             imageTileSize = parseInt( image.TileSize, 10 ),
             imageTileOverlap = parseInt( image.Overlap, 10 );
@@ -411,7 +412,6 @@ function configureFromObject( tileSource, configuration ){
         minLevel: null, /* minLevel */
         maxLevel: null, /* maxLevel */
         fileFormat: fileFormat, /* fileFormat */
-        imageArray: configuration.ImageArray,
         displayRects: displayRects /* displayRects */
     }, configuration );
 }

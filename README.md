@@ -203,6 +203,8 @@ key-up -> has e.focusCanvas-->
 
 ### `./external/`
 Always-present third-party libraries and styles which are guaranteed to be included.
+The exception is the `monaco` editor which is also available, but only in a different window
+context via the `Dialogs` interface.
 
 ### `./assets/`
 Own images and styles.

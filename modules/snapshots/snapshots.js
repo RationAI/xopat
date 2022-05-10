@@ -13,6 +13,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
      * Create a snapshot
+     * @event create
      * @param {number} delay delay before the current snapshot is run when played, in seconds
      * @param {number} duration transition duration, in seconds
      * @param {number} transition transition style, 1 - linear; >1 - ease-out default 1.6
@@ -23,17 +24,20 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         }
         let view = this.viewer.viewport;
         this._add({
-            zoomLevel: view.getZoom(),
-            point: view.getCenter(),
+            zoomLevel: this._captureViewport ? view.getZoom() : undefined,
+            point: this._captureViewport ? view.getCenter() : undefined,
             delay: delay,
             duration: duration,
             transition: transition,
-            visualization: this._getVisualizationSnapshot()
+            visualization: this._getVisualizationSnapshot(),
+            screenShot: this._captureScreen ?
+                this._utils.screenshot(true, {width: 120, height: 120}) : undefined
         });
     }
 
     /**
      * Delete snapshot
+     * @event remove
      * @param {number} index optional, deleted current if unspecified
      */
     remove(index=undefined) {
@@ -82,6 +86,9 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
      * Play the sequence. Does nothing when already playing.
+     * @event start raised when playing has begun
+     * @event before-enter called at the start of delay of each step
+     * @event enter called after the delay waiting is done and the step executes
      */
     play() {
         if (this._playing) return;
@@ -95,6 +102,9 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
      * Play from index.
+     * @event start raised when playing has begun
+     * @event before-enter called at the start of delay of each step
+     * @event enter called after the delay waiting is done and the step executes
      * @param {number} index to start from snapshot
      */
     playFromIndex(index) {
@@ -107,6 +117,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
      * Stop current playback.
+     * @event stop called when playing was stopped
      */
     stop() {
         if (!this._playing) return;
@@ -121,19 +132,77 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     /**
+     * Set snapshot as active, apply its settings
+     * @event enter called once the animation begun
+     * @param {number} atIndex step index
+     */
+    goToIndex(atIndex) {
+        if (this._playing) {
+            return;
+        }
+        this._idx = atIndex % this._steps.length;
+        this._jumpAt(this._idx);
+    }
+
+    /**
      * Toggle capturing of the current visualization
-     * todo debug
      * @param {boolean} value
      */
-    set captureVisualization(value) {
+    set capturesVisualization(value) {
         this._captureVisualization = value && this.viewer.hasOwnProperty("bridge");
     }
 
+    /**
+     * Toggle capturing of the current viewport position
+     * @param {boolean} value
+     */
+    set capturesViewport(value) {
+        this._captureViewport = value;
+    }
+
+    /**
+     * Save screen as image on capture
+     * @param {boolean} value
+     */
+    set capturesScreen(value) {
+        this._captureScreen = value;
+    }
+
+    /**
+     * @return {boolean}
+     */
+    get capturesVisualization() {
+        return this._captureVisualization;
+    }
+
+    /**
+     * @return {boolean} value
+     */
+    get capturesViewport() {
+        return this._captureViewport;
+    }
+
+    /**
+     * @return {boolean}
+     */
+    get capturesScreen() {
+        return this._captureScreen;
+    }
+
+    /**
+     * Serialize current state
+     * @return {string}
+     */
     exportJSON() {
         return JSON.stringify(this._steps);
     }
 
+    /**
+     * Import state (deletes existing one)
+     * @param {object[]|string} json
+     */
     importJSON(json) {
+        if (typeof json === "string") json = JSON.parse(json);
         this._idx = 0;
         this._steps = [];
         this._currentStep = null;
@@ -143,6 +212,24 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
             this._add(json[i]);
         }
+    }
+
+    /**
+     * Check whether step contains visualization capture
+     * @param {object} step
+     * @return {boolean}
+     */
+    stepCapturesVisualization(step) {
+        return step.visualization && step.visualization.cache;
+    }
+
+    /**
+     * Check whether step contains viewport capture
+     * @param {object} step
+     * @return {boolean}
+     */
+    stepCapturesViewport(step) {
+        return step.point && step.zoomLevel;
     }
 
     _playStep(index) {
@@ -187,8 +274,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         return {
             index: this.viewer.bridge.currentVisualisationIndex(),
             cache: shadersCache,
-            order: [...vis.order],
-            screenshot: this._utils.screenshot(true, {width: 120, height: 120})
+            order: [...vis.order]
         }
     }
 
@@ -221,17 +307,10 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         };
     }
 
-    goToIndex(atIndex) {
-        if (this._playing) {
-            return;
-        }
-        this._idx = atIndex % this._steps.length;
-        this._jumpAt(this._idx);
-    }
-
     _add(step) {
         let index = this._steps.length;
         this._steps.push(step);
+        console.log(step);
         this.raiseEvent("create", {
             index: index,
             step: step
@@ -244,7 +323,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             return;
         }
         if (step.visualization) this._setVisualization(step);
-        this._utils.focus(step);
+        if (step.point && !isNaN(step.zoomLevel)) this._utils.focus(step);
         this.raiseEvent("enter", {
             index: index,
             immediate: direct,
@@ -268,7 +347,8 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
                 if (!needsRefresh && !this._equalCache(shaderSetup.cache, cachedCache)) {
                     needsRefresh = true;
                 }
-                shaderSetup.cache = cachedCache;
+
+                if (needsRefresh) shaderSetup.cache = $.extend(true, {}, cachedCache);
             }
         }
 
@@ -336,6 +416,10 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         this._currentStep = null;
         this._init();
         this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
+
+        this._captureVisualization = false;
+        this._captureViewport = true;
+        this._captureScreen = false;
 
         this.captureVisualization = false;
     }

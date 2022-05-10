@@ -104,6 +104,8 @@ You can use
  - [Material design icons](https://fonts.google.com/icons?selected=Material+Icons)
  for icons (use `<span>`) and 
  - [Primer CSS bootstrap](https://primer.style/css).
+ - other libraries included in `/external`, the Monaco editor is available only in a child window
+   context via the `Dialogs` interface
  
 ### `includes` property
 In fact, the plugin can either specify a string value to indicate local file, 
