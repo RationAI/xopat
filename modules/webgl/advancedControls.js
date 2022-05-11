@@ -112,7 +112,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
 
         this.setSteps();
 
-        if (!this.value || !ColorMaps.schemeGroups[this.params.mode].hasOwnProperty(this.value)) {
+        if (!this.value || !ColorMaps.schemeGroups[this.params.mode][this.value]) {
             this.value = ColorMaps.defaults[this.params.mode];
         }
         this.pallete = ColorMaps[this.value][this.maxSteps];
@@ -204,7 +204,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
                 this.pallete.push(...this.parser(color));
             }
         }
-        for (let i = this.pallete.length; i < 3*this.MAX_SAMPLES; i++) this.pallete.push(0);
+        for (let i = this.pallete.length; i < 3*(this.MAX_SAMPLES); i++) this.pallete.push(0);
     }
 
     glDrawing(program, dimension, gl) {

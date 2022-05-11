@@ -37,8 +37,8 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
     static defaultControls = {
         color: {
             default: {
-                steps: 2,
-                default: "Inferno",
+                steps: 3, //number of categories
+                default: "Parula",
                 mode: "sequential",
                 title: "Colormap",
                 continuous: false,
@@ -48,8 +48,8 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         },
         threshold: {
             default: {
-                default: [0.2, 0.4, 0.6, 0.8],
-                mask: [1, 0, 0, 0, 1],
+                default: [0.25, 0.75], //breaks/separators, e.g. one less than bin count
+                mask: [1, 0, 1],  //same number of steps as color
                 title: "Breaks",
                 pips: {
                     mode: 'positions',
@@ -64,7 +64,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             accepts: (type, instance) => type === "float"
         },
         connect : {
-            default: {type: "bool", interactive: true, title: "Breaks mapping: ", default: false},
+            default: {type: "bool", interactive: true, title: "Connect breaks: ", default: false},
             accepts:  (type, instance) => type === "bool"
         }
     };
@@ -77,26 +77,40 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 `;
     }
 
+    defaultColSteps(length) {
+        return [...Array(length).keys()].forEach(x => x+1);
+    }
+
     init() {
+        const _this = this;
+
         this.color.init();
         let steps = this.color.steps.filter(x => x >= 0);
         steps.splice(steps.length-1, 1); //last element is 1 not a break
+
         this.threshold.params.default = steps;
         this.storeProperty('threshold', steps);
-        this.threshold.init();
-        this.opacity.init();
-
-        const _this = this;
-
         this.threshold.on('threshold', function (raw, encoded, ctx) {
             if (_this.connect.raw) { //if YES
                 _this.color.setSteps([...raw, 1]);
             }
         }, true);
+        this.threshold.init();
+
+        this.opacity.init();
+
         this.connect.on('connect', function (raw, encoded, ctx) {
-            _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] : undefined);
+            _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] :
+                _this.defaultColSteps(_this.color.maxSteps)
+            );
         }, true);
         this.connect.init();
+
+        if (!this.connect.raw) {
+            //default breaks mapping for colormap if connect not enabled
+            this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
+            console.log(this.color.steps);
+        }
     }
 };
 

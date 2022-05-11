@@ -597,7 +597,7 @@ WebGLModule.UIControls = class {
             params = {default: params};
         }
         let originalType = defaultParams.type;
-        $.extend(true, defaultParams, params, requiredParams);
+        defaultParams = $.extend(true, {}, defaultParams, params, requiredParams);
 
         if (!this._items.hasOwnProperty(defaultParams.type)) {
             if (!this._impls.hasOwnProperty(defaultParams.type)) {
@@ -772,7 +772,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                let value = params.default && params.default !== "false" ? "checked" : "";
+                let value = this.decode(params.default) ? "checked" : "";
                 //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
                 return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
 class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
