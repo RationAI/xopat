@@ -358,7 +358,7 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 	 * @returns {string} HTML
 	 */
 	getPresetControlHTML(preset, isLeftClick) {
-		let comment = preset.getMetaValue('comment') || preset.objectFactory.getASAP_XMLTypeName();
+		let category = preset.getMetaValue('category') || preset.objectFactory.getASAP_XMLTypeName();
 		let icon = preset.objectFactory.getIcon();
 
 		let changeHtml = "";
@@ -376,7 +376,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_X
 		return `<div class="position-relative border-md p-1 mx-2 rounded-3 px-1" style="border-width:3px!important;"
 onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons pr-0" 
 style="color: ${preset.color};">${icon}</span>  <span class="one-liner d-inline-block v-align-middle" 
-style="width: 115px;">${comment}</span>
+style="width: 115px;">${category}</span>
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
 	}
 
@@ -504,7 +504,7 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 
 		let inputs = [];
 		for (let key in preset.meta) {
-			inputs.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], key !== 'comment'));
+			inputs.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], key !== 'category'));
 		}
 
 		return `${html} style="cursor:pointer; margin: 5px;" 

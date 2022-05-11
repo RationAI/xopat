@@ -704,7 +704,7 @@ To apply changes, please <a onclick="UTILITIES.refreshPage()" class="pointer">re
 <span class="f3-light text-shadow" style="position: absolute; top: 80px; right: 70px;">Pathopus</span>
 <span class="f3-light text-shadow" style="position: absolute; top: 97px;right: 61px;">Viewer</span>
 <span class="f6" style="color: var(--color-text-tertiary);    position: absolute;top: 73px;right: 59px;">v${APPLICATION_CONTEXT.version}</span>
-<span class="f3-light header-sep">Appearance</span>
+<span class="f3-light header-sep">Appearance</span><br>
 Theme &emsp; ${inputs.select({
                 classes: "select-sm",
                 onchange: `${updateOption("theme", true)} UTILITIES.updateTheme();`,
@@ -717,7 +717,7 @@ Theme &emsp; ${inputs.select({
                 default: true
 })}
 <br> ${standardBoolInput("scaleBar", "Show ScaleBar")}
-<br><br><span class="f3-light header-sep">Behaviour</span>
+<br><br><span class="f3-light header-sep">Behaviour</span><br>
 ${standardBoolInput("bypassCookies", "Disable Cookies")}
 <br>${standardBoolInput("debugMode", "Debug Mode")}
 `, 'settings', false, true);

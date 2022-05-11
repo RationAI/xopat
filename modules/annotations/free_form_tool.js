@@ -52,7 +52,7 @@ OSDAnnotations.FreeFormTool = class {
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
-        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(this._context.polygonFactory);
+        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(OSDAnnotations.PolygonUtilities);
         this._created = created;
         this._updatePerformed = false;
     }

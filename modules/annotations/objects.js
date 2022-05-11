@@ -5,17 +5,17 @@ OSDAnnotations.Preset = class {
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
      * @param {number} id
      * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
-     * @param {string} comment default comment meta data
+     * @param {string} category default category meta data
      * @param {string} color fill color
      */
-    constructor(id, objectFactory = null, comment = "", color = "") {
+    constructor(id, objectFactory = null, category = "", color = "") {
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
-        this.meta.comment = {
+        this.meta.category = {
             name: 'Category',
-            value: comment
+            value: category
         };
     }
 

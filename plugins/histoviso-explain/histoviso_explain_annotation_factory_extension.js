@@ -327,8 +327,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                     width: _this._selected.width,
                     height: _this._selected.height,
                     type: _this.type,
-                    factoryId: _this.factoryId,
-                    comment: _this._selected.comment
+                    factoryId: _this.factoryId
                 }
             ));
             img.originalImage = myImage;

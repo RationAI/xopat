@@ -1322,8 +1322,8 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	setToAuto(temporary) {
-		if (temporary) return false;
 		this.context.freeFormTool.hideCursor();
+		if (temporary) return false;
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
 		return true;

@@ -174,7 +174,6 @@ window.addEventListener("beforeunload", (e) => {
         if (previous) {
             this._removeFromBoard(previous);
         }
-        //console.log("PREV", previous, "NEXT", newObject);
 
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
         this._buffer[this._buffidx] = { forward: newObject, back: previous };
@@ -300,7 +299,6 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _updateBoardText(object, text) {
-        //console.log(text);
         if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
         this._performAtJQNode("annotation-logs", node =>
             node.find(`#log-object-${object.incrementId} span.desc`).html(text));
@@ -345,20 +343,25 @@ window.addEventListener("beforeunload", (e) => {
             let objmeta = object.meta || {};
             for (let key in preset.meta) {
                 let metaElement = preset.meta[key];
-                let fn = key === "comment" ? inputs.unshift : inputs.push;
-                fn.apply(inputs, ['<label class="show-hint d-block" data-hint="', metaElement.name,
-                    '"><input type="text" class="form-control border-0 width-full" readonly ',
-                    'style="background:transparent;color: inherit;" value="', objmeta[key] ?? metaElement.value,
-                    '" name="', key, '"></label>']);
+                if (key === "category") {
+                    inputs.unshift('<span class="show-hint d-block p-2" data-hint="', metaElement.name,
+                        '">', metaElement.value || this._getObjectDefaultDescription(object), '</span>');
+                } else {
+                    // from user-testing: disabled change of properties in the board...
+                    // inputs.push('<label class="show-hint d-block" data-hint="', metaElement.name,
+                    //     '"><input type="text" class="form-control border-0 width-full" readonly ',
+                    //     'style="background:transparent;color: inherit;" value="', objmeta[key] ?? metaElement.value,
+                    //     '" name="', key, '"></label>');
+                }
             }
         }
 
-        //with no metadata, object will receive 'comment' on edit
+        //with no metadata, object will receive 'category' on edit
         if (inputs.length  < 1) {
             inputs.push('<label class="show-hint d-block" data-hint="Category">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
-                this._getObjectDefaultDescription(object), '" name="comment"></label>');
+                this._getObjectDefaultDescription(object), '" name="category"></label>');
         }
 
         const _this = this;
@@ -366,7 +369,7 @@ window.addEventListener("beforeunload", (e) => {
         this._performAtJQNode("annotation-logs", node => node.prepend(`
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
-<span class="material-icons" style="vertical-align:super;color: ${object.fill}">${icon}</span> 
+<span class="material-icons" style="vertical-align:sub;color: ${object.fill}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 <span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
 title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
@@ -419,32 +422,34 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
                 let newObject = factory.recalculate(obj);
                 if (newObject) {
                     this._context.replaceAnnotation(obj, newObject, true);
-                    obj = newObject;
+                    //from user testing: disable modification of meta
+                    //obj = newObject;
                 } else {
                     this._context.canvas.renderAll();
                 }
             } else {
-                obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
+                //from user testing: disable modification of meta
+                //obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
             }
 
-            let self = this._editSelection.self,
-                inputs = self.parent().find("input"),
-                preset = this._context.presets.get(obj.presetID),
-                metadata = preset ? preset.meta : {};
-            if (obj) {
-                if (!obj.meta) obj.meta = {};
-                inputs.each((e, t) => {
-                    if (!metadata[t.name] || metadata[t.name].value != t.value) {
-                        obj.meta[t.name] = t.value;
-                    }
-                    $(t).attr('readonly', true);
-                });
-                console.log(obj.meta);
-            } else {
-                console.warn("Failed to update object: could not find object with id "
-                    + this._editSelection.incrementId);
-                inputs.each((e, t) => t.readonly = true);
-            }
+            let self = this._editSelection.self;
+            //from user testing: disable modification of meta
+            //     inputs = self.parent().find("input"),
+            //     preset = this._context.presets.get(obj.presetID),
+            //     metadata = preset ? preset.meta : {};
+            // if (obj) {
+            //     if (!obj.meta) obj.meta = {};
+            //     inputs.each((e, t) => {
+            //         if (!metadata[t.name] || metadata[t.name].value != t.value) {
+            //             obj.meta[t.name] = t.value;
+            //         }
+            //         $(t).attr('readonly', true);
+            //     });
+            // } else {
+            //     console.warn("Failed to update object: could not find object with id "
+            //         + this._editSelection.incrementId);
+            //     inputs.each((e, t) => t.readonly = true);
+            // }
             self.html('edit');
 
             if (!switches) {
@@ -463,7 +468,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
         if (factory !== undefined) {
             return factory.getDescription(object);
         }
-        return undefined;
+        return "";
     }
 
     async _performSwap(canvas, toAdd, toRemove) {
