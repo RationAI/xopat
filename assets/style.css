@@ -6,6 +6,13 @@
 .text-white-shadow {
     text-shadow: -1px 0 white, 0 1px white, 1px 0 white, 0 -1px white;
 }
+/*Text with bg color outline*/
+.text-shadow {
+    text-shadow: -1px 0 var(--color-bg-primary), 0 1px var(--color-bg-primary), 1px 0 var(--color-bg-primary), 0 -1px var(--color-bg-primary);
+}
+html[data-color-mode=dark] .invert-icon {
+    filter: invert(0.8);
+}
 /*Button is outlined like selected*/
 .btn-selected {
     background: var(--color-border-overlay) !important;
@@ -301,6 +308,8 @@ input.selectable-image-row-context:checked + div {border-color: var(--color-stat
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
+.svg-bg {fill: var(--color-bg-primary);}
+.svg-fg {fill: var(--color-text-primary);}
 a {cursor: pointer;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
 .material-icons {font-family: 'Material Icons';font-weight: normal;font-style: normal;font-size: 24px;
