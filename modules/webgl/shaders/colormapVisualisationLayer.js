@@ -84,33 +84,42 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
     init() {
         const _this = this;
 
-        this.color.init();
-        let steps = this.color.steps.filter(x => x >= 0);
-        steps.splice(steps.length-1, 1); //last element is 1 not a break
-
-        this.threshold.params.default = steps;
-        this.storeProperty('threshold', steps);
-        this.threshold.on('threshold', function (raw, encoded, ctx) {
-            if (_this.connect.raw) { //if YES
-                _this.color.setSteps([...raw, 1]);
-            }
-        }, true);
-        this.threshold.init();
-
         this.opacity.init();
 
         this.connect.on('connect', function (raw, encoded, ctx) {
             _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] :
                 _this.defaultColSteps(_this.color.maxSteps)
             );
+            _this.color.updateColormapUI();
         }, true);
         this.connect.init();
+
+
+        this.threshold.on('threshold_values', function (raw, encoded, ctx) {
+            if (_this.connect.raw) { //if YES
+                _this.color.setSteps([...raw, 1]);
+                _this.color.updateColormapUI();
+            }
+        }, true);
+        this.threshold.init();
+
+        if (this.threshold.raw.length != this.color.params.steps - 1) {
+            //todo fix this scenario
+            //console.warn("Invalid todododo");
+        }
 
         if (!this.connect.raw) {
             //default breaks mapping for colormap if connect not enabled
             this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
             console.log(this.color.steps);
+        } else {
+            this.color.setSteps([...this.threshold.raw, 1]);
         }
+
+        this.color.init();
+        // let steps = this.color.steps.filter(x => x >= 0);
+        // steps.splice(steps.length-1, 1); //last element is 1 not a break
+        // this.storeProperty('threshold_values', steps);
     }
 };
 

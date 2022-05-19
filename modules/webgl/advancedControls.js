@@ -115,24 +115,24 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
         if (!this.value || !ColorMaps.schemeGroups[this.params.mode][this.value]) {
             this.value = ColorMaps.defaults[this.params.mode];
         }
-        this.pallete = ColorMaps[this.value][this.maxSteps];
+        this.colorPallete = ColorMaps[this.value][this.maxSteps];
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 let self = $(e.target),
                     selected = self.val();
-                let pallete = ColorMaps[selected][_this.maxSteps];
-                _this._setPallete(pallete);
-                self.css("background", _this.cssGradient(pallete));
+                _this.colorPallete = ColorMaps[selected][_this.maxSteps];
+                _this._setPallete(_this.colorPallete);
+                self.css("background", _this.cssGradient(_this.colorPallete));
                 _this.value = selected;
                 _this.context.storeProperty(_this.name, selected);
                 _this.changed(_this.name, _this.pallete, _this.value, _this);
                 _this.context.invalidate();
             };
-            let node = $(`#${this.id}`);
-            node.css("background", this.cssGradient(this.pallete));
-            this._setPallete(this.pallete);
+
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
 
             let schemas = [];
             for (let pallete of ColorMaps.schemeGroups[this.params.mode]) {
@@ -146,6 +146,12 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             let existsNode = document.getElementById(this.id);
             if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
         }
+    }
+
+    updateColormapUI() {
+        let node = $(`#${this.id}`);
+        node.css("background", this.cssGradient(this.colorPallete));
+        return node;
     }
 
     setSteps(steps) {
@@ -173,26 +179,22 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     _continuousCssFromPallete(pallete) {
-        let step = 100 / (pallete.length-1),
-            percent = step;
         let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
-        for (let i = 1; i < pallete.length; i++) {
-            css.push(`, ${pallete[i]} ${percent}%`);
-            percent += step;
+        for (let i = 1; i < this.maxSteps; i++) {
+            css.push(`, ${pallete[i]} ${Math.round((this.steps[i-1]+this.steps[i])*50)}%`);
         }
         css.push(")");
+        console.log(this.steps, this.colorPallete, css.join(""));
         return css.join("");
     }
 
     _discreteCssFromPallete(pallete) {
-        let step = 100 / pallete.length,
-            percent = step;
         let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
-        for (let i = 1; i < pallete.length; i++) {
-            css.push(`, ${pallete[i-1]} ${percent}%, ${pallete[i]} ${percent}%`);
-            percent += step;
+        for (let i = 1; i < this.maxSteps; i++) {
+            css.push(`, ${pallete[i-1]} ${Math.round(this.steps[i-1]*100)}%, ${pallete[i]} ${Math.round(this.steps[i-1]*100)}%`);
         }
         css.push(")");
+        console.log(this.steps, this.colorPallete, css.join(""));
         return css.join("");
     }
 
@@ -423,7 +425,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     _this._updatePending = true;
                     setTimeout(_ => {
                         //todo re-scale values or filter out -1ones
-                        _this.changed(_this.name, _this.value, strValues, _this);
+                        _this.changed(_this.name + "_values", _this.value, strValues, _this);
                         _this.context.storeProperty(_this.name, unencoded);
 
                         _this.context.invalidate();
