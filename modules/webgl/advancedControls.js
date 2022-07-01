@@ -142,6 +142,8 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             node.val(this.value);
             node.change(updater);
         } else {
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
             //be careful with what the DOM elements contains or not if not interactive...
             let existsNode = document.getElementById(this.id);
             if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
@@ -184,7 +186,6 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             css.push(`, ${pallete[i]} ${Math.round((this.steps[i-1]+this.steps[i])*50)}%`);
         }
         css.push(")");
-        console.log(this.steps, this.colorPallete, css.join(""));
         return css.join("");
     }
 
@@ -194,7 +195,6 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             css.push(`, ${pallete[i-1]} ${Math.round(this.steps[i-1]*100)}%, ${pallete[i]} ${Math.round(this.steps[i-1]*100)}%`);
         }
         css.push(")");
-        console.log(this.steps, this.colorPallete, css.join(""));
         return css.join("");
     }
 
@@ -220,8 +220,8 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><div id="${this.id}" class="text-white-shadow" 
-style="width: 60%;">${this.params.default}</div>`;
+        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
+style="width: 60%;">${this.context.loadProperty(this.name, this.params.default)}</span>`;
 
         if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
             this.params.pallete = "OrRd";

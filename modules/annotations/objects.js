@@ -103,6 +103,8 @@ OSDAnnotations.PresetManager = class {
         //active presets for mouse buttons
         this.left = undefined;
         this.right = undefined;
+        //todo as configurable and save-able param
+        this.modeOutline = true;
         this._colorSteps = 8;
         this._colorStep = 0;
     }
@@ -114,24 +116,24 @@ OSDAnnotations.PresetManager = class {
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
-        let preset = isLeftClick ? this.left : this.right;
+        let preset = isLeftClick ? this.left : this.right,
+            result = this._populateObjectOptions(preset);
+        result.isLeftClick = isLeftClick;
+        return result;
+    }
 
-        //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
-        return $.extend({fill: preset.color},
-            OSDAnnotations.PresetManager._commonProperty,
-            {
-                presetID: preset.presetID,
-                layerId: this._context.getLayer().id,
-                isLeftClick: isLeftClick,
-                opacity: this._context.getOpacity(),
-            }
-        );
+    /**
+     * Todo implement
+     * @param isOutline
+     */
+    setModeOutline(isOutline) {
+
     }
 
     /**
      * Add new preset with default values
      * @event preset-create
-     * @returns {Preset} newly created preset
+     * @returns {OSDAnnotations.Preset} newly created preset
      */
     addPreset() {
         let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
@@ -142,15 +144,28 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Alias for static _commonProperty
+     * @param {OSDAnnotations.Preset} preset
      */
-    getCommonProperties() {
+    getCommonProperties(withPreset) {
+        if (withPreset) {
+            return this._populateObjectOptions(withPreset);
+        }
         return this.constructor._commonProperty;
+    }
+
+    /**
+     * Check if preset exists
+     * @param {number} id preset id
+     * @returns true if exists
+     */
+    exists(id) {
+        return this._presets.hasOwnProperty(id);
     }
 
     /**
      * Presets getter
      * @param {number} id preset id
-     * @returns {Preset} preset instance
+     * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id) {
         return this._presets[id];
@@ -207,6 +222,23 @@ OSDAnnotations.PresetManager = class {
         }
         if (needsRefresh) this._context.raiseEvent('preset-update', {preset: preset});
         return needsRefresh ? preset : undefined;
+    }
+
+    /**
+     * Correctly and safely reflect object appearance based on mode
+     * @param object object to update
+     * @param withPreset preset that obect belongs to
+     */
+    updateObjectVisuals(object, withPreset) {
+        if (typeof object.fill === 'string') {
+            if (this.modeOutline) {
+                object.fill = "";
+                object.stroke = withPreset.color;
+            } else {
+                object.fill = withPreset.color;
+                object.stroke = this.constructor._commonProperty.stroke;
+            }
+        }
     }
 
     /**
@@ -316,6 +348,30 @@ OSDAnnotations.PresetManager = class {
         if (!this._presets[id]) return;
         if (isLeftClick) this.left = this._presets[id];
         else this.right = this._presets[id];
+    }
+
+    _populateObjectOptions(withPreset) {
+        if (this.modeOutline) {
+            return $.extend({fill: ""},
+                OSDAnnotations.PresetManager._commonProperty,
+                {
+                    presetID: withPreset.presetID,
+                    layerId: this._context.getLayer().id,
+                    opacity: this._context.getOpacity(),
+                    stroke: withPreset.color
+                }
+            );
+        } else {
+            //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
+            return $.extend({fill: withPreset.color},
+                OSDAnnotations.PresetManager._commonProperty,
+                {
+                    presetID: withPreset.presetID,
+                    layerId: this._context.getLayer().id,
+                    opacity: this._context.getOpacity(),
+                }
+            );
+        }
     }
 
     _randomColorHexString() {
@@ -478,6 +534,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     getCreationRequiredMouseDragDurationMS() {
         return 100;
+    }
+
+    /**
+     * Get bounding box of an object - used to focus the screen on.
+     */
+    getObjectFocusZone(ofObject) {
+       return ofObject.getBoundingRect(true, true);
     }
 
     /**

@@ -108,7 +108,7 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
 
         let uicontrols = {};
         let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {});
+        let fallbackLayer = new WebGLModule.IdentityLayer("id", {}, {layer: {}});
         for (let type of types) {
             let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
             let glType = ctrl.type;

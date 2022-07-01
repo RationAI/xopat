@@ -200,15 +200,15 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         super();
         this.context = context;
         this.gl = gl;
+        //todo delete
         this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
 
-        this.tile_size = 'u_tile_size';
         this.wrap = gl.MIRRORED_REPEAT;
         this.tile_pos = 'a_tile_pos';
         this.filter = gl.NEAREST;
         this.pos = 'a_pos';
 
-        this.texture = new WebGLModule.DataLoader.V1_0(gl, index => `vis_data_sampler_${index}`);
+        this.texture = new WebGLModule.DataLoader.V1_0(gl);
     }
 
     getVersion() {
@@ -216,15 +216,15 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
     }
 
     getTextureDimensionXY(dataIndex) {
-        return `u_tile_size`; //hope its okay :D
+        return this.texture.measure(dataIndex);
     }
 
     getTextureSamplingCode(dataIndex, textureCoords) {
-        return `texture2D(vis_data_sampler_${dataIndex}, ${textureCoords})`;
+        return this.texture.sample(dataIndex, textureCoords);
     }
 
     generateVisualisation(order, visualisation, withHtml) {
-        var definition = "", execution = "", samplers = "", html = "",
+        var definition = "", execution = "", html = "",
             _this = this, usableShaders = 0, simultaneouslyVisible = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
@@ -283,31 +283,29 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         // this.texture.renderOrder = urls;
 
         //since we download for now all data, we can just index the sources...
-        this.texture.loadOrder = this.context.visualization();
-        for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
-            if (this.context._dataSourceMapping[i] === -1) continue;
-            samplers += `uniform sampler2D vis_data_sampler_${i};`;
-        }
+        // this.texture.loadOrder = this.context.visualization();
+        // for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
+        //     if (this.context._dataSourceMapping[i] === -1) continue;
+        //     samplers += `uniform sampler2D vis_data_sampler_${i};`;
+        // }
 
         return {
             vertex_shader: this.getVertexShader(),
-            fragment_shader: this.getFragmentShader(samplers, definition, execution, globalScopeCode),
+            fragment_shader: this.getFragmentShader(definition, execution,
+                this.context._dataSourceMapping, globalScopeCode),
             html: html,
             usableShaders: usableShaders,
             dataUrls: this.context._dataSources
         };
     }
 
-    getFragmentShader(samplers, definition, execution, globalScopeCode) {
+    getFragmentShader(definition, execution, indicesOfImages, globalScopeCode) {
         return `
 precision mediump float;
 uniform float pixel_size_in_fragments;
 uniform float zoom_level;
-uniform vec2 u_tile_size;
-
+${this.texture.declare(indicesOfImages)}
 varying vec2 tile_texture_coords;
-
-${samplers}
 
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
@@ -367,8 +365,6 @@ void main() {
         var bytes = buffer.BYTES_PER_ELEMENT;
         var count = 4;
 
-        gl.uniform2f(gl.getUniformLocation(program, this.tile_size), gl.canvas.width, gl.canvas.height);
-
         // Get attribute terms
         this._att = [this.pos, this.tile_pos].map(function (name, number) {
             var index = Math.min(number, boxes.length - 1);
@@ -377,7 +373,7 @@ void main() {
             return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
-        this.texture.toBuffers(this.context, gl, this.wrap, this.filter, currentVisualisation);
+        this.texture.toBuffers(this.context, gl, program, this.wrap, this.filter, currentVisualisation);
 
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 
@@ -505,11 +501,11 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
     }
 
     getTextureDimensionXY(dataIndex) {
-        return `vec2(textureSize(vis_data_sampler_array))`;
+        return this.texture.measure(dataIndex);
     }
 
     getTextureSamplingCode(dataIndex, textureCoords) {
-        return `texture(vis_data_sampler_array, vec3(${textureCoords}, _vis_data_sampler_array_indices[${dataIndex}]))`;
+        return this.texture.sample(dataIndex, textureCoords);
     }
 
     getFragmentShader(definition, execution, indicesOfImages, globalScopeCode) {
@@ -517,10 +513,7 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
 precision mediump float;
 precision mediump sampler2DArray;
 
-uniform sampler2DArray vis_data_sampler_array;
-int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOfImages.length}](
-  ${indicesOfImages.join(",")}
-);
+${this.texture.declare(indicesOfImages)}
 uniform float pixel_size_in_fragments;
 uniform float zoom_level;
 uniform vec2 u_tile_size;
@@ -546,7 +539,6 @@ ${this.glslBlendCode}
 void blend(vec4 foreground) {
     final_color = blend_equation(foreground, final_color);
 }
-
 
 ${Object.values(globalScopeCode).join("\n")}
         
@@ -590,9 +582,7 @@ void main() {
         context['gl_loaded'].call(context, gl, program, currentVisualisation);
 
         //Note that the drawing strategy is not to resize canvas, and simply draw everyhing on squares
-        //The resizing in border tiles is done when the GL canvas is rendered to the output canvas
-        gl.uniform2f(gl.getUniformLocation(program, 'u_tile_size'), gl.canvas.width, gl.canvas.height);
-        this.texture.toBuffers(context, gl, this.wrap, this.filter, currentVisualisation);
+        this.texture.toBuffers(context, gl, program, this.wrap, this.filter, currentVisualisation);
 
         //Empty ARRAY: get the vertices directly from the shader
         gl.bindBuffer(gl.ARRAY_BUFFER, this.emptyBuffer);

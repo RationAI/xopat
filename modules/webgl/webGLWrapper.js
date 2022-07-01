@@ -99,6 +99,7 @@ class WebGLModule {
             WebGLModule.GlContextFactory.init(this, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
+            console.error(e);
             return;
         }
 
@@ -529,7 +530,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 document.body.innerHTML += `<div id="test-${this.uniqueId}-webgl" style="position:absolute; top:0; right:0; width: 250px">${this._getDebugInfoPanel()}</div>`;
             } else {
                 //safe as we do this before handlers are attached
-                document.getElementById(this.htmlControlsId).innerHTML += `<div id="test-${this.uniqueId}-webgl" style="width: 100%;">${this._getDebugInfoPanel()}</div>`;
+                document.getElementById(this.htmlControlsId).parentElement.innerHTML += `<div id="test-${this.uniqueId}-webgl" style="width: 100%;">${this._getDebugInfoPanel()}</div>`;
             }
         }
     }

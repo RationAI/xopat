@@ -33,13 +33,14 @@ OpenSeadragon.Tools = class {
 
     /**
      * @param params Object that defines the focus
-     * @param params.animationTime | params.duration (optional)
-     * @param params.springStiffness | params.transition (optional)
-     * @param params.bounds OpenSeadragon.Rect, if defined, the focus is immediate, in viewport coordinates;
-     * else both elements below must be defined
-     * @param params.immediately  focus immediately if true and params.bounds defined
+     * @param params.bounds OpenSeadragon.Rect, in viewport coordinates;
+     *   both elements below must be defined if bounds are undefined
      * @param params.point OpenSeadragon.Point center of focus
      * @param params.zoomLevel Number, zoom level
+     *
+     * @param params.animationTime | params.duration (optional)
+     * @param params.springStiffness | params.transition (optional)
+     * @param params.immediately focus immediately if true (optional)
      */
     focus(params) {
         this.constructor.focus(this.viewer, params);
@@ -69,8 +70,8 @@ OpenSeadragon.Tools = class {
         if (params.hasOwnProperty("bounds")) {
             view.fitBoundsWithConstraints(params.bounds, params.immediately);
         } else {
-            view.panTo(params.point);
-            view.zoomTo(params.zoomLevel);
+            view.panTo(params.point, params.immediately);
+            view.zoomTo(params.zoomLevel, params.immediately);
         }
         view.applyConstraints();
 

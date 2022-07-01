@@ -719,7 +719,9 @@ Theme &emsp; ${inputs.select({
 <br> ${standardBoolInput("scaleBar", "Show ScaleBar")}
 <br><br><span class="f3-light header-sep">Behaviour</span><br>
 ${standardBoolInput("bypassCookies", "Disable Cookies")}
+<br><br><span class="f3-light header-sep">Other</span><br>
 <br>${standardBoolInput("debugMode", "Debug Mode")}
+<br>${standardBoolInput("webglDebugMode", "Debug Rendering")}
 `, 'settings', false, true);
     }
 

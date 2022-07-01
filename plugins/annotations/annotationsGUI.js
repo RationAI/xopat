@@ -718,10 +718,11 @@ ${this.presetExportControls()}
         const _this = this;
 
 		this.dataLoader.loadAnnotation(this._server, id, json => {
-                _this.context.loadObjects(json.annotations);
                 $('#preset-modify-dialog').remove();
                 _this.context.presets.import(json.presets);
                 _this.updatePresetsHTML();
+
+				_this.context.loadObjects(json.annotations);
                 $("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
                 Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
             },

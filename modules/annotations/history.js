@@ -153,6 +153,8 @@ window.addEventListener("beforeunload", (e) => {
         let _this = this;
         this._context.canvas.getObjects().some(o => {
             if (!isNaN(o.incrementId)) {
+                let preset = this._presets.get(o.presetID);
+                if (preset) this._presets.updateObjectVisuals(o, preset);
                 _this._addToBoard(o);
             }
             return false;
@@ -234,7 +236,8 @@ window.addEventListener("beforeunload", (e) => {
     itemEdit(object) {
         let node = this._getNode(`edit-log-object-${object.incrementId}`);
         if (node) {
-            this._boardItemEdit(node, object.x, object.y);
+            let bbox = this._getFocusBBox(object);
+            this._boardItemEdit(node, bbox, object);
         }
     }
 
@@ -264,13 +267,6 @@ window.addEventListener("beforeunload", (e) => {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }
-                let preset = this._presets.get(o.presetID);
-                if (preset) {
-                    if (typeof o.fill === 'string') {
-                        o.fill = preset.color;
-                    }
-                    o.color = preset.color; //todo color not supported anymore
-                }
                 _this._addToBoard(o);
             } else if (o.incrementId && !isNaN(o.incrementId)) {
                 _this._addToBoard(o);
@@ -279,13 +275,12 @@ window.addEventListener("beforeunload", (e) => {
         });
     }
 
-    _focus(cx, cy, objectId = null) {
-        cx = Number.parseFloat(cx);
-        cy = Number.parseFloat(cy);
-        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+    _focus(bbox, objectId = null, adjustZoom=true) {
+        bbox.left = Number.parseFloat(bbox.left || bbox.x);
+        bbox.top = Number.parseFloat(bbox.top || bbox.y);
+        if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) return;
 
-        let target = VIEWER.tools.referencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy)),
-            targetObj = undefined;
+        let targetObj = undefined;
         if (objectId !== null) {
             targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
@@ -293,8 +288,22 @@ window.addEventListener("beforeunload", (e) => {
                 this._context.canvas.setActiveObject(targetObj);
             }
         }
-        VIEWER.viewport.panTo(target, false);
-        VIEWER.viewport.applyConstraints();
+
+        if (adjustZoom && bbox.width > 0 && bbox.height > 0) {
+            //show such that the annotation would fit on the screen three times
+            let offX = bbox.width,
+                offY = bbox.height;
+            let target = VIEWER.tools.referencedTiledImage().imageToViewportRectangle(bbox.left-offX*1.5,
+                bbox.top-offY*1.5, bbox.width+offX*3, bbox.height+offY*3);
+
+            VIEWER.tools.focus({bounds: target});
+        } else {
+            let cx = bbox.left + bbox.width / 2, cy = bbox.top + bbox.height / 2;
+            let target = VIEWER.tools.referencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+            VIEWER.viewport.panTo(target, false);
+            VIEWER.viewport.applyConstraints();
+        }
+
         return targetObj;
     }
 
@@ -338,8 +347,9 @@ window.addEventListener("beforeunload", (e) => {
             object.incrementId = this._autoIncrement++;
         }
 
-        let preset = this._context.presets.get(object.presetID);
+        let preset = this._context.presets.get(object.presetID), color = 'black';
         if (preset) {
+            color = preset.color;
             let objmeta = object.meta || {};
             for (let key in preset.meta) {
                 let metaElement = preset.meta[key];
@@ -365,19 +375,19 @@ window.addEventListener("beforeunload", (e) => {
         }
 
         const _this = this;
-        let center = object.getCenterPoint();
+        let focusBox = this._getFocusBBoxAsString(object, factory);
         this._performAtJQNode("annotation-logs", node => node.prepend(`
 <div id="log-object-${object.incrementId}" class="rounded-2"
-onclick="opener.${_this._globalSelf}._focus(${center.x}, ${center.y}, ${object.incrementId});">
-<span class="material-icons" style="vertical-align:sub;color: ${object.fill}">${icon}</span> 
+onclick="opener.${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
+<span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 <span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
 title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
-opener.${_this._globalSelf}._boardItemEdit(self, ${center.x}, ${center.y}, ${object.incrementId}); } 
+opener.${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
     }
 
-    _boardItemEdit(self, cx, cy, object) {
+    _boardItemEdit(self, focusBBox, object) {
         if (this._editSelection) {
             this._boardItemSave(true);
         } else {
@@ -394,7 +404,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
         let objectId;
         if (typeof object !== "object") {
             objectId = object;
-            object = this._focus(cx, cy, objectId) || this._context.canvas.getActiveObject();
+            object = this._focus(focusBBox, objectId) || this._context.canvas.getActiveObject();
         } else {
             objectId = object.incrementId;
         }
@@ -473,8 +483,7 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
 
     async _performSwap(canvas, toAdd, toRemove) {
         if (toAdd) {
-            let center = toAdd.getCenterPoint();
-            this._focus(center.x, center.y);
+            this._focus(this._getFocusBBox(toAdd));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
             this._addToBoard(toAdd);
@@ -485,13 +494,29 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             }
             this._context.canvas.setActiveObject(toAdd);
         } else if (toRemove) {
-            let center = toRemove.getCenterPoint();
-            this._focus(center.x, center.y);
+            this._focus(this._getFocusBBox(toRemove));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
         }
         canvas.renderAll();
+    }
+
+    _getFocusBBox(of, factory) {
+        factory = factory || this._context.getAnnotationObjectFactory(of.factoryId);
+        let bbox;
+        if (factory) {
+            bbox = factory.getObjectFocusZone(of);
+        } else {
+            let center = of.getCenterPoint();
+            bbox = {left: center.x, top: center.y, width: 0, height: 0};
+        }
+        return bbox;
+    }
+
+    _getFocusBBoxAsString(of, factory) {
+        let box = this._getFocusBBox(of, factory);
+        return `{left: ${box.left},top: ${box.top},width: ${box.width},height: ${box.height}}`;
     }
 
     _findObjectOnCanvasById(id) {

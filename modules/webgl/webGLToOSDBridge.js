@@ -4,6 +4,8 @@
 *
 * Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
+*
+* TODO always use cache approach, do not rely on events, just program two approaches - with and without cache (setting c2d directly after tile load)
 */
 
 OpenSeadragon.BridgeGL = class {

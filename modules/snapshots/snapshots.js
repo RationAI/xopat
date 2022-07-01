@@ -212,6 +212,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             json[i].point = new OpenSeadragon.Point(json[i].point.x, json[i].point.y);
             this._add(json[i]);
         }
+        this._idx = 0;
     }
 
     /**
@@ -310,7 +311,6 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     _add(step) {
         let index = this._steps.length;
         this._steps.push(step);
-        console.log(step);
         this.raiseEvent("create", {
             index: index,
             step: step
@@ -322,8 +322,12 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         if (!step || this._steps.length <= index) {
             return;
         }
-        if (step.visualization) this._setVisualization(step);
-        if (step.point && !isNaN(step.zoomLevel)) this._utils.focus(step);
+
+        let capturesViewport = step.point && !isNaN(step.zoomLevel);
+        if (step.visualization) this._setVisualization(step, capturesViewport ? step.duration : 0);
+        if (capturesViewport) this._utils.focus(step);
+        else if (this.viewer.bridge) this.viewer.bridge.redraw();
+
         this.raiseEvent("enter", {
             index: index,
             immediate: direct,
@@ -331,7 +335,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         });
     }
 
-    _setVisualization(step) {
+    _setVisualization(step, duration) {
         let bridge = this.viewer.bridge,
             from = step.visualization,
             curIdx = bridge.currentVisualisationIndex(),
@@ -358,7 +362,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             bridge.switchVisualisation(from.index);
         } else if (needsRefresh) {
             bridge.webGLEngine.rebuildVisualisation(from.order);
-            bridge.invalidate(step.duration * 900); //50% od the duration allowed to be constantly updated
+            bridge.invalidate(duration * 900); //50% od the duration allowed to be constantly updated
         }
     }
 

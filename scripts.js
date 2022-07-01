@@ -304,7 +304,7 @@ form.submit();<\/script>`;
             let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
-<body>
+<body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${JSON.stringify(console.savedLogs)}</pre></div>
 ${constructExportVisualisationForm()}
 </body></html>`;

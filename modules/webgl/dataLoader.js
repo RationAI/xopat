@@ -22,6 +22,9 @@ WebGLModule.DataLoader = {
      *  use the global index to localize the texture chunk in the data
      *  use the local index to get the texture name the chunk must be loaded to.
      *
+     * Note that loading with single texture and computing indices is not possible
+     * since some access surrounding pixels -> requirement of MIRRORED_REPEAT not implementable
+     *
      * For details, please, see the implementation.
      * @type WebGLModule.DataLoader.V1_0
      */
@@ -29,13 +32,9 @@ WebGLModule.DataLoader = {
         /**
          * Creation
          * @param {WebGLRenderingContext} gl
-         * @param {function} textureNameGetter must receive index of texture (wrt. WebGLModule),
-         *   returns name of the texture. Supposes all tiles are loaded to different texture units,
-         *   since WebGL 1.0 does not support texture arrays or 3D textures.
          */
-        constructor(gl, textureNameGetter) {
+        constructor(gl) {
             this._units = [];
-            this.texNameGetter = textureNameGetter;
             this.canvas = document.createElement('canvas');
             this.canvasReader = this.canvas.getContext('2d');
             this.canvasConverter = document.createElement('canvas');
@@ -46,13 +45,17 @@ WebGLModule.DataLoader = {
          * Called when the program is being loaded (set as active)
          * @param {WebGLModule} context
          * @param {WebGLRenderingContext} gl WebGL context
+         * @param {WebGLProgram} program
          * @param {GLint} wrap required texture GL wrap value
          * @param {GLint} filter required texture GL filter value
          * @param {object} visualisation reference to the visualization object
          */
-        toBuffers (context, gl, wrap, filter, visualisation) {
+        toBuffers (context, gl, program, wrap, filter, visualisation) {
             this.wrap = wrap;
             this.filter = filter;
+
+            //The resizing in border tiles is done when the GL canvas is rendered to the output canvas
+            gl.uniform2f(gl.getUniformLocation(program, 'sampler_size'), gl.canvas.width, gl.canvas.height);
         }
 
         /**
@@ -103,7 +106,7 @@ WebGLModule.DataLoader = {
                 }
                 let bindConst = `TEXTURE${index}`;
                 gl.activeTexture(gl[bindConst]);
-                let location = gl.getUniformLocation(program, this.texNameGetter(i));
+                let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
                 gl.uniform1i(location, index);
 
                 gl.bindTexture(gl.TEXTURE_2D, this._units[index]);
@@ -134,6 +137,40 @@ WebGLModule.DataLoader = {
                 index++;
             }
         }
+
+        /**
+         * Measure texture size
+         * @param {number} index index of the texture
+         * @return {string} GLSL expression (unterminated) to obtain texture size - vec2
+         */
+        measure(index) {
+            return 'sampler_size';
+        }
+
+        /**
+         * Sample texture
+         * @param {number|string} index texture index, must respect index re-mapping (see declare())
+         * @param {string} vec2coords GLSL expression that evaluates to vec2
+         * @return {string} GLSL expression (unterminated) that evaluates to vec4
+         */
+        sample(index, vec2coords) {
+            return `texture2D(vis_data_sampler_${index}, ${vec2coords})`;
+        }
+
+        /**
+         * Declare elements in shader
+         * @param {number[]} indicesOfImages mapping of shader to data index, i.e. if shader requests
+         *  texture i, the texture is located in the data at indicesOfImages[i] index
+         * @return {string} GLSL declaration (terminated with semicolon) of necessary elements for textures
+         */
+        declare(indicesOfImages) {
+            let samplers = 'uniform vec2 sampler_size;';
+            for (let i = 0; i < indicesOfImages.length; i++) {
+                if (indicesOfImages[i] === -1) continue;
+                samplers += `uniform sampler2D vis_data_sampler_${i};`;
+            }
+            return samplers;
+        }
     },
 
     /**
@@ -163,7 +200,7 @@ WebGLModule.DataLoader = {
          * @param {GLint} filter required texture GL filter value
          * @param {object} visualisation reference to the visualization object
          */
-        toBuffers(context, gl, wrap, filter, visualisation) {
+        toBuffers(context, gl, program, wrap, filter, visualisation) {
             this.wrap = wrap;
             this.filter = filter;
         }
@@ -198,18 +235,52 @@ WebGLModule.DataLoader = {
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, this.filter);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, this.wrap);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, this.wrap);
+
             gl.texImage3D(
                 gl.TEXTURE_2D_ARRAY,
                 0,
-                gl.R8,
+                gl.RGBA,
                 tileBounds.width,
                 tileBounds.height,
                 NUM_IMAGES,
                 0,
-                gl.RED,
+                gl.RGBA,
                 gl.UNSIGNED_BYTE,
                 data
             );
+        }
+
+
+        /**
+         * Measure texture size
+         * @param {number} index index of the texture
+         * @return {string} GLSL expression (unterminated) to obtain texture size - vec2
+         */
+        measure(index) {
+            return 'vec2(textureSize(vis_data_sampler_array))';
+        }
+
+        /**
+         * Sample texture
+         * @param {number|string} index texture index, must respect index re-mapping (see declare())
+         * @param {string} vec2coords GLSL expression that evaluates to vec2
+         * @return {string} GLSL expression (unterminated) that evaluates to vec4
+         */
+        sample(index, vec2coords) {
+            return `texture(vis_data_sampler_array, vec3(${vec2coords}, _vis_data_sampler_array_indices[${index}]))`;
+        }
+
+        /**
+         * Declare elements in shader
+         * @param {number[]} indicesOfImages mapping of shader to data index, i.e. if shader requests
+         *  texture i, the texture is located in the data at indicesOfImages[i] index
+         * @return {string} GLSL declaration (terminated with semicolon) of necessary elements for textures
+         */
+        declare(indicesOfImages) {
+            return `uniform sampler2DArray vis_data_sampler_array;
+int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOfImages.length}](
+  ${indicesOfImages.join(",")}
+);`;
         }
     }
 };

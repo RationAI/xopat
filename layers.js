@@ -74,7 +74,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     }
                 });
             } else {
-                window.VIEWER.addTiledImage({
+                VIEWER.addTiledImage({
                     tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
                     index: index,
                     opacity: $("#global-opacity").val(),
@@ -117,6 +117,36 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         return seaGL.urlMaker;
     };
 
+
+    VIEWER.addHandler('open-failed', function (e) {
+        //todo check whether open failed only during opening, if so this is correct
+        //this event handless add:    add-item-failed
+
+        //should work only for rendering layer
+        //todo not called probably because it is not on VIEWER called but somewhere else
+        if (typeof e.source === 'string') {
+            if (e.source == seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, seaGL.dataImageSources())) {
+                VIEWER.addTiledImage({
+                    //todo what if this is the background image? :/
+                    tileSource : new EmptyTileSource({
+                        height: 512,
+                        width: 512,
+                        tileSize: 512
+                    }),
+                    //index: seaGL.getWorldIndex(),
+                    opacity: $("#global-opacity").val(),
+                    replace: true,
+                    success: function (e) {
+                        //seaGL.addLayer(seaGL.getWorldIndex());
+                        //seaGL.initAfterOpen();
+                    }
+                });
+            }
+        } else {
+            //unknown origin, just fail=ignore?
+        }
+    });
+
     seaGL._onload = function(firstLayerWorldIndex) {
         let layerWorldItem = VIEWER.world.getItemAt(firstLayerWorldIndex);
         if (layerWorldItem) {
@@ -125,6 +155,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                 layerWorldItem.source.setFormat("png");
             }
             layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+        } else {
+            throw 'Should not have happened: failed source should load empty source in its place.';
         }
         seaGL.addLayer(firstLayerWorldIndex);
         seaGL.initAfterOpen();
@@ -321,6 +353,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             if (!layers.hasOwnProperty(key)) continue;
 
             let errorMessage;
+
+            //todo check this attr existnce and invalidate layer if missing
             for (let imgSource of layers[key].dataReferences) {
                 let idx = sources.findIndex(s => s === allSources[imgSource]);
                 if (idx !== -1

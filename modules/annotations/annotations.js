@@ -372,7 +372,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Set active preset for mouse button
-	 * @param {OSDAnnotations.Preset|undefined} preset  object that defines how annotation is constructed,
+	 * @param {OSDAnnotations.Preset|undefined} preset  object that defines properties annotation is labeled with,
 	 * 		omit if the preset should be deducted automatically (first one / create new)
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
@@ -380,8 +380,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	setPreset(preset, left=true) {
 		if (!preset) {
 			for (let key in this.presets._presets) {
-				if (this.presets._presets.hasOwnProperty(key)) {
-					preset = this.presets._presets[key];
+				if (this.presets.exists(key)) {
+					preset = this.presets.get(key);
 					break;
 				}
 			}
@@ -395,6 +395,24 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let original = this.presets.right;
 		this.presets.right = preset;
 		return original;
+	}
+
+	checkPreset(object) {
+		let preset;
+		if (object.presetID) {
+			preset = this.presets.get(object.presetID);
+			if (!preset) {
+				console.warn("Object refers to an invalid preset: using default one.");
+				preset = this.presets.left;
+				object.presetID = preset.id;
+			}
+
+		} else {
+			preset = this.presets.left;
+			object.presetID = preset.id;
+		}
+
+		$.extend(object, this.presets.getCommonProperties(preset));
 	}
 
 	/************************ Layers *******************************/
@@ -584,6 +602,17 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Focus object without highlighting the focus within the board
+	 * @param {OpenSeadragon.Rect|fabric.Object} object
+	 */
+	focusObject(object) {
+		if (object.incrementId) {
+			object = this.history._getFocusBBox(object);
+		}
+		this.history._focus(object);
+	}
+
+	/**
 	 * Clear fabric selection (of any kind)
 	 */
 	clearSelection() {
@@ -707,6 +736,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		this._layers = {};
 
+		//restore presents if any
+		UTILITIES.addPostExport("annotation_presets", this.presets.export.bind(this.presets), "annotations");
+		if (APPLICATION_CONTEXT.postData.hasOwnProperty("annotation_presets")) {
+			this.presets.import(APPLICATION_CONTEXT.postData["annotation_presets"]);
+		} else {
+			this.presets.addPreset();
+		}
+
+		//restore objects if any
 		UTILITIES.addPostExport("annotation-list",
 			_ => JSON.stringify(_this.getObjectContent()), "annotations");
 		let imageJson = APPLICATION_CONTEXT.postData["annotation-list"];
@@ -717,7 +755,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 				});
 			} catch (e) {
 				console.warn(e);
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide means how the visualisation was loaded.", 20000, Dialogs.MSG_ERR);
+				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
 				_this.history.size = 50;
 			}
 		} else {
@@ -725,14 +763,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		if (Object.keys(this._layers).length < 1) this.createLayer();
-
-		//restore presents if any
-		UTILITIES.addPostExport("annotation_presets", this.presets.export.bind(this.presets), "annotations");
-		if (APPLICATION_CONTEXT.postData.hasOwnProperty("annotation_presets")) {
-			this.presets.import(APPLICATION_CONTEXT.postData["annotation_presets"]);
-		} else {
-			this.presets.addPreset();
-		}
 
 		this.setMouseOSDInteractive(true, false);
 		this._setListeners();
@@ -975,16 +1005,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	_loadObjects(input, callback, clear, reviver) {
 		//from loadFromJSON implementation in fabricJS
-		const _this = this.canvas;
-		const annot = this;
+		const _this = this.canvas, self = this;
 		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
 			if (clear) _this.clear();
 			_this._setBgOverlay(input, function () {
 				enlivenedObjects.forEach(function(obj, index) {
-					$.extend(obj, OSDAnnotations.PresetManager._commonProperty);
-					annot.checkLayer(obj);
-					obj.on('selected', annot._objectClicked.bind(annot));
+					self.checkLayer(obj);
+					self.checkPreset(obj);
 
+					obj.on('selected', self._objectClicked.bind(self));
 					_this.insertAt(obj, index);
 				});
 				delete input.objects;
@@ -1214,7 +1243,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
-			Dialogs.show("Could not create automatic annotation.", 5000, Dialogs.MSG_WARN);
+			Dialogs.show("Could not create automatic annotation. Make sure you are detecting in the correct layer. Also, adjusting threhold can help.", 5000, Dialogs.MSG_WARN);
 		}
 	}
 

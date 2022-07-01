@@ -54,7 +54,6 @@ function hasKey($array, $key) {
 ">
 {
     "params": {
-        "experimentId": "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69",
         "customBlending": true
     },
     "data": [],
