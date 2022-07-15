@@ -1,3 +1,4 @@
+//todo move some func up if could be used (e.g. annotation name extraction etc.)
 OSDAnnotations.History = class {
     /**
      * Create a history annotation manager
@@ -308,7 +309,7 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _updateBoardText(object, text) {
-        if (!text || text.length < 0) text = this._getObjectDefaultDescription(object);
+        if (!text || text.length < 0) text = this._context.getDefaultAnnotationName(object);
         this._performAtJQNode("annotation-logs", node =>
             node.find(`#log-object-${object.incrementId} span.desc`).html(text));
     }
@@ -347,31 +348,36 @@ window.addEventListener("beforeunload", (e) => {
             object.incrementId = this._autoIncrement++;
         }
 
-        let preset = this._context.presets.get(object.presetID), color = 'black';
-        if (preset) {
-            color = preset.color;
-            let objmeta = object.meta || {};
-            for (let key in preset.meta) {
-                let metaElement = preset.meta[key];
-                if (key === "category") {
-                    inputs.unshift('<span class="show-hint d-block p-2" data-hint="', metaElement.name,
-                        '">', metaElement.value || this._getObjectDefaultDescription(object), '</span>');
-                } else {
-                    // from user-testing: disabled change of properties in the board...
-                    // inputs.push('<label class="show-hint d-block" data-hint="', metaElement.name,
-                    //     '"><input type="text" class="form-control border-0 width-full" readonly ',
-                    //     'style="background:transparent;color: inherit;" value="', objmeta[key] ?? metaElement.value,
-                    //     '" name="', key, '"></label>');
-                }
-            }
-        }
-
-        //with no metadata, object will receive 'category' on edit
-        if (inputs.length  < 1) {
+        // let preset = this._context.presets.get(object.presetID), color = 'black';
+        // if (preset) {
+        //     color = preset.color;
+        //     for (let key in preset.meta) {
+        //         let metaElement = preset.meta[key];
+        //         if (key === "category") {
+        //             inputs.unshift('<span class="show-hint d-block p-2" data-hint="', metaElement.name,
+        //                 '">', metaElement.value || this._context.getDefaultAnnotationName(object), '</span>');
+        //         } else {
+        //             // from user-testing: disabled change of properties in the board...
+        //
+        //             //let objmeta = object.meta || {};
+        //             // inputs.push('<label class="show-hint d-block" data-hint="', metaElement.name,
+        //             //     '"><input type="text" class="form-control border-0 width-full" readonly ',
+        //             //     'style="background:transparent;color: inherit;" value="', objmeta[key] ?? metaElement.value,
+        //             //     '" name="', key, '"></label>');
+        //         }
+        //     }
+        // }
+        let color = this._context.getAnnotationColor(object);
+        let name = this._context.getAnnotationDescription(PannerNode, "category", false);
+        if (name) {
+            inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
+                name || this._context.getDefaultAnnotationName(object), '</span>');
+        } else {
+            //with no meta name, object will receive 'category' on edit
             inputs.push('<label class="show-hint d-block" data-hint="Category">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
-                this._getObjectDefaultDescription(object), '" name="category"></label>');
+                this._context.getDefaultAnnotationName(object), '" name="category"></label>');
         }
 
         const _this = this;
@@ -471,14 +477,6 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             console.warn(e);
         }
         this._editSelection = undefined;
-    }
-
-    _getObjectDefaultDescription(object) {
-        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
-        if (factory !== undefined) {
-            return factory.getDescription(object);
-        }
-        return "";
     }
 
     async _performSwap(canvas, toAdd, toRemove) {

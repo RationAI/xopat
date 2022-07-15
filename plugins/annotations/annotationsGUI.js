@@ -41,7 +41,13 @@ class AnnotationsGUI {
 			if (_this.context.disabledInteraction) return;
 			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
+
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Share",
+				`<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
+		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 		this.loadAnnotationsList();
+
+		this.preview = new AnnotationsGUI.Previewer("preview", this);
 	} // end of initialize
 
 	/****************************************************************************************************************
@@ -55,7 +61,7 @@ class AnnotationsGUI {
 			"Annotations",
 			`
 <span class="material-icons btn-pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
-<span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');">cloud_upload</span>
+<span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">cloud_upload</span>
 <span class="material-icons btn-pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
 <span class="material-icons btn-pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
 			`
@@ -652,14 +658,9 @@ class="btn m-2">Set for left click </button>
 	}
 
     loadAnnotationsList() {
-        if (!this.annotationsMenuBuilder) {
-            USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Share",
-                `<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
-            this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
-        }
-        this.annotationsMenuBuilder.clear();
+		this.annotationsMenuBuilder.clear();
 
-        //todo cannot use more than one tissue at time, hardcoded :/
+		//todo cannot use more than one tissue at time, hardcoded :/
         let bgImage = APPLICATION_CONTEXT.setup.background[0];
         if (!bgImage) {
             $("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));

@@ -119,6 +119,238 @@ OpenSeadragon.Tools = class {
         return data.data;
     }
 
+    /**
+     * @param {object} region region of interest in the image pixel space
+     * @param {number} region.x
+     * @param {number} region.y
+     * @param {number} region.width
+     * @param {number} region.height
+     * @param {object} targetSize desired size, the result tries to find a level on which the region
+     *  is closest in size to the desired size
+     * @param {number} targetSize.width
+     * @param {number} targetSize.height
+     * @param {function} onfinish function that is called on screenshot finish, argument is a canvas with resulting image
+     * @param {boolean} squarify enlarge region to form a square if true, default false
+     */
+    offlineScreenshot(region, targetSize, onfinish, squarify=false) {
+        //todo support only one BG image at time, easier
+        let referencedTiledImage = this.referencedTiledImage();
+        let referencedSource = referencedTiledImage.source;
+
+        //todo cehck aspect ratio region -> target size
+        let level = Math.min(
+            this.constructor._bestLevelForTiledImage(referencedTiledImage, region, targetSize),
+            this.viewer.bridge ? this.viewer.bridge.getTiledImage().source.maxLevel : Infinity
+        );
+
+        //todo check how it performs on non-rect area
+
+        function download(tiledImage, level, x, y, onload, onfail) {
+            //copied over from tileSource.js
+            //todo consider using  tiledImage._getTile(...)
+            let tileSource = tiledImage.source;
+            let numTiles = tileSource.getNumTiles( level );
+            let xMod    = ( numTiles.x + ( x % numTiles.x ) ) % numTiles.x;
+            let yMod    = ( numTiles.y + ( y % numTiles.y ) ) % numTiles.y;
+            let bounds  = tiledImage.getTileBounds( level, x, y );
+            let sourceBounds = tileSource.getTileBounds( level, xMod, yMod, true );
+            let exists  = tileSource.tileExists( level, xMod, yMod );
+            let url     = tileSource.getTileUrl( level, xMod, yMod );
+            let post    = tileSource.getTilePostData( level, xMod, yMod );
+            let ajaxHeaders;
+
+            // Headers are only applicable if loadTilesWithAjax is set
+            if (tiledImage.loadTilesWithAjax) {
+                ajaxHeaders = tileSource.getTileAjaxHeaders( level, xMod, yMod );
+                // Combine tile AJAX headers with tiled image AJAX headers (if applicable)
+                if (OpenSeadragon.isPlainObject(tiledImage.ajaxHeaders)) {
+                    ajaxHeaders = $.extend({}, tiledImage.ajaxHeaders, ajaxHeaders);
+                }
+            } else {
+                ajaxHeaders = null;
+            }
+
+            let tile = new OpenSeadragon.Tile(
+                level,
+                x,
+                y,
+                bounds,
+                exists,
+                url,
+                undefined,
+                tiledImage.loadTilesWithAjax,
+                ajaxHeaders,
+                sourceBounds,
+                post,
+                tileSource.getTileHashKey(level, xMod, yMod, url, ajaxHeaders, post)
+            );
+
+            tile.loading = true;
+            tiledImage._imageLoader.addJob({
+                src: tile.url,
+                tile: tile,
+                source: tiledImage.source,
+                postData: tile.postData,
+                loadWithAjax: tile.loadWithAjax,
+                ajaxHeaders: tile.ajaxHeaders,
+                crossOriginPolicy: tiledImage.crossOriginPolicy,
+                ajaxWithCredentials: tiledImage.ajaxWithCredentials,
+                callback: function( data, errorMsg, tileRequest ){
+                    tile.loading = false;
+                    if ( !data ) {
+                        tile.exists = false;
+                        onfail(data, tile);
+                        return;
+                    }
+                    onload(data, tile);
+                },
+                abort: function() {
+                    tile.loading = false;
+                    onfail(data, tile);
+                }
+            });
+        }
+
+        function buildImageForLayer(tiledImage, region, onBuilt) {
+            let source = tiledImage.source,
+                viewportX = region.x / referencedSource.width,
+                viewportY = region.y / referencedSource.width,
+                viewportXAndWidth = (region.x+region.width-1) / referencedSource.width,
+                viewportYAdnHeight = (region.y+region.height-1) / referencedSource.width; //minus 1 to avoid next tile if not needed
+
+            let tileXY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportY)),
+                tileXWY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportY)),
+                tileXYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportYAdnHeight)),
+                tileXWYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportYAdnHeight));
+
+            let scale = referencedSource.getLevelScale(level),
+                tileWidth = source.getTileWidth(level),
+                tileHeight = source.getTileHeight(level),
+                x = Math.floor(region.x * scale),
+                y = Math.floor(region.y * scale),
+                w = Math.floor(region.width * scale),
+                h = Math.floor(region.height * scale),
+                canvas = document.createElement('canvas'),
+                c2d = canvas.getContext('2d');
+
+            canvas.width = w;
+            canvas.height = h;
+
+            function draw(data, tile) {
+                let sx = tileWidth * tile.x - x, sy = tileHeight * tile.y - y,
+                    sDx = 0, sDy = 0,
+                    dw = tile.sourceBounds.width, dh = tile.sourceBounds.height;
+
+                if (sx < 0) { //tile above rendering area
+                    dw += sx;
+                    sDx = -sx;
+                    sx = 0;
+                }
+                if (sDy < 0) {
+                    dh += sy;
+                    sDy = -sy;
+                    sy = 0;
+                }
+                //cache can be an empty object, it correctly processes the data and returns operate-able object
+                let cache = {};
+                source.createTileCache(cache, data, tile);
+                c2d.drawImage(source.getTileCacheDataAsContext2D(cache).canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+                source.destroyTileCache(cache);
+                finish();
+            }
+
+            function fill(data, tile) {
+                console.log("aborted", data);
+                finish();
+            }
+
+            function finish() {
+                count--;
+                if (count === 0) {
+                    //todo draw annotation or just the rectangle...? maybe add padding first now we just render the region of interest
+                    // c2d.lineWidth = 3;
+                    // c2d.rect(1, 1, w-1, h-1);
+                    // c2d.stroke();
+                    onBuilt(canvas);
+                }
+            }
+
+            let count = 4;
+            download(tiledImage, level, tileXY.x, tileXY.y, draw, fill);
+            if (tileXY.x !== tileXWY.x) download(tiledImage, level, tileXWY.x, tileXWY.y, draw, fill);
+            else count--;
+            if (tileXY.y !== tileXYH.y) download(tiledImage, level, tileXYH.x, tileXYH.y, draw, fill);
+            else count--;
+            //being forced to download all means diagonally too
+            if (count === 4) download(tiledImage, level, tileXWYH.x, tileXWYH.y, draw, fill);
+            else count--;
+        }
+
+        let targetRegion = region;
+        if (squarify && targetRegion.width !== targetRegion.height) {
+            let maxD = Math.max(targetRegion.width, targetRegion.height);
+            targetRegion.width = targetRegion.height = maxD;
+        }
+
+        //todo this is hardcoded, fix after the word item api gets cleared
+        let canvasCache = null;
+
+        let steps = 2;
+        buildImageForLayer(VIEWER.world.getItemAt(0), targetRegion,(canvas) => {
+            steps--;
+            if (steps > 0) {
+                canvasCache = canvas;
+            } else {
+                let outputCanvas = document.createElement('canvas'),
+                    c2d = outputCanvas.getContext('2d');
+                outputCanvas.width = 256;
+                outputCanvas.height = 256;
+                c2d.drawImage(canvas, 0, 0, 256, 256);
+                c2d.drawImage(canvasCache, 0, 0, 256, 256);
+                onfinish(outputCanvas);
+            }
+        });
+        //todo not necessarily present
+        //todo must get loaded after we finish
+        buildImageForLayer(VIEWER.world.getItemAt(1), targetRegion,(canvas) => {
+            steps--;
+            if (steps > 0) {
+                canvasCache = canvas;
+            } else {
+                let outputCanvas = document.createElement('canvas'),
+                    c2d = outputCanvas.getContext('2d');
+                outputCanvas.width = 256;
+                outputCanvas.height = 256;
+                c2d.drawImage(canvasCache, 0, 0, 256, 256);
+                c2d.drawImage(canvas, 0, 0, 256, 256);
+                onfinish(outputCanvas);
+             }
+        });
+    }
+    static _bestLevelForTiledImage(image, region, targetSize) {
+
+        //best level is found by tile size fit wrt. annotation size
+        function getDiff(source, level) {
+            let scale = source.getLevelScale(level);
+
+            //scale multiplication computes no. of pixels at given pyramid level
+            return Math.min(Math.abs(region.width * scale - targetSize.width),
+                Math.abs(region.height * scale - targetSize.height));
+        }
+
+        let source = image.source,
+            bestLevel = source.maxLevel,
+            d = getDiff(source, bestLevel);
+
+        for (let i = source.maxLevel-1; i >= source.minLevel; i--) {
+            let dd = getDiff(source, i);
+            if (dd > d) break;
+            bestLevel = i;
+            d = dd;
+        }
+        return bestLevel;
+    }
+
 
     link(child) {
         this.constructor.link(child, this.viewer);

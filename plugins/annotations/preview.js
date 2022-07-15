@@ -6,23 +6,77 @@ AnnotationsGUI.Previewer = class {
     constructor(selfName, context) {
         this.context = context;
         this.self = context.id + '.' + selfName;
-        USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-preview", "Preview",
-            `<button class="btn" onclick="${this.self}.load();">Load previews</button><div id="preview-of-annotations"></div>`);
+        USER_INTERFACE.AdvancedMenu.setMenu(this.context.id, "annotations-preview", "Preview",
+            `<button class="btn" onclick="${this.self}.load();">Reload previews</button><br>
+<div id="preview-of-annotations" class="p-2">No previews were loaded yet.</div>`);
         this._previews = {};
     }
 
     async load() {
-        const container = $("preview-of-annotations");
+
+//         //todo let the user chose? or render both?
+//         let tiledImage = VIEWER.bridge.getTiledImage();
+//         for (let object of this.context.context.canvas.getObjects()) {
+//             let factory = this.context.context.getAnnotationObjectFactory(object.factoryId);
+//             if (factory) {
+//                 container.append(`
+// <div onclick="${this.context.id}.context.focusObjectOrArea(${factory.getObjectFocusZone(object)});" style="" class="d-inline-block">Click me</div>
+//             `);
+//             }
+//         }
+
+        const container = $("#preview-of-annotations");
         container.html("");
-        //todo let the user chose? or render both?
-        let tiledImage = VIEWER.bridge.getTiledImage();
+        let tiledImage = VIEWER.bridge.getTiledImage(),
+            counter = 0;
         for (let object of this.context.context.canvas.getObjects()) {
             let factory = this.context.context.getAnnotationObjectFactory(object.factoryId);
             if (factory) {
+                let name = this.context.context.getAnnotationDescription(object);
+                let bbox = factory.getObjectFocusZone(object);
                 container.append(`
-<div onclick="${this.context.id}.context.focusObject(${factory.getObjectFocusZone(object)});" style="" class="d-inline-block">Click me</div>
+<div onclick="${this.context.id}.context.focusObjectOrArea({left: ${bbox.left}, top: ${bbox.top}, 
+width: ${bbox.width}, height: ${bbox.height}});" class="d-inline-block pointer">
+<img width="120" height="120" data-left="${bbox.left}" data-top="${bbox.top}" id="matrix-${counter}-annotation-preview"
+data-width="${bbox.width}" data-height="${bbox.height}" src="./assets/image.png"><br>${name}
+</div>
             `);
+                counter++;
             }
+        }
+        this.loadImagesRecursive(0, counter, 8);
+    }
+
+    loadImagesRecursive(step, maxSteps, batchSize) {
+        if (step >= maxSteps) return;
+
+        let progress = batchSize;
+        const self = this;
+        function render(thisStep) {
+            let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
+            if (!image) {
+                progress--;
+                return;
+            }
+
+            let region = {
+                x: Number.parseInt(image.dataset.left) || 0,
+                y: Number.parseInt(image.dataset.top) || 0,
+                width: Number.parseInt(image.dataset.width) || 0,
+                height: Number.parseInt(image.dataset.height) || 0
+            }
+
+            VIEWER.tools.offlineScreenshot(region, {width: 120, height: 120}, (canvas) => {
+                let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
+                if (image) image.src = canvas.toDataURL();
+                if (progress < 1) {
+                    self.loadImagesRecursive(step+progress, maxSteps);
+                }
+            });
+        }
+
+        for (let i = 0; i < batchSize; i++) {
+            render(step + i);
         }
     }
 };

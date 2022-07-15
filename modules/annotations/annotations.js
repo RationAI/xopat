@@ -567,6 +567,54 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Get annotation description from a preset, overriden by own object meta if present
+	 * @param {fabric.Object} annotation annotation to describe
+	 * @param {string} desiredKey metadata key to read and return
+	 * @param {boolean} defaultIfUnknown if false, empty string is returned in case no property was found
+	 * @return {string|*} annotation description
+	 */
+	getAnnotationDescription(annotation, desiredKey="category", defaultIfUnknown=true) {
+		let preset = this.presets.get(annotation.presetID);
+		if (preset) {
+			for (let key in preset.meta) {
+				let objmeta = annotation.meta || {}, specificElement = objmeta[key] || {};
+				let metaElement = preset.meta[key];
+				if (key === desiredKey) {
+					return specificElement.value || metaElement.value ||
+						(defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "");
+				}
+			}
+		}
+		return defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "";
+	}
+
+	/**
+	 * Get annotation color as set by attached preset
+	 * @param {fabric.Object} annotation
+	 * @return {string} css color
+	 */
+	getAnnotationColor(annotation) {
+		let preset = this.presets.get(annotation.presetID);
+		if (preset) {
+			return preset.color;
+		}
+		return 'black';
+	}
+
+	/**
+	 * Get default annotation name
+	 * @param {fabric.Object} annotation
+	 * @return {string} annotation name created by factory
+	 */
+	getDefaultAnnotationName(annotation) {
+		let factory = this.getAnnotationObjectFactory(annotation.factoryId);
+		if (factory !== undefined) {
+			return factory.getDescription(annotation);
+		}
+		return "Unknown annotation.";
+	}
+
+	/**
 	 * Replace annotation with different one
 	 * @param {fabric.Object} previous
 	 * @param {fabric.Object} next
@@ -603,9 +651,9 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Focus object without highlighting the focus within the board
-	 * @param {OpenSeadragon.Rect|fabric.Object} object
+	 * @param {object|fabric.Object} object
 	 */
-	focusObject(object) {
+	focusObjectOrArea(object) {
 		if (object.incrementId) {
 			object = this.history._getFocusBBox(object);
 		}
