@@ -69,8 +69,9 @@ data-width="${bbox.width}" data-height="${bbox.height}" src="./assets/image.png"
             VIEWER.tools.offlineScreenshot(region, {width: 120, height: 120}, (canvas) => {
                 let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
                 if (image) image.src = canvas.toDataURL();
+                progress--;
                 if (progress < 1) {
-                    self.loadImagesRecursive(step+progress, maxSteps);
+                    self.loadImagesRecursive(step+batchSize, maxSteps, batchSize);
                 }
             });
         }
