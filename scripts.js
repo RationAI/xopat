@@ -217,8 +217,16 @@ form.submit();<\/script>`;
     //     window.attachEvent('onbeforeunload', preventDirtyClose);
     // }
 
+    window.APPLICATION_CONTEXT.setData = function(key, valueHandler, contextId) {
+        UTILITIES._exportHandlers.push({name: key, call: valueHandler, pluginId: contextId});
+    }
+    window.APPLICATION_CONTEXT.getData = function(key) {
+        return APPLICATION_CONTEXT.postData[key];
+    }
 
     window.UTILITIES = {
+        _exportHandlers: [],
+
         fetchJSON: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
             $.extend(headers, {
@@ -330,11 +338,6 @@ ${constructExportVisualisationForm()}
         },
 
         setDirty: () => {APPLICATION_CONTEXT.setup.dirty = true;},
-
-        _exportHandlers: [],
-        addPostExport: function(name, valueHandler, pluginId) {
-            this._exportHandlers.push({name: name, call: valueHandler, pluginId: pluginId});
-        },
 
         /**
          * Refresh current page with all plugins and their data if export API used

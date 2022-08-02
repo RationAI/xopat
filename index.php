@@ -416,21 +416,29 @@ EOF;
         metaMenuId: "app-meta-data",
         getOption: function (name) {
             if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
-            if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(name)) {
-                let value = serverCookies[name]; //todo URL decode?
-                if (value === "false") value = false;
-                return value;
-            }
+            let cookie = this._getCookie(name);
+            if (cookie !== undefined) return cookie;
             return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] : this.defaultParams[name];
         },
         setOption: function (name, value, cookies = false) {
             if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
+            if (cookies) this._setCookie(name, value);
             if (value === "false") value = false;
-            if (cookies && !this.setup.params.bypassCookies) {
-                serverCookies[name] = value;
-                document.cookie = `${name}=${value}; ${APPLICATION_CONTEXT.cookiePolicy}`; //todo URL encode?
-            }
             this.setup.params[name] = value;
+        },
+        _setCookie: function (key, value) {
+            if (!this.setup.params.bypassCookies) {
+                serverCookies[key] = value;
+                document.cookie = `${key}=${value}; ${APPLICATION_CONTEXT.cookiePolicy}`; //todo URL encode?
+            }
+        },
+        _getCookie: function (key) {
+            if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(key)) {
+                let value = serverCookies[key]; //todo URL decode?
+                if (value === "false") value = false;
+                return value;
+            }
+            return undefined;
         }
     };
 
@@ -442,6 +450,11 @@ EOF;
         }
     };
 
+    /**
+     * window.PLUGINS
+     * object that contains metadata, paths for plugins,
+     * holds instances of plugins and is not exported
+     */
     window.PLUGINS = <?php echo json_encode((object)$PLUGINS)?>;
 
     //preventive error message, that will be discarded after the full initialization
@@ -592,6 +605,25 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         PLUGINS[id].instance = plugin;
         window[id] = plugin;
+        plugin.setOption = function(key, value, cookies=true) {
+            //todo encode/sanitize?
+            if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
+            APPLICATION_CONTEXT.setup.plugins[id][key] = value;
+        }
+        plugin.getOption = function(key) {
+            //todo encode/sanitize?
+            let cookie = APPLICATION_CONTEXT._getCookie(key);
+            if (cookie !== undefined) return cookie;
+            return APPLICATION_CONTEXT.setup.plugins[id][key];
+        }
+        //todo use this across plugns instead
+        //todo encode ` character if contained
+        plugin.setData = function(key, dataExportHandler) {
+            UTILITIES._exportHandlers.push({name: `${key}_${id}`, call: dataExportHandler, pluginId: id});
+        }
+        plugin.getData = function(key) {
+            return APPLICATION_CONTEXT.postData[`${key}_${id}`];
+        }
         showPluginError(id, null);
         return plugin;
     }

@@ -242,6 +242,14 @@ window.addEventListener("beforeunload", (e) => {
         }
     }
 
+    assignIDs(objects) {
+        for (let object of objects) {
+            if (!object.hasOwnProperty("incrementId")) {
+                object.incrementId = this._autoIncrement++;
+            }
+        }
+    }
+
     _performAtJQNode(id, callback) {
         let ctx = this.winContext();
         if (ctx) {
@@ -276,13 +284,13 @@ window.addEventListener("beforeunload", (e) => {
         });
     }
 
-    _focus(bbox, objectId = null, adjustZoom=true) {
+    _focus(bbox, objectId = undefined, adjustZoom=true) {
         bbox.left = Number.parseFloat(bbox.left || bbox.x);
         bbox.top = Number.parseFloat(bbox.top || bbox.y);
         if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) return;
 
         let targetObj = undefined;
-        if (objectId !== null) {
+        if (objectId !== undefined) {
             targetObj = this._findObjectOnCanvasById(objectId);
             if (targetObj) {
                 this.highlight(targetObj);

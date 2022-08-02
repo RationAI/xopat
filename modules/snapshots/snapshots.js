@@ -280,8 +280,8 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     _init() {
-        UTILITIES.addPostExport("snapshot-keyframes", this.exportJSON.bind(this), this.id);
-        let importedJson = APPLICATION_CONTEXT.postData["snapshot-keyframes"];
+        APPLICATION_CONTEXT.setData("snapshot-keyframes", this.exportJSON.bind(this), this.id);
+        let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));

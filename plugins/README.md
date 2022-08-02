@@ -43,14 +43,15 @@ the plugin `include.json` content with additional data (such as `loaded` flag).
 don't use `id` for anything else
 - The plugin main class should be visible from the global scope. However, try not to pollute the global namespace 
 and define other classes in closures or as a properties of the parent class.
+- The plugin main class should not define two functions `getOption()` and `setOption()` - these are
+set up automatically and available when `YourPLuginClass::pluginReady()` gets called
 
-### Global interface
+### Interface
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 
 be able to work flawlessly.
 
-
 #### `addPlugin(id, PluginRootClass)`
-This function will register the plugin and initialize it. It will make sure that
+This (global) function will register the plugin and initialize it. It will make sure that
 - an instance of `PluginRootClass` is created
 - `id` member variable is set
 - global space contains the plugin instance in a variable named after `plugin.id`
@@ -61,7 +62,10 @@ This function will register the plugin and initialize it. It will make sure that
 - in case `pluginReady` is defined, it will be invoked when the visualisation is ready
 
 #### `YourPLuginClass::constructor(id, params)`
-The plugin main class is given it's `id` and `params` object, use them as you wish
+The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
+is integrated within the system and gets exported - such information is available when sharing the plugin
+exports. Note that the object should not be used to store big amounts of data, for that `YourPLuginClass::setData()` 
+together with `YourPLuginClass::getData()` should be used.
 
 #### `YourPLuginClass::pluginReady()`
 Because of dynamic loading and behaviour, it is necessary that you do most initialization
@@ -76,8 +80,24 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
  - your main class script (often) calls `addPlugin(...)`
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
+ 
+#### \[EXISTS\] `YourPLuginClass::getOption(key)`
+Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
+read from the `params` object given to the constructor, unless cookie cache overrides it.
 
-### API
+#### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
+Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
+The value itself is stored in the `params` object given to the constructor.
+
+#### \[EXISTS\] `YourPLuginClass::getData(key)`
+Return data exported with the viewer if available.
+
+#### \[EXISTS\] `YourPLuginClass::setData(key, dataExportHandler)`
+Registers `dataExportHandler` under arbitrary `key`. `dataExportHandler` is a function callback that
+will get called once a viewer export event is invoked. Should return a string that encodes the data to store.
+The data should not contain `` ` `` character.
+
+### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
 approaches - first, get familiar with:
  - `window.VIEWER` 

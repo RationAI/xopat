@@ -652,12 +652,14 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/**
 	 * Focus object without highlighting the focus within the board
 	 * @param {object|fabric.Object} object
+	 * @param {number|undefined} incremendId set to object id if highligh should take place and
+	 * 	focus item is not an instance of fabric.Object
 	 */
-	focusObjectOrArea(object) {
+	focusObjectOrArea(object, incremendId=undefined) {
 		if (object.incrementId) {
 			object = this.history._getFocusBBox(object);
 		}
-		this.history._focus(object);
+		this.history._focus(object, incremendId);
 	}
 
 	/**
@@ -785,17 +787,14 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._layers = {};
 
 		//restore presents if any
-		UTILITIES.addPostExport("annotation_presets", this.presets.export.bind(this.presets), "annotations");
-		if (APPLICATION_CONTEXT.postData.hasOwnProperty("annotation_presets")) {
-			this.presets.import(APPLICATION_CONTEXT.postData["annotation_presets"]);
-		} else {
-			this.presets.addPreset();
-		}
+		APPLICATION_CONTEXT.setData("annotation_presets", this.presets.export.bind(this.presets), "annotations");
+		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
+		if (presetData !== undefined) this.presets.import(presetData);
+		else this.presets.addPreset();
 
 		//restore objects if any
-		UTILITIES.addPostExport("annotation-list",
-			_ => JSON.stringify(_this.getObjectContent()), "annotations");
-		let imageJson = APPLICATION_CONTEXT.postData["annotation-list"];
+		APPLICATION_CONTEXT.setData("annotation-list", _ => JSON.stringify(_this.getObjectContent()), "annotations");
+		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
 		if (imageJson) {
 			try {
 				this.loadObjects(JSON.parse(imageJson), _ => {
@@ -1074,6 +1073,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 				callback && callback();
 			});
 		}, reviver);
+		this.history.assignIDs(this.canvas.getObjects());
 	}
 
 	static __self = undefined;

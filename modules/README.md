@@ -23,3 +23,25 @@ define a dependency on other modules with `requires` list.
     "requires": []
 }
 ````
+
+
+### Interface
+Unlike plugins, options and data is stored on global API level, since we cannot nor want to enforce instantiation 
+or other life cycle behaviour on modules. This means that modules have to care about used keys - these are on global 
+level and must be unique.
+
+#### `APPLICATION_CONTEXT::getOption(key)`
+Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
+read from the `params` object given to the constructor, unless cookie cache overrides it.
+
+#### `APPLICATION_CONTEXT::setOption(key, value, cookies=true)`
+Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
+The value itself is stored in the `params` object given to the constructor.
+
+#### `APPLICATION_CONTEXT::getData(key)`
+Return data exported with the viewer if available.
+
+#### `APPLICATION_CONTEXT::setData(key, dataExportHandler)`
+Registers `dataExportHandler` under arbitrary `key`. `dataExportHandler` is a function callback that
+will get called once a viewer export event is invoked. Should return a string that encodes the data to store.
+The data should not contain `` ` `` character.
