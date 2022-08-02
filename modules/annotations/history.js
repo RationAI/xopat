@@ -152,13 +152,12 @@ window.addEventListener("beforeunload", (e) => {
 
         this._performAtJQNode("annotation-logs", node => node.html(""));
         let _this = this;
-        this._context.canvas.getObjects().some(o => {
+        this._context.canvas.getObjects().forEach(o => {
             if (!isNaN(o.incrementId)) {
                 let preset = this._presets.get(o.presetID);
                 if (preset) this._presets.updateObjectVisuals(o, preset);
                 _this._addToBoard(o);
             }
-            return false;
         });
     }
 

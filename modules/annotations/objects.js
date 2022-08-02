@@ -103,8 +103,7 @@ OSDAnnotations.PresetManager = class {
         //active presets for mouse buttons
         this.left = undefined;
         this.right = undefined;
-        //todo as configurable and save-able param
-        this.modeOutline = true;
+        this.modeOutline = APPLICATION_CONTEXT.getOption(`annotation_presets_mode_outline`, true);
         this._colorSteps = 8;
         this._colorStep = 0;
     }
@@ -123,11 +122,19 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Todo implement
-     * @param isOutline
+     * Set annotations to mode filled or outlined
+     * @param isOutline true if outlined
      */
     setModeOutline(isOutline) {
+        if (this.modeOutline === isOutline) return;
+        this.modeOutline = isOutline;
+        APPLICATION_CONTEXT.setOption(`annotation_presets_mode_outline`, isOutline, true);
+        this.updateAllObjectsVisuals();
+        this._context.canvas.requestRenderAll();
+    }
 
+    getModeOutline() {
+        return this.modeOutline;
     }
 
     /**
@@ -232,13 +239,27 @@ OSDAnnotations.PresetManager = class {
     updateObjectVisuals(object, withPreset) {
         if (typeof object.fill === 'string') {
             if (this.modeOutline) {
-                object.fill = "";
-                object.stroke = withPreset.color;
+                object.set({
+                    fill: "",
+                    stroke: withPreset.color
+                });
             } else {
-                object.fill = withPreset.color;
-                object.stroke = this.constructor._commonProperty.stroke;
+                object.set({
+                    fill: withPreset.color,
+                    stroke: this.constructor._commonProperty.stroke
+                });
             }
         }
+    }
+
+    /**
+     * Update all object visuals
+     */
+    updateAllObjectsVisuals() {
+        this._context.canvas.getObjects().forEach(o => {
+            let preset = this.get(o.presetID);
+            if (preset) this.updateObjectVisuals(o, preset);
+        });
     }
 
     /**

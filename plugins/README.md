@@ -81,7 +81,7 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
  
-#### \[EXISTS\] `YourPLuginClass::getOption(key)`
+#### \[EXISTS\] `YourPLuginClass::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it.
 

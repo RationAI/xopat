@@ -30,9 +30,10 @@ Unlike plugins, options and data is stored on global API level, since we cannot 
 or other life cycle behaviour on modules. This means that modules have to care about used keys - these are on global 
 level and must be unique.
 
-#### `APPLICATION_CONTEXT::getOption(key)`
+#### `APPLICATION_CONTEXT::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
-read from the `params` object given to the constructor, unless cookie cache overrides it.
+read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
+for build-in defaults, defined in the viewer core.
 
 #### `APPLICATION_CONTEXT::setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 

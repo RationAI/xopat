@@ -414,16 +414,16 @@ EOF;
         settingsMenuId: "app-settings",
         pluginsMenuId: "app-plugins",
         metaMenuId: "app-meta-data",
-        getOption: function (name) {
-            if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
+        getOption: function (name, defaultValue=undefined) {
             let cookie = this._getCookie(name);
             if (cookie !== undefined) return cookie;
-            return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] : this.defaultParams[name];
+            return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] :
+                (defaultValue === undefined ? this.defaultParams[name] : defaultValue);
         },
         setOption: function (name, value, cookies = false) {
-            if (!this.defaultParams.hasOwnProperty(name)) console.warn("Unknown viewer parameter!", name);
             if (cookies) this._setCookie(name, value);
             if (value === "false") value = false;
+            else if (value === "true") value = true;
             this.setup.params[name] = value;
         },
         _setCookie: function (key, value) {
@@ -436,6 +436,7 @@ EOF;
             if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(key)) {
                 let value = serverCookies[key]; //todo URL decode?
                 if (value === "false") value = false;
+                else if (value === "true") value = true;
                 return value;
             }
             return undefined;
@@ -610,11 +611,12 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
             APPLICATION_CONTEXT.setup.plugins[id][key] = value;
         }
-        plugin.getOption = function(key) {
+        plugin.getOption = function(key, defaultValue=undefined) {
             //todo encode/sanitize?
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
-            return APPLICATION_CONTEXT.setup.plugins[id][key];
+            return APPLICATION_CONTEXT.setup.plugins[id].hasOwnProperty(key) ?
+                APPLICATION_CONTEXT.setup.plugins[id][key] : defaultValue;
         }
         //todo use this across plugns instead
         //todo encode ` character if contained

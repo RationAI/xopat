@@ -43,7 +43,15 @@ class AnnotationsGUI {
 		});
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Share",
-				`<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
+				`<h3 class="f2-light">Annotations</h3><div id="annotations-option-panel">
+${UIComponents.Elements.checkBox({
+	label: " Show outline only.",
+	onchange: `${this.id}.context.presets.setModeOutline(this.checked == true);`,
+	default: this.context.presets.getModeOutline()
+})}
+</div>
+<br>
+<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 		this.loadAnnotationsList();
 
@@ -704,7 +712,7 @@ class="btn m-2">Set for left click </button>
     getAnnotationsHeadMenu(error="") {
         let upload = error ? "" : `<button class="btn float-right" onclick="${this.id}.uploadAnnotation()">Create: upload current state</button>`;
         error = error ? `<div class="error-container m-2">${error}</div>` : "";
-        return `<h3 class="f2-light">Annotations</h3>&emsp;<span class="text-small">
+        return `<span class="text-small">
 for slide ${this.activeTissue}</span>${upload}${error}<br><br>
 <button id="downloadAnnotation" onclick="${this.id}.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
 <button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
