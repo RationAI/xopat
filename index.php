@@ -207,6 +207,7 @@ foreach ($MODULES as $_ => $mod) {
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
+    <!--TODO add anonymous and integrity tags, require them from files included in safe mode-->
     <!-- jquery -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"
         integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="

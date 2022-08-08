@@ -819,6 +819,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     getASAP_XMLTypeName() {
         return "Rectangle";
     }
+
+
 };
 
 OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {

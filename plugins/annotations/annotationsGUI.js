@@ -56,6 +56,7 @@ ${UIComponents.Elements.checkBox({
 		this.loadAnnotationsList();
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
+		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
 	} // end of initialize
 
 	/****************************************************************************************************************
@@ -440,7 +441,7 @@ style="width: 115px;">${category}</span>
 	 */
 	exportToFile() {
 		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.getObjectContent()));
-		UTILITIES.downloadAsFile("annotations_asap_xml_export.json", this.context.getXMLStringContent());
+		UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", this.context.getXMLStringContent());
 	}
 
 	/**
@@ -511,7 +512,7 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 		let id = index === undefined ? "" : `id="preset-no-${index}"`;
 
 		let html = `<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `;
-		if (preset === currentPreset) {
+		if (preset === currengetXMLStringContenttPreset) {
 			html += `highlighted-preset"`;
 			this._presetSelection = preset.presetID;
 		} else html += `"`;

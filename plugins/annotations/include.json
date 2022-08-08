@@ -4,7 +4,7 @@
   "author": "Jirka Horák",
   "description": "A plugin for annotations creation, management and sharing.",
   "icon": "",
-  "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js"],
+  "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "advanced.js", "xmlToJSON.min.js"],
   "modules": ["annotations"],
   "server": "/iipsrv.fcgi",
   "factories": ["polygon", "rect", "ellipse", "ruler"]

@@ -128,12 +128,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			xml_annotation.setAttribute("Name", "Annotation " + i);
 			let factory = this.getAnnotationObjectFactory(obj.factoryId);
 			if (factory) {
-				xml_annotation.setAttribute("Type", "Rectangle"); //todo ???
+				xml_annotation.setAttribute("Type", "Polygon");
 				coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
 			}
 			// noinspection JSUnresolvedVariable
 			xml_annotation.setAttribute("PartOfGroup", obj.a_group);
-			xml_annotation.setAttribute("Color", obj.color);
+			xml_annotation.setAttribute("Preset", obj.presetID);
 
 			//get coordinates in ASAP format
 			var xml_coordinates = doc.createElement("Coordinates");
@@ -166,8 +166,9 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @param {boolean} clear true if existing objects should be removed, default false
 	 */
 	loadObjects(annotations, onfinish=function(){}, clear=false) {
-		if (!annotations.objects) return;
-		this._loadObjects(annotations, onfinish);
+		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
+		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
+		this._loadObjects(annotations, onfinish, clear);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -402,7 +403,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (object.presetID) {
 			preset = this.presets.get(object.presetID);
 			if (!preset) {
-				console.warn("Object refers to an invalid preset: using default one.");
+				console.log("Object refers to an invalid preset: using default one.");
 				preset = this.presets.left;
 				object.presetID = preset.id;
 			}
@@ -1054,6 +1055,10 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
+			if (input.objects.length > 0 && enlivenedObjects.length < 1) {
+				throw "Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?";
+			}
+
 			if (clear) _this.clear();
 			_this._setBgOverlay(input, function () {
 				enlivenedObjects.forEach(function(obj, index) {
