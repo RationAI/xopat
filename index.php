@@ -77,13 +77,16 @@ $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
 
 if ($layerVisible) {
     $layerVisible--;
-    foreach ($parsedParams->visualizations as $visualisationTarget) {
+    foreach ($parsedParams->visualizations as $index=>$visualisationTarget) {
         if (!isset($visualisationTarget->name)) {
             $visualisationTarget->name = "Custom Visualisation";
         }
-        throwFatalErrorIf(!isset($visualisationTarget->shaders), "No visualisation defined.",
-            "You must specify non-empty <b>shaders</b> object.", print_r($visualisationTarget, true));
+        if (!isset($visualisationTarget->shaders)) {
+            unset($parsedParams->visualizations[$index]);
+            //todo print warn to JS console
+        }
 
+        $shader_count = 0;
         foreach ($visualisationTarget->shaders as $data=>$layer) {
             throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
                 "You must specify <b>type</b> parameter.", print_r($layer, true));
@@ -97,8 +100,14 @@ if ($layerVisible) {
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 $layer->cache = $cookieCache->{$layer->name};
             }
+            $shader_count++;
         }
-        $layerVisible++;
+
+        if ($shader_count > 0) {
+            $layerVisible++;
+        } else {
+            unset($parsedParams->visualizations[$index]);
+        }
     }
 
     //requires webgl module

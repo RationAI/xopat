@@ -311,6 +311,7 @@ input.selectable-image-row-context:checked + div {border-color: var(--color-stat
 .svg-bg {fill: var(--color-bg-primary);}
 .svg-fg {fill: var(--color-text-primary);}
 a {cursor: pointer;}
+canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
 .material-icons {font-family: 'Material Icons';font-weight: normal;font-style: normal;font-size: 24px;
     display: inline-block;color: var( --color-icon-primary);line-height: 1;text-transform: none;letter-spacing: normal;
