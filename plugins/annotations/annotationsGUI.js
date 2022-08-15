@@ -512,7 +512,7 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 		let id = index === undefined ? "" : `id="preset-no-${index}"`;
 
 		let html = `<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `;
-		if (preset === currengetXMLStringContenttPreset) {
+		if (preset === currentPreset) {
 			html += `highlighted-preset"`;
 			this._presetSelection = preset.presetID;
 		} else html += `"`;

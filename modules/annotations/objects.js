@@ -81,7 +81,7 @@ OSDAnnotations.PresetManager = class {
      */
     static _commonProperty = {
         selectable: true,
-        strokeWidth: 4,
+        originalStrokeWidth: 3,
         borderColor: '#fbb802',
         cornerColor: '#fbb802',
         stroke: 'black',
@@ -372,6 +372,7 @@ OSDAnnotations.PresetManager = class {
     }
 
     _populateObjectOptions(withPreset) {
+        let zoom = this._context.canvas.getZoom();
         if (this.modeOutline) {
             return $.extend({fill: ""},
                 OSDAnnotations.PresetManager._commonProperty,
@@ -379,7 +380,9 @@ OSDAnnotations.PresetManager = class {
                     presetID: withPreset.presetID,
                     layerId: this._context.getLayer().id,
                     opacity: this._context.getOpacity(),
-                    stroke: withPreset.color
+                    stroke: withPreset.color,
+                    zoomAtCreation: zoom,
+                    strokeWidth: 3 / zoom
                 }
             );
         } else {
@@ -390,6 +393,8 @@ OSDAnnotations.PresetManager = class {
                     presetID: withPreset.presetID,
                     layerId: this._context.getLayer().id,
                     opacity: this._context.getOpacity(),
+                    zoomAtCreation: zoom,
+                    strokeWidth: 3 / zoom
                 }
             );
         }
@@ -715,6 +720,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             stroke: ofObject.stroke,
             scaleX: ofObject.scaleX,
             scaleY: ofObject.scaleY,
+            zoomAtCreation: ofObject.zoomAtCreation,
+            originalStrokeWidth: ofObject.originalStrokeWidth,
             type: ofObject.type,
             factoryId: ofObject.factoryId,
             hasRotatingPoint: ofObject.hasRotatingPoint,
@@ -876,9 +883,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: line.hasControls,
             lockMovementX: line.lockMovementX,
             lockMovementY: line.lockMovementY,
+            originalStrokeWidth: line.originalStrokeWidth,
         }), new fabric.Text(text.text), {
             textBackgroundColor: text.textBackgroundColor,
-            fontSize: text.fontSize
+            fontSize: text.fontSize,
+            lockUniScaling: true,
+            scaleY: text.scaleY,
+            scaleX: text.scaleX
         }], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
@@ -887,7 +898,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
             layerId: ofObject.layerId,
-            fill: ofObject.fill
+            fill: ofObject.fill,
+            zoomAtCreation: ofObject.zoomAtCreation,
         });
     }
 
@@ -903,7 +915,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         let bounds = this._auto.approximateBounds(screenPoint, false);
         if (bounds) {
             let opts = this._presets.getAnnotationOptions(isLeftClick);
-            opts.strokeWidth = opts.strokeWidth / VIEWER.tools.imagePixelSizeOnScreen();
             let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
             this._context.addAnnotation(object);
             return true;
@@ -913,7 +924,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     initCreate(x, y, isLeftClick) {
         let opts = this._presets.getAnnotationOptions(isLeftClick);
-        opts.strokeWidth = opts.strokeWidth / VIEWER.tools.imagePixelSizeOnScreen();
         let parts = this._createParts([x, y, x, y], opts);
         this._updateText(parts[0], parts[1]);
         this._current = parts;
@@ -984,13 +994,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _createParts(parameters, options) {
-        options.stroke = options.fill;
+        options.stroke = options.fill || options.stroke;
+        console.log(options);
         return [new fabric.Line(parameters, $.extend({
             scaleX: 1,
             scaleY: 1,
         }, options)), new fabric.Text('', {
-            fontSize: 12 / VIEWER.tools.imagePixelSizeOnScreen(),
-            textBackgroundColor: "#fff"
+            fontSize: 16,
+            textBackgroundColor: "#fff",
+            lockUniScaling: true,
+            scaleX: 1/options.zoomAtCreation,
+            scaleY: 1/options.zoomAtCreation
         })];
     }
 
@@ -1068,6 +1082,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             opacity: ofObject.opacity,
+            scaleX: ofObject.scaleX,
+            scaleY: ofObject.scaleY,
+            zoomAtCreation: ofObject.zoomAtCreation,
+            originalStrokeWidth: ofObject.originalStrokeWidth,
             type: ofObject.type,
             factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
@@ -1237,6 +1255,10 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             isLeftClick: ofObject.isLeftClick,
             opacity: ofObject.opacity,
             type: ofObject.type,
+            scaleX: ofObject.scaleX,
+            scaleY: ofObject.scaleY,
+            zoomAtCreation: ofObject.zoomAtCreation,
+            originalStrokeWidth: ofObject.originalStrokeWidth,
             factoryId: ofObject.factoryId,
             selectable: ofObject.selectable,
             borderColor: ofObject.borderColor,
@@ -1261,7 +1283,6 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
         theObject.objectCaching = false;
-        theObject.strokeWidth = 8 / VIEWER.tools.imagePixelSizeOnScreen();
         theObject.transparentCorners = false;
         theObject.controls = theObject.points.reduce(function(acc, point, index) {
             acc['p' + index] = new fabric.Control({
