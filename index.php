@@ -280,7 +280,6 @@ foreach ($MODULES as $_ => $mod) {
 <span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="background: var(--color-bg-primary); width: 400px;">
-
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
         <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
             <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
@@ -324,7 +323,6 @@ EOF;
         <?php
            if (count($parsedParams->background) > 1) {
                 echo <<<EOF
-        </div> <!--end of general controls-->
         <div id="panel-images" class="inner-panel mt-2">
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
@@ -380,6 +378,7 @@ EOF;
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
     <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
+    <div id="tissue-list-menu" class="position-absolute bottom-0 right-0 left-0 noselect"></div>
 
     <!-- Values Initialization -->
     <script type="text/javascript">
@@ -398,7 +397,8 @@ EOF;
         preventNavigationShortcuts: false,
         permaLoadPlugins: true,
         bypassCookies: false,
-        theme: "auto"
+        theme: "auto",
+        stackedBackground: false,
     };
     let serverCookies = <?php echo json_encode($_COOKIE) ?>;
     //default parameters not extended by setup.params (would bloat link files)
@@ -414,6 +414,7 @@ EOF;
         version: '<?php echo VERSION ?>',
         backgroundServer: '<?php echo BG_TILE_SERVER ?>',
         backgroundProtocol: '<?php echo BG_DEFAULT_PROTOCOL ?>',
+        backgroundProtocolPreview: '<?php echo BG_DEFAULT_PROTOCOL_PREVIEW ?>',
         layersServer: '<?php echo LAYERS_TILE_SERVER ?>',
         layersProtocol: '<?php echo LAYERS_DEFAULT_PROTOCOL ?>',
         cookiePolicy: '<?php echo JS_COOKIE_SETUP ?>',
@@ -845,32 +846,57 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
     function fireTheVisualization() {
         window.VIEWER.removeHandler('open', fireTheVisualization);
-        let i = 0;
-        let largestWidth = 0, selectedImageLayer = 0;
-        let imageNode = $("#image-layer-options");
+        let i = 0, selectedImageLayer = 0;
         let setup = APPLICATION_CONTEXT.setup;
-        //image-layer-options can be missing --> populate menu only if exists
-        if (imageNode) {
-            //reverse order menu since we load images in reverse order
-            for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
-                let image = setup.background[revidx];
-                let worldItem =  window.VIEWER.world.getItemAt(i);
-                if (image.hasOwnProperty("lossless") && image.lossless) {
-                    worldItem.source.fileFormat = "png";
-                }
-                let width = worldItem.getContentSize().x;
-                if (width > largestWidth) {
-                    largestWidth = width;
-                    selectedImageLayer = i;
-                }
-                imageNode.prepend(`
+
+        if (APPLICATION_CONTEXT.getOption("stackedBackground") || setup.background.length < 2 /*todo show allways but hiden in this case*/) {
+            let largestWidth = 0,
+                imageNode = $("#image-layer-options");
+            //image-layer-options can be missing --> populate menu only if exists
+            if (imageNode) {
+                //reverse order menu since we load images in reverse order
+                for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
+                    let image = setup.background[revidx];
+                    let worldItem =  window.VIEWER.world.getItemAt(i);
+                    if (image.hasOwnProperty("lossless") && image.lossless) {
+                        worldItem.source.fileFormat = "png";
+                    }
+                    let width = worldItem.getContentSize().x;
+                    if (width > largestWidth) {
+                        largestWidth = width;
+                        selectedImageLayer = i;
+                    }
+                    imageNode.prepend(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
 ${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
-                i++;
+                    i++;
+                }
             }
+        } else {
+            let html = "";
+            for (let idx = setup.background.length-1; idx >= 0; idx-- ) {
+                let image = setup.background[idx],
+                    imagePath =  APPLICATION_CONTEXT.setup.data[image.dataReference];
+                const urlmaker = new Function("path,data", "return " +
+                    (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview))
+                html += `
+<div id="tissue-scan-${imagePath}" onclick="alert('click');" class="d-inline-block" style="max-height: 150px"><img src="${
+urlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
+ }"/></div>
+                `;
+            }
+            //use switching panel
+            USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
+${html}
+
+
+            `);
+            i++; //rendering group always second
         }
+
+
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
@@ -966,10 +992,18 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
         APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
         function() {
             let activeData = VIEWER.bridge.dataImageSources(); 
-            let toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
-                const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
-            }).reverse(); //reverse order: last opened IMAGE is the first visible
+            let toOpen;
+            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+                toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
+                    const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                    return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
+                }).reverse(); //reverse order: last opened IMAGE is the first visible
+            } else {
+                let selectedImage = APPLICATION_CONTEXT.setup.background[0]; //todo custom index start?
+                const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
+                toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
+            }
+          
             VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
             toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, activeData));
             window.VIEWER.open(toOpen);
@@ -985,11 +1019,22 @@ EOF;
     /*---------------------------------------------------------*/
     /*----- Init without layers (layers.js) -------------------*/
     /*---------------------------------------------------------*/
-
-     window.VIEWER.open(APPLICATION_CONTEXT.setup.background.map(value => {
-        const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-        return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
-    }).reverse());
+    
+(function (window) {
+        
+    let toOpen;
+    if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+        toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
+            const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+            return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
+        }).reverse(); //reverse order: last opened IMAGE is the first visible
+    } else {
+        let selectedImage = APPLICATION_CONTEXT.setup.background[0]; //todo custom index start?
+        const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+        toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
+    }
+    window.VIEWER.open(toOpen);
+}(window)); 
 
 </script>
 EOF;

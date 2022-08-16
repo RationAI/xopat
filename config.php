@@ -38,13 +38,16 @@ define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
 define('VERSION', "1.0.1");
 
 /**
- * Default protocol
+ * Default protocol = DZI
  * one-liner javascript expression with two available variables:
  *  - path: server URL
  *  - data: requested images ids/paths (comma-separated if multiple)
  *  - do not use " symbol as this is used to convert the value to string (or escape, e.g. \\")
+ *
+ * preview is an url creator for whole image preview fetching
  */
 define('BG_DEFAULT_PROTOCOL', '`${path}?Deepzoom=\${data}.dzi`');
+define('BG_DEFAULT_PROTOCOL_PREVIEW', '`${path}?Deepzoom=\${data}_files/0/0_0.jpg`');
 define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(",")}.dzi`');
 
 /**

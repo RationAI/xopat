@@ -110,6 +110,7 @@ We will use [R] for required and [O] for optional parameters.
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation
     - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value

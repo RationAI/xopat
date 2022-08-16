@@ -329,7 +329,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     }; // end of namespace Dialogs
     Dialogs.init();
 
-    let pluginsToolsBuilder;
+    let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {
         /**
@@ -414,9 +414,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
                 let width = this.opened ? "calc(100% - 400px)" : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
-                if (pluginsToolsBuilder) {
-                    pluginsToolsBuilder.context.style.width = width;
-                }
+                if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
+                if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
             }
         },
 
@@ -461,6 +460,50 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             close() {
                 USER_INTERFACE.Margins.bottom = 0;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
+            }
+        },
+
+        /**
+         * Tools menu by default invisible (top)
+         */
+        TissueList: {
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
+                if (!tissueMenuBuilder) {
+                    tissueMenuBuilder = new UIComponents.Containers.PanelMenu("tissue-list-menu");
+                    tissueMenuBuilder.isMenuBelow = true;
+                    tissueMenuBuilder.context.classList.add("bg-opacity");
+                    USER_INTERFACE.MainMenu._sync();
+                }
+                tissueMenuBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
+                if (tissueMenuBuilder.isVisible) {
+                    USER_INTERFACE.Margins.bottom = tissueMenuBuilder.height;
+                }
+            },
+            /**
+             * Show desired toolBar menu. Also opens the toolbar if closed.
+             * @param {string|undefined} toolsId menu id to open at
+             */
+            open(toolsId=undefined) {
+                if (tissueMenuBuilder) {
+                    USER_INTERFACE.Margins.top = tissueMenuBuilder.height;
+                    tissueMenuBuilder.show(toolsId);
+                }
+            },
+            /**
+             * Notify menu. The menu tab will receive a counter that notifies the user something has happened.
+             * @param {string} menuId menu id to open at
+             * @param {string} symbol a html symbol (that can be set as data- attribute) to show, shows increasing
+             *  counter if undefined (e.g. 3 if called 3 times)
+             */
+            notify(menuId, symbol=undefined) {
+                if (tissueMenuBuilder) tissueMenuBuilder.setNotify(menuId, symbol);
+            },
+            /**
+             * Close the menu, so that it is not visible at all.
+             */
+            close() {
+                USER_INTERFACE.Margins.top = 0;
+                if (tissueMenuBuilder) tissueMenuBuilder.hide();
             }
         },
 
