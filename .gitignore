@@ -4,7 +4,5 @@
 Thumbs.db
 
 osd_debug/*
-openseadragon/*
 osd_debug/
-/openseadragon/package.json
-/openseadragon/package-lock.json
+
