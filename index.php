@@ -88,17 +88,20 @@ if ($layerVisible) {
 
         $shader_count = 0;
         foreach ($visualisationTarget->shaders as $data=>$layer) {
-            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
-                "You must specify <b>type</b> parameter.", print_r($layer, true));
-
             if (!isset($layer->name)) {
                 $temp = substr($data, max(0, strlen($data)-24), 24);
                 if (strlen($temp) != strlen($data)) $temp  = "...$temp";
                 $layer->name = "Source: $temp";
             }
 
+            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
+                "You must specify <b>type</b> parameter.", print_r($layer, true));
+
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 $layer->cache = $cookieCache->{$layer->name};
+            }
+            if (!isset($layer->params)) {
+                $layer->params = (object)array();
             }
             $shader_count++;
         }
