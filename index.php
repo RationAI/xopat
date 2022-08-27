@@ -9,7 +9,7 @@ require_once("plugins.php");
 $version = VERSION;
 
 function hasKey($array, $key) {
-    return !empty($array[$key]) && $array[$key];
+    return isset($array[$key]) && $array[$key];
 }
 
 function isFlagInProtocols($flag) {
@@ -28,7 +28,7 @@ function throwFatalErrorIf($condition, $title, $description, $details) {
 }
 
 function ensureDefined($object, $property, $default) {
-    if (empty($object->{$property})) {
+    if (!isset($object->{$property})) {
         $object->{$property} = $default;
     }
 }
@@ -57,11 +57,11 @@ ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
 ensureDefined($parsedParams, "dataPage", (object)array());
 
-$bypassCookies = !empty($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
-$cookieCache = !empty($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
+$bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
+$cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 
 foreach ($parsedParams->background as $bg) {
-    throwFatalErrorIf(empty($bg->dataReference), "No data available.",
+    throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
         "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
         print_r($parsedParams->background, true));
 
@@ -71,36 +71,36 @@ foreach ($parsedParams->background as $bg) {
         "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
 }
 
-$layerVisible = !empty($parsedParams->visualizations) ? 1 : 0;
+$layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
 
 if ($layerVisible) {
     $layerVisible--;
     foreach ($parsedParams->visualizations as $index=>$visualisationTarget) {
-        if (empty($visualisationTarget->name)) {
+        if (!isset($visualisationTarget->name)) {
             $visualisationTarget->name = "Custom Visualisation";
         }
-        if (empty($visualisationTarget->shaders)) {
+        if (!isset($visualisationTarget->shaders)) {
             unset($parsedParams->visualizations[$index]);
             //todo print warn to JS console
         }
 
         $shader_count = 0;
         foreach ($visualisationTarget->shaders as $data=>$layer) {
-            throwFatalErrorIf(empty($layer->type), "No visualisation style defined for $layer->name.",
-                "You must specify <b>type</b> parameter.", print_r($layer, true));
-
-            if (empty($layer->name)) {
+            if (!isset($layer->name)) {
                 $temp = substr($data, max(0, strlen($data)-24), 24);
                 if (strlen($temp) != strlen($data)) $temp  = "...$temp";
                 $layer->name = "Source: $temp";
             }
 
-            if (empty($layer->cache) && !empty($layer->name) && !empty($cookieCache->{$layer->name})) {
+            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
+                "You must specify <b>type</b> parameter.", print_r($layer, true));
+
+            if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 $layer->cache = $cookieCache->{$layer->name};
             }
-            if (empty($layer->params)) {
+            if (!isset($layer->params)) {
                 $layer->params = (object)array();
             }
             $shader_count++;
@@ -128,9 +128,9 @@ foreach ($PLUGINS as $_ => $plugin) {
         $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
     }
 
-    $hasParams = !empty($parsedParams->plugins->{$plugin->id});
-    $plugin->loaded = empty($plugin->error) &&
-        (!empty($parsedParams->plugins->{$plugin->id}) || in_array($plugin->id, $pluginsInCookies));
+    $hasParams = isset($parsedParams->plugins->{$plugin->id});
+    $plugin->loaded = !isset($plugin->error) &&
+        (isset($parsedParams->plugins->{$plugin->id}) || in_array($plugin->id, $pluginsInCookies));
 
     //make sure all modules required by plugins are also loaded
     if ($plugin->loaded) {
@@ -149,7 +149,7 @@ $cookie_setup = JS_COOKIE_SETUP;
 function getAttributes($source, ...$properties) {
     $html = "";
     foreach ($properties as $property) {
-        if (!empty($source->{$property})) {
+        if (isset($source->{$property})) {
             $html .= " $property=\"{$source->{$property}}\"";
         }
     }
@@ -159,7 +159,7 @@ function getAttributes($source, ...$properties) {
 function printDependencies($directory, $item) {
     global $version;
     //add module style sheet if exists
-    if (!empty($item->styleSheet)) {
+    if (isset($item->styleSheet)) {
         echo "<link rel=\"stylesheet\" href=\"$item->styleSheet\" type='text/css'>\n";
     }
     foreach ($item->includes as $__ => $file) {
