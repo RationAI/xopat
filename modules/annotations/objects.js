@@ -884,12 +884,19 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementX: line.lockMovementX,
             lockMovementY: line.lockMovementY,
             originalStrokeWidth: line.originalStrokeWidth,
+            selectable: false,
         }), new fabric.Text(text.text), {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize,
             lockUniScaling: true,
             scaleY: text.scaleY,
-            scaleX: text.scaleX
+            scaleX: text.scaleX,
+            selectable: false,
+            hasControls: false,
+            stroke: text.stroke,
+            fill: text.fill,
+            paintFirst: 'stroke',
+            strokeWidth: text.strokeWidth,
         }], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
@@ -900,6 +907,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             layerId: ofObject.layerId,
             fill: ofObject.fill,
             zoomAtCreation: ofObject.zoomAtCreation,
+            selectable: false,
+            hasControls: false
         });
     }
 
@@ -995,14 +1004,20 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _createParts(parameters, options) {
         options.stroke = options.fill || options.stroke;
-        console.log(options);
         return [new fabric.Line(parameters, $.extend({
             scaleX: 1,
             scaleY: 1,
+            selectable: false,
+            hasControls: false,
         }, options)), new fabric.Text('', {
             fontSize: 16,
-            textBackgroundColor: "#fff",
+            selectable: false,
+            hasControls: false,
             lockUniScaling: true,
+            stroke: 'white',
+            fill: 'black',
+            paintFirst: 'stroke',
+            strokeWidth: 2,
             scaleX: 1/options.zoomAtCreation,
             scaleY: 1/options.zoomAtCreation
         })];
