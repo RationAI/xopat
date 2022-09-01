@@ -36,6 +36,30 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     color:var(--color-state-focus-border) !important;
 }
 
+.ui-highlight {
+    -webkit-box-shadow: 0 0 5px 3px var(--color-state-focus-border);
+    -moz-box-shadow: 0 0 5px 3px var(--color-state-focus-border);
+    box-shadow: 0 0 5px 3px var(--color-state-focus-border);
+}
+
+.ui-highlight-animated {
+    animation: highlighted 0.5s infinite linear;
+
+}
+@keyframes highlighted {
+    0% { -webkit-box-shadow: 0 0 0 0 var(--color-state-focus-border);
+        -moz-box-shadow:  0 0 0 0 var(--color-state-focus-border);
+        box-shadow:  0 0 0 0 var(--color-state-focus-border);}
+    33% {    -webkit-box-shadow: 0 0 4px 1px var(--color-state-focus-border);
+        -moz-box-shadow: 0 0 4px 1px var(--color-state-focus-border);
+        box-shadow: 0 0 4px 1px var(--color-state-focus-border);}
+    66% {    -webkit-box-shadow: 0 0 5px 5px var(--color-state-focus-border);
+        -moz-box-shadow: 0 0 5px 5px var(--color-state-focus-border);
+        box-shadow: 0 0 5px 5px var(--color-state-focus-border);}
+    100% { -webkit-box-shadow: 0 0 0 0 var(--color-state-focus-border);
+        -moz-box-shadow:  0 0 0 0 var(--color-state-focus-border);
+        box-shadow:  0 0 0 0 var(--color-state-focus-border);}
+}
 /*stolen from github sourcecode page (flash.scss) use <div class="blob-code"><div class="blob-code-inner"></div></div>*/
 .blob-code-inner {
     overflow: visible;
@@ -289,10 +313,54 @@ input.switch:checked + label span {
     border-top: 3px solid var(--color-state-focus-border);}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
+#tissue-preview-container {
+    height: 30px;
+    flex-direction: row;
+    display: flex;
+}
+#tissue-preview-container:hover {
+    height: 200px;
+}
+#tissue-preview-container .selected::before {
+    content: '';
+    width: 100%;
+    height: 10px;
+    background: var(--color-state-focus-border);
+    background: linear-gradient(180deg, var(--color-state-focus-border) 0%, rgba(0,212,255,0) 100%);
+    position: absolute;
+    top: 0;
+    z-index: 2;
+}
+#tissue-preview-container .pointer:hover::before {
+    z-index: 4;
+}
+
+
+#tissue-preview-container .pointer {
+    cursor: pointer;
+    transition: transform .1s ease-out;
+    position: relative;
+}
+
+#tissue-preview-container .pointer:hover {
+    transform: scale(1.1);
+    box-shadow: var(--color-shadow-medium);
+    z-index: 3;
+}
+
+#tissue-preview-container img {
+    height: 200px;
+
+}
+#tissue-preview-container img:hover {
+
+}
 
 /** DIALOGS*/
-input.selectable-image-row-context:checked + div {border-color: var(--color-state-focus-border);
-    outline: none;box-shadow: var(--color-state-focus-shadow);}
+input.selectable-image-row-context:checked + div {
+    outline: none; -webkit-box-shadow: 0 0 5px 3px var(--color-state-focus-border);
+    -moz-box-shadow: 0 0 5px 3px var(--color-state-focus-border);
+    box-shadow: 0 0 5px 3px var(--color-state-focus-border);}
 @-webkit-keyframes popUpEnter { 0%{opacity: 0; margin-top: -20%;} 75%{margin-top: 50px;} 100%{opacity: 1;} }
 @keyframes popUpEnter { 0%{opacity: 0; margin-top: -20%;} 75%{margin-top: 50px;} 100%{opacity: 1;} }
 @-webkit-keyframes popUpHide { 0%{opacity: 1;display: flex !important;}
@@ -320,25 +388,25 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
     font-feature-settings: 'liga';}
 
 /* For somre reason Github css does not style input range */
-input[type=range] { height: 25px;  -webkit-appearance: none; margin: 3px 0; width: 65%; background: transparent;
+input[type=range] { height: 25px;  -webkit-appearance: none; /*margin: 3px 0;*/ width: 65%; background: transparent;
     vertical-align: middle; margin: 0;}
 input[type=range].with-direct-input { width: calc(70% - 80px);}
 input[type=range]:focus { outline: none;}
 input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer;  background: #b9b9b9;
-    border-radius: 7px; border: 0px }
-input[type=range]::-webkit-slider-thumb { box-shadow: 0px 0px 3px #9d9d9d; border: 0px solid #FFFFFF; height: 18px;
+    border-radius: 7px; border: 0 }
+input[type=range]::-webkit-slider-thumb { box-shadow: 0 0 3px #9d9d9d; border: 0 solid #FFFFFF; height: 18px;
     width: 18px; border-radius: 25px; background: #fff;
     cursor: pointer; -webkit-appearance: none; margin-top: -5px;}
 input[type=range]:focus::-webkit-slider-runnable-track {  background: #b9b9b9;}
 input[type=range]::-moz-range-track { width: 100%; height: 8px; cursor: pointer;  background: #b9b9b9;
-    border-radius: 7px; border: 0px;}
-input[type=range]::-moz-range-thumb { box-shadow: 0px 0px 3px #9d9d9d; border: 0px solid #b9b9b9; height: 18px;
+    border-radius: 7px; border: 0;}
+input[type=range]::-moz-range-thumb { box-shadow: 0 0 3px #9d9d9d; border: 0 solid #b9b9b9; height: 18px;
     width: 18px; border-radius: 25px; background: #fff; cursor: pointer;}
 input[type=range]::-ms-track { width: 100%; height: 8px; cursor: pointer; background: transparent;
     border-color: transparent; color: transparent;}
-input[type=range]::-ms-fill-lower { background: #b9b9b9; border: 0px solid #000000; border-radius: 14px; }
-input[type=range]::-ms-fill-upper { background: #b9b9b9;border: 0px solid #e8eaed;border-radius: 14px;}
-input[type=range]::-ms-thumb { margin-top: 1px; box-shadow: 0px 0px 3px #9d9d9d; border: 0px solid #b9b9b9;
+input[type=range]::-ms-fill-lower { background: #b9b9b9; border: 0 solid #000000; border-radius: 14px; }
+input[type=range]::-ms-fill-upper { background: #b9b9b9;border: 0 solid #e8eaed;border-radius: 14px;}
+input[type=range]::-ms-thumb { margin-top: 1px; box-shadow: 0 0 3px #9d9d9d; border: 0 solid #b9b9b9;
     height: 18px; width: 18px; border-radius: 25px; background: #fff; cursor: pointer;}
 input[type=range]:focus::-ms-fill-lower { background: #b9b9b9;}
 input[type=range]:focus::-ms-fill-upper { background: #b9b9b9;}

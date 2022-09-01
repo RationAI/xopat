@@ -1526,8 +1526,8 @@ OSDAnnotations.PolygonUtilities = {
         // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
-        let tolerance = Math.pow(3 / VIEWER.tools.imagePixelSizeOnScreen(), 2);
-        points = highestQuality ? points : this._simplifyRadialDist(points, tolerance);
+        let tolerance = 7 / VIEWER.tools.imagePixelSizeOnScreen();
+        points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
         points = this._simplifyDouglasPeucker(points, tolerance);
 
         return points;
@@ -1753,7 +1753,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.image, tile.sourceBounds, 0, this._currentPixelSize
+                tile.getImage(), tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;

@@ -332,6 +332,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {
+        highlight(id, timeout=2000, animated=true) {
+            let cls = animated ? "ui-highlight-animated" : "ui-highlight";
+            $(`#${id}`).addClass(cls);
+            setTimeout( () => $(`#${id}`).removeClass(cls), timeout);
+        },
+
         /**
          * Workspace (canvas) margins
          */

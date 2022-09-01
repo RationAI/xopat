@@ -8,8 +8,11 @@
         debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
         ready: function() {
             var i = 0;
+            const activeBackgroundSetup = APPLICATION_CONTEXT.setup.backgroundSetup[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+                defaultIndex = activeBackgroundSetup?.dataGroupIndex;
+
             let select = $("#shaders"),
-                activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
+                activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", Number.isInteger(defaultIndex) ? defaultIndex : 0);
             seaGL.foreachVisualisation(function (vis) {
                 let selected = i === activeIndex ? "selected" : "";
                 if (vis.error) {
@@ -117,7 +120,6 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         return seaGL.urlMaker;
     };
 
-
     VIEWER.addHandler('open-failed', function (e) {
         //todo check whether open failed only during opening, if so this is correct
         //this event handless add:    add-item-failed
@@ -193,10 +195,28 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         }
     });
 
+    function setNewDataGroup(index) {
+        APPLICATION_CONTEXT.setOption("activeVisualizationIndex", index);
+        seaGL.switchVisualisation(index);
+    }
+
     shadersMenu.addEventListener("change", function () {
-        let active = Number.parseInt(this.value);
-        APPLICATION_CONTEXT.setOption("activeVisualizationIndex", active);
-        seaGL.switchVisualisation(active);
+        setNewDataGroup(Number.parseInt(this.value));
+    });
+
+    VIEWER.addHandler('background-image-swap', function (e) {
+        e.prevBackgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+
+        if (Number.isInteger(e.backgroundSetup.dataGroupIndex)) {
+            const selectNode = $("#shaders");
+            let active = Number.parseInt(selectNode.val());
+            if (active !== e.backgroundSetup.dataGroupIndex) {
+                selectNode.val(String(e.backgroundSetup.dataGroupIndex));
+                setNewDataGroup(e.backgroundSetup.dataGroupIndex);
+            }
+        } else {
+            e.backgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+        }
     });
 
     /**

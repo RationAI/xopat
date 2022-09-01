@@ -666,16 +666,13 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         for (let key in vis.shaders) {
             if (vis.shaders.hasOwnProperty(key)) {
                 let layer = vis.shaders[key];
-                for (let id of layer.dataReferences) {
-                    usedIds.add(id);
-                }
+                layer.dataReferences.forEach(x => usedIds.add(x));
             }
         }
         usedIds = [...usedIds].sort();
         this._dataSources = [];
-        this._dataSourceMapping = new Array(this._origDataSources.length).fill(-1);
+        this._dataSourceMapping = new Array(Math.max(this._origDataSources.length, usedIds[usedIds.length-1])).fill(-1);
         for (let id of usedIds) {
-            //todo isn't dataSrouceMapping just identity?
             this._dataSourceMapping[id] = this._dataSources.length;
             this._dataSources.push(this._origDataSources[id]);
             while (id > this._dataSourceMapping.length) {

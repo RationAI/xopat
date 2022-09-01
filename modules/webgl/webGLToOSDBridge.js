@@ -10,7 +10,7 @@
 
 OpenSeadragon.BridgeGL = class {
 
-    constructor( openSeaDragonInstance, webGLEngine, cachedMode=true) {
+    constructor(openSeaDragonInstance, webGLEngine, cachedMode=true) {
         let _this  = this;
         this.openSD = openSeaDragonInstance;
 

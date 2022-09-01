@@ -7,7 +7,6 @@ define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this
 define('EXTERNAL_SOURCES', 'external');
 define('MODULES_FOLDER', 'modules');
 define('PLUGINS_FOLDER', 'plugins');
-define('OPEN_SEADRAGON', 'osd');
 
 if ($production) {
     define('PROTOCOL', "https://");
