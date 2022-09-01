@@ -74,6 +74,7 @@ foreach ($parsedParams->background as $bg) {
 $layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
+$errors_print = "";
 
 if ($layerVisible) {
     $layerVisible--;
@@ -82,8 +83,9 @@ if ($layerVisible) {
             $visualisationTarget->name = "Custom Visualisation";
         }
         if (!isset($visualisationTarget->shaders)) {
+            $visSummary = print_r($visualisationTarget, true);
+            $errors_print .= "console.warn('Visualisation #$index removed: missing shaders definition. The layer: <code>$visSummary</code>');";
             unset($parsedParams->visualizations[$index]);
-            //todo print warn to JS console
         }
 
         $shader_count = 0;
@@ -215,6 +217,7 @@ foreach ($MODULES as $_ => $mod) {
             console.defaultWarn.apply(console, arguments);
             console.savedLogs.push(Array.from(arguments));
         };
+        <?php echo $errors_print; ?>
     </script>
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
@@ -394,6 +397,7 @@ EOF;
         scaleBar: true,
         microns: undefined,
         viewport: undefined,
+        activeBackgroundIndex: 0,
         activeVisualizationIndex: 0,
         grayscale: false,
         tileCache: true,
@@ -847,6 +851,38 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         return MODULES[id].loaded;
     };
 
+    UTILITIES.swapBackgroundImages = function (bgIndex) {
+        const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+        if (activeBackground === bgIndex) return;
+        const image = APPLICATION_CONTEXT.setup.background[bgIndex],
+            imagePath = APPLICATION_CONTEXT.setup.data[image.dataReference],
+            sourceUrlMaker = new Function("path,data", "return " +
+            (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+
+        let prevImage = VIEWER.world.getItemAt(0);
+        let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+        VIEWER.addTiledImage({
+            tileSource: url,
+            index: 0,
+            opacity: 1,
+            replace: true,
+            success: function (e) {
+                APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+                let previousBackgroundSetup = APPLICATION_CONTEXT.setup.background[activeBackground];
+                VIEWER.raiseEvent('background-image-swap', {
+                    backgroundImageUrl: url,
+                    prevBackgroundSetup: previousBackgroundSetup,
+                    backgroundSetup: image,
+                    previousTiledImage: prevImage,
+                    tiledImage: e.item,
+                });
+                let container = document.getElementById('tissue-preview-container');
+                container.children[activeBackground].classList.remove('selected');
+                container.children[bgIndex].classList.add('selected');
+            }
+        });
+    };
+
     function fireTheVisualization() {
         window.VIEWER.removeHandler('open', fireTheVisualization);
         let i = 0, selectedImageLayer = 0;
@@ -878,24 +914,23 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
                 }
             }
         } else {
-            let html = "";
-            for (let idx = setup.background.length-1; idx >= 0; idx-- ) {
+            let html = "", activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            for (let idx = 0; idx < setup.background.length; idx++ ) {
                 let image = setup.background[idx],
-                    imagePath =  APPLICATION_CONTEXT.setup.data[image.dataReference];
-                const urlmaker = new Function("path,data", "return " +
-                    (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview))
+                    imagePath = setup.data[image.dataReference];
+                const previewUrlmaker = new Function("path,data", "return " +
+                    (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
-<div id="tissue-scan-${imagePath}" onclick="alert('click');" class="d-inline-block" style="max-height: 150px"><img src="${
-urlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
+<div onclick="UTILITIES.swapBackgroundImages(${idx});"
+class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
+previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
  }"/></div>
                 `;
             }
+            $("#panel-images").remove(); //necessary in other mode only
             //use switching panel
             USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
-${html}
-
-
-            `);
+<div id="tissue-preview-container">${html}</div>`);
             i++; //rendering group always second
         }
 
@@ -1002,7 +1037,7 @@ ${html}
                     return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
                 }).reverse(); //reverse order: last opened IMAGE is the first visible
             } else {
-                let selectedImage = APPLICATION_CONTEXT.setup.background[0]; //todo custom index start?
+                let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
                 const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
                 toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
             }
@@ -1032,7 +1067,7 @@ EOF;
             return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
         }).reverse(); //reverse order: last opened IMAGE is the first visible
     } else {
-        let selectedImage = APPLICATION_CONTEXT.setup.background[0]; //todo custom index start?
+        let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
         const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
         toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
     }
