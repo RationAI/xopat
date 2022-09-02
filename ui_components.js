@@ -400,26 +400,30 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
     //Enhancement: let creator own builder and just accept plain html
     RowPanel: class {
         constructor(containerId, builder=UIComponents.Components.ImageRow, builderOptions={}) {
-            this.context = document.getElementById(containerId);
+            const context = document.getElementById(containerId);
+            if (!context) throw "RowPanel(): invalid initialization: container does not exist!";
+            this.containerId = containerId;
             this.builder = new builder(containerId, builderOptions);
             this.uid = containerId;
-            if (!this.context) throw "RowPanel(): invalid initialization: container does not exist!";
-            this.context.innerHTML = `<div></div>`;
+            context.innerHTML = `<div></div>`;
             this.rows = [];
             this.count = 0;
             this.contentClass = "row-panel";
-            this.context = $(this.context.childNodes[0]);
+        }
+
+        _getContext() {
+            return $(document.getElementById(this.containerId).children[0]);
         }
 
         addRow(options) {
             options.id = `${this.uid}-row-${this.count++}`;
             options.customClass = this.contentClass;
-            this.context.append(this.builder.build(options))
+            this._getContext().append(this.builder.build(options))
             //this.rows.push(this.context.append(this.rowBuilder(options)));
         }
 
         clear() {
-            this.context.html("");
+           this._getContext().html("");
         }
     },
 };
