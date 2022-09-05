@@ -37,7 +37,7 @@ image server together with image queries. In case you change the image server UR
  - check that the plugin knows how to connect to the server, i.e. setting up a correct URL in the `include.json` file
 
 #### DYI - Frontend
-0. Add and build OpenSeadragon - requires `npm` and `grunt` (``cd pathopus && git clone https://github.com/RationAI/openseadragon.git && cd openseadragon && npm install``), details [here](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
+0. Add and build OpenSeadragon - requires `npm` and `grunt` (``cd pathopus && git clone https://github.com/RationAI/openseadragon.git && cd openseadragon && npm install && grunt build``), details [here](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
 1. Place the application to a folder from which PHP (**VERSION > 7.1**) can serve files (e.g. create WampServer configuration for localhost).
 2. Change **config.php** configuration, most importantly the protocol used, correct paths and default URL(s) to image server(s).
 3. Use the visualization by sending the `JSON` configuration via `HTTP POST` to the `index.php` (you will most likely want to have 

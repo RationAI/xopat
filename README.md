@@ -22,9 +22,9 @@ In order to install the library you have to clone it and generate the source cod
 >
 > building requires grunt and npm
 >
-> ``cd openseadragon && npm install``
+> ``cd openseadragon && npm install && grunt build``
 >
-> npm install should run ``grunt build``, for more info on building see [the guide](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
+> you should see `build/` folder. For more info on building see [the guide](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
 
 
 The visualization itself is not based on any framework, it is pure JavaScript application that integrates
