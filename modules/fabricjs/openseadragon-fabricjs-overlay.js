@@ -34,6 +34,7 @@
     // };
 
     fabric.Object.prototype.objectCaching = false;
+    fabric.Group.prototype.objectCaching = false;
 
     if (!window.OpenSeadragon) {
         console.error('[openseadragon-canvas-overlay] requires OpenSeadragon');
