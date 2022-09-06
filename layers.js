@@ -8,7 +8,7 @@
         debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
         ready: function() {
             var i = 0;
-            const activeBackgroundSetup = APPLICATION_CONTEXT.setup.backgroundSetup[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+            const activeBackgroundSetup = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
                 defaultIndex = activeBackgroundSetup?.dataGroupIndex;
 
             let select = $("#shaders"),
