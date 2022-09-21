@@ -3,7 +3,7 @@
 OSDAnnotations.Preset = class {
     /**
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
-     * @param {number} id
+     * @param {number|string} id
      * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
      * @param {string} category default category meta data
      * @param {string} color fill color
@@ -310,7 +310,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Export presets
-     * @returns {object} JSON-friendly representation
+     * @returns {[object]} JSON-friendly representation
      */
     toObject() {
         let exported = [];

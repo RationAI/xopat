@@ -1,0 +1,8 @@
+{
+    "id": "pathopus-worker",
+    "name": "Pathopus Thread Worker",
+    "description": "Generic asynchronous detached worker for offscreen computation.",
+    "includes" : ["interface.js"],
+    "requires": [],
+    "attach": "PathopusWorker"
+}

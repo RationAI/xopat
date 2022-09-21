@@ -7,9 +7,7 @@ MUST DO's or plugin ID does not apply.
 
 
 ## `include.json`
-It's structure is similar, however, you have no access to the values of
-this configuration at runtime and the set-up should be more or less static,
-so that plugins can rely on the behaviour. Instead of `modules` here we can
+It's structure is similar but instead of `modules` here we can
 define a dependency on other modules with `requires` list.
 ````json
 {
@@ -23,7 +21,12 @@ define a dependency on other modules with `requires` list.
     "requires": []
 }
 ````
+The access to this file is **not enabled implicitly**, you have to explicitly
+define optional key `attach` with a value of a global object: it will make the core to attach 
+this file enriched by additional data (see `modules.php`) as a *`metadata`* variable.
 
+> Note: to ensure attached metadata, make sure the provided name of an object is accessible
+> via ``window`` variable: use `MyClass = class extends ...` instead of `class MyClass extends ...`
 
 ### Interface
 Unlike plugins, options and data is stored on global API level, since we cannot nor want to enforce instantiation 

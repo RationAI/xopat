@@ -559,8 +559,8 @@ EOF;
 
 (function (window) {
     var registeredPlugins = [];
-    var MODULES = <?php echo json_encode((object)$MODULES) ?>;
     var LOADING_PLUGIN = false;
+    const MODULES = <?php echo json_encode((object)$MODULES) ?>;
 
     function showPluginError(id, e) {
         if (!e) {
@@ -785,6 +785,9 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                         $('head').append(`<link rel='stylesheet' href='${module.styleSheet}' type='text/css'/>`);
                     }
                     module.loaded = true;
+                    if (typeof module.attach === "string" && window[module.attach]) {
+                        window[module.attach].metadata = module;
+                    }
                     chainLoadModules(moduleList, index+1, onSuccess);
                 }, '<?php echo MODULES_FOLDER ?>');
         }
@@ -970,6 +973,13 @@ previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
                 fontSize: "small",
                 barThickness: 2
             });
+        }
+
+        for (let modID in MODULES) {
+            const module = MODULES.hasOwnProperty(modID) && MODULES[modID];
+            if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
+                window[module.attach].metadata = module;
+            }
         }
 
         //Notify plugins OpenSeadragon is ready

@@ -5,6 +5,8 @@
     "includes" : [
         "ext/greiner-hormann.min.js",
         "annotations.js",
+        "convert/convertor.js",
+        "convert/asapXml.js",
         "objects.js",
         "free_form_tool.js",
         "history.js"

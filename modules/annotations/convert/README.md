@@ -7,10 +7,9 @@ a list of active objects and a list of presets.
 ### Supported formats
 The default format is the native format. Build-in (lossy) convertors include **GeoJSON** and **ASAP XML** formats. 
 
-To register a new converter, do not force the annotation module to load the file: instead, modify the
-``convertor.js`` file by adding a new register expression:
+To register a new converter, register the converter class after its definition with:
 
-> ``OSDAnnotations.Convertor.register(name, filename, convertor)``
+> ``OSDAnnotations.Convertor.register(name, convertorClass)``
 
 Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
 
@@ -91,5 +90,15 @@ metadata, it is stored in the annotation `meta` field.
 ##### Preset variables: a live object
 The live object properties differ from those described above, for example factoryID is paired with an appropriate
 factory instance to provide its features.
+
+### Gotchas
+In general, `type` is the only general property an annotation object must provide when importing (but you should
+provide all **type-dependent properties**), other things
+will be set up for you automatically. However, doing so mean two subsequent imports of annotations are type-and-id-wise
+incompatible, although they look identically.
+
+By default, a ``polygon`` factory is always available, so that you can set this value as a fallback. Other factories
+might not be available on the current session: for safety, check the presence with the OSDAnnotations API.
+
 
 

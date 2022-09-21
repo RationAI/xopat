@@ -422,6 +422,7 @@ style="width: 115px;">${category}</span>
 		fileReader.onload = function (e) {
 			try {
 				if (annotations) {
+					//todo then, catch?
 					_this.context.loadObjects(JSON.parse(e.target.result));
 				} else {
 					_this.context.presets.import(e.target.result);
@@ -440,8 +441,18 @@ style="width: 115px;">${category}</span>
 	 * Export annotations and download them
 	 */
 	exportToFile() {
+		//todo implement imports
 		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.getObjectContent()));
-		UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", this.context.getXMLStringContent());
+		//UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", this.context.getXMLStringContent());
+		OSDAnnotations.Convertor.encode('asap-xml',
+			this.context.canvas.getObjects(),
+			this.context.presets.toObject(),
+			this.context
+		).then(result => {
+			UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", result);
+		}).catch(e => {
+			console.error(e);
+		});
 	}
 
 	/**
@@ -732,6 +743,7 @@ ${this.presetExportControls()}
                 _this.context.presets.import(json.presets);
                 _this.updatePresetsHTML();
 
+				//todo then, catch
 				_this.context.loadObjects(json.annotations);
                 $("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
                 Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);

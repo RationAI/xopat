@@ -1,60 +1,54 @@
 OSDAnnotations.Convertor = class {
 
-    static CONVERTERS = {
-
-    };
+    static CONVERTERS = {};
 
     /**
      * Register custom Annotation Converter
      * @param {string} name version to register (can override)
-     * @param {string} filename file that provides the implementation of the converter
-     * @param {object} convertor a converter object from the provided file
+     * @param {object} convertor a converter object main class (function) name from the provided file, it should have:
      * @param {string} convertor.title human readable title
      * @param {string} convertor.description optional
-     * @param {function} convertor.glContext returns WebGL context
-     * @param {function} convertor.webGLImplementation returns class extending WebGLImplementation
+     * @param {function} convertor.encode encodes the annotations into desired format from the native one,
+     *  receives annotations and presets objects, should return a string - serialized object
+     * @param {function} convertor.decode decodes the format into native format, receives a string, returns
+     *  on objects {annotations: [], presets: []}
      */
-    static register(name, filename, convertor) {
-        if ((typeof convertor.encode) !== "function") {
-            console.error(`Registered annotations convertor ${name} must provide encode() function!`);
-            return;
-        }
-        if ((typeof convertor.decode) !== "function") {
-            console.error(`Registered annotations convertor ${name} must provide decode() function!`);
-            return;
-        }
-        if ((typeof convertor.title) !== "string") {
-            console.warn(`Registered annotations convertor ${name} should provide 'title'.`);
-            convertor.title = name;
-        }
-        if (typeof OSDAnnotations.Convertor._CONVERTERS[name] === "object") {
+    static register(name, convertor) {
+        if (typeof OSDAnnotations.Convertor.CONVERTERS[name] === "object") {
             console.warn(`Registered annotations convertor ${name} overrides existing convertor!`);
         }
         OSDAnnotations.Convertor.CONVERTERS[name] = convertor;
     }
 
     /**
-     * Encodes the annotation data using a worker
+     * Encodes the annotation data using asynchronous communication.
      * @param name
      * @param annotations
      * @param presets
-     * @param onFinish
+     * @param context
      */
-    static encode(name, annotations, presets, onFinish) {
-
+    static async encode(name, annotations, presets, context) {
+        const parserCls = OSDAnnotations.Convertor.CONVERTERS[name];
+        return new parserCls().encode(annotations, presets, context);
     }
 
     /**
-     * Decodes the annotation data using a worker
+     * Decodes the annotation data using asynchronous communication.
      * @param name
      * @param data
-     * @param onFinish
+     * @param context
      */
-    static decode(name, data, onFinish) {
+    static async decode(name, data, context) {
+        const parserCls = OSDAnnotations.Convertor.CONVERTERS[name];
+        return new parserCls().encode(data, context);
+    }
+
+    static async load(name, data, context) {
+
+    }
+
+    static async export(name, context) {
 
     }
 };
 
-/////////////////////////////////
-/// REGISTER CALLS BELOW ////////
-/////////////////////////////////
