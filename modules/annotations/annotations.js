@@ -905,6 +905,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		/****** E V E N T  L I S T E N E R S: FABRIC (called when not navigating) **********/
 
+			//todo better handling - either add events to the viewer or...
+
 		let annotationCanvas = this.canvas.upperCanvasEl;
 		annotationCanvas.addEventListener('mousedown', function (event) {
 			if (_this.disabledInteraction) return;
@@ -963,7 +965,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryId}`;
 		}
 		_this.objectFactories[factory.factoryId] = factory;
-		if (atRuntime) _this.raiseEvent('factory-registered');
+		if (atRuntime) _this.raiseEvent('factory-registered', {factory: factory});
 	}
 
 	_setModeFromAuto(mode) {
@@ -1296,7 +1298,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		//instant create wants screen pixels as we approximate based on zoom level
 		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
 			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
-			onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN);
+onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
+coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
 		}
 	}
 

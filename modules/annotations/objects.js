@@ -381,6 +381,7 @@ OSDAnnotations.PresetManager = class {
                     layerId: this._context.getLayer().id,
                     opacity: this._context.getOpacity(),
                     stroke: withPreset.color,
+                    color: withPreset.color,
                     zoomAtCreation: zoom,
                     strokeWidth: 3 / zoom
                 }
@@ -393,6 +394,7 @@ OSDAnnotations.PresetManager = class {
                     presetID: withPreset.presetID,
                     layerId: this._context.getLayer().id,
                     opacity: this._context.getOpacity(),
+                    color: withPreset.color,
                     zoomAtCreation: zoom,
                     strokeWidth: 3 / zoom
                 }
@@ -469,6 +471,8 @@ OSDAnnotations.Layer = class {
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
+ *
+ * TODO: unify group behaviour, introduce general recursive object for objects and group
  */
 OSDAnnotations.AnnotationObjectFactory = class {
 
@@ -487,6 +491,22 @@ OSDAnnotations.AnnotationObjectFactory = class {
         this._auto = autoCreationStrategy;
         this.factoryId = identifier;
         this.type = objectType;
+    }
+
+    /**
+     * Human-readable annotation title
+     * @returns {string}
+     */
+    title() {
+        return "Generic Object";
+    }
+
+    /**
+     * What internal structure is kept by this annotation
+     * @returns {string|[string]|[[string]]} (possibly nested) list of types
+     */
+    fabricStructure() {
+        return "object";
     }
 
     /**
@@ -623,10 +643,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
     selected(theObject) {
     }
 
-    getASAP_XMLTypeName() {
-        return "Generic Object";
-    }
-
     /**
      * If the object is defined implicitly (e.g. control points + formula)
      * if returns false, a 'points' property of the object should exist where its shape is stored
@@ -673,6 +689,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return "crop_5_4";
     }
 
+    fabricStructure() {
+        return "rect";
+    }
+
     getDescription(ofObject) {
         return `Rect [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
     }
@@ -694,7 +714,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             scaleX: 1,
             scaleY: 1,
             type: this.type,
-            factoryId: this.factoryId
+            factoryId: this.factoryId,
         }, parameters, options));
     }
 
@@ -720,6 +740,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             stroke: ofObject.stroke,
             scaleX: ofObject.scaleX,
             scaleY: ofObject.scaleY,
+            color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             originalStrokeWidth: ofObject.originalStrokeWidth,
             type: ofObject.type,
@@ -823,7 +844,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         ];
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "Rectangle";
     }
 
@@ -842,6 +863,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getDescription(ofObject) {
         return `Length ${Math.round(ofObject.measure)} mm`;
+    }
+
+    fabricStructure() {
+        return ["line", "text"];
     }
 
     getCurrentObject() {
@@ -905,7 +930,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
             layerId: ofObject.layerId,
-            fill: ofObject.fill,
+            color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: false,
             hasControls: false
@@ -968,7 +993,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return undefined;
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "Ruler";
     }
 
@@ -1029,7 +1054,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryId: this.factoryId,
             type: this.type,
             measure: 0,
-            fill: parts[0].fill
         }, options));
     }
 };
@@ -1044,6 +1068,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getIcon() {
         return "lens";
+    }
+
+    fabricStructure() {
+        return "ellipse";
     }
 
     getDescription(ofObject) {
@@ -1065,8 +1093,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         return new fabric.Ellipse($.extend({
-            originX: 'left',
-            originY: 'top',
+            // originX: 'center',
+            // originY: 'center',
             angle: 0,
             scaleX: 1,
             scaleY: 1,
@@ -1090,8 +1118,6 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             top: parameters.top,
             rx: parameters.rx,
             ry: parameters.ry,
-            originX: ofObject.originX,
-            originY: ofObject.originY,
             angle: ofObject.angle,
             fill: ofObject.fill,
             stroke: ofObject.stroke,
@@ -1102,6 +1128,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             zoomAtCreation: ofObject.zoomAtCreation,
             originalStrokeWidth: ofObject.originalStrokeWidth,
             type: ofObject.type,
+            color: ofObject.color,
             factoryId: ofObject.factoryId,
             isLeftClick: ofObject.isLeftClick,
             selectable: ofObject.selectable,
@@ -1222,7 +1249,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return points;
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "Ellipse";
     }
 };
@@ -1236,6 +1263,10 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getIcon() {
         return "share";
+    }
+
+    fabricStructure() {
+        return "polygon";
     }
 
     getDescription(ofObject) {
@@ -1271,6 +1302,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             opacity: ofObject.opacity,
             type: ofObject.type,
             scaleX: ofObject.scaleX,
+            color: ofObject.color,
             scaleY: ofObject.scaleY,
             zoomAtCreation: ofObject.zoomAtCreation,
             originalStrokeWidth: ofObject.originalStrokeWidth,
@@ -1492,7 +1524,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
         return points;
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "Polygon";
     }
 
@@ -1509,8 +1541,8 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
             fill: '#fbb802',
             left: x,
             top: y,
-            originX: 'center',
-            originY: 'center',
+            // originX: 'center',
+            // originY: 'center',
             factory: "__private",
         }));
     }
@@ -1664,10 +1696,24 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         this._renderEngine = new WebGLModule({
             uniqueId: "annot",
             onError: function(error) {
-                //maybe notify
+                //potentially able to cope with it
+                VIEWER.raiseEvent('warn-system', {
+                    originType: "module",
+                    originId: "annotations",
+                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
+                    message: "Error in the webgl module.",
+                    trace: error
+                });
             },
             onFatalError: function (error) {
                 console.error("Error with automatic detection: this feature wil be disabled.");
+                VIEWER.raiseEvent('error-user', {
+                    originType: "module",
+                    originId: "annotations",
+                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
+                    message: "Error with automatic detection: this feature wil be disabled.",
+                    trace: error
+                });
                 _this._running = false;
             }
         });
@@ -1712,6 +1758,19 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 let otherLayer = vis.shaders[key];
                 let type;
                 if (key === this._readingKey) {
+                    //todo clipping mask and custom rendering will maybe not work here
+
+                    if (!otherLayer.visible || otherLayer.visible === "false" || otherLayer.visible === "0") {
+
+                        VIEWER.raiseEvent('warn-user', {
+                            originType: "module",
+                            originId: "annotations",
+                            code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
+                            message: "The <a class='pointer' onclick=\"USER_INTERFACE.highlight('sensitivity-auto-outline')\">chosen layer</a> is not visible: auto outline method will not work.",
+                        });
+                        return false;
+                    }
+
                     if (otherLayer.type === "bipolar-heatmap") {
                         this.comparator = function(pixel) {
                             return Math.abs(pixel[0] - this.origPixel[0]) < 10 &&
@@ -1759,6 +1818,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             tile.annotationCanvas.height = tile.sourceBounds.height;
             tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
         }
+        return true;
     }
 
     _afterAutoMethod() {
@@ -1766,8 +1826,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     approximateBounds(point, growY=true) {
-        this._beforeAutoMethod();
-		if (!this.changeTile(point) || !this._running) {
+		if (!this._beforeAutoMethod() || !this.changeTile(point) || !this._running) {
             this._afterAutoMethod();
             return null;
         }
@@ -1820,8 +1879,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     /*async*/ createOutline(eventPosition) {
-        this._beforeAutoMethod();
-        if (!this.changeTile(eventPosition) || !this._running) {
+        if (!this._beforeAutoMethod() || !this.changeTile(eventPosition) || !this._running) {
             this._afterAutoMethod();
             return null;
         }

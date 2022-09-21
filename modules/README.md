@@ -46,3 +46,8 @@ Return data exported with the viewer if available.
 Registers `dataExportHandler` under arbitrary `key`. `dataExportHandler` is a function callback that
 will get called once a viewer export event is invoked. Should return a string that encodes the data to store.
 The data should not contain `` ` `` character.
+
+## Events
+Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description
+should be provided. These events should be invoked on the parent instance of the 'module' and
+use the OpenSeadragon Event System.

@@ -114,6 +114,9 @@ class WebGLModule {
         this.reset();
     }
 
+    /**
+     * Reset the engine to the initial state
+     */
     reset() {
         this._visualisations = [];
         this._dataSources = [];
@@ -700,6 +703,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key],
                         ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
+                    if (layer.type === "none") continue;
                     this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
                 }
             }
@@ -716,6 +720,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     }
                     delete layer.error;
                     delete layer.desc;
+                    if (layer.type === "none") continue;
                     let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
                     this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }

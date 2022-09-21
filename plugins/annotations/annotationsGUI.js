@@ -373,7 +373,7 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 	 * @returns {string} HTML
 	 */
 	getPresetControlHTML(preset, isLeftClick) {
-		let category = preset.getMetaValue('category') || preset.objectFactory.getASAP_XMLTypeName();
+		let category = preset.getMetaValue('category') || preset.objectFactory.title();
 		let icon = preset.objectFactory.getIcon();
 
 		let changeHtml = "";
@@ -384,7 +384,7 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 				changeHtml += `<div onclick="${this.id}.updatePreset(${preset.presetID}, 
 {objectFactory: ${this.id}.context.getAnnotationObjectFactory('${factory.factoryId}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
-style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
+style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
 			}
 		});
 
@@ -503,9 +503,9 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
 
 			if (factory.factoryId === preset.objectFactory.factoryId) {
-				select += `<option value="${factory.factoryId}" selected>${factory.getASAP_XMLTypeName()}</option>`;
+				select += `<option value="${factory.factoryId}" selected>${factory.title()}</option>`;
 			} else {
-				select += `<option value="${factory.factoryId}">${factory.getASAP_XMLTypeName()}</option>`;
+				select += `<option value="${factory.factoryId}">${factory.title()}</option>`;
 			}
 		});
 

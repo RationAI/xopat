@@ -39,8 +39,13 @@
          * @param delayMS miliseconds to wait before auto close
          *          use values < 1000 to not to close at all
          * @param importance Dialogs.MSG_[INFO/WARN/ERR] object
+         * @param queued this message is ignored if another is shown and queued=false
          */
-        show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO) {
+        show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
+            //todo support concurrence, queue
+
+            if (!queued && this._timer) return;
+
             this._board.html(text);
             this._icon.html(importance.icon);
             this._body.removeClass(); //all
@@ -49,7 +54,7 @@
             this._body.addClass("popUpEnter");
 
             if (delayMS > 1000) {
-                this._timer = setTimeout(this.hide.bind(this), delayMS);
+                this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
             }
         },
 
@@ -57,7 +62,7 @@
          * Hide notification
          */
         hide: function () {
-            this._hideImpl(true);
+            this._hideImpl(false);
         },
 
         _hideImpl: function(timeoutCleaned) {

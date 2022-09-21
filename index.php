@@ -528,6 +528,17 @@ EOF;
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
+
+    VIEWER.addHandler('warn-user', e => {
+        //todo time deduction from the message length
+        //todo make this as a last handler
+        Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
+    });
+    VIEWER.addHandler('error-user', e => {
+        //todo time deduction from the message length
+        //todo make this as a last handler
+        Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
+    });
 })(window);
     </script>
 
