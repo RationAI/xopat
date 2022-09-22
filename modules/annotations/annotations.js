@@ -91,25 +91,83 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._registerAnnotationFactory(FactoryClass, atRuntime);
 	}
 
-	/******************* EXPORT, IMPORT **********************/
+	/******************* EXPORT, IMPORT... todo move to convertor? **********************/
 
 	/**
-	 * Export objects in a fabricjs manner (actually just forwards the export command)
-	 * @param {string[]} withProperties list of extra properties to export
-	 * @return {object} exported canvas content
+	 * Export annotations and presets
+	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
+	 *     use "native" or undefined for native export
+	 * @param {boolean} withAnnotations
+	 * @param {boolean} withPresets
+	 * @return Promise(string)
 	 */
-	getObjectContent(...withProperties) {
-		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor',
-			'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', 'layerId', ...withProperties]);
+	async export(format=undefined, withAnnotations=true, withPresets=true) {
+		if (!format || format === "native") {
+			const result = withAnnotations ? this.toObject() : {};
+			if (withPresets) result.presets = this.presets.toObject();
+			return JSON.stringify(result);
+		}
+		return OSDAnnotations.Convertor.encode(format, this, withAnnotations, withPresets);
 	}
 
 	/**
-	 * Load objects, must keep the same structure that comes from 'export'
-	 * @param {object} annotations objects to import
-	 * @param {function} onfinish
+	 * Import annotations and presets
+	 * @param {string} data serialized data of the given format
+	 * @param {string} format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {boolean} clear erase state upon import
+	 * @return Promise(string)
+	 */
+	async import(data, format=undefined, clear=false) {
+		//todo allow for 'redo' history
+
+		let toImport;
+		if (!format || format === "native") {
+			toImport = JSON.parse(data);
+		} else {
+			toImport = await OSDAnnotations.Convertor.decode(format, data, this);
+		}
+
+		// the import should happen in two stages, one that prepares the data and one that
+		// loads so that integrity is kept -> this is not probably a big issue since the only
+		// 'parsing' is done within preset import and it fails safely with exception in case of error
+
+		if (toImport.presets) {
+			this.presets.import(toImport.presets, clear);
+		}
+
+		if (!Array.isArray(toImport.objects)) {
+			await this._loadObjects(toImport, clear);
+		}
+	}
+
+	/**
+	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
+	 * for exporting presets, see this.presets.export(...)
+	 * @param {string[]} withProperties list of extra properties to export
+	 * @return {object} exported canvas content {objects:[object]}
+	 */
+	toObject(...withProperties) {
+		const props = [];
+		for (let fid in this.objectFactories) {
+			const factory = this.objectFactories[fid];
+			const newProps = factory.exportsProperties();
+			if (Array.isArray(newProps)) props.push(...newProps);
+		}
+		props.push(...OSDAnnotations.PresetManager.exportableProperties);
+		props.push(...withProperties);
+		return this.canvas.toObject(props);
+	}
+
+	/**
+	 * Load annotation objects only, must keep the same structure that comes from 'toObject',
+	 * the load event should be preceded with preset load event
+	 * for loading presets, see this.presets.import(...)
+	 * @param {object} annotations objects to import, {objects:[object]} format
 	 * @param {boolean} clear true if existing objects should be removed, default false
+	 * @return Promise
 	 */
 	async loadObjects(annotations, clear=false) {
+		//todo allow for 'redo' history
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
 		return this._loadObjects(annotations, clear);
@@ -349,12 +407,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			if (!preset) {
 				console.log("Object refers to an invalid preset: using default one.");
 				preset = this.presets.left;
-				object.presetID = preset.id;
+				object.presetID = preset.presetID;
 			}
-
 		} else {
+			//todo maybe try to find a preset with the exact same color...
 			preset = this.presets.left;
-			object.presetID = preset.id;
+			object.presetID = preset.presetID;
 		}
 
 		$.extend(object, this.presets.getCommonProperties(preset));
@@ -732,14 +790,23 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._layers = {};
 
 		//restore presents if any
-		//todo events instead, but what about reading? ...
-		APPLICATION_CONTEXT.setData("annotation_presets", this.presets.export.bind(this.presets), "annotations");
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation_presets", JSON.stringify(_this.presets.toObject())));
 		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		if (presetData !== undefined) this.presets.import(presetData);
-		else this.presets.addPreset();
+		let preset;
+		if (presetData !== undefined) {
+			try {
+				preset = this.presets.import(presetData);
+			} catch (e) {
+				preset = this.presets.addPreset();
+			}
+		}
+		else preset = this.presets.addPreset();
+		if (preset) this.setPreset(preset);
 
 		//restore objects if any
-		APPLICATION_CONTEXT.setData("annotation-list", _ => JSON.stringify(_this.getObjectContent()), "annotations");
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation-list", JSON.stringify(_this.toObject())));
 		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
 		if (imageJson) {
 			try {
@@ -758,7 +825,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 
 		this.setMouseOSDInteractive(true, false);
-		this._setListeners();
 	}
 
 	_debugActiveObjectBinder() {
@@ -1002,35 +1068,32 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		return new Promise((resolve, reject) => {
-			try {
-				this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
-					if (input.objects.length > 0 && enlivenedObjects.length < 1) {
-						reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
-					}
+			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
+				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
+					return reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
+				}
 
-					if (clear) _this.clear();
-					_this._setBgOverlay(input, function () {
-						enlivenedObjects.forEach(function(obj, index) {
-							self.checkLayer(obj);
-							self.checkPreset(obj);
+				if (clear) _this.clear();
+				_this._setBgOverlay(input, function () {
+					enlivenedObjects.forEach(function(obj, index) {
+						self.checkLayer(obj);
+						self.checkPreset(obj);
 
-							obj.on('selected', self._objectClicked.bind(self));
-							_this.insertAt(obj, index);
-						});
-						delete input.objects;
-						delete input.backgroundImage;
-						delete input.overlayImage;
-						delete input.background;
-						delete input.overlay;
-						_this._setOptions(input);
-						_this.renderAll();
-						resolve();
+						obj.on('selected', self._objectClicked.bind(self));
+						//todo annotation creation event?
+						_this.insertAt(obj, index);
 					});
-				}, reviver);
-				this.history.assignIDs(this.canvas.getObjects());
-			} catch (e) {
-				reject(e);
-			}
+					delete input.objects;
+					delete input.backgroundImage;
+					delete input.overlayImage;
+					delete input.background;
+					delete input.overlay;
+					_this._setOptions(input);
+					self.history.assignIDs(_this.getObjects());
+					_this.renderAll();
+					return resolve();
+				});
+			}, reviver);
 		});
 	}
 
@@ -1042,11 +1105,13 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		//possibly try to avoid in the future accessing self through a global
-		window.Annotations = this;
+		window.annotations = this;
 		this.id = "annotations";
-		this.session = Date.now();
+		this.version = "0.0.1";
+		this.session = this.version + "_" + Date.now();
 		this.constructor.__self = this;
 		this._init();
+		this._setListeners();
 	}
 };
 

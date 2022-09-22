@@ -3,7 +3,7 @@
 OSDAnnotations.Preset = class {
     /**
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
-     * @param {number|string} id
+     * @param {string} id
      * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
      * @param {string} category default category meta data
      * @param {string} color fill color
@@ -32,14 +32,16 @@ OSDAnnotations.Preset = class {
                 "No factory for such object available.");
             factory = factoryGetter("polygon"); //rely on polygon presence
         }
-        let preset = new this(parsedObject.presetID, factory, "", parsedObject.color);
+
+        const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
+        let preset = new this(id, factory, "", parsedObject.color);
         preset.meta = parsedObject.meta || {};
         return preset;
     }
 
     /**
      * Convert the preset to JSON-friendly object
-     * @return {{color: string, factoryID: string, meta: {}, presetID: number}}
+     * @return {{color: string, factoryID: string, meta: {}, presetID: string}}
      */
     toJSONFriendlyObject() {
         return {
@@ -93,6 +95,14 @@ OSDAnnotations.PresetManager = class {
     };
 
     /**
+     * Properties that get exported from annotations by default
+     */
+    static exportableProperties = [
+        'meta', 'borderColor', 'cornerColor', 'borderScaleFactor', 'color', 'presetID',
+        'hasControls', 'factoryId', 'sessionId', 'layerId'
+    ];
+
+    /**
      * Create Preset Manager
      * @param {string} selfName name of the property 'self' in parent
      * @param {OSDAnnotations} context parent context
@@ -143,7 +153,7 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} newly created preset
      */
     addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(Date.now().toString(), this._context.polygonFactory, "", this._randomColorHexString());
         this._presets[preset.presetID] = preset;
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
@@ -331,31 +341,38 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Import presets
-     * @param {string|object} presets JSON to decode
-     * @param {boolean} overwrite true if existing presets should be replaced upon ID match
+     * Import presets. Upon clearing, the canvas objects should be cleared too
+     * (either manually or with the same parameter via export/import options).
+     * @param {string|[object]} presets (possibly serialized) array of presets to import
+     * @param {boolean} clear true if existing presets should be replaced upon ID match
      * @return {OSDAnnotations.Preset|undefined} preset
      */
-    import(presets, overwrite=false) {
-        this._presets = {};
+    import(presets, clear=false) {
+        const _this = this;
+
+        if (clear) {
+            Object.values(this._presets).forEach(p => _this.raiseEvent('preset-delete', {preset: p}));
+
+            this._presets = {};
+        }
         let first;
 
         if (typeof presets === 'string' && presets.length > 10) {
             presets = JSON.parse(presets);
         }
 
-        if (typeof presets === 'object') {
-            for (let i = 0; i < presets.length; i++) {
-                let p = OSDAnnotations.Preset.fromJSONFriendlyObject(
-                    presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
-                );
-                if (overwrite || ! this._presets.hasOwnProperty(p.presetID)) {
-                    this._presets[p.presetID] = p;
+        if (Array.isArray(presets)) {
+            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(
+                p, _this._context.getAnnotationObjectFactory.bind(_this._context)
+            )).forEach(p => {
+                if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
+                    _this._context.raiseEvent('preset-create', {preset: p});
+                    _this._presets[p.presetID] = p;
                     if (!first) first = p;
                 }
-            }
+            });
         } else {
-            first = this.addPreset();
+            throw "Invalid presets data provided as an input for import.";
         }
         return first;
     }
@@ -661,6 +678,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
+    }
+
+    /**
+     * Which properties should be kept on objects apart from default ones
+     * @return {[string]} a list of properties to keep on native exports,
+     *   geometry-related properties are usually exported automatically
+     */
+    exportsProperties() {
+        return [];
     }
 
     /**
@@ -995,6 +1021,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     title() {
         return "Ruler";
+    }
+
+    exportsProperties() {
+        return ["measure"];
     }
 
     _getWithUnit(value, unitSuffix) {
@@ -1514,7 +1544,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
-        let points = obj.get("points");
+        let points = obj.points;
         if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary

@@ -293,6 +293,11 @@ UIComponents.Containers = {
             return this.context.style.display !== 'none';
         }
 
+        isOpened(focus) {
+            if (focus) return this.isVisible && document.getElementById(focus)?.style.display === 'block';
+            return this.isVisible;
+        }
+
         hide() {
             this.context.style.display = 'none';
         }

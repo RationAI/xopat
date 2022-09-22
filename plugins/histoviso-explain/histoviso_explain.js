@@ -20,9 +20,9 @@ style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHist
         this.context = OSDAnnotations.instance();
         this.context.setModeUsed("CUSTOM");
 
-        this.inspect = new OSDAnnotations.Preset(Date.now(),
+        this.inspect = new OSDAnnotations.Preset(Date.now().toString(),
             this.context.getAnnotationObjectFactory("_histoviso-network_inspector"));
-        this.measure = new OSDAnnotations.Preset(Date.now(),
+        this.measure = new OSDAnnotations.Preset(Date.now().toString(),
             this.context.getAnnotationObjectFactory("_histoviso-explain-explorer"));
 
         this.fetchParameters("/histoviso-explain/available-expl-methods").then(

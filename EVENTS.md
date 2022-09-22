@@ -36,6 +36,12 @@ to the handler function that might contain a lot of useful data.
 #### `loaded` | e: undefined
 Fired when the viewer is ready.
 
+#### `export-data` | e: `{setSerializedData: function}`
+Submit your serialized data to the export event. The event gives you a callback to use to 
+save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value
+should be unique - a good idea is to make use of the plugin id value when creating the value.
+When loaded, you can access the data using `APPLICATION_CONTEXT.getData(myUniqueKey)`.
+
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
 a different notification is being shown). Parameters should be strictly kept:

@@ -14,3 +14,13 @@ layer-removed
 annotation-create
 
 annotation-delete
+
+preset-delete
+
+preset-create
+
+preset-update
+
+preset-meta-remove
+
+preset-meta-add

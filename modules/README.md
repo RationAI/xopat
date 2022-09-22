@@ -43,12 +43,7 @@ Stores value under arbitrary `key`, caches it if allowed within cookies. The val
 The value itself is stored in the `params` object given to the constructor.
 
 #### `APPLICATION_CONTEXT::getData(key)`
-Return data exported with the viewer if available.
-
-#### `APPLICATION_CONTEXT::setData(key, dataExportHandler)`
-Registers `dataExportHandler` under arbitrary `key`. `dataExportHandler` is a function callback that
-will get called once a viewer export event is invoked. Should return a string that encodes the data to store.
-The data should not contain `` ` `` character.
+Return data exported with the viewer if available. Exporting the data is done through events.
 
 ## Events
 Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description

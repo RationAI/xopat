@@ -35,13 +35,16 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     hasControls     auto, disables fabricjs buildin controls, internally enabled if the system decides to
     lockMovementX   auto, disables the annotation movement in X
     lockMovementY   auto, disables the annotation movement in Y
+    sessionId       auto, technical id of the session
 
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas
     type            fabricjs object type - drives which object will be internally created (rect -> fabricjs.Rect)
     factoryId       pathopus annotation type - drives which pathopus annotation factory implementation will be taking 
-                    care of the annotation object; these define what object can or cannot do and how (convert to 
-                    explicit/polygonize, modify with free form tool...), example: polygon -> PolygonFactory
+                        care of the annotation object; these define what object can or cannot do and how (convert to 
+                        explicit/polygonize, modify with free form tool...), 'Unknown Annotation' means this property 
+                        has no registered factory active for the given factoryId 
+                        example: polygon -> PolygonFactory
     meta            custom metadata
     presetID        a numerical preset id binding
     layerId         a numerical layer id binding, experimental
@@ -82,10 +85,10 @@ metadata, it is stored in the annotation `meta` field.
 
 ##### Preset variables         
     color       the annotation color, a group update on annotations will be overriden by this value
-    factoryID   the associated factory #todo provide general fallback implementation
+    factoryID   the associated factory the preset uses to create annotations, #todo provide general fallback implementation
     presetID    the id of this object to be paired with annotations
     meta        a map: {<id>: {name: string, value: any}} that adds custom meta to the group: name is a
-                human-readable label, the value can be any JSON-friendly value
+                    human-readable label, the value can be any JSON-friendly value
 
 ##### Preset variables: a live object
 The live object properties differ from those described above, for example factoryID is paired with an appropriate

@@ -2,8 +2,11 @@ OSDAnnotations.Convertor.AsapXml = class {
     title = 'ASAP-XML Annotations';
     description = 'ASAP-compatible XML Annotations Format';
 
-    encode(annotations, presets, annotationsModule) {
+    encode(annotationsGetter, presetsGetter, annotationsModule) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
+
+        const annotations = annotationsGetter();
+        const presets = presetsGetter();
 
         let doc = document.implementation.createDocument("", "", null);
         let ASAP_annot = doc.createElement("ASAP_Annotations");
@@ -62,7 +65,6 @@ OSDAnnotations.Convertor.AsapXml = class {
 
         if (Array.isArray(presets)) {
             let xml_groups = doc.createElement("AnnotationGroups");
-            ASAP_annot.appendChild(xml_groups);
 
             for (let preset of presets) {
                 const xml_preset = doc.createElement("Group");
@@ -70,6 +72,7 @@ OSDAnnotations.Convertor.AsapXml = class {
                 xml_preset.setAttribute("PartOfGroup", "None"); //nesting not supported
                 xml_preset.setAttribute("Color", preset.color);
 
+                //todo possibly attributes was general term and there can be plethora of elements
                 const preset_attributes = doc.createElement("Attributes");
                 preset_attributes.setAttribute("FactoryID", preset.factoryID);
 
@@ -79,9 +82,11 @@ OSDAnnotations.Convertor.AsapXml = class {
                     preset_attributes.setAttribute(`${metaKey}Value`, data.value);
                 }
 
+                xml_preset.appendChild(preset_attributes);
                 xml_groups.appendChild(xml_preset);
                 presetsIdSet.delete(preset.presetID);
             }
+            ASAP_annot.appendChild(xml_groups);
             //todo check for consitency presetsIdSet?
         }
         return new XMLSerializer().serializeToString(doc);
@@ -105,21 +110,24 @@ OSDAnnotations.Convertor.AsapXml = class {
             //in case of numbers, try to parse and otherwise accept string
             presetId = Number.parseInt(presetId) || presetId || Date.now();
 
-            const attrs = elem.childNodes[0];
-            const factoryID = attrs.getAttribute("FactoryID") || "polygon";
-            attrs.removeAttribute("FactoryID");
             const meta = {};
-            for (let attrMetaElem of attrs.attributes) {
-                if (attrMetaElem.nodeName.endsWith("Name")) {
-                    const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-4);
-                    let ctx = meta[key] || {};
-                    ctx.name = attrMetaElem.nodeValue;
-                    meta[key] = ctx;
-                } else if (attrMetaElem.nodeName.endsWith("Value")) {
-                    const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-5);
-                    let ctx = meta[key] || {};
-                    ctx.value = attrMetaElem.nodeValue; //todo parse?
-                    meta[key] = ctx;
+            const attrs = elem.firstElementChild; //todo probably incorrect...
+            const factoryID = attrs?.getAttribute("FactoryID") || "polygon";
+
+            if (attrs) {
+                attrs.removeAttribute("FactoryID");
+                for (let attrMetaElem of attrs.attributes) {
+                    if (attrMetaElem.nodeName.endsWith("Name")) {
+                        const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-4);
+                        let ctx = meta[key] || {};
+                        ctx.name = attrMetaElem.nodeValue;
+                        meta[key] = ctx;
+                    } else if (attrMetaElem.nodeName.endsWith("Value")) {
+                        const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-5);
+                        let ctx = meta[key] || {};
+                        ctx.value = attrMetaElem.nodeValue; //todo parse?
+                        meta[key] = ctx;
+                    }
                 }
             }
 
@@ -131,11 +139,10 @@ OSDAnnotations.Convertor.AsapXml = class {
             };
         }
 
-
-        for (const elem of xmlDoc.getElementsByTagName("Annotations")) {
-            const coords = elem.childNodes[0],
+        for (const elem of xmlDoc.getElementsByTagName("Annotation")) {
+            const coords = elem.firstElementChild,
                 pointArray = [];
-            for (const coordElem of coords.childNodes) {
+            for (const coordElem of coords.getElementsByTagName("Coordinate")) {
                 const index = Number.parseInt(coordElem.getAttribute("Order"));
                 pointArray[index] = {
                     x: Number.parseInt(coordElem.getAttribute("X")),
@@ -150,10 +157,16 @@ OSDAnnotations.Convertor.AsapXml = class {
             annotations.push({
                 type: "polygon",
                 points: pointArray,
-                presetID: presets[presetID],
+                presetID: presetID,
+                factoryId: "polygon",
                 color: elem.getAttribute("Color") || undefined
             });
         }
+
+        return {
+            objects: annotations,
+            presets: Object.values(presets)
+        };
     }
 }
 

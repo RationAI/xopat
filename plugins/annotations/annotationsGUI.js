@@ -415,44 +415,31 @@ style="width: 115px;">${category}</span>
 	 * @param {Event} e event of the file load
 	 */
 	importFromFile(e, annotations=true) {
-		let file = e.target.files[0];
-		if (!file) return;
-		let fileReader = new FileReader();
-		let _this = this;
-		fileReader.onload = function (e) {
-			try {
-				if (annotations) {
-					//todo then, catch?
-					_this.context.loadObjects(JSON.parse(e.target.result));
-				} else {
-					_this.context.presets.import(e.target.result);
-					_this.updatePresetsHTML();
-				}
-				Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
-			} catch (e) {
-				console.log(e);
-				Dialogs.show("Failed to load the file.", 2500, Dialogs.MSG_ERR);
+		const _this = this;
+		UTILITIES.readFileUploadEvent(e).then(async data => {
+			if (annotations) {
+				//todo then, catch?
+				await _this.context.loadObjects(JSON.parse(data));
+			} else {
+				_this.context.presets.import(e.target.result); //todo fixme
+				_this.updatePresetsHTML();
 			}
-		};
-		fileReader.readAsText(file);
+			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
+		}).catch(e => {
+			console.log(e);
+			Dialogs.show("Failed to load the file.", 2500, Dialogs.MSG_ERR);
+		});
 	}
 
 	/**
 	 * Export annotations and download them
 	 */
 	exportToFile() {
+
+
 		//todo implement imports
-		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.getObjectContent()));
+		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.toObject()));
 		//UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", this.context.getXMLStringContent());
-		OSDAnnotations.Convertor.encode('asap-xml',
-			this.context.canvas.getObjects(),
-			this.context.presets.toObject(),
-			this.context
-		).then(result => {
-			UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", result);
-		}).catch(e => {
-			console.error(e);
-		});
 	}
 
 	/**
@@ -481,7 +468,24 @@ class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"><
 <button id="presets-download" onclick="${this.id}.exportPresetsToFile();" class="btn">Export presets.</button>&nbsp;
 <button id="presets-upload" onclick="this.nextElementSibling.click();" class="btn">Import presets.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 
-onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
+onchange="${this.id}.importFromFile(event, false);$(this).val('');" />
+
+
+<button onclick="${this.id}.testAsapExport();" class="btn">Export ASAP (test).</button>&nbsp;
+<button onclick="this.nextElementSibling.click();" class="btn">Import ASAP (test).</button>
+<input type='file' style="visibility:hidden; width: 0; height: 0;" 
+onchange="UTILITIES.readFileUploadEvent(event).then(data => {
+   
+    ${this.id}.context.import(data, 'asap-xml');
+});$(this).val('');" />`;
+	}
+
+	testAsapExport() {
+		this.context.export(
+			"asap-xml"
+		).then(result => {
+			UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", result);
+		}).catch(e => console.error(e));
 	}
 
 	/**
@@ -666,7 +670,7 @@ class="btn m-2">Set for left click </button>
 	getFullExportData(name) {
 		let now = Date.now();
 		return {
-			annotations: this.context.getObjectContent(),
+			annotations: this.context.toObject(),
 			presets: this.context.presets.toObject(),
 			metadata: {
 				name: name || `a${now}`,
@@ -740,7 +744,7 @@ ${this.presetExportControls()}
 
 		this.dataLoader.loadAnnotation(this._server, id, json => {
                 $('#preset-modify-dialog').remove();
-                _this.context.presets.import(json.presets);
+                _this.context.presets.import(json.presets); //todo fixme
                 _this.updatePresetsHTML();
 
 				//todo then, catch
