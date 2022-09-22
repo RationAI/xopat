@@ -333,14 +333,6 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Export presets
-     * @returns {string} JSON-encoded string
-     */
-    export() {
-        return JSON.stringify(this.toObject());
-    }
-
-    /**
      * Import presets. Upon clearing, the canvas objects should be cleared too
      * (either manually or with the same parameter via export/import options).
      * @param {string|[object]} presets (possibly serialized) array of presets to import

@@ -138,6 +138,12 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (!Array.isArray(toImport.objects)) {
 			await this._loadObjects(toImport, clear);
 		}
+
+		this.raiseEvent('import', {
+			format: format,
+			clear: clear,
+			data: toImport,
+		});
 	}
 
 	/**
@@ -380,7 +386,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
 	 */
-	setPreset(preset, left=true) {
+	setPreset(preset=undefined, left=true) {
 		if (!preset) {
 			for (let key in this.presets._presets) {
 				if (this.presets.exists(key)) {

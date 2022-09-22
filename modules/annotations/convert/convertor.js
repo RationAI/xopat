@@ -48,10 +48,10 @@ OSDAnnotations.Convertor = class {
      *  on objects {annotations: [], presets: []}
      */
     static register(format, convertor) {
-        if (typeof OSDAnnotations.Convertor.CONVERTERS[format] === "object") {
+        if (typeof this.CONVERTERS[format] === "object") {
             console.warn(`Registered annotations convertor ${format} overrides existing convertor!`);
         }
-        OSDAnnotations.Convertor.CONVERTERS[format] = convertor;
+        this.CONVERTERS[format] = convertor;
     }
 
     /**
@@ -60,7 +60,7 @@ OSDAnnotations.Convertor = class {
      * @param context
      */
     static async encode(format, context, widthAnnotations=true, withPresets=true) {
-        const parserCls = OSDAnnotations.Convertor.CONVERTERS[format];
+        const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
         return new parserCls().encode(
             (...exportedProps) => widthAnnotations ? context.toObject(...exportedProps).objects : [],
@@ -76,9 +76,17 @@ OSDAnnotations.Convertor = class {
      * @param context
      */
     static async decode(format, data, context) {
-        const parserCls = OSDAnnotations.Convertor.CONVERTERS[format];
+        const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
         return new parserCls().decode(data, context);
+    }
+
+
+    static get formats() {
+        const result = Object.keys(this.CONVERTERS);
+        //todo generalize this to a module and add native as another converter?
+        result.push("native");
+        return result;
     }
 };
 
