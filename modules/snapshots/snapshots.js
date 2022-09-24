@@ -280,7 +280,9 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     _init() {
-        APPLICATION_CONTEXT.setData("snapshot-keyframes", this.exportJSON.bind(this), this.id);
+        const _this = this;
+        VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
+
         let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
         if (importedJson) {
             try {

@@ -64,8 +64,8 @@ This (global) function will register the plugin and initialize it. It will make 
 #### `YourPLuginClass::constructor(id, params)`
 The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
 is integrated within the system and gets exported - such information is available when sharing the plugin
-exports. Note that the object should not be used to store big amounts of data, for that `YourPLuginClass::setData()` 
-together with `YourPLuginClass::getData()` should be used.
+exports. Note that the object should not be used to store big amounts of data, for that use general viewer 
+event `export-data` together with `YourPLuginClass::getData()` should be used.
 
 #### `YourPLuginClass::pluginReady()`
 Because of dynamic loading and behaviour, it is necessary that you do most initialization
@@ -91,11 +91,6 @@ The value itself is stored in the `params` object given to the constructor.
 
 #### \[EXISTS\] `YourPLuginClass::getData(key)`
 Return data exported with the viewer if available.
-
-#### \[EXISTS\] `YourPLuginClass::setData(key, dataExportHandler)`
-Registers `dataExportHandler` under arbitrary `key`. `dataExportHandler` is a function callback that
-will get called once a viewer export event is invoked. Should return a string that encodes the data to store.
-The data should not contain `` ` `` character.
 
 ### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own

@@ -87,7 +87,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         this.opacity.init();
 
         this.connect.on('connect', function (raw, encoded, ctx) {
-            _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] :
+            _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
                 _this.defaultColSteps(_this.color.maxSteps)
             );
             _this.color.updateColormapUI();
@@ -97,7 +97,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
         this.threshold.on('threshold_values', function (raw, encoded, ctx) {
             if (_this.connect.raw) { //if YES
-                _this.color.setSteps([...raw, 1]);
+                _this.color.setSteps([0, ...raw, 1]);
                 _this.color.updateColormapUI();
             }
         }, true);
@@ -108,12 +108,12 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             //console.warn("Invalid todododo");
         }
 
-        if (!this.connect.raw) {
+        if (this.connect.raw) {
+            this.color.setSteps([0, ...this.threshold.raw, 1]);
+
+        } else {
             //default breaks mapping for colormap if connect not enabled
             this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
-            console.log(this.color.steps);
-        } else {
-            this.color.setSteps([...this.threshold.raw, 1]);
         }
 
         this.color.init();

@@ -23,6 +23,16 @@ class AnnotationsGUI {
 
 		//by default no preset is active, make one
 		this.context.setPreset();
+		this.exportOptions = {
+			availableFormats: OSDAnnotations.Convertor.formats,
+			format: "native",
+			flags: [true, true],
+			availableFlags: {
+				"everything": [true, true],
+				"annotations": [true, false],
+				"presets": [false, true]
+			}
+		};
 
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 
@@ -49,6 +59,9 @@ ${UIComponents.Elements.checkBox({
 	onchange: `${this.id}.context.presets.setModeOutline(this.checked == true);`,
 	default: this.context.presets.getModeOutline()
 })}
+
+<br>Format <select class="form-control" onchange="${this.id}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join()}</select>
+<br>Content <select class="form-control" onchange="${this.id}.exportOptions.flags = ${this.id}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join()}</select>
 </div>
 <br>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
@@ -108,6 +121,11 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
+		this.context.addHandler('import', e => {
+			if (e.data.presets?.length > 0) {
+				_this.updatePresetsHTML();
+			}
+		});
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);
@@ -373,7 +391,7 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 	 * @returns {string} HTML
 	 */
 	getPresetControlHTML(preset, isLeftClick) {
-		let category = preset.getMetaValue('category') || preset.objectFactory.getASAP_XMLTypeName();
+		let category = preset.getMetaValue('category') || preset.objectFactory.title();
 		let icon = preset.objectFactory.getIcon();
 
 		let changeHtml = "";
@@ -384,7 +402,7 @@ onclick="${this.id}.showPresets(${isLeftClick});"><span class="material-icons">a
 				changeHtml += `<div onclick="${this.id}.updatePreset(${preset.presetID}, 
 {objectFactory: ${this.id}.context.getAnnotationObjectFactory('${factory.factoryId}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
-style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.getASAP_XMLTypeName()}</div>`;
+style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
 			}
 		});
 
@@ -414,41 +432,31 @@ style="width: 115px;">${category}</span>
 	 * Load presets from a file
 	 * @param {Event} e event of the file load
 	 */
-	importFromFile(e, annotations=true) {
-		let file = e.target.files[0];
-		if (!file) return;
-		let fileReader = new FileReader();
-		let _this = this;
-		fileReader.onload = function (e) {
-			try {
-				if (annotations) {
-					_this.context.loadObjects(JSON.parse(e.target.result));
-				} else {
-					_this.context.presets.import(e.target.result);
-					_this.updatePresetsHTML();
-				}
-				Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
-			} catch (e) {
-				console.log(e);
-				Dialogs.show("Failed to load the file.", 2500, Dialogs.MSG_ERR);
-			}
-		};
-		fileReader.readAsText(file);
+	importFromFile(e) {
+		const _this = this;
+		UTILITIES.readFileUploadEvent(e).then(async data => {
+			await _this.context.import(data, _this.exportOptions.format, false);
+			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
+		}).catch(e => {
+			console.log(e);
+			Dialogs.show("Failed to load the file. Is the selected format correct?", 2500, Dialogs.MSG_ERR);
+		});
 	}
 
 	/**
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		UTILITIES.downloadAsFile("annotations_export.json", JSON.stringify(this.context.getObjectContent()));
-		UTILITIES.downloadAsFile("annotations_asap_xml_export.xml", this.context.getXMLStringContent());
-	}
-
-	/**
-	 * Makes the browser download the export() output
-	 */
-	exportPresetsToFile() {
-		UTILITIES.downloadAsFile("annotation-presets.json", this.context.presets.export());
+		this.context.export(
+			this.exportOptions.format || "native",
+			this.exportOptions.flags[0],
+			this.exportOptions.flags[1]
+		).then(result => {
+			UTILITIES.downloadAsFile("the_filename_getter_not_implemented.txt", result);
+		}).catch(e => {
+			Dialogs.show("Could not export annotations in the selected format.");
+			console.error(e);
+		});
 	}
 
 	/**
@@ -459,18 +467,6 @@ style="width: 115px;">${category}</span>
 		return `<span id="annotations-left-click" class="d-inline-block position-relative" 
 style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
 class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
-	}
-
-	/**
-	 * Output additional GUI HTML for presets
-	 * @returns {string} HTML
-	 */
-	presetExportControls() {
-		return `
-<button id="presets-download" onclick="${this.id}.exportPresetsToFile();" class="btn">Export presets.</button>&nbsp;
-<button id="presets-upload" onclick="this.nextElementSibling.click();" class="btn">Import presets.</button>
-<input type='file' style="visibility:hidden; width: 0; height: 0;" 
-onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 	}
 
 	/**
@@ -503,9 +499,9 @@ onchange="${this.id}.importFromFile(event, false);$(this).val('');" />`;
 			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
 
 			if (factory.factoryId === preset.objectFactory.factoryId) {
-				select += `<option value="${factory.factoryId}" selected>${factory.getASAP_XMLTypeName()}</option>`;
+				select += `<option value="${factory.factoryId}" selected>${factory.title()}</option>`;
 			} else {
-				select += `<option value="${factory.factoryId}">${factory.getASAP_XMLTypeName()}</option>`;
+				select += `<option value="${factory.factoryId}">${factory.title()}</option>`;
 			}
 		});
 
@@ -655,7 +651,7 @@ class="btn m-2">Set for left click </button>
 	getFullExportData(name) {
 		let now = Date.now();
 		return {
-			annotations: this.context.getObjectContent(),
+			annotations: this.context.toObject(),
 			presets: this.context.presets.toObject(),
 			metadata: {
 				name: name || `a${now}`,
@@ -718,8 +714,7 @@ for slide ${this.activeTissue}</span>${upload}${error}<br><br>
 <button id="downloadAnnotation" onclick="${this.id}.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
 <button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" 
-onchange="${this.id}.importFromFile(event);$(this).val('');" />&nbsp;
-${this.presetExportControls()}
+onchange="${this.id}.importFromFile(event);$(this).val('');" />
 <br><br><br><h4 class="f3-light header-sep">Available annotations</h4>
 `;
     }
@@ -727,11 +722,13 @@ ${this.presetExportControls()}
     loadAnnotation(id, force=false) {
         const _this = this;
 
+		//todo move the logics to the data loader
 		this.dataLoader.loadAnnotation(this._server, id, json => {
                 $('#preset-modify-dialog').remove();
-                _this.context.presets.import(json.presets);
+                _this.context.presets.import(json.presets); //todo fixme
                 _this.updatePresetsHTML();
 
+				//todo then, catch
 				_this.context.loadObjects(json.annotations);
                 $("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
                 Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);

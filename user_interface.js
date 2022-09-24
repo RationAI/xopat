@@ -39,8 +39,13 @@
          * @param delayMS miliseconds to wait before auto close
          *          use values < 1000 to not to close at all
          * @param importance Dialogs.MSG_[INFO/WARN/ERR] object
+         * @param queued this message is ignored if another is shown and queued=false
          */
-        show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO) {
+        show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
+            //todo support concurrence, queue
+
+            if (!queued && this._timer) return;
+
             this._board.html(text);
             this._icon.html(importance.icon);
             this._body.removeClass(); //all
@@ -49,7 +54,7 @@
             this._body.addClass("popUpEnter");
 
             if (delayMS > 1000) {
-                this._timer = setTimeout(this.hide.bind(this), delayMS);
+                this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
             }
         },
 
@@ -57,7 +62,7 @@
          * Hide notification
          */
         hide: function () {
-            this._hideImpl(true);
+            this._hideImpl(false);
         },
 
         _hideImpl: function(timeoutCleaned) {
@@ -542,25 +547,47 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             /**
              * Open the Menu UI at desired tab
              * @param {string|undefined} atPluginId menu tab to open
+             * @param {boolean} toggle whether to close if the menu is opened
+             * @return {boolean} true if the menu was opened with this call
              */
-            openMenu(atPluginId=undefined) {
+            openMenu(atPluginId=undefined, toggle=true) {
+                const wasOpened = this.selfContext.isOpened(atPluginId);
+                if (toggle && wasOpened) {
+                    this.close();
+                    return false;
+                }
+
+                if (wasOpened) return false;
                 this.selfContext.show(atPluginId);
                 if (window.innerWidth < 1150) {
                     this._closedMm = true;
                     USER_INTERFACE.MainMenu.close();
                 }
+                return true;
             },
+
             /**
              * Open the Menu UI at desired sub-menu tab
              * @param {string} atPluginId menu tab to open
              * @param {string|undefined} atSubId sub-menu tab to open
+             * @param {boolean} toggle whether to close if the menu is opened
+             * @return {boolean} true if the submenu was opened by this call
              */
-            openSubmenu(atPluginId, atSubId=undefined) {
-                this.openMenu(atPluginId);
+            openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
+                const didOpenParent = this.openMenu(atPluginId, false);
+
                 let plugin = PLUGINS[atPluginId];
-                if (!plugin) return;
+                if (!plugin) return false;
                 let builder = plugin.__selfMenu;
-                if (builder) builder.show(atSubId);
+                if (builder) {
+                    if (toggle && !didOpenParent && builder.isOpened(atSubId)) {
+                        this.close();
+                        return false;
+                    }
+                    builder.show(atSubId);
+                    return true;
+                }
+                return false;
             },
             /**
              * Close the menu.

@@ -180,22 +180,20 @@
       </form>
       <script type="text/javascript">
         document.getElementById("visualisation").value = \`${exported}\`;
-        var form = document.getElementById("redirect");
-        var node;`;
+        const form = document.getElementById("redirect");
+        let node;`;
 
         APPLICATION_CONTEXT.setup.params.bypassCookies = bypass;
 
-        for (let i = 0; i < UTILITIES._exportHandlers.length; i++) {
-            let toExport = UTILITIES._exportHandlers[i];
-            if (toExport) {
-                let value = toExport.call();
+        VIEWER.raiseEvent('export-data', {
+            setSerializedData: (uniqueKey, data) => {
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", \`${toExport.name}\`);
-node.setAttribute("value", \`${value}\`);
+node.setAttribute("name", \`${uniqueKey}\`);
+node.setAttribute("value", \`${data}\`);
 form.appendChild(node);`;
             }
-        }
+        });
 
         return `${form}
 form.submit();<\/script>`;
@@ -217,16 +215,11 @@ form.submit();<\/script>`;
     //     window.attachEvent('onbeforeunload', preventDirtyClose);
     // }
 
-    window.APPLICATION_CONTEXT.setData = function(key, valueHandler, contextId) {
-        UTILITIES._exportHandlers.push({name: key, call: valueHandler, pluginId: contextId});
-    }
     window.APPLICATION_CONTEXT.getData = function(key) {
         return APPLICATION_CONTEXT.postData[key];
     }
 
     window.UTILITIES = {
-        _exportHandlers: [],
-
         fetchJSON: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
             $.extend(headers, {
@@ -372,6 +365,21 @@ ${constructExportVisualisationForm()}
             elem.setAttribute('download', filename);
             elem.click();
             URL.revokeObjectURL(downloadURL);
+        },
+
+        /**
+         * File input text data loader
+         * @param e event fired on an input (single) type file submit,
+         * @returns {Promise<void>}
+         */
+        readFileUploadEvent: async function(e) {
+            return new Promise((resolve, reject) => {
+                let file = e.target.files[0];
+                if (!file) return reject("Invalid input file: no file.");
+                let fileReader = new FileReader();
+                fileReader.onload = e => resolve(e.target.result);
+                fileReader.readAsText(file);
+            });
         }
     };
 
