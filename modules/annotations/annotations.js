@@ -93,6 +93,13 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/******************* EXPORT, IMPORT... todo move to convertor? **********************/
 
+	defaultFileNameFor(format=undefined) {
+		if (!format || format === "native") {
+			return 'annotations_'+UTILITIES.todayISO()+'.json';
+		}
+		return OSDAnnotations.Convertor.defaultFileName(format);
+	}
+
 	/**
 	 * Export annotations and presets
 	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
@@ -635,8 +642,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
-		if (updateHistory) this.history.push(next, previous);
 		this.canvas.renderAll();
+		if (updateHistory) this.history.push(next, previous);
 	}
 
 	/**
@@ -771,6 +778,11 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		const _this = this;
 
 		//after properties initialized
+		// OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polyline, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
+
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);

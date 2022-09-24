@@ -26,3 +26,5 @@ preset-meta-remove
 preset-meta-add
 
 import
+
+error

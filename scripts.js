@@ -220,6 +220,10 @@ form.submit();<\/script>`;
     }
 
     window.UTILITIES = {
+        todayISO: function() {
+           return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
+        },
+
         fetchJSON: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
             $.extend(headers, {

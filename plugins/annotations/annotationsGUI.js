@@ -38,6 +38,15 @@ class AnnotationsGUI {
 
 		const _this = this;
 
+		//todo cannot use more than one tissue at time, hardcoded :/
+		let bgImage = APPLICATION_CONTEXT.setup.background[0];
+		if (!bgImage) {
+			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
+			return;
+		}
+
+		this.activeTissue = APPLICATION_CONTEXT.setup.data[bgImage.dataReference];
+
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
@@ -52,20 +61,6 @@ class AnnotationsGUI {
 			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
 
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Share",
-				`<h3 class="f2-light">Annotations</h3><div id="annotations-option-panel">
-${UIComponents.Elements.checkBox({
-	label: " Show outline only.",
-	onchange: `${this.id}.context.presets.setModeOutline(this.checked == true);`,
-	default: this.context.presets.getModeOutline()
-})}
-
-<br>Format <select class="form-control" onchange="${this.id}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join()}</select>
-<br>Content <select class="form-control" onchange="${this.id}.exportOptions.flags = ${this.id}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join()}</select>
-</div>
-<br>
-<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
-		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 		this.loadAnnotationsList();
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
@@ -79,21 +74,25 @@ ${UIComponents.Elements.checkBox({
 	*****************************************************************************************************************/
 
 	initHTML() {
-		USER_INTERFACE.MainMenu.append(
+		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`
 <span class="material-icons btn-pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
 <span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">cloud_upload</span>
 <span class="material-icons btn-pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>
 <span class="material-icons btn-pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.id}._toggleEnabled(this)"> visibility</span>`,
-			`
-<span>Opacity: &emsp;</span>
-<input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br><br>${this.presetControls()}
-<a id="download_link1" download="annotations.json" href="" hidden>Download JSON</a>
-<a id="download_link2" download="annotations.xml" href="" hidden>Download XML</a>`,
+			this.presetControls(),
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.id}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
+			`
+<div class="p-2"><span>Opacity: &emsp;</span>
+<input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br>
+${UIComponents.Elements.checkBox({
+	label: " Show outline only.",
+	onchange: `${this.id}.context.presets.setModeOutline(this.checked == true);`,
+	default: this.context.presets.getModeOutline()
+})}</div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -113,6 +112,21 @@ ${UIComponents.Elements.checkBox({
 vertical-align: middle; opacity: 0.3;" class="d-inline-block mx-1"></span>&nbsp;<div id="mode-custom-items" 
 class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
+			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
+Format <select class="form-control select-sm" onchange="${this.id}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join()}</select>
+&emsp;Content <select class="form-control select-sm" onchange="${this.id}.exportOptions.flags = ${this.id}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join()}</select>
+<br><br>
+<h4 class="f3-light header-sep">Download / Upload</h4><br>
+<div id="annotations-local-export-panel">
+	<button id="downloadAnnotation" onclick="${this.id}.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
+	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
+	<input type='file' style="visibility:hidden; width: 0; height: 0;" 
+	onchange="${this.id}.importFromFile(event);$(this).val('');" />
+</div>
+<br>
+<div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
+		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 	}
 
 	initHandlers() {
@@ -361,7 +375,7 @@ style="height: 22px; width: 60px;" onchange="${this.id}.context.freeFormTool.set
 		let strategy = this.context.automaticCreationStrategy;
 		if (!strategy || !strategy.running) return "";
 		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
-annotations."> Automatic annotations detected in: </span><select title="What layer is selected for the data." style="min-width: 180px; max-width: 250px;"
+annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
 type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.id}.setAutoTargetLayer(this);">
 ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	}
@@ -447,12 +461,9 @@ style="width: 115px;">${category}</span>
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		this.context.export(
-			this.exportOptions.format || "native",
-			this.exportOptions.flags[0],
-			this.exportOptions.flags[1]
-		).then(result => {
-			UTILITIES.downloadAsFile("the_filename_getter_not_implemented.txt", result);
+		const toFormat = this.exportOptions.format || "native";
+		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
+			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.");
 			console.error(e);
@@ -464,9 +475,9 @@ style="width: 115px;">${category}</span>
 	 * @returns {string} HTML
 	 */
 	presetControls() {
-		return `<span id="annotations-left-click" class="d-inline-block position-relative" 
+		return `<span id="annotations-left-click" class="d-inline-block position-relative mt-1" 
 style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
-class="d-inline-block position-relative" style="width: 180px; cursor:pointer;"></span>`;
+class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointer;"></span>`;
 	}
 
 	/**
@@ -665,14 +676,6 @@ class="btn m-2">Set for left click </button>
     loadAnnotationsList() {
 		this.annotationsMenuBuilder.clear();
 
-		//todo cannot use more than one tissue at time, hardcoded :/
-        let bgImage = APPLICATION_CONTEXT.setup.background[0];
-        if (!bgImage) {
-            $("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
-            return;
-        }
-
-        this.activeTissue = APPLICATION_CONTEXT.setup.data[bgImage.dataReference];
 		const _this = this;
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0;
@@ -708,14 +711,8 @@ class="btn m-2">Set for left click </button>
 
     getAnnotationsHeadMenu(error="") {
         let upload = error ? "" : `<button class="btn float-right" onclick="${this.id}.uploadAnnotation()">Create: upload current state</button>`;
-        error = error ? `<div class="error-container m-2">${error}</div>` : "";
-        return `<span class="text-small">
-for slide ${this.activeTissue}</span>${upload}${error}<br><br>
-<button id="downloadAnnotation" onclick="${this.id}.exportToFile();return false;" class="btn">Download as a file.</button>&nbsp;
-<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import from a file.</button>
-<input type='file' style="visibility:hidden; width: 0; height: 0;" 
-onchange="${this.id}.importFromFile(event);$(this).val('');" />
-<br><br><br><h4 class="f3-light header-sep">Available annotations</h4>
+        error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
+        return `${error}<br><h4 class="f3-light header-sep">Stored on a server</h4>${upload}
 `;
     }
 

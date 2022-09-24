@@ -171,7 +171,7 @@ function printDependencies($directory, $item) {
             echo "    <script" . getAttributes($file, 'async', 'crossorigin', 'use-credentials',
                     'defer', 'integrity', 'referrerpolicy', 'src') . "></script>";
         } else {
-            //todo ignore? error?
+            echo "<script>console.warn('Invalid include:', '{$item->id}', '$file');</script>";
         }
     }
 }
@@ -593,17 +593,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         PLUGINS[id].loaded = false;
         PLUGINS[id].error = e;
 
-        let removalIndices = [];
-        for (let i = 0; i < UTILITIES._exportHandlers.length; i++) {
-            if (UTILITIES._exportHandlers[i].pluginId === id) {
-                removalIndices.push(i);
-            }
-        }
-        //removed in backward pass to always access valid indices
-        for (let j = removalIndices.length-1; j >= 0; j--) {
-            UTILITIES._exportHandlers.splice(removalIndices[j], 1);
-        }
-
         showPluginError(id, e);
         $(`.${id}-plugin-root`).remove();
         cleanUpScripts(id);
@@ -653,11 +642,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             if (cookie !== undefined) return cookie;
             return APPLICATION_CONTEXT.setup.plugins[id].hasOwnProperty(key) ?
                 APPLICATION_CONTEXT.setup.plugins[id][key] : defaultValue;
-        }
-        //todo use this across plugns instead
-        //todo encode ` character if contained
-        plugin.setData = function(key, dataExportHandler) {
-            UTILITIES._exportHandlers.push({name: `${key}_${id}`, call: dataExportHandler, pluginId: id});
         }
         plugin.getData = function(key) {
             return APPLICATION_CONTEXT.postData[`${key}_${id}`];

@@ -386,6 +386,11 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
     word-wrap: normal;white-space: nowrap;direction: ltr;vertical-align: middle;padding: 0 5px;
     -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
     font-feature-settings: 'liga';}
+.fa {font-weight: normal;font-style: normal;font-size: 24px;
+    display: inline-block;color: var( --color-icon-primary);line-height: 1;text-transform: none;letter-spacing: normal;
+    word-wrap: normal;white-space: nowrap;direction: ltr;vertical-align: middle;padding: 0 5px;
+    -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'liga';}
 
 /* For somre reason Github css does not style input range */
 input[type=range] { height: 25px;  -webkit-appearance: none; /*margin: 3px 0;*/ width: 65%; background: transparent;

@@ -2,6 +2,10 @@ OSDAnnotations.Convertor.AsapXml = class {
     title = 'ASAP-XML Annotations';
     description = 'ASAP-compatible XML Annotations Format';
 
+    static getFileName(context) {
+        return 'annotations_' + UTILITIES.todayISO() + '.xml';
+    }
+
     encode(annotationsGetter, presetsGetter, annotationsModule) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
 

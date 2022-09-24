@@ -7,5 +7,5 @@
   "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "advanced.js", "xmlToJSON.min.js"],
   "modules": ["annotations"],
   "server": "/iipsrv.fcgi",
-  "factories": ["polygon", "rect", "ellipse", "ruler"]
+  "factories": ["polygon", "rect", "ellipse", "ruler", "group"]
 }

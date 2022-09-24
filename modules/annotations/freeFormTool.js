@@ -290,6 +290,9 @@ OSDAnnotations.FreeFormTool = class {
     _createPolygonAndSetupFrom(points, object) {
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.factoryId = this._context.polygonFactory.factoryId;
+        //preventive update in case we modified a different-visual-like object
+        this._context.polygonFactory.updateRendering(this._context.presets.modeOutline, polygon,
+            polygon.color, OSDAnnotations.PresetManager._commonProperty.stroke);
         this._setupPolygon(polygon, object);
     }
 

@@ -6,6 +6,10 @@
  *     title = 'My Custom Format';
  *     description = 'This is the best format in the universe.';
  *
+ *     static getFileName(context) {
+ *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
+ *     }
+ *
  *     encode(annotationsGetter, presetsGetter, annotationsModule) {*
  *         const objects = annotationsGetter("keepThisProperty", "keepAlsoThis");
  *         const presets = presetsGetter();
@@ -58,6 +62,8 @@ OSDAnnotations.Convertor = class {
      * Encodes the annotation data using asynchronous communication.
      * @param format
      * @param context
+     * @param widthAnnotations
+     * @param withPresets
      */
     static async encode(format, context, widthAnnotations=true, withPresets=true) {
         const parserCls = this.CONVERTERS[format];
@@ -67,6 +73,12 @@ OSDAnnotations.Convertor = class {
             () => withPresets ? context.presets.toObject() : [],
             context
         );
+    }
+
+    static defaultFileName(format, context) {
+        const parserCls = this.CONVERTERS[format];
+        if (!parserCls) throw "Invalid format " + format;
+        return parserCls.getFileName(context);
     }
 
     /**
