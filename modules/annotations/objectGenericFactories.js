@@ -31,12 +31,22 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        return new fabric.Rect($.extend({
-            scaleX: 1,
-            scaleY: 1,
+        const instance = new fabric.Rect(parameters);
+        return this.configure(instance, options);
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        $.extend(object, {
             type: this.type,
             factoryId: this.factoryId,
-        }, parameters, options));
+        }, options);
+        return object;
     }
 
     /**
@@ -55,6 +65,14 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.width = parameters.width;
         copy.height = parameters.height;
         return new fabric.Rect(copy);
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["left", "top", "width", "height"];
     }
 
     edit(theObject) {
@@ -182,15 +200,31 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        return new fabric.Ellipse($.extend({
-            // originX: 'center',
-            // originY: 'center',
+        const instance = new fabric.Ellipse(parameters);
+        return this.configure(instance, options);
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        $.extend(object, {
             angle: 0,
-            scaleX: 1,
-            scaleY: 1,
             type: this.type,
             factoryId: this.factoryId
-        }, parameters, options));
+        }, options);
+        return object;
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["left", "top", "rx", "ry"];
     }
 
     /**
@@ -340,10 +374,16 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        return new this.Class(parameters, $.extend({
-            type: this.type,
-            factoryId: this.factoryId
-        }, options));
+        const instance = new this.Class(parameters);
+        return this.configure(instance, options);
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["points"];
     }
 
     /**
@@ -617,15 +657,32 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        const newInstance = new fabric.Line(parameters, $.extend({
-            scaleX: 1,
-            scaleY: 1,
+        const instance = new fabric.Line(parameters);
+        return this.configure(instance, options);
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        $.extend(object, options, {
+            fill: "",
+            stroke: options.color,
             type: this.type,
             factoryId: this.factoryId,
-        }, options));
-        newInstance.fill = "";
-        newInstance.stroke = newInstance.color;
-        return newInstance;
+        });
+        return object;
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["x1", "x2", "y1", "y2"];
     }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
@@ -893,18 +950,27 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        if (parameters.autoScale) {
-            return new fabric.Text(parameters.text, $.extend({
-                left: parameters.left,
-                top: parameters.top,
-                fontSize: parameters.fontSize || 16,
+        const instance = new fabric.Text(parameters.text);
+        return this.configure(instance, $.extend(options, parameters));
+    }
+
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        options.autoScale = options.autoScale || false;
+        if (options.autoScale) {
+            $.extend(object, options, {
+                fontSize: options.fontSize || 16,
+                type: this.type,
+                factoryId: this.factoryId,
                 selectable: false,
                 hasControls: false,
                 lockUniScaling: true,
-                factoryId: this.factoryId,
-                type: this.type,
-                autoScale: true
-            }, options, {
                 stroke: 'white',
                 fill: 'black',
                 paintFirst: 'stroke',
@@ -912,25 +978,25 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
                 scaleX: 1/options.zoomAtCreation,
                 scaleY: 1/options.zoomAtCreation
-            }));
+            });
+        } else {
+            $.extend(object, options, {
+                fontSize: (options.fontSize || 16) / options.zoomAtCreation,
+                type: this.type,
+                factoryId: this.factoryId,
+                selectable: false,
+                hasControls: false,
+                lockUniScaling: true,
+                stroke: 'white',
+                fill: 'black',
+                paintFirst: 'stroke',
+                strokeWidth: 2,
+                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
+                scaleX: 1,
+                scaleY: 1,
+            });
         }
-        return new fabric.Text(parameters.text, $.extend({
-            left: parameters.left,
-            top: parameters.top,
-            fontSize: (parameters.fontSize || 16) / options.zoomAtCreation,
-            selectable: false,
-            hasControls: false,
-            lockUniScaling: true,
-            factoryId: this.factoryId,
-            type: this.type,
-            autoScale: false
-        }, options, {
-            stroke: 'white',
-            fill: 'black',
-            paintFirst: 'stroke',
-            strokeWidth: 2,
-            fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
-        }));
+        return object;
     }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
@@ -945,6 +1011,28 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             });
         }
         ofObject.isAtZoom = zoom;
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     */
+    import(object, atZoom) {
+        object.lockUniScaling = true;
+        object.stroke = 'white';
+        object.fill = 'black';
+        object.paintFirst = 'stroke';
+        object.strokeWidth = 2;
+        object.fontFamily = 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS';
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["autoScale", "text", "left", "top", "fontSize"];
     }
 
     /**
@@ -1037,9 +1125,6 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         this.factoryId = "point";
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a point is always 'transparent'
-    }
 
     getIcon() {
         return "radio_button_checked";
@@ -1049,13 +1134,48 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return `Point [${Math.round(ofObject.top)}, ${Math.round(ofObject.left)}]`;
     }
 
+    /**
+     *
+     * @param {object} parameters
+     * @param {number} parameters.x
+     * @param {number} parameters.y
+     * @param options see parent class
+     */
     create(parameters, options) {
-        const newInstance = super.create(parameters, options);
-        newInstance.strokeWidth *= 5;
-        newInstance.originalStrokeWidth *= 5;
-        newInstance.fill = "";
-        newInstance.stroke = newInstance.color;
-        return newInstance;
+        const instance = new fabric.Ellipse({left: parameters.x, top: parameters.y});
+        return this.configure(instance, options);
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        $.extend(object, options, {
+            angle: 0,
+            rx: 10,
+            ry: 10,
+            strokeWidth: 1,
+            originalStrokeWidth: 1,
+            originX: 'center',
+            originY: 'center',
+            type: this.type,
+            factoryId: this.factoryId,
+            fill: options.color,
+        });
+        return object;
+    }
+
+    onZoom(ofObject, zoom) {
+        ofObject.scaleX = 1/zoom;
+        ofObject.scaleY = 1/zoom;
+    }
+
+    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
+        super.updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke);
+        ofObject.set({fill: ofObject.color});
     }
 
     edit(theObject) {
@@ -1070,9 +1190,9 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     recalculate(theObject) {
         let left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            rx: 1, ry: 1, hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {left: left, top: top, rx: 1, ry: 1});
+        theObject.set({ left: this._left, top: this._top,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
         this._context.replaceAnnotation(theObject, newObject, true);
     }
@@ -1081,22 +1201,17 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         let global = VIEWER.tools.referencedTiledImage().windowToImageCoordinates(
             new OpenSeadragon.Point(screenPoint.x, screenPoint.y)
         );
-        this._context.addAnnotation(this.create({
-            left: global.x,
-            top: global.y,
-            rx: 20,
-            ry: 20
-        }, this._presets.getAnnotationOptions(isLeftClick)));
-        return true;
+        return this.initCreate(global.x, global.y, isLeftClick);
     }
 
     initCreate(x, y, isLeftClick = true) {
-        this._context.addAnnotation(this.create({
-            left: x,
-            top: y,
-            rx: 20,
-            ry: 20
-        }, this._presets.getAnnotationOptions(isLeftClick)));
+        const instance = this.create({
+            x: x,
+            y: y
+        }, this._presets.getAnnotationOptions(isLeftClick));
+        instance.scaleX = 1/instance.zoomAtCreation;
+        instance.scaleY = 1/instance.zoomAtCreation;
+        this._context.addAnnotation(instance);
         return true;
     }
 
@@ -1152,11 +1267,11 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return "polyline";
     }
 
-    create(parameters, options) {
-        const newInstance = super.create(parameters, options);
-        newInstance.fill = "";
-        newInstance.stroke = newInstance.color;
-        return newInstance;
+    configure(object, options) {
+        const instance = super.configure(object, options);
+        instance.fill = "";
+        instance.stroke = instance.color;
+        return instance;
     }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {

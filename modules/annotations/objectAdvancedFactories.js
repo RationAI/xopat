@@ -98,11 +98,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     onZoom(ofObject, zoom) {
-        ofObject._objects[1].set({
-            scaleX: 1/zoom,
-            scaleY: 1/zoom
-        });
-        super.onZoom( ofObject._objects[0], zoom);
+        if (ofObject._objects) {
+            ofObject._objects[1].set({
+                scaleX: 1/zoom,
+                scaleY: 1/zoom
+            });
+            super.onZoom( ofObject._objects[0], zoom);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -195,6 +197,22 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return strText;
     }
 
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     */
+    import(object) {
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["measure"];
+    }
+
     _createParts(parameters, options) {
         options.stroke = options.color;
         return [new fabric.Line(parameters, $.extend({
@@ -210,7 +228,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockUniScaling: true,
             stroke: 'white',
             factoryId: this.factoryId,
-
             fill: 'black',
             paintFirst: 'stroke',
             strokeWidth: 2,

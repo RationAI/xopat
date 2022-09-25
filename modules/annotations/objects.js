@@ -121,6 +121,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return null;
     }
 
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you should use this function in create(...) to avoid implementing stuff twice,
+     * e.g. in create assemble object, and pass it to the configure. Shortly: in create, merge two elements to
+     * form a native configuration object, instantiate it and configure it here. Options should equal to options arg
+     * from create.
+     * @param object given object type for the factory type
+     * @param options options for correct visuals creation, from presets, same as with create()
+     * @return object from the input parameters (builder-like behaviour)
+     */
+    configure(object, options) {
+        $.extend(object, options, {
+            type: this.type,
+            factoryId: this.factoryId,
+        });
+        return object;
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return [];
+    }
+
+
     copyProperties(ofObject, ...withAdditional) {
         // const copy = {...ofObject};
         // delete copy.incrementId;

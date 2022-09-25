@@ -428,7 +428,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			object.presetID = preset.presetID;
 		}
 
-		$.extend(object, this.presets.getCommonProperties(preset));
+		const factory = object._factory()?.configure(object, this.presets.getCommonProperties(preset));
 	}
 
 	/************************ Layers *******************************/

@@ -114,8 +114,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
-Format <select class="form-control select-sm" onchange="${this.id}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join()}</select>
-&emsp;Content <select class="form-control select-sm" onchange="${this.id}.exportOptions.flags = ${this.id}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join()}</select>
+ <span class="show-hint" data-hint="Format"><select class="form-control select-sm" onchange="${this.id}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join()}</select></span>
+&emsp; <span class="show-hint" data-hint="Content"><select class="form-control select-sm" onchange="${this.id}.exportOptions.flags = ${this.id}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join()}</select></span>
 <br><br>
 <h4 class="f3-light header-sep">Download / Upload</h4><br>
 <div id="annotations-local-export-panel">
@@ -712,7 +712,7 @@ class="btn m-2">Set for left click </button>
     getAnnotationsHeadMenu(error="") {
         let upload = error ? "" : `<button class="btn float-right" onclick="${this.id}.uploadAnnotation()">Create: upload current state</button>`;
         error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
-        return `${error}<br><h4 class="f3-light header-sep">Stored on a server</h4>${upload}
+        return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}${upload}
 `;
     }
 
