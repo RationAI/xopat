@@ -118,6 +118,10 @@ OSDAnnotations.PresetManager = class {
         this._colorStep = 0;
     }
 
+    getActivePreset(isLeftClick) {
+        return isLeftClick ? this.left : this.right;
+    }
+
     /**
      * Get data to set as annotation properties (look, metadata...)
      * @param {boolean} isLeftClick true if the data should be with preset data bound to the left mouse button
@@ -125,7 +129,7 @@ OSDAnnotations.PresetManager = class {
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
-        let preset = isLeftClick ? this.left : this.right,
+        let preset = this.getActivePreset(isLeftClick),
             result = this._populateObjectOptions(preset);
         result.isLeftClick = isLeftClick;
         return result;

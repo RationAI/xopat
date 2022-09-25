@@ -45,7 +45,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
                         explicit/polygonize, modify with free form tool...), 'Unknown Annotation' means this property 
                         has no registered factory active for the given factoryId 
                         example: polygon -> PolygonFactory
-    meta            custom metadata
+    meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
     layerId         a numerical layer id binding, experimental
 

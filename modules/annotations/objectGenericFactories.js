@@ -645,69 +645,82 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         this._origPoints = [theObject.x1, theObject.y1, theObject.x2, theObject.y2];
         this._context.canvas.setActiveObject(theObject);
 
-        const _this = this;
+        const _this = this,
+            rightSkew = theObject.x1 > theObject.x2;
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
         theObject.objectCaching = false;
         theObject.transparentCorners = false;
+
+        theObject._origX = theObject.left
+
+        theObject._origY = theObject.top
         theObject.controls = {
             p0: new fabric.Control({
-                positionHandler: _this._polygonPositionHandler,
-                actionHandler: _this._anchorWrapper(1, _this._actionHandler),
+                x:rightSkew ? 0.5 : -0.5,
+                y: -0.5,
+                actionHandler:_this._actionHandler,
                 actionName: 'modifyLine',
-                pointIndex: 0
+                pointIndex: 0,
+                rightDiagonal: rightSkew,
             }),
             p1: new fabric.Control({
-                positionHandler: _this._polygonPositionHandler,
-                actionHandler: _this._anchorWrapper(0, _this._actionHandler),
+                x:rightSkew ? -0.5 : 0.5,
+                y:0.5,
+                actionHandler:  _this._actionHandler,
                 actionName: 'modifyLine',
-                pointIndex: 1
+                pointIndex: 1,
+                rightDiagonal: rightSkew,
             })
         };
         this._context.canvas.renderAll();
     }
 
-    _polygonPositionHandler(dim, finalMatrix, fabricObject) {
-        var x = fabricObject['x'+this.pointIndex+1],
-            y = fabricObject['y'+this.pointIndex+1];
-        return fabric.util.transformPoint(
-            { x: x, y: y },
-            fabric.util.multiplyTransformMatrices(
-                fabricObject.canvas.viewportTransform,
-                fabricObject.calcTransformMatrix()
-            )
+    _actionHandler(eventData, transform,x, y) {
+
+        const line =  transform.target,
+            coords = line.oCoords;
+            // ,
+
+        const controls = [line.oCoords.p0, line.oCoords.p1].map(c => fabric.util.transformPoint(c, line.calcTransformMatrix())
         );
-    }
+        //const controls = Object.values(line.aCoords);
+        let
+        left = controls.reduce((a, b) => a < b.x ? a : b.x, Infinity),
+        top = controls.reduce((a, b) => a < b.y ? a : b.y, Infinity),
+        width = controls.reduce((a, b) => a > b.x ? a : b.x, -Infinity) - left,
+        height = controls.reduce((a, b) => a > b.y ? a : b.y, -Infinity) - top;
 
-    _actionHandler(eventData, transform, x, y) {
-        var line = transform.target,
-            mouseLocalPosition = line.toLocalPoint(new fabric.Point(x, y), 'center', 'center'),
-            polygonBaseSize = line._getNonTransformedDimensions(),
-            size = line._getTransformedDimensions(0, 0);
 
-        const pointIndex = line.controls[line.__corner].pointIndex+1;
-        line['x'+pointIndex] = mouseLocalPosition.x * polygonBaseSize.x / size.x;
-        line['y'+pointIndex] = mouseLocalPosition.y * polygonBaseSize.y / size.y;
+        // x = absolutePoint.x;
+        // y = absolutePoint.y;
+        // if (transform.target._origX > x) transform.target.set({ left: x });
+        // if (transform.target._origY > y) transform.target.set({ top: y });
+        //
+        //  width = Math.abs(x - transform.target._origX);
+        //  height = Math.abs(y - transform.target._origY);
+        transform.target.set({ width: width, height: height, left: left, top: top,
+            x1:left,  x2:left+width, y1:top, y2:top+height
+        });
+        console.log({ width: width, height: height, left: left, top: top,
+            x1:left,  x2:left+width, y1:top, y2:top+height
+        })
         return true;
+
+
+        // var
+        //     mouseLocalPosition = line.toLocalPoint(new fabric.Point(x, y), 'center', 'center'),
+        //     polygonBaseSize = line._getNonTransformedDimensions(),
+        //     size = line._getTransformedDimensions(0, 0);
+        //
+        // const pointIndex = line.controls[line.__corner].pointIndex+1;
+        // line['x'+pointIndex] = mouseLocalPosition.x;
+        // line['y'+pointIndex] = mouseLocalPosition.y;
+        // console.log("NEW PTS",line['x'+pointIndex], line['y'+pointIndex] )
+        // return true;
     }
 
-    _anchorWrapper(anchorIndex, fn) {
-        return function(eventData, transform, x, y) {
-            let fabricObject = transform.target,
-                absolutePoint = fabric.util.transformPoint({
-                    x: fabricObject['x'+anchorIndex+1],
-                    y: fabricObject['x'+anchorIndex+1],
-                }, fabricObject.calcTransformMatrix()),
-                actionPerformed = fn(eventData, transform, x, y);
-            fabricObject._setPositionDimensions({});
-            let polygonBaseSize = fabricObject._getNonTransformedDimensions(),
-                newX = fabricObject['x'+anchorIndex+1] / polygonBaseSize.x,
-                newY = fabricObject['x'+anchorIndex+1] / polygonBaseSize.y;
-            fabricObject.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
-            return actionPerformed;
-        }
-    }
 
     recalculate(theObject) {
         theObject.controls = fabric.Object.prototype.controls;
@@ -846,6 +859,173 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         }));
     }
 };
+
+
+OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "text", "text");
+    }
+
+    getIcon() {
+        return "translate";
+    }
+
+    fabricStructure() {
+        return "text";
+    }
+
+    getDescription(ofObject) {
+        return ofObject.text;
+    }
+
+    getCurrentObject() {
+        return (this._current);
+    }
+
+    /**
+     * @param {object} parameters
+     * @param {string} parameters.text text to display
+     * @param {number} parameters.left
+     * @param {number} parameters.top
+     * @param {number} parameters.fontSize  optional
+     * @param {number} parameters.autoScale optional default false
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        if (parameters.autoScale) {
+            return new fabric.Text(parameters.text, $.extend({
+                left: parameters.left,
+                top: parameters.top,
+                fontSize: parameters.fontSize || 16,
+                selectable: false,
+                hasControls: false,
+                lockUniScaling: true,
+                factoryId: this.factoryId,
+                type: this.type,
+                autoScale: true
+            }, options, {
+                stroke: 'white',
+                fill: 'black',
+                paintFirst: 'stroke',
+                strokeWidth: 2,
+                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
+                scaleX: 1/options.zoomAtCreation,
+                scaleY: 1/options.zoomAtCreation
+            }));
+        }
+        return new fabric.Text(parameters.text, $.extend({
+            left: parameters.left,
+            top: parameters.top,
+            fontSize: (parameters.fontSize || 16) / options.zoomAtCreation,
+            selectable: false,
+            hasControls: false,
+            lockUniScaling: true,
+            factoryId: this.factoryId,
+            type: this.type,
+            autoScale: false
+        }, options, {
+            stroke: 'white',
+            fill: 'black',
+            paintFirst: 'stroke',
+            strokeWidth: 2,
+            fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
+        }));
+    }
+
+    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
+        //do nothing - a text has no area
+    }
+
+    onZoom(ofObject, zoom) {
+        if (ofObject.autoScale) {
+            ofObject.set({
+                scaleX: 1/zoom,
+                scaleY: 1/zoom
+            });
+        }
+        ofObject.isAtZoom = zoom;
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Polygon object that is being copied
+     * @param {object} parameters
+     * @param {string} parameters.text text to display
+     * @param {number} parameters.left
+     * @param {number} parameters.top
+     * @param {number} parameters.fontSize  optional
+     */
+    copy(ofObject, parameters) {
+        parameters = parameters || {text: ofObject.text, left: ofObject.left, top: ofObject.top};
+        return new fabric.Text(parameters.text, this.copyProperties(ofObject,
+            "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale"));
+    }
+
+    edit(theObject) {
+        this._left = theObject.left;
+        this._top = theObject.top;
+        theObject.set({
+            lockMovementX: false,
+            lockMovementY: false
+        });
+    }
+
+    getCreationRequiredMouseDragDurationMS() {
+        return -1; //always allow
+    }
+
+    recalculate(theObject) {
+        let left = theObject.left,
+            top = theObject.top,
+            text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
+
+        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {left: left, top: top, text: text});
+        theObject.calcACoords();
+        this._context.replaceAnnotation(theObject, newObject, true);
+    }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        //todo initCreate?
+        return undefined;
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        this._origX = x;
+        this._origY = y;
+        const text = this._context.presets.getActivePreset(isLeftClick).meta?.category.value || 'Text';
+        this._current = this.create({
+            text: text,
+            top: y,
+            left: x,
+        }, this._presets.getAnnotationOptions(isLeftClick));
+        this._context.addAnnotation(this._current);
+        this._context.canvas.renderAll();
+    }
+
+    updateCreate(x, y) {
+        //do nothing
+    }
+
+    isImplicit() {
+        //text is implicitly drawn (using fonts)
+        return true;
+    }
+
+    finishIndirect() {
+        //do nothing
+    }
+
+    toPointArray(obj, converter, quality=1) {
+        return undefined;
+    }
+
+    title() {
+        return "Text";
+    }
+};
+
 
 /**
  * A point

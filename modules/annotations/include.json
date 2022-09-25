@@ -10,6 +10,7 @@
         "presets.js",
         "objects.js",
         "objectGenericFactories.js",
+        "objectAdvancedFactories.js",
         "freeFormTool.js",
         "history.js"
     ],

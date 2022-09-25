@@ -2,8 +2,6 @@
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
- *
- * TODO: unify group behaviour, introduce general recursive object for objects and group
  */
 OSDAnnotations.AnnotationObjectFactory = class {
 
@@ -124,18 +122,18 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     copyProperties(ofObject, ...withAdditional) {
-        const copy = {...ofObject};
-        delete copy.incrementId;
-        return copy;
+        // const copy = {...ofObject};
+        // delete copy.incrementId;
+        // return copy;
 
-        // const result = {};
-        // for (let prop of this._copiedProperties) {
-        //     result[prop] = ofObject[prop];
-        // }
-        // for (let prop of withAdditional) {
-        //     result[prop] = ofObject[prop];
-        // }
-        // return result;
+        const result = {};
+        for (let prop of this._copiedProperties) {
+            result[prop] = ofObject[prop];
+        }
+        for (let prop of withAdditional) {
+            result[prop] = ofObject[prop];
+        }
+        return result;
     }
 
 
@@ -144,7 +142,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {OpenSeadragon.Point} screenPoint mouse coordinates (X|Y) in SCREEN coordinates
      *  that this is an exception, other methods work with image coord system
      * @param {boolean} isLeftClick true if the object was created using left mouse button
-     * @return {boolean} true if creation succeeded
+     * @return {boolean|undefined} true if creation succeeded, false if error, undefined if sailently fail
      */
     instantCreate(screenPoint, isLeftClick) {
         return false;
@@ -195,6 +193,31 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} theObject recalculate the object that has been modified
      */
     recalculate(theObject) {
+    }
+
+    /**
+     * Zoom event on canvas, update necessary properties to stay visually appleasing
+     * @param ofObject
+     * @param zoom
+     */
+    onZoom(ofObject, zoom) {
+        ofObject.set({
+            strokeWidth: ofObject.originalStrokeWidth/zoom
+        });
+        // // Update object properties to reflect zoom
+        // var updater = function(x) {
+        //     //todo unify this somehow using a function callback with the limitation, e.g. call only resize when the difference is significant
+        //     if (x.type == "text") {
+        //         x.set({
+        //             scaleX: 1/zoom,
+        //             scaleY: 1/zoom
+        //         });
+        //     } else {
+        //         x.set({
+        //             strokeWidth: x.originalStrokeWidth/zoom
+        //         });
+        //     }
+        // }
     }
 
     /**
@@ -285,217 +308,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 };
 
-OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ruler", "group");
-        this._current = null;
-    }
-
-    getIcon() {
-        return "square_foot";
-    }
-
-    getDescription(ofObject) {
-        return `Length ${Math.round(ofObject.measure)} mm`;
-    }
-
-    fabricStructure() {
-        return ["line", "text"];
-    }
-
-    getCurrentObject() {
-        return this._current;
-    }
-
-    isEditable() {
-        return false;
-    }
-
-    /**
-     * @param {array} parameters array of line points [x, y, x, y ..]
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        let parts = this._createParts(parameters, options);
-        return this._createWrap(parts, options);
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Line object that is being copied
-     * @param {array} parameters array of line points [x, y, x, y ..]
-     */
-    copy(ofObject, parameters=undefined) {
-        let line = ofObject.item(0),
-            text = ofObject.item(1);
-        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-        return new fabric.Group([fabric.Line(parameters, {
-            fill: line.fill,
-            opacity: line.opacity,
-            strokeWidth: line.strokeWidth,
-            stroke: line.stroke,
-            scaleX: line.scaleX,
-            scaleY: line.scaleY,
-            hasRotatingPoint: line.hasRotatingPoint,
-            borderColor: line.borderColor,
-            cornerColor: line.cornerColor,
-            borderScaleFactor: line.borderScaleFactor,
-            hasControls: line.hasControls,
-            lockMovementX: line.lockMovementX,
-            lockMovementY: line.lockMovementY,
-            originalStrokeWidth: line.originalStrokeWidth,
-            selectable: false,
-        }), new fabric.Text(text.text), {
-            textBackgroundColor: text.textBackgroundColor,
-            fontSize: text.fontSize,
-            lockUniScaling: true,
-            scaleY: text.scaleY,
-            scaleX: text.scaleX,
-            selectable: false,
-            hasControls: false,
-            stroke: text.stroke,
-            fill: text.fill,
-            paintFirst: 'stroke',
-            strokeWidth: text.strokeWidth,
-        }], {
-            presetID: ofObject.presetID,
-            measure: ofObject.measure,
-            meta: ofObject.meta,
-            factoryId: ofObject.factoryId,
-            isLeftClick: ofObject.isLeftClick,
-            type: ofObject.type,
-            layerId: ofObject.layerId,
-            color: ofObject.color,
-            zoomAtCreation: ofObject.zoomAtCreation,
-            selectable: false,
-            hasControls: false
-        });
-    }
-
-    edit(theObject) {
-        //not allowed
-    }
-
-    recalculate(theObject) {
-        //not supported error?
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint, false);
-        if (bounds) {
-            let opts = this._presets.getAnnotationOptions(isLeftClick);
-            let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
-            this._context.addAnnotation(object);
-            return true;
-        }
-        return false;
-    }
-
-    initCreate(x, y, isLeftClick) {
-        let opts = this._presets.getAnnotationOptions(isLeftClick);
-        let parts = this._createParts([x, y, x, y], opts);
-        this._updateText(parts[0], parts[1]);
-        this._current = parts;
-        this._context.addHelperAnnotation(this._current[0]);
-        this._context.addHelperAnnotation(this._current[1]);
-
-    }
-
-    updateCreate(x, y) {
-        if (!this._current) return;
-        let line = this._current[0],
-            text = this._current[1];
-        line.set({ x2: x, y2: y });
-        this._updateText(line, text);
-    }
-
-    finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return;
-        this._context.deleteHelperAnnotation(obj[0]);
-        this._context.deleteHelperAnnotation(obj[1]);
-
-        obj = this._createWrap(obj, this._presets.getCommonProperties());
-        this._context.addAnnotation(obj);
-        this._current = undefined;
-    }
-
-    /**
-     * Create array of points - approximation of the object shape
-     * @return {undefined} not supported, ruler cannot be turned to polygon
-     */
-    toPointArray(obj, converter, quality=1) {
-        return undefined;
-    }
-
-    title() {
-        return "Ruler";
-    }
-
-    exportsProperties() {
-        return ["measure"];
-    }
-
-    _getWithUnit(value, unitSuffix) {
-        if (value < 0.000001) {
-            return value * 1000000000 + " n" + unitSuffix;
-        }
-        if (value < 0.001) {
-            return value * 1000000 + " μ" + unitSuffix;
-        }
-        if (value < 1) {
-            return value * 1000 + " m" + unitSuffix;
-        }
-        if (value >= 1000) {
-            return value / 1000 + " k" + unitSuffix;
-        }
-        return value + " " + unitSuffix;
-    }
-
-    _updateText(line, text) {
-        let microns = APPLICATION_CONTEXT.getOption("microns") ?? -1;
-        let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
-            strText;
-        if (microns > 0) {
-            strText = this._getWithUnit(
-                Math.round(d * microns / 10000000) / 100, "m"
-            );
-        } else {
-            strText = Math.round(d) + " px";
-        }
-        text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
-    }
-
-    _createParts(parameters, options) {
-        options.stroke = options.color;
-        return [new fabric.Line(parameters, $.extend({
-            scaleX: 1,
-            scaleY: 1,
-            selectable: false,
-            hasControls: false,
-        }, options)), new fabric.Text('', {
-            fontSize: 16,
-            selectable: false,
-            hasControls: false,
-            lockUniScaling: true,
-            stroke: 'white',
-            fill: 'black',
-            paintFirst: 'stroke',
-            strokeWidth: 2,
-            scaleX: 1/options.zoomAtCreation,
-            scaleY: 1/options.zoomAtCreation
-        })];
-    }
-
-    _createWrap(parts, options) {
-        this._updateText(parts[0], parts[1]);
-        return new fabric.Group(parts, $.extend({
-            factoryId: this.factoryId,
-            type: this.type,
-            measure: 0,
-        }, options));
-    }
-};
-
 /**
  * Polygon Utilities that can help with points array simplification and more
  * todo move here more utils
@@ -531,6 +343,134 @@ OSDAnnotations.PolygonUtilities = {
             minY = Math.min(minY, points[i].y);
         }
         return { diffX: maxX - minX, diffY: maxY - minY };
+    },
+
+    polygonsIntersect(p1, p2) {
+        /**
+         *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
+         *  To detect intersection with another Polygon object, this
+         *  function uses the Separating Axis Theorem. It returns false
+         *  if there is no intersection, or an object if there is. The object
+         *  contains 2 fields, overlap and axis. Moving the polygon by overlap
+         *  on axis will get the polygons out of intersection.
+         *
+         *  @jirka Cleaned. Honestly, why people who are good at math cannot keep their code clean.
+         */
+
+        let axis = {x: 0, y: 0},
+            tmp, minA, maxA, minB, maxB, side, i,
+            smallest = null,
+            overlap = 99999999,
+            p1Pts = p1.points, p2Pts = p2.points;
+
+        /* test polygon A's sides */
+        for (side = 0; side < p1Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p1Pts[p1Pts.length - 1].y - p1Pts[0].y;
+                axis.y = p1Pts[0].x - p1Pts[p1Pts.length - 1].x;
+            } else {
+                axis.x = p1Pts[side - 1].y - p1Pts[side].y;
+                axis.y = p1Pts[side].x - p1Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++) {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA) maxA = tmp;
+                else if (tmp < minA) minA = tmp;
+            }
+            /* correct for offset */
+            tmp = axis.x +  axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++) {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x +  axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                let o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+
+        /* test polygon B's sides */
+        for (side = 0; side < p2Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p2Pts[p2Pts.length - 1].y - p2Pts[0].y;
+                axis.y = p2Pts[0].x - p2Pts[p2Pts.length - 1].x;
+            } else {
+                axis.x = p2Pts[side - 1].y - p2Pts[side].y;
+                axis.y = p2Pts[side].x - p2Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++)
+            {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA)
+                    maxA = tmp;
+                else if (tmp < minA)
+                    minA = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++)
+            {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                var o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+        return overlap;
     },
 
     /**

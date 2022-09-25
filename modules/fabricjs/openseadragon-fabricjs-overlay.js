@@ -72,6 +72,7 @@
             this._id = 'osd-overlaycanvas-' + counter();
             this._canvas.setAttribute('id', this._id);
             this._canvasdiv.appendChild(this._canvas);
+            this._lastZoomUpdate = -99999;
             this.resize();
             this._fabricCanvas = new fabric.Canvas(this._canvas, {
                 imageSmoothingEnabled: false,
@@ -123,27 +124,10 @@
             let zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
-            // Update object properties to reflect zoom
-            let ratio = 0.01 / this._viewer.tools.imagePixelSizeOnScreen();
-            var updater = function(x) {
-                if (x.type == "text") {
-                    x.set({
-                        scaleX: 1/zoom,
-                        scaleY: 1/zoom
-                    });
-                } else {
-                    x.set({
-                        strokeWidth: x.originalStrokeWidth/zoom
-                    });
-                }
-            }
             this._fabricCanvas._objects.forEach(x => {
-                if (x.type === "group") {
-                    x._objects.forEach(updater);
-                } else {
-                    updater(x);
-                }
+                x.zooming?.(zoom);
             });
+            this._lastZoomUpdate = zoom;
 
             var viewportOrigin = this._viewer.viewport.viewportToWindowCoordinates(new OpenSeadragon.Point(0, 0));
             var canvasOffset = this._canvasdiv.getBoundingClientRect();

@@ -593,10 +593,10 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let preset = this.presets.get(annotation.presetID);
 		if (preset) {
 			for (let key in preset.meta) {
-				let objmeta = annotation.meta || {}, specificElement = objmeta[key] || {};
+				let objmeta = annotation.meta || {}, overridingValue = objmeta[key];
 				let metaElement = preset.meta[key];
 				if (key === desiredKey) {
-					return specificElement.value || metaElement.value ||
+					return overridingValue || metaElement.value ||
 						(defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "");
 				}
 			}
@@ -623,7 +623,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @return {string} annotation name created by factory
 	 */
 	getDefaultAnnotationName(annotation) {
-		let factory = this.getAnnotationObjectFactory(annotation.factoryId);
+		let factory = annotation._factory();
 		if (factory !== undefined) {
 			return factory.getDescription(annotation);
 		}
@@ -782,11 +782,28 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polyline, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Text, false);
 
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+
+		/**
+		 * Attach factory getter to each object
+		 */
+		fabric.Object.prototype._factory = function () {
+			const factory = _this.getAnnotationObjectFactory(this.factoryId);
+			if (factory) this._factory = () => factory;
+			else if (this.factoryId) {
+				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryId);
+				//maybe provide general implementation that can do nearly nothing
+			}
+			return factory;
+		}
+		fabric.Object.prototype.zooming = function(zoom) {
+			this._factory()?.onZoom(this, zoom);
+		}
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -1330,7 +1347,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
-		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
+		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
+		if (created === false) {
 			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
 onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
 coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
@@ -1372,7 +1390,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick);
 			created = true;
 		} else {
-			let	factory = this.context.getAnnotationObjectFactory(currentObject.factoryId),
+			let	factory = currentObject._factory(),
 				willModify, newPolygonPoints;
 
 			//treat as polygon
@@ -1388,7 +1406,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
 			} else {
 				newPolygonPoints = this._geCirclePoints(point);
-				willModify = this.context.freeFormTool.polygonsIntersect(
+				willModify = OSDAnnotations.PolygonUtilities.polygonsIntersect(
 					{points: newPolygonPoints}, currentObject
 				);
 			}
