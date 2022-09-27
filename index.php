@@ -100,6 +100,7 @@ if ($layerVisible) {
                 "You must specify <b>type</b> parameter.", print_r($layer, true));
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
+                //todo cached setup -> notify user rendering has changed....
                 $layer->cache = $cookieCache->{$layer->name};
             }
             if (!isset($layer->params)) {
@@ -146,7 +147,6 @@ foreach ($PLUGINS as $_ => $plugin) {
 }
 
 $visualisation = json_encode($parsedParams);
-$cookie_setup = JS_COOKIE_SETUP;
 
 function getAttributes($source, ...$properties) {
     $html = "";
@@ -239,6 +239,7 @@ foreach ($MODULES as $_ => $mod) {
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
     <!--Extensions/modifications-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=$version"></script>
@@ -336,7 +337,6 @@ EOF;
         <div id="panel-images" class="inner-panel mt-2"></div>
 
         <?php
-
                 $opened = $firstTimeVisited || (isset($_COOKIE["_shadersPin"]) && $_COOKIE["_shadersPin"] == "true");
                 $pinClass = $opened ? "opened" : "";
                 $shadersSettingsClass = $opened ? "force-visible" : "";
@@ -347,7 +347,7 @@ EOF;
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
                     <div>
                         <span id="shaders-pin" class="material-icons btn-pointer inline-arrow $pinClass" onclick="let jqSelf = $(this); USER_INTERFACE.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                        document.cookie = `_shadersPin=\${jqSelf.hasClass('pressed')}; $cookie_setup`" style="padding: 0;">navigate_next</span>
+                        APPLICATION_CONTEXT._setCookie('_shadersPin', `\${jqSelf.hasClass('opened')}`);" style="padding: 0;">navigate_next</span>
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
@@ -384,8 +384,8 @@ EOF;
 
 
 (function (window) {
-    let setup = <?php echo $visualisation ?>;
-    let defaultSetup = {
+    const setup = <?php echo $visualisation ?>;
+    const defaultSetup = {
         customBlending: false,
         debugMode: false,
         webglDebugMode: false,
@@ -402,14 +402,27 @@ EOF;
         theme: "auto",
         stackedBackground: false,
     };
-    let serverCookies = <?php echo json_encode($_COOKIE) ?>;
+
+    console.log('<?php echo json_encode($_COOKIE); ?>');
+
+    const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
+    const cookies = Cookies;
+
+    Cookies.withAttributes({
+        path: JSON.parse(`"<?php echo JS_COOKIE_PATH ?>"`) || undefined,
+        expires: JSON.parse(`<?php echo JS_COOKIE_EXPIRE ?>`) || undefined,
+        sameSite: JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`) || undefined,
+        secure: typeof sameSite === "boolean" ? sameSite : undefined
+    });
+
+    console.log('CACHE', cookies.get('_cache'));
+
     //default parameters not extended by setup.params (would bloat link files)
     setup.params = setup.params || {};
     //optimization allways present
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
     window.APPLICATION_CONTEXT = {
-        shadersCache: serverCookies._cache || {},
         setup: setup,
         //here are all parameters supported by the core visualization
         defaultParams: defaultSetup,
@@ -419,7 +432,6 @@ EOF;
         backgroundProtocolPreview: '<?php echo BG_DEFAULT_PROTOCOL_PREVIEW ?>',
         layersServer: '<?php echo LAYERS_TILE_SERVER ?>',
         layersProtocol: '<?php echo LAYERS_DEFAULT_PROTOCOL ?>',
-        cookiePolicy: '<?php echo JS_COOKIE_SETUP ?>',
         url: '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>',
         rootPath: '<?php echo VISUALISATION_ROOT_ABS_PATH ?>',
         postData: <?php echo json_encode($_POST)?>,
@@ -445,13 +457,12 @@ EOF;
         },
         _setCookie: function (key, value) {
             if (!this.setup.params.bypassCookies) {
-                serverCookies[key] = value;
-                document.cookie = `${key}=${value}; ${APPLICATION_CONTEXT.cookiePolicy}`; //todo URL encode?
+                cookies.set(key, value);
             }
         },
         _getCookie: function (key) {
-            if (!this.setup.params.bypassCookies && serverCookies.hasOwnProperty(key)) {
-                let value = serverCookies[key]; //todo URL decode?
+            if (!this.setup.params.bypassCookies) {
+                let value = cookies.get(key);
                 if (value === "false") value = false;
                 else if (value === "true") value = true;
                 return value;
@@ -617,6 +628,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         PLUGINS[id].instance = plugin;
         window[id] = plugin;
+        //todo docs
         plugin.setOption = function(key, value, cookies=true) {
             //todo encode/sanitize?
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
@@ -821,7 +833,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 for (let p in PLUGINS) {
                     if (PLUGINS[p].loaded) plugins.push(p);
                 }
-                document.cookie = `_plugins=${plugins.join(",")}; <?php echo JS_COOKIE_SETUP ?>`;
+                APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
             }
             onload();
         };

@@ -324,13 +324,15 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
 
                 let active = seaGL.visualization().shaders;
+                const shaderCache = [];
                 for (let key in active) {
                     if (active.hasOwnProperty(key)) {
                         let shaderSettings = active[key];
-                        APPLICATION_CONTEXT.shadersCache[shaderSettings.name] = shaderSettings.cache;
+                        shaderCache[shaderSettings.name] = shaderSettings.cache;
                     }
                 }
-                document.cookie = `_cache=${JSON.stringify(APPLICATION_CONTEXT.shadersCache)}; ${APPLICATION_CONTEXT.cookiePolicy}`;
+                APPLICATION_CONTEXT._setCookie('_cache', JSON.stringify(shaderCache));
+                console.log(APPLICATION_CONTEXT._getCookie('_cache'));
                 Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
             };
 

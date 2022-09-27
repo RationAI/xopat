@@ -671,7 +671,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     USER_INTERFACE.Tools.open();
                 }
                 this.running = false;
-                document.cookie = '_shadersPin=false; expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/';
+                APPLICATION_CONTEXT._setCookie('_shadersPin', 'false');
             },
 
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
@@ -841,7 +841,7 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
             formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
         }
         let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-        document.cookie = `_plugins=${pluginCookie}; ${APPLICATION_CONTEXT.cookiePolicy}`;
+        APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie);
         UTILITIES.refreshPage(formData.join(""), plugins);
     };
 
