@@ -156,8 +156,10 @@ UIComponents.Components = {
         }
 
         build(options) {
+            //todo hardcoded assets path
+
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon || "assets/image.png";
+            let icon = options.icon || "src/assets/image.png";
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
@@ -190,9 +192,11 @@ ${contentAction}
         }
 
         build(options) {
+            //todo hardcoded assets path
+
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon || "assets/image.png";
+            let icon = options.icon || "src/assets/image.png";
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";

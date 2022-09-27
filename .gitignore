@@ -3,7 +3,7 @@
 .idea/
 Thumbs.db
 
-osd_debug/*
-osd_debug/
-openseadragon/*
-openseadragon/
+openseadragon
+node_modules
+build
+coverage

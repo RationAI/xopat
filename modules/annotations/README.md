@@ -28,3 +28,8 @@ For most of the behaviour, you can consult ``fabricjs`` documentation, however t
  - check other main classes API in the framework, namely ``PolygonUtilities``, `PresetsManager`, `History`.
  - inherited from ``fabricjs module`` there is a new function on  `fabric.Object`: `zooming(zoom)` that gets invoked if exists
  - extended by ``annotations module`` there is a new funciton on  `fabric.Object`: `_factory()` memoization that simplifies factory API access
+
+
+#### The Factory
+todo describe lifecycle
+todo since we use create to instaniate and also fabricjs to instantiate, get rind of create method

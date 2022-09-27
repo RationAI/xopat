@@ -3,8 +3,14 @@
 $production = false;
 
 //relative path system in the application
+define('PROJECT_ROOT', 'src');
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
-define('EXTERNAL_SOURCES', 'external');
+define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
+define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
+
+//todo two versions - dev and production
+define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
+
 define('MODULES_FOLDER', 'modules');
 define('PLUGINS_FOLDER', 'plugins');
 

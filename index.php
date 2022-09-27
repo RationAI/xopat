@@ -5,7 +5,7 @@ if (version_compare(phpversion(), '7.1', '<')) {
 }
 
 require_once("config.php");
-require_once("plugins.php");
+require_once(PROJECT_ROOT . "/plugins.php");
 $version = VERSION;
 
 function hasKey($array, $key) {
@@ -22,7 +22,7 @@ function throwFatalErrorIf($condition, $title, $description, $details) {
         $_SESSION['title'] = $title;
         $_SESSION['description'] = $description;
         $_SESSION['details'] = $details;
-        header('Location: error.php');
+        header('Location: ./src/error.php');
         exit;
     }
 }
@@ -196,15 +196,15 @@ foreach ($MODULES as $_ => $mod) {
     <meta charset="utf-8">
     <title>Visualisation</title>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="./assets/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="<?php echo ASSETS_ROOT; ?>/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="<?php echo ASSETS_ROOT; ?>/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="<?php echo ASSETS_ROOT; ?>/favicon-16x16.png">
 <!--    <link rel="manifest" href="./assets/site.webmanifest">-->
-    <link rel="mask-icon" href="./assets/safari-pinned-tab.svg" color="#5bbad5">
+    <link rel="mask-icon" href="<?php echo ASSETS_ROOT; ?>/safari-pinned-tab.svg" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
 
-    <link rel="stylesheet" href="./assets/style.css?v=$version">
-    <link rel="stylesheet" href="./external/primer_css.css">
+    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>/style.css?v=$version">
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
     <!--
     Possible external dependency
     <link href="https://unpkg.com/@primer/css@^16.0.0/dist/primer.css" rel="stylesheet" />
@@ -236,21 +236,21 @@ foreach ($MODULES as $_ => $mod) {
         crossorigin="anonymous"></script>
 
     <!-- OSD -->
-    <script src="./openseadragon/build/openseadragon/openseadragon.js"></script>
+    <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
     <!--Extensions/modifications-->
-    <script src="./external/dziexttilesource.js?v=$version"></script>
-    <script src="./external/osd_tools.js?v=$version"></script>
-    <script src="./external/scalebar.js?v=$version"></script>
-    <script src="./external/scrollTo.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=$version"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=$version"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=$version"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
 
     <!--Tutorials-->
-    <script src="./external/kinetic-v5.1.0.min.js"></script>
-    <link rel="stylesheet" href="./external/enjoyhint.css">
-    <script src="./external/enjoyhint.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/kinetic-v5.1.0.min.js"></script>
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.css">
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.min.js"></script>
 
     <!--UI Classes-->
-    <script src="ui_components.js"></script>
+    <script src="<?php echo PROJECT_ROOT; ?>/ui_components.js"></script>
 
     <!--Modules-->
     <?php
@@ -333,29 +333,15 @@ EOF;
 "> push_pin </span>
         </div>
 
-        <?php
-           if (count($parsedParams->background) > 1) {
-                echo <<<EOF
-        <div id="panel-images" class="inner-panel mt-2">
-                <div class="inner-panel-content noselect" id="inner-panel-content-1">
-                    <div>
-                        <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                        <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
-                    </div>
+        <div id="panel-images" class="inner-panel mt-2"></div>
 
-                    <div id="image-layer-options" class="inner-panel-hidden">
-                        <!--populated with options for a given image data -->
-                    </div>
-                </div>
-           </div>
-EOF;
-            }
-            if ($layerVisible) {
+        <?php
+
                 $opened = $firstTimeVisited || (isset($_COOKIE["_shadersPin"]) && $_COOKIE["_shadersPin"] == "true");
                 $pinClass = $opened ? "opened" : "";
                 $shadersSettingsClass = $opened ? "force-visible" : "";
                 echo <<<EOF
-          <div id="panel-shaders" class="inner-panel">
+          <div id="panel-shaders" class="inner-panel" style="display:none;">
 
                 <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
                 <div class="inner-panel-content noselect" id="inner-panel-content-1">
@@ -375,7 +361,7 @@ EOF;
                 </div>
             </div>
 EOF;
-            }?>
+            ?>
 
             <!-- Appended controls for other plugins -->
         </div>
@@ -395,6 +381,8 @@ EOF;
 
     <!-- Values Initialization -->
     <script type="text/javascript">
+
+
 (function (window) {
     let setup = <?php echo $visualisation ?>;
     let defaultSetup = {
@@ -435,7 +423,11 @@ EOF;
         url: '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>',
         rootPath: '<?php echo VISUALISATION_ROOT_ABS_PATH ?>',
         postData: <?php echo json_encode($_POST)?>,
-        layersAvailable: false, //default
+
+        backgroundImageCount: function () {
+            return setup.background?.length;
+        },
+        layersAvailable: false, //default todo getter instead
         settingsMenuId: "app-settings",
         pluginsMenuId: "app-plugins",
         metaMenuId: "app-meta-data",
@@ -496,10 +488,10 @@ EOF;
     </script>
 
     <!-- UI -->
-    <script type="text/javascript" src="user_interface.js"></script>
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
 
     <!-- Basic Tutorial -->
-    <?php include_once ("basic_tutorial.php"); ?>
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/tutorials.js"></script>
 
     <!-- Basic Initialization -->
     <script type="text/javascript">
@@ -511,14 +503,14 @@ EOF;
     /*---------------------------------------------------------*/
 
     if (!OpenSeadragon.supportsCanvas) {
-        window.location = `./error.php?title=${encodeURIComponent('Your browser is not supported.')}
+        window.location = `./src/error.php?title=${encodeURIComponent('Your browser is not supported.')}
 &description=${encodeURIComponent('ERROR: The visualisation requires canvasses in order to work.')}`;
     }
 
     // Initialize viewer - OpenSeadragon
     window.VIEWER = OpenSeadragon({
         id: "osd",
-        prefixUrl: "openseadragon/build/openseadragon/images",
+        prefixUrl: "openseadragon/build/openseadragon/images", //todo configurable
         showNavigator: true,
         maxZoomPixelRatio: 1,
         blendTime: 0,
@@ -550,16 +542,10 @@ EOF;
     </script>
 
     <!--Event listeners, Utilities, Exporting...-->
-    <script type="text/javascript" src="scripts.js"></script>
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
 
-<?php
-    if ($layerVisible) {
-        echo <<<EOF
     <!--Visualization setup-->
-    <script type="text/javascript" src="layers.js"></script>
-EOF;
-    }
-?>
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/layers.js"></script>
 
     <!--Plugins Loading-->
     <script type="text/javascript">
@@ -856,7 +842,15 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         return MODULES[id].loaded;
     };
 
+    /**
+     * Change background image if not in stacked mode
+     * @param bgIndex
+     */
     UTILITIES.swapBackgroundImages = function (bgIndex) {
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
+            return;
+        }
         const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
         if (activeBackground === bgIndex) return;
         const image = APPLICATION_CONTEXT.setup.background[bgIndex],
@@ -888,12 +882,22 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         });
     };
 
-    function fireTheVisualization() {
-        window.VIEWER.removeHandler('open', fireTheVisualization);
+    const isFirstOpen = true;
+    window.VIEWER.addHandler('open', function () {
         let i = 0, selectedImageLayer = 0;
         let setup = APPLICATION_CONTEXT.setup;
 
-        if (APPLICATION_CONTEXT.getOption("stackedBackground") || setup.background.length < 2 /*todo show allways but hiden in this case*/) {
+        const imageRenderingOptions = $("#panel-images");
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            const imageOpts = [
+                `<div id="panel-images" class="inner-panel mt-2">
+    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+        <div>
+             <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
+             <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
+        </div>
+
+        <div id="image-layer-options" class="inner-panel-hidden">`];
             let largestWidth = 0,
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
@@ -901,7 +905,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 //reverse order menu since we load images in reverse order
                 for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
                     let image = setup.background[revidx];
-                    let worldItem =  window.VIEWER.world.getItemAt(i);
+                    let worldItem =  VIEWER.world.getItemAt(i);
                     if (image.hasOwnProperty("lossless") && image.lossless) {
                         worldItem.source.fileFormat = "png";
                     }
@@ -910,7 +914,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                         largestWidth = width;
                         selectedImageLayer = i;
                     }
-                    imageNode.prepend(`
+                    imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
 ${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
@@ -918,7 +922,9 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
                     i++;
                 }
             }
-        } else {
+            imageOpts.push("</div></div></div>");
+            imageRenderingOptions.html(imageOpts.join());
+        } else if (setup.background.length > 1) {
             let html = "", activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
             for (let idx = 0; idx < setup.background.length; idx++ ) {
                 let image = setup.background[idx],
@@ -928,14 +934,16 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
 class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
-previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
- }"/></div>
+                    previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
+                }"/></div>
                 `;
             }
-            $("#panel-images").remove(); //necessary in other mode only
+            imageRenderingOptions.html();
             //use switching panel
             USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
 <div id="tissue-preview-container">${html}</div>`);
+            i++; //rendering group always second
+        } else {
             i++; //rendering group always second
         }
 
@@ -949,6 +957,7 @@ previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
             VIEWER.bridge._onload(i);
         }
 
+        //todo change microns with each background image change -> add as prop to background!!!
         let microns = APPLICATION_CONTEXT.getOption("microns");
         if (microns && APPLICATION_CONTEXT.getOption("scaleBar")) {
             VIEWER.scalebar({
@@ -966,51 +975,98 @@ previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
             });
         }
 
-        for (let modID in MODULES) {
-            const module = MODULES.hasOwnProperty(modID) && MODULES[modID];
-            if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
-                window[module.attach].metadata = module;
+        if (isFirstOpen) {
+            for (let modID in MODULES) {
+                const module = MODULES.hasOwnProperty(modID) && MODULES[modID];
+                if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
+                    window[module.attach].metadata = module;
+                }
             }
-        }
 
-        //Notify plugins OpenSeadragon is ready
-        registeredPlugins.forEach(plugin => initializePlugin(plugin));
-        registeredPlugins = undefined;
+            //Notify plugins OpenSeadragon is ready
+            registeredPlugins.forEach(plugin => initializePlugin(plugin));
+            registeredPlugins = undefined;
 
-        let focus = APPLICATION_CONTEXT.getOption("viewport");
-        if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-            window.VIEWER.viewport.panTo(focus.point, true);
-            window.VIEWER.viewport.zoomTo(focus.zoomLevel, null, true);
-        }
+            let focus = APPLICATION_CONTEXT.getOption("viewport");
+            if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
+                window.VIEWER.viewport.panTo(focus.point, true);
+                window.VIEWER.viewport.zoomTo(focus.zoomLevel, null, true);
+            }
 
-        if (window.innerHeight < 630) {
-            <?php if (!$firstTimeVisited) {
-            echo "            $('#navigator-pin').click();";
-        }?>
-            USER_INTERFACE.MainMenu.close();
-        }
+            if (window.innerHeight < 630) {
+                <?php if (!$firstTimeVisited) {
+                echo "            $('#navigator-pin').click();";
+            }?>
+                USER_INTERFACE.MainMenu.close();
+            }
 
-        window.onerror = null;
+            window.onerror = null;
 
-        if (window.opener && window.opener.VIEWER) {
-            OpenSeadragon.Tools.link( window.VIEWER, window.opener.VIEWER);
-        }
+            if (window.opener && window.opener.VIEWER) {
+                OpenSeadragon.Tools.link( window.VIEWER, window.opener.VIEWER);
+            }
 
-        if (USER_INTERFACE.Errors.active) {
-            $("#viewer-container").addClass("disabled"); //preventive
-            return;
-        }
-        <?php
-        if ($firstTimeVisited) {
-            echo "        setTimeout(function() {
+            if (USER_INTERFACE.Errors.active) {
+                $("#viewer-container").addClass("disabled"); //preventive
+                return;
+            }
+            <?php
+            if ($firstTimeVisited) {
+                echo "        setTimeout(function() {
                     USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
                         'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
             }, 2000);";
+            }
+            ?>
+            VIEWER.raiseEvent('loaded');
         }
-        ?>
-        VIEWER.raiseEvent('loaded');
+    });
+
+    //todo support white background by rendering nothing - referenced time image must change :/
+    APPLICATION_CONTEXT.prepareViewer = function (
+        data,
+        background,
+        visualizations=undefined,
+    ) {
+        //todo loading animation?
+
+        APPLICATION_CONTEXT.setup.data = data;
+        APPLICATION_CONTEXT.setup.background = background;
+        APPLICATION_CONTEXT.setup.visualizations = visualizations;
+
+        if (!isFirstOpen) {
+            APPLICATION_CONTEXT.disableRendering();
+        } else {
+            VIEWER.raiseEvent('before-canvas-reload');
+        }
+
+        const toOpen = [];
+
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            toOpen.push(...APPLICATION_CONTEXT.setup.background.map(value => {
+                const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
+            }).reverse()); //reverse order: last opened IMAGE is the first visible
+        } else {
+            let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference]));
+        }
+
+        if (visualizations) {
+            APPLICATION_CONTEXT.prepareRendering();
+            VIEWER.bridge.loadShaders(
+                APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
+                function() {
+                    VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
+                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
+                    window.VIEWER.open(toOpen)
+                }
+            );
+        } else {
+            window.VIEWER.open(toOpen);
+        }
     }
-    window.VIEWER.addHandler('open', fireTheVisualization);
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of UI -----------------------*/
@@ -1029,66 +1085,14 @@ previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
             echo "</div>";
         }
     }
+   ?>
 
-    if ($layerVisible) {
-        echo <<<EOF
-<script type="text/javascript">
-
-    /*---------------------------------------------------------*/
-    /*----- Init with layers (variables from layers.js) -------*/
-    /*---------------------------------------------------------*/
-
-    VIEWER.bridge.loadShaders(
-        APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
-        function() {
-            let activeData = VIEWER.bridge.dataImageSources(); 
-            let toOpen;
-            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-                toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
-                    const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                    return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
-                }).reverse(); //reverse order: last opened IMAGE is the first visible
-            } else {
-                let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-                const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
-                toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
-            }
-          
-            VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
-            toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, activeData));
-            window.VIEWER.open(toOpen);
-    });
-
+<script>
+    APPLICATION_CONTEXT.prepareViewer(
+        APPLICATION_CONTEXT.setup.data,
+        APPLICATION_CONTEXT.setup.background,
+        APPLICATION_CONTEXT.setup.visualizations
+    );
 </script>
-EOF;
-
-    } else if (count($parsedParams->background) > 0) {
-        echo <<<EOF
-<script type="text/javascript">
-
-    /*---------------------------------------------------------*/
-    /*----- Init without layers (layers.js) -------------------*/
-    /*---------------------------------------------------------*/
-    
-(function (window) {
-        
-    let toOpen;
-    if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-        toOpen = APPLICATION_CONTEXT.setup.background.map(value => {
-            const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-            return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
-        }).reverse(); //reverse order: last opened IMAGE is the first visible
-    } else {
-        let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-        const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-        toOpen = [urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference])];
-    }
-    window.VIEWER.open(toOpen);
-}(window)); 
-
-</script>
-EOF;
-    }
-?>
 </body>
 </html>

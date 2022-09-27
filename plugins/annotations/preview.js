@@ -35,11 +35,13 @@ AnnotationsGUI.Previewer = class {
             if (factory) {
                 let name = this.context.context.getAnnotationDescription(object);
                 let bbox = factory.getObjectFocusZone(object);
+
+                //todo hardcoded assets path
                 container.append(`
 <div onclick="${this.context.id}.context.focusObjectOrArea({left: ${bbox.left}, top: ${bbox.top}, 
 width: ${bbox.width}, height: ${bbox.height}}, ${object.incrementId});" class="d-inline-block pointer">
 <img alt="preview" width="120" height="120" data-left="${bbox.left}" data-top="${bbox.top}" id="matrix-${counter}-annotation-preview"
-data-width="${bbox.width}" data-height="${bbox.height}" src="./assets/image.png"><br>${name}
+data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.png"><br>${name}
 </div>
             `);
                 counter++;

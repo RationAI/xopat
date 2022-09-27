@@ -5,7 +5,8 @@
   <meta charset="utf-8">
   <title>Visualisation Developer Setup</title>
 
-  <link rel="stylesheet" href="./external/primer_css.css"><script src="./shader_input_gui.js"></script>
+  <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
+  <script src="<?php echo PROJECT_ROOT; ?>/shader_input_gui.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
@@ -24,8 +25,8 @@
 <br><br>
 <?php
 
-include_once("config.php");
-include_once("modules.php");
+include_once("./config.php");
+include_once(PROJECT_ROOT . "/modules.php");
 
 $webglPath = "";
 $version = VERSION;
@@ -43,7 +44,6 @@ function hasKey($array, $key) {
 
 ?>
       <br>
-
           <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
           try {
               JSON.parse($(this).val());

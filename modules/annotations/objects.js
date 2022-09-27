@@ -105,6 +105,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Create an annotation object from given parameters, used mostly privately
      * @param {*} parameters geometry, depends on the object type
      * @param {object} options FbaricJS and custom options to set
+     * todo since we use create to instaniate and also fabricjs to instantiate, get rid of create method
      * @returns
      */
     create(parameters, options) {

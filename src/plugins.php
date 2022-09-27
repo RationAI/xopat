@@ -1,6 +1,6 @@
 <?php
 
-require_once("modules.php");
+require_once(PROJECT_ROOT . "/modules.php");
 $PLUGINS = array();
 
 foreach (array_diff(scandir(PLUGINS_FOLDER), array('..', '.')) as $_=>$dir) {

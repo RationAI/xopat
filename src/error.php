@@ -25,8 +25,8 @@ session_destroy();
     <meta charset="utf-8">
     <title>Visualisation Error</title>
 
-    <link rel="stylesheet" href="./assets/style.css">
-    <link rel="stylesheet" href="./external/primer_css.css">
+    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>/style.css">
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 </head>
