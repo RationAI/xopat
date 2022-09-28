@@ -141,7 +141,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             let layerWorldItem = VIEWER.world.getItemAt(firstLayerWorldIndex);
             if (layerWorldItem) {
                 let activeVis = seaGL.visualization();
-                if (!activeVis.hasOwnProperty("lossless") || activeVis.lossless && layerWorldItem.source.setFormat) {
+                if (!(activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
                     layerWorldItem.source.setFormat("png");
                 }
                 layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
@@ -324,7 +324,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
 
                 let active = seaGL.visualization().shaders;
-                const shaderCache = [];
+                const shaderCache = {};
                 for (let key in active) {
                     if (active.hasOwnProperty(key)) {
                         let shaderSettings = active[key];
@@ -332,7 +332,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     }
                 }
                 APPLICATION_CONTEXT._setCookie('_cache', JSON.stringify(shaderCache));
-                console.log(APPLICATION_CONTEXT._getCookie('_cache'));
                 Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
             };
 

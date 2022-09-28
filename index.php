@@ -18,11 +18,8 @@ function isFlagInProtocols($flag) {
 
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
-        session_start();
-        $_SESSION['title'] = $title;
-        $_SESSION['description'] = $description;
-        $_SESSION['details'] = $details;
-        header('Location: ./src/error.php');
+        require_once(PROJECT_ROOT . "/error.php");
+        show_error($title, $description, $details);
         exit;
     }
 }
@@ -36,7 +33,7 @@ function ensureDefined($object, $property, $default) {
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
  */
-
+//todo rename to something else sz ugly
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
 throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
@@ -46,9 +43,9 @@ throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup da
  * Parsing: verify valid parameters
  */
 
-$parsedParams = json_decode($visualisation);
+$parsedParams = is_string($visualisation) ? json_decode($visualisation) : $visualisation;
 throwFatalErrorIf(!$parsedParams, "Invalid link.", "The visualisation setup is not parse-able.",
-    "Error: " . json_last_error() . "<br>" . $visualisation);
+    "JSON Error: " . json_last_error() . "<br>" . $visualisation);
 
 ensureDefined($parsedParams, "params", (object)array());
 ensureDefined($parsedParams, "data", array());
@@ -101,6 +98,8 @@ if ($layerVisible) {
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 //todo cached setup -> notify user rendering has changed....
+
+                //todo not working!!!
                 $layer->cache = $cookieCache->{$layer->name};
             }
             if (!isset($layer->params)) {
@@ -403,8 +402,6 @@ EOF;
         stackedBackground: false,
     };
 
-    console.log('<?php echo json_encode($_COOKIE); ?>');
-
     const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
     const cookies = Cookies;
 
@@ -414,8 +411,6 @@ EOF;
         sameSite: JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`) || undefined,
         secure: typeof sameSite === "boolean" ? sameSite : undefined
     });
-
-    console.log('CACHE', cookies.get('_cache'));
 
     //default parameters not extended by setup.params (would bloat link files)
     setup.params = setup.params || {};

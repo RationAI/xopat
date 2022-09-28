@@ -1,3 +1,7 @@
+<?php
+include_once("./config.php");
+?>
+
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 
@@ -25,7 +29,6 @@
 <br><br>
 <?php
 
-include_once("./config.php");
 include_once(PROJECT_ROOT . "/modules.php");
 
 $webglPath = "";

@@ -1,20 +1,10 @@
 <?php
-require_once("config.php");
 
-session_start();
+function show_error($err_title, $err_desc, $err_details) {
 
-function hasKey($array, $key) {
-    return isset($array[$key]) && $array[$key];
-}
-
-$title = hasKey($_SESSION, "title") ? $_SESSION['title'] : (hasKey($_GET, "title") ? $_GET['title'] : false);
-$description = hasKey($_SESSION, "description") ? $_SESSION['description'] : (hasKey($_GET, "description") ? $_GET['description'] : false);
-$techNFO = hasKey($_SESSION, "details") ? $_SESSION['details'] : (hasKey($_GET, "details") ? $_GET['details'] : false);
-
-unset($_SESSION['title']);
-unset($_SESSION['description']);
-unset($_SESSION['details']);
-session_destroy();
+$title = isset($err_title) ? $err_title : false;
+$description = isset($err_desc) ? $err_desc : false;
+$techNFO = isset($err_details) ? $err_details : false;
 
 ?>
 
@@ -76,3 +66,5 @@ session_destroy();
 </script>
 </body>
 </html>
+ <?php
+}

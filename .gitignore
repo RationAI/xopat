@@ -1,9 +1,19 @@
+#rubbish
 *.txt
 *.old
 .idea/
 Thumbs.db
 
-openseadragon
-node_modules
-build
-coverage
+#builds and binaries
+openseadragon/
+node_modules/
+build/
+coverage/
+
+#test data
+test/downloads/
+test/screenshots/
+test/videos/
+
+#sensitive data
+cypress.env.json

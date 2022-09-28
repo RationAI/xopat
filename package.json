@@ -1,0 +1,37 @@
+{
+  "name": "pathopus",
+  "version": "1.0.0",
+  "description": "A flexible multipurose browser-based WSI viewer.",
+  "main": "index.php",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RationAI/pathopus.git"
+  },
+  "keywords": [
+    "viewer",
+    "WSI",
+    "pathology",
+    "scan",
+    "AI",
+    "networks",
+    "learning",
+    "annotations",
+    "slide",
+    "tissue",
+    "pathopus"
+  ],
+  "author": "Jirka Horák",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/RationAI/pathopus/issues"
+  },
+  "homepage": "https://github.com/RationAI/pathopus#readme",
+  "devDependencies": {
+    "cypress": "^10.9.0",
+    "grunt": "^1.4.1",
+    "grunt-git-describe": "^2.4.4"
+  }
+}

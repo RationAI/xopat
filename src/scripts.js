@@ -2,7 +2,8 @@
 
     //https://github.com/mrdoob/stats.js
     if (APPLICATION_CONTEXT.getOption("debugMode")) {
-        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='external/stats.js';document.head.appendChild(script);})()
+        //todo hardcoded source path
+        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='src/external/stats.js';document.head.appendChild(script);})()
     }
 
     // opacity of general layer available everywhere
