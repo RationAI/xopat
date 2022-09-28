@@ -37,6 +37,13 @@ various libraries. That is true for the running deployed application. However, t
 
 > The build and test framework is still in development - for now, the viewer can be used AS-IS just add the OSD library and run from a PHP server.
 
+It defines where and how to access the viewer. The testing framework can be run directly from console using `npx cypress open`.
+This naturally involves 
+For now, you need to
+ - create **``cypress.env.json``** file in the project root, it defines where and how to access the viewer, an example file is ``cypress.env.example.json``
+ - run ``npm install`` if you haven't already, it installs build and test tools
+ - run ``npx cypress open`` to run the interactive test framework
+
 
 #### Plugins API
 Each plugin can perform custom tasks that might depend on some service. After you manage to successfully run
