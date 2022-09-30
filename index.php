@@ -43,8 +43,9 @@ throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup da
  * Parsing: verify valid parameters
  */
 
-$parsedParams = is_string($visualisation) ? json_decode($visualisation) : $visualisation;
-throwFatalErrorIf(!$parsedParams, "Invalid link.", "The visualisation setup is not parse-able.",
+//params that come in might be associative arrays :/
+$parsedParams = json_decode(is_string($visualisation) ? $visualisation : json_encode($visualisation));
+throwFatalErrorIf(!is_object($parsedParams), "Invalid link.", "The visualisation setup is not parse-able.",
     "JSON Error: " . json_last_error() . "<br>" . $visualisation);
 
 ensureDefined($parsedParams, "params", (object)array());
@@ -297,14 +298,17 @@ foreach ($MODULES as $_ => $mod) {
         <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
             <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
 
+            <span id="global-opacity">
+                <label>
+                    Layer Opacity &nbsp;<input type="range"  min="0" max="1" value="1" step="0.1" style="width: 100px;">
+                </label>
+                &emsp;
+            </span>
+
             <!--TODO export also these values? -->
             <?php
-            if ($layerVisible) {
-                echo <<<EOF
-            <label for="global-opacity">Layer Opacity &nbsp;</label>
-            <input type="range" id="global-opacity" min="0" max="1" value="1" step="0.1" class="d-flex" style="width: 100px;">&emsp;
-EOF;
-            }
+
+
 
             if ($singleBgImage) {
                 echo <<<EOF
@@ -384,6 +388,7 @@ EOF;
 
 (function (window) {
     const setup = <?php echo $visualisation ?>;
+    const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = {
         customBlending: false,
         debugMode: false,
@@ -418,51 +423,95 @@ EOF;
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
     window.APPLICATION_CONTEXT = {
-        setup: setup,
-        //here are all parameters supported by the core visualization
-        defaultParams: defaultSetup,
-        version: '<?php echo VERSION ?>',
-        backgroundServer: '<?php echo BG_TILE_SERVER ?>',
-        backgroundProtocol: '<?php echo BG_DEFAULT_PROTOCOL ?>',
-        backgroundProtocolPreview: '<?php echo BG_DEFAULT_PROTOCOL_PREVIEW ?>',
-        layersServer: '<?php echo LAYERS_TILE_SERVER ?>',
-        layersProtocol: '<?php echo LAYERS_DEFAULT_PROTOCOL ?>',
-        url: '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>',
-        rootPath: '<?php echo VISUALISATION_ROOT_ABS_PATH ?>',
-        postData: <?php echo json_encode($_POST)?>,
-
-        backgroundImageCount: function () {
-            return setup.background?.length;
+        config: {
+            get params () {
+                return setup.params || {};
+            },
+            get data () {
+                return setup.data || [];
+            },
+            get background () {
+                return setup.background || [];
+            },
+            get visualizations () {
+                return setup.visualizations || [];
+            },
+            get shaderSources () {
+                return setup.shaderSources || [];
+            },
+            get plugins () {
+                return setup.plugins || {};
+            },
+            get dataPage () {
+                return setup.dataPage || {};
+            },
         },
+        //here are all parameters supported by the core visualization
+        get defaultConfig() {
+           return defaultSetup;
+        },
+        get version() {
+            return '<?php echo VERSION ?>';
+        },
+        get backgroundServer() {
+            return '<?php echo BG_TILE_SERVER ?>';
+        },
+        get backgroundProtocol() {
+            return '<?php echo BG_DEFAULT_PROTOCOL ?>';
+        },
+        get backgroundProtocolPreview() {
+            return '<?php echo BG_DEFAULT_PROTOCOL_PREVIEW ?>';
+        },
+        get layersServer() {
+            return '<?php echo LAYERS_TILE_SERVER ?>';
+        },
+        get layersProtocol() {
+            return '<?php echo LAYERS_DEFAULT_PROTOCOL ?>';
+        },
+        get url() {
+            return '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>';
+        },
+        get rootPath() {
+            return '<?php echo VISUALISATION_ROOT_ABS_PATH ?>';
+        },
+        get postData() {
+            return postData;
+        },
+        get settingsMenuId() { return "app-settings"; },
+        get pluginsMenuId() { return "app-plugins"; },
+        get metaMenuId() { return "app-meta-data"; },
         layersAvailable: false, //default todo getter instead
-        settingsMenuId: "app-settings",
-        pluginsMenuId: "app-plugins",
-        metaMenuId: "app-meta-data",
-        getOption: function (name, defaultValue=undefined) {
+        getOption(name, defaultValue=undefined) {
             let cookie = this._getCookie(name);
             if (cookie !== undefined) return cookie;
-            return this.setup.params.hasOwnProperty(name) ? this.setup.params[name] :
-                (defaultValue === undefined ? this.defaultParams[name] : defaultValue);
+            let value = this.config.params[name] !== undefined ? this.config.params[name] :
+                (defaultValue === undefined ? this.defaultConfig[name] : defaultValue);
+            if (value === "false") value = false; //true will eval to true anyway
+            return value;
         },
-        setOption: function (name, value, cookies = false) {
+        setOption(name, value, cookies = false) {
             if (cookies) this._setCookie(name, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
-            this.setup.params[name] = value;
+            this.config.params[name] = value;
         },
-        _setCookie: function (key, value) {
-            if (!this.setup.params.bypassCookies) {
+        _setCookie(key, value) {
+            if (!this.config.params.bypassCookies) {
                 cookies.set(key, value);
             }
         },
-        _getCookie: function (key) {
-            if (!this.setup.params.bypassCookies) {
+        _getCookie(key) {
+            if (!this.config.params.bypassCookies) {
                 let value = cookies.get(key);
                 if (value === "false") value = false;
                 else if (value === "true") value = true;
                 return value;
             }
             return undefined;
+        },
+        //todo remove?
+        _dangerouslyAccessConfig() {
+            return setup;
         }
     };
 
@@ -600,13 +649,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             return;
         }
 
+        let plugin;
         try {
-            let parameters = APPLICATION_CONTEXT.setup.plugins[id];
+            let parameters = APPLICATION_CONTEXT.config.plugins[id];
             if (!parameters) {
                 parameters = {};
-                APPLICATION_CONTEXT.setup.plugins[id] = parameters;
+                APPLICATION_CONTEXT.config.plugins[id] = parameters;
             }
-            var plugin = new PluginClass(id, parameters);
+            plugin = new PluginClass(id, parameters);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
             cleanUpPlugin(id, e);
@@ -627,14 +677,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         plugin.setOption = function(key, value, cookies=true) {
             //todo encode/sanitize?
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
-            APPLICATION_CONTEXT.setup.plugins[id][key] = value;
+            APPLICATION_CONTEXT.config.plugins[id][key] = value;
         }
         plugin.getOption = function(key, defaultValue=undefined) {
             //todo encode/sanitize?
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
-            return APPLICATION_CONTEXT.setup.plugins[id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.setup.plugins[id][key] : defaultValue;
+            return APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
+                APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
         }
         plugin.getData = function(key) {
             return APPLICATION_CONTEXT.postData[`${key}_${id}`];
@@ -860,8 +910,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         }
         const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
         if (activeBackground === bgIndex) return;
-        const image = APPLICATION_CONTEXT.setup.background[bgIndex],
-            imagePath = APPLICATION_CONTEXT.setup.data[image.dataReference],
+        const image = APPLICATION_CONTEXT.config.background[bgIndex],
+            imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
             sourceUrlMaker = new Function("path,data", "return " +
             (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
 
@@ -874,7 +924,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             replace: true,
             success: function (e) {
                 APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-                let previousBackgroundSetup = APPLICATION_CONTEXT.setup.background[activeBackground];
+                let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
                 VIEWER.raiseEvent('background-image-swap', {
                     backgroundImageUrl: url,
                     prevBackgroundSetup: previousBackgroundSetup,
@@ -889,10 +939,11 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         });
     };
 
-    const isFirstOpen = true;
+    let isFirstOpen = true;
     window.VIEWER.addHandler('open', function () {
         let i = 0, selectedImageLayer = 0;
-        let setup = APPLICATION_CONTEXT.setup;
+        let confData = APPLICATION_CONTEXT.config.data,
+            confBackground = APPLICATION_CONTEXT.config.background;
 
         const imageRenderingOptions = $("#panel-images");
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
@@ -910,8 +961,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
                 //reverse order menu since we load images in reverse order
-                for (let revidx = setup.background.length-1; revidx >= 0; revidx-- ) {
-                    let image = setup.background[revidx];
+                for (let revidx = confBackground.length-1; revidx >= 0; revidx-- ) {
+                    let image = confBackground[revidx];
                     let worldItem =  VIEWER.world.getItemAt(i);
                     if (image.hasOwnProperty("lossless") && image.lossless) {
                         worldItem.source.fileFormat = "png";
@@ -924,18 +975,18 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                     imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
-${fileNameOf(APPLICATION_CONTEXT.setup.data[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+${fileNameOf(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                     i++;
                 }
             }
             imageOpts.push("</div></div></div>");
             imageRenderingOptions.html(imageOpts.join());
-        } else if (setup.background.length > 1) {
+        } else if (confBackground.length > 1) {
             let html = "", activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
-            for (let idx = 0; idx < setup.background.length; idx++ ) {
-                let image = setup.background[idx],
-                    imagePath = setup.data[image.dataReference];
+            for (let idx = 0; idx < confBackground.length; idx++ ) {
+                let image = confBackground[idx],
+                    imagePath = confData[image.dataReference];
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
@@ -960,8 +1011,11 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
 
         //private API
-        if (setup.hasOwnProperty("visualizations") && VIEWER.bridge) {
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge) {
             VIEWER.bridge._onload(i);
+            $("#global-opacity").css('display', 'initial');
+        } else {
+            $("#global-opacity").css('display', 'none');
         }
 
         //todo change microns with each background image change -> add as prop to background!!!
@@ -996,8 +1050,8 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
 
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                window.VIEWER.viewport.panTo(focus.point, true);
-                window.VIEWER.viewport.zoomTo(focus.zoomLevel, null, true);
+                window.VIEWER.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
+                window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
             if (window.innerHeight < 630) {
@@ -1027,19 +1081,22 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             ?>
             VIEWER.raiseEvent('loaded');
         }
+        isFirstOpen = false;
     });
 
     //todo support white background by rendering nothing - referenced time image must change :/
     APPLICATION_CONTEXT.prepareViewer = function (
         data,
         background,
-        visualizations=undefined,
+        visualizations=[],
     ) {
         //todo loading animation?
 
-        APPLICATION_CONTEXT.setup.data = data;
-        APPLICATION_CONTEXT.setup.background = background;
-        APPLICATION_CONTEXT.setup.visualizations = visualizations;
+        // TODO more ingenious in the safety of setup
+        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig;
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
 
         if (!isFirstOpen) {
             APPLICATION_CONTEXT.disableRendering();
@@ -1050,17 +1107,17 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
         const toOpen = [];
 
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            toOpen.push(...APPLICATION_CONTEXT.setup.background.map(value => {
+            toOpen.push(...APPLICATION_CONTEXT.config.background.map(value => {
                 const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[value.dataReference]);
+                return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.config.data[value.dataReference]);
             }).reverse()); //reverse order: last opened IMAGE is the first visible
         } else {
-            let selectedImage = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
+            let selectedImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
             const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.setup.data[selectedImage.dataReference]));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.config.data[selectedImage.dataReference]));
         }
 
-        if (visualizations) {
+        if (visualizations.length > 0) {
             APPLICATION_CONTEXT.prepareRendering();
             VIEWER.bridge.loadShaders(
                 APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
@@ -1096,9 +1153,9 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
 
 <script>
     APPLICATION_CONTEXT.prepareViewer(
-        APPLICATION_CONTEXT.setup.data,
-        APPLICATION_CONTEXT.setup.background,
-        APPLICATION_CONTEXT.setup.visualizations
+        APPLICATION_CONTEXT.config.data,
+        APPLICATION_CONTEXT.config.background,
+        APPLICATION_CONTEXT.config.visualizations
     );
 </script>
 </body>

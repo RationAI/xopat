@@ -7,7 +7,7 @@ class Playground  {
         this.strategy = null;
 
         if (!this.setup.hasOwnProperty("server")) this.setup.server = "http://test.muni:8080";
-        this.imageSources = [...APPLICATION_CONTEXT.setup.data]; //copy
+        this.imageSources = [...APPLICATION_CONTEXT.config.data]; //copy
 
         USER_INTERFACE.MainMenu.appendExtended("Python Playground", `
 <span class="material-icons btn-pointer" id="reload-playground" title="Restart" style="float: right;" onclick="${this.id}.refresh();"> refresh</span>

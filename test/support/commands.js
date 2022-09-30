@@ -24,6 +24,9 @@
 // -- This will overwrite an existing command --
 // Cypress.Commands.overwrite('visit', (originalFn, url, options) => { ... })
 
+import "cypress-plugin-snapshots/commands"
+
+
 /**
  * Remove OpenSeadragon XHR
  */
@@ -43,12 +46,22 @@ if (Cypress.config('hideXHRInCommandLog')) {
 }
 
 Cypress.Commands.addAll({
-    launch(configuration) {
+    launch(configuration, data={}) {
+        cy.log("POST", {
+            visualisation: configuration,
+            ...data
+        });
         return cy.visit({
             url: Cypress.env('viewer'),
             headers: Cypress.env('headers'),
             method: 'POST',
-            body: configuration
+            body: {
+                visualisation: configuration,
+                ...data
+            }
         })
+    },
+    canvas() {
+        return cy.get(".openseadragon-canvas > canvas");
     }
 });

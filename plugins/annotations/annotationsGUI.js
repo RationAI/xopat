@@ -39,13 +39,13 @@ class AnnotationsGUI {
 		const _this = this;
 
 		//todo cannot use more than one tissue at time, hardcoded :/
-		let bgImage = APPLICATION_CONTEXT.setup.background[0];
+		let bgImage = APPLICATION_CONTEXT.config.background[0];
 		if (!bgImage) {
 			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
 			return;
 		}
 
-		this.activeTissue = APPLICATION_CONTEXT.setup.data[bgImage.dataReference];
+		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImage.dataReference];
 
 		this.initHandlers();
 		//init on html sooner than history so it is placed above

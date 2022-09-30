@@ -11,10 +11,10 @@
         'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
     }, {
         'next #general-controls' : 'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.<br>You can control the data layer opacity here.',
-        runIf: function() {return APPLICATION_CONTEXT.backgroundImageCount == 1 && withLayers();}
+        runIf: function() {return APPLICATION_CONTEXT.config.background.length == 1 && withLayers();}
     }, {
         'next #panel-images' : 'There are several background images available: <br> you can turn them on/off or blend using an opacity slider.',
-        runIf: function () {return APPLICATION_CONTEXT.backgroundImageCount() > 0;}
+        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 0;}
     },{
         'next #general-controls' : 'The data layer opacity atop background images can be controlled here.',
         runIf: withLayers

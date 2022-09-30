@@ -900,8 +900,8 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         }
     }
     function buildMetaDataMenu(ctx) {
-        for (let key in APPLICATION_CONTEXT.setup.dataPage) {
-            let data = APPLICATION_CONTEXT.setup.dataPage[key];
+        for (let key in APPLICATION_CONTEXT.config.dataPage) {
+            let data = APPLICATION_CONTEXT.config.dataPage[key];
             let html = [];
 
             for (let element of (data.page || [])) {

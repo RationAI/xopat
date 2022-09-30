@@ -1,92 +1,36 @@
-
-// describe('Third party pyramidal image', () => {
-//     it('Background only: custom protocol', () => {
-//         cy.launch({
-//             visualisation: {
-//                 "data":["https://libimages1.princeton.edu/loris/pudl0001%2F4609321%2Fs42%2F00000001.jp2/info.json"],
-//                 "background":[{
-//                     "dataReference":0,
-//                     "lossless":false,
-//                     "protocol":"`${data}`"
-//                 }]
-//             }
-//         })
-//         expect(true).to.equal(true)
-//     })
-// })
+import {config, shaders} from "../../support/configurations"
 
 
-/**TODO TEST
- *
- {
- "params": {
-"debugMode": false,
-        "webglDebugMode": false,
-"tileCache": false
-} ,
-   "data":[
-      "https://libimages1.princeton.edu/loris/pudl0001%2F4609321%2Fs42%2F00000001.jp2/info.json"
-   ],
-   "background":[
-      {
-         "dataReference":0,
-         "lossless":false,
-         "protocol":"`${data}`"
-      }
-   ],
-   "visualizations":[
-      {
-         "name":"The book is rendered twice, once as overlay.",
-"protocol":"`${data}`",
-         "shaders":{
-            "0":{
-               "name":"Heatmap overlay",
-               "type":"heatmap",
-               "visible":1,
-               "params":{
-                  "color":{
-                     "type":"color",
-                     "default":"#12fbff"
-                  }
-               },
-               "dataReferences":[
-                  0
-               ]
-            }
-         }
-      }
-   ]
-}
- */
+describe('Third party pyramidal image', () => {
+    it('Background only: custom protocol', () => {
+        cy.launch({
+            params: config.params({viewport: config.viewport('book', 0)}),
+            data: config.data('book'),
+            background: config.background({protocol: "data"}, 0)
+        })
+
+        cy.wait(5000)
+        cy.canvas()
+        //.toMatchImageSnapshot()
+    })
+})
+
 describe('Third party pyramidal image', () => {
     it('Full rendering options: only one layer available.', () => {
         cy.launch({
-            visualisation: {
-                "data":["https://libimages1.princeton.edu/loris/pudl0001%2F4609321%2Fs42%2F00000001.jp2/info.json"],
-                "background":[{
-                    "dataReference":0,
-                    "lossless":false,
-                    "protocol":"`${data}`"
-                }],
-                "visualizations":[{
+            params: config.params({viewport: config.viewport('book', 0)}),
+            data: config.data('book'),
+            background: config.background({"protocol": "data"}, 0),
+            visualizations:[
+                config.visualization({
                     "name":"The book is rendered twice, once as overlay.",
-                    "protocol":"`${data}`",
-                    "shaders":{
-                        "0": {
-                            "name": "Heatmap overlay",
-                            "type": "heatmap", "visible": 1,
-                            "params": {
-                                "color": {
-                                    "type": "color",
-                                    "default": "#12fbff"
-                                },
-                            },
-                            "dataReferences": [0],
-                        }
-                    },
-                }]
-            }
+                    "protocol":"data[0]",
+                }, shaders.heatmap(0))
+            ]
         })
-        expect(true).to.equal(true)
+        cy.debug()
+        //todo set some trigger that allows the set?
+        cy.canvas()
+            //.toMatchImageSnapshot()
     })
 })

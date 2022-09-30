@@ -25,7 +25,7 @@
                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 ready: function() {
                     var i = 0;
-                    const activeBackgroundSetup = APPLICATION_CONTEXT.setup.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+                    const activeBackgroundSetup = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
                         defaultIndex = activeBackgroundSetup?.dataGroupIndex;
 
                     let select = $("#shaders"),
@@ -66,7 +66,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     //          window.VIEWER.addTiledImage({
                     //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
                     //             index: seaGL.getLayerIdx(),
-                    //             opacity: $("#global-opacity").val(),
+                    //             opacity: $("#global-opacity input").val(),
                     //             replace: true
                     //         });
                     //     }
@@ -84,7 +84,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                         VIEWER.addTiledImage({
                             tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
                             index: index,
-                            opacity: $("#global-opacity").val(),
+                            opacity: $("#global-opacity input").val(),
                             success: function (e) {
                                 if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
                                     e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
@@ -97,7 +97,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                         VIEWER.addTiledImage({
                             tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
                             index: index,
-                            opacity: $("#global-opacity").val(),
+                            opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
                                 if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
@@ -121,13 +121,13 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             });
             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
             //load shaders just once
-            webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.setup.shaderSources);
+            webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
         }
 
         let seaGL = VIEWER.bridge;
-        seaGL.addVisualisation(...APPLICATION_CONTEXT.setup.visualizations);
-        seaGL.addData(...APPLICATION_CONTEXT.setup.data);
-        if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > APPLICATION_CONTEXT.setup.visualizations) {
+        seaGL.addVisualisation(...APPLICATION_CONTEXT.config.visualizations);
+        seaGL.addData(...APPLICATION_CONTEXT.config.data);
+        if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > APPLICATION_CONTEXT.config.visualizations) {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
@@ -301,7 +301,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                                 tileSize: 512
                             }),
                             //index: seaGL.getWorldIndex(),
-                            opacity: $("#global-opacity").val(),
+                            opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
                                 //seaGL.addLayer(seaGL.getWorldIndex());
@@ -435,7 +435,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             UTILITIES.updateUIForMissingSources = function () {
                 let layers = seaGL.visualization().shaders;
                 let sources = webglProcessing.getSources();
-                let allSources = APPLICATION_CONTEXT.setup.data;
+                let allSources = APPLICATION_CONTEXT.config.data;
                 let tiledImage = seaGL.getTiledImage();
                 if (!tiledImage) {
                     console.error("Could not determine TiledImage item that is bound to the bridge.");

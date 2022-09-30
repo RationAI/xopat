@@ -51,7 +51,7 @@ style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHist
 
     createMenu(notification=undefined) {
         let targetSetup = "";
-        // if (APPLICATION_CONTEXT.setup.background.length > 1) {
+        // if (APPLICATION_CONTEXT.config.background.length > 1) {
         targetSetup = `<br><br>
 Use Alt+Left Mouse button to draw region of interest.<br>
 <button class="btn" onclick="${this.id}.setMode(this, this.nextElementSibling , 'inspect');">Inspect</button>
@@ -60,15 +60,15 @@ Use Alt+Left Mouse button to draw region of interest.<br>
 <br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
 onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(this.value);'>`;
         var name;
-        for (let i = APPLICATION_CONTEXT.setup.background.length-1; i >= 0; i--) {
-            name = this.getNameFromImagePath(APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[i].dataReference]);
+        for (let i = APPLICATION_CONTEXT.config.background.length-1; i >= 0; i--) {
+            name = this.getNameFromImagePath(APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.config.background[i].dataReference]);
             let selected = i === 0 ? "selected" : "";
             targetSetup += `<option value='${name}' ${selected}>image ${name}</option>`;
         }
         this.targetImageSourceName = name; //reverse order, remember last one
         targetSetup += "</select>";
         // }  else {
-        //     this.targetImageSourceName = this.getNameFromImagePath(APPLICATION_CONTEXT.setup.data[APPLICATION_CONTEXT.setup.background[0].dataReference]);
+        //     this.targetImageSourceName = this.getNameFromImagePath(APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.config.background[0].dataReference]);
         // }
 
         //bit dirty :)

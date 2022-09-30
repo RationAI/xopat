@@ -443,17 +443,10 @@ OpenSeadragon.BridgeGL = class {
         let source = layer.source;
 
         //necessary to modify hash key so as to force the viewer download the image twice
-        //todo implement instead feature of sharing the data :/
         source.__cached_getTileHashKey = source.getTileHashKey;
         source.getTileHashKey = function(level, x, y, url, ajaxHeaders, postData) {
-            function withHeaders(hash) {
-                return ajaxHeaders ? hash + "+webgl+" + JSON.stringify(ajaxHeaders) : hash;
-            }
-
-            if (typeof url !== "string") {
-                return withHeaders(level + "/" + x + "_" + y);
-            }
-            return withHeaders(url);
+            //todo implement instead feature of sharing the data :/
+            return source.__cached_getTileHashKey(level, x, y, url, ajaxHeaders, postData) + "_webgl";
         };
 
         source.__cached_createTileCache = source.createTileCache;

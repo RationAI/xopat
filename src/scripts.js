@@ -7,7 +7,7 @@
     }
 
     // opacity of general layer available everywhere
-    $("#global-opacity").on("input", function () {
+    $("#global-opacity input").on("input", function () {
         let val = $(this).val();
         VIEWER.world.getItemAt(VIEWER.bridge.getWorldIndex()).setOpacity(val);
     });
@@ -151,7 +151,7 @@
 
     function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         //reconstruct active plugins
-        let pluginsData = APPLICATION_CONTEXT.setup.plugins;
+        let pluginsData = APPLICATION_CONTEXT.config.plugins;
         let plugins = PLUGINS;
         let includeEvaluator = includedPluginsList ?
             p => includedPluginsList.includes(p) :
@@ -166,12 +166,12 @@
             }
         }
 
-        let bypass = APPLICATION_CONTEXT.setup.params.bypassCookies;
-        if (!withCookies) APPLICATION_CONTEXT.setup.params.bypassCookies = true;
+        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
+        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
 
         let exported = APPLICATION_CONTEXT.layersAvailable && VIEWER.bridge
-            ? JSON.stringify(APPLICATION_CONTEXT.setup, VIEWER.bridge.webGLEngine.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.setup);
+            ? JSON.stringify(APPLICATION_CONTEXT.config, VIEWER.bridge.webGLEngine.jsonReplacer)
+            : JSON.stringify(APPLICATION_CONTEXT.config);
 
         let form = `
       <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
@@ -184,7 +184,7 @@
         const form = document.getElementById("redirect");
         let node;`;
 
-        APPLICATION_CONTEXT.setup.params.bypassCookies = bypass;
+        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
 
         VIEWER.raiseEvent('export-data', {
             setSerializedData: (uniqueKey, data) => {
@@ -204,7 +204,7 @@ form.submit();<\/script>`;
     //Attempt to prevent re-submit, but now it fires two messages - POST resubmit and content..
     // function preventDirtyClose(e) {
     //     e.preventDefault();
-    //     if (APPLICATION_CONTEXT.setup.dirty) return "You will lose your workspace if you leave now: are you sure?";
+    //     if (APPLICATION_CONTEXT.config.params.dirty) return "You will lose your workspace if you leave now: are you sure?";
     //
     //     RefreshForm.submit();
     //     return;
@@ -250,7 +250,7 @@ form.submit();<\/script>`;
 
         updateTheme: function() {
             let theme = APPLICATION_CONTEXT.getOption("theme");
-            if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultParams.theme;
+            if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultConfig.theme;
             if (theme === "dark_dimmed") {
                 document.documentElement.dataset['darkTheme'] = "dark_dimmed";
                 document.documentElement.dataset['colorMode'] = "dark";
@@ -277,21 +277,21 @@ form.submit();<\/script>`;
         copyUrlToClipboard: function () {
             let baseUrl = APPLICATION_CONTEXT.rootPath + "/redirect.php#";
 
-            let oldViewport = APPLICATION_CONTEXT.setup.params.viewport;
-            APPLICATION_CONTEXT.setup.params.viewport = {
+            let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
+            APPLICATION_CONTEXT.config.params.viewport = {
                 zoomLevel: VIEWER.viewport.getZoom(),
                 point: VIEWER.viewport.getCenter()
             };
 
-            let bypass = APPLICATION_CONTEXT.setup.params.bypassCookies;
-            APPLICATION_CONTEXT.setup.params.bypassCookies = true;
+            let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
+            APPLICATION_CONTEXT.config.params.bypassCookies = true;
 
             let postData = APPLICATION_CONTEXT.layersAvailable && VIEWER.bridge
-                ? JSON.stringify(APPLICATION_CONTEXT.setup, VIEWER.bridge.webGLEngine.jsonReplacer)
-                : JSON.stringify(APPLICATION_CONTEXT.setup);
+                ? JSON.stringify(APPLICATION_CONTEXT.config, VIEWER.bridge.webGLEngine.jsonReplacer)
+                : JSON.stringify(APPLICATION_CONTEXT.config);
 
-            APPLICATION_CONTEXT.setup.params.viewport = oldViewport;
-            APPLICATION_CONTEXT.setup.params.bypassCookies = bypass;
+            APPLICATION_CONTEXT.config.params.viewport = oldViewport;
+            APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
 
             let $temp = $("<input>");
             $("body").append($temp);
@@ -302,8 +302,8 @@ form.submit();<\/script>`;
         },
 
         export: function () {
-            let oldViewport = APPLICATION_CONTEXT.setup.params.viewport;
-            APPLICATION_CONTEXT.setup.params.viewport = {
+            let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
+            APPLICATION_CONTEXT.config.params.viewport = {
                 zoomLevel: VIEWER.viewport.getZoom(),
                 point: VIEWER.viewport.getCenter()
             };
@@ -314,9 +314,9 @@ form.submit();<\/script>`;
 <div>Errors (if any): <pre>${JSON.stringify(console.savedLogs)}</pre></div>
 ${constructExportVisualisationForm()}
 </body></html>`;
-            APPLICATION_CONTEXT.setup.params.viewport = oldViewport;
+            APPLICATION_CONTEXT.config.params.viewport = oldViewport;
             UTILITIES.downloadAsFile("export.html", doc);
-            APPLICATION_CONTEXT.setup.dirty = false;
+            APPLICATION_CONTEXT.config.dirty = false;
         },
 
         clone: function () {
@@ -335,7 +335,7 @@ ${constructExportVisualisationForm()}
                 constructExportVisualisationForm(), `width=${x},height=${y}`);
         },
 
-        setDirty: () => {APPLICATION_CONTEXT.setup.dirty = true;},
+        setDirty: () => {APPLICATION_CONTEXT.config.dirty = true;},
 
         /**
          * Refresh current page with all plugins and their data if export API used
@@ -343,8 +343,8 @@ ${constructExportVisualisationForm()}
          * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
          */
         refreshPage: function(formData="", includedPluginsList=undefined) {
-            if (APPLICATION_CONTEXT.setup.dirty) {
-                Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.setup.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
+            if (APPLICATION_CONTEXT.config.dirty) {
+                Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.config.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
                     15000, Dialogs.MSG_WARN);
                 return;
             }

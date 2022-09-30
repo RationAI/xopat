@@ -101,7 +101,7 @@ approaches - first, get familiar with:
     - events invoked on the VIEWER
  - `window.APPLICATION_CONTEXT`
     - note that this interface is meant for inner logic and you probably do not need to access it
-    - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.setup`
+    - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`
     - to access the viewer parameters, use `[set|get]Option(...)` method
  - `window.USER_INTERFACE`
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
