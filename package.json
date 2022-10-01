@@ -33,6 +33,7 @@
     "cypress": "^10.9.0",
     "grunt": "^1.4.1",
     "grunt-git-describe": "^2.4.4",
-    "cypress-plugin-snapshots": "^1.4.4"
+    "cypress-plugin-snapshots": "^1.4.4",
+    "cypress-wait-until": "^1.7.2"
   }
 }

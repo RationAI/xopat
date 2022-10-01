@@ -1,7 +1,8 @@
-import {config, shaders} from "../../support/configurations"
+import {config, shaders, withBrowser} from "../../support/configurations"
+import {basicUi} from "../../support/routines"
+import {default as utils} from "../../support/utilities"
 
-
-describe('Third party pyramidal image', () => {
+describe('Third party pyramidal image', withBrowser, () => {
     it('Background only: custom protocol', () => {
         cy.launch({
             params: config.params({viewport: config.viewport('book', 0)}),
@@ -9,13 +10,13 @@ describe('Third party pyramidal image', () => {
             background: config.background({protocol: "data"}, 0)
         })
 
-        cy.wait(5000)
-        cy.canvas()
-        //.toMatchImageSnapshot()
+        utils.waitForViewer();
+        basicUi.testBackgroundUI();
+        cy.canvas().toMatchImageSnapshot();
     })
 })
 
-describe('Third party pyramidal image', () => {
+describe('Third party pyramidal image', withBrowser, () => {
     it('Full rendering options: only one layer available.', () => {
         cy.launch({
             params: config.params({viewport: config.viewport('book', 0)}),
