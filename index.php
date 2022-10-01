@@ -12,10 +12,6 @@ function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
-function isFlagInProtocols($flag) {
-    return (hasKey($_GET, $flag) ? $_GET[$flag] : (hasKey($_POST, $flag) ? $_POST[$flag] : false));
-}
-
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
         require_once(PROJECT_ROOT . "/error.php");
@@ -126,14 +122,22 @@ if ($layerVisible) {
  */
 $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 
-foreach ($PLUGINS as $_ => $plugin) {
+foreach ($PLUGINS as $key => $plugin) {
+    if (!$plugin->id) {
+        $errors_print .= "console.warn('Plugin ?? removed: probably include.json misconfiguration.');";
+        unset($PLUGINS[$key]);
+    }
+
     if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
         $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
     }
 
     $hasParams = isset($parsedParams->plugins->{$plugin->id});
     $plugin->loaded = !isset($plugin->error) &&
-        (isset($parsedParams->plugins->{$plugin->id}) || in_array($plugin->id, $pluginsInCookies));
+        (isset($parsedParams->plugins->{$plugin->id})
+            || (isset($plugin->permaLoad) && $plugin->permaLoad)
+            || in_array($plugin->id, $pluginsInCookies)
+        );
 
     //make sure all modules required by plugins are also loaded
     if ($plugin->loaded) {
@@ -305,18 +309,12 @@ foreach ($MODULES as $_ => $mod) {
                 &emsp;
             </span>
 
-            <!--TODO export also these values? -->
-            <?php
-
-
-
-            if ($singleBgImage) {
-                echo <<<EOF
-            <label for="global-tissue-visibility"> Tissue &nbsp;</label>
-            <input type="checkbox" style="align-self: center;" checked class="form-control" id="global-tissue-visibility"
-                   onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-EOF;
-            }?>
+            <span id="global-tissue-visibility">
+                <label>
+                    Tissue &nbsp;<input type="checkbox" style="align-self: center;" checked class="form-control" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                </label>
+                &emsp;
+            </span>
 
             <span class="material-icons btn-pointer ml-2" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
         </div><!--end of general controls-->
@@ -387,6 +385,13 @@ EOF;
 
 
 (function (window) {
+    /*---------------------------------------------------------*/
+    /*---------- APPLICATION_CONTEXT and viewer data ----------*/
+    /*---------------------------------------------------------*/
+
+    const PLUGINS = <?php echo json_encode((object)$PLUGINS)?>;
+    const MODULES = <?php echo json_encode((object)$MODULES) ?>;
+
     const setup = <?php echo $visualisation ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = {
@@ -495,6 +500,22 @@ EOF;
             else if (value === "true") value = true;
             this.config.params[name] = value;
         },
+        pluginIds() {
+            return Object.keys(PLUGINS);
+        },
+        activePluginIds() {
+            const result = [];
+
+            for (let pid in PLUGINS) {
+                if (!PLUGINS.hasOwnProperty(pid)) continue;
+                const plugin = PLUGINS[pid];
+
+                if (!plugin.error && plugin.instance && (plugin.loaded || plugin.permaLoad)) {
+                    result.push(pid);
+                }
+            }
+            return result;
+        },
         _setCookie(key, value) {
             if (!this.config.params.bypassCookies) {
                 cookies.set(key, value);
@@ -509,9 +530,16 @@ EOF;
             }
             return undefined;
         },
-        //todo remove?
         _dangerouslyAccessConfig() {
+            //remove in the future?
             return setup;
+        },
+        _dangerouslyAccessPlugin(id) {
+            //remove in the future?
+            return PLUGINS[id];
+        },
+        __cache: {
+            dirty: false
         }
     };
 
@@ -523,13 +551,6 @@ EOF;
         }
     };
 
-    /**
-     * window.PLUGINS
-     * object that contains metadata, paths for plugins,
-     * holds instances of plugins and is not exported
-     */
-    window.PLUGINS = <?php echo json_encode((object)$PLUGINS)?>;
-
     //preventive error message, that will be discarded after the full initialization
     window.onerror = function (message, file, line, col, error) {
         let ErrUI = USER_INTERFACE.Errors;
@@ -538,20 +559,6 @@ EOF;
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
         return false;
     };
-
-})(window);
-    </script>
-
-    <!-- UI -->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
-
-    <!-- Basic Tutorial -->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/tutorials.js"></script>
-
-    <!-- Basic Initialization -->
-    <script type="text/javascript">
-
-(function (window) {
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -593,22 +600,13 @@ EOF;
         //todo make this as a last handler
         Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
     });
-})(window);
-    </script>
 
-    <!--Event listeners, Utilities, Exporting...-->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
+    /*---------------------------------------------------------*/
+    /*----------------- MODULE/PLUGIN core API ----------------*/
+    /*---------------------------------------------------------*/
 
-    <!--Visualization setup-->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/layers.js"></script>
-
-    <!--Plugins Loading-->
-    <script type="text/javascript">
-
-(function (window) {
     var registeredPlugins = [];
     var LOADING_PLUGIN = false;
-    const MODULES = <?php echo json_encode((object)$MODULES) ?>;
 
     function showPluginError(id, e) {
         if (!e) {
@@ -630,7 +628,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
     function cleanUpPlugin(id, e="Unknown error") {
         delete PLUGINS[id].instance;
-        delete window[id];
         PLUGINS[id].loaded = false;
         PLUGINS[id].error = e;
 
@@ -656,6 +653,11 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 parameters = {};
                 APPLICATION_CONTEXT.config.plugins[id] = parameters;
             }
+            PluginClass.prototype.staticData = function(metaKey) {
+                if (metaKey === "instance") return undefined;
+                return PLUGINS[id]?.[metaKey];
+            };
+
             plugin = new PluginClass(id, parameters);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
@@ -664,30 +666,31 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         }
 
         plugin.id = id; //silently set
-        if (window[plugin.id]) {
-            console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, window[id]);
+
+        let possiblyExisting = PLUGINS[id].instance;
+        if (possiblyExisting) {
+            console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
             Dialogs.show(`Plugin ${plugin.name} could not be loaded: please, contact administrator.`, 7000, Dialogs.MSG_WARN);
             cleanUpPlugin(plugin.id);
             return;
         }
 
         PLUGINS[id].instance = plugin;
-        window[id] = plugin;
-        //todo docs
         plugin.setOption = function(key, value, cookies=true) {
             //todo encode/sanitize?
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
             APPLICATION_CONTEXT.config.plugins[id][key] = value;
         }
         plugin.getOption = function(key, defaultValue=undefined) {
-            //todo encode/sanitize?
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
             return APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
         }
+
+        //todo better API with data?
         plugin.getData = function(key) {
-            return APPLICATION_CONTEXT.postData[`${key}_${id}`];
+            return APPLICATION_CONTEXT.postData[key];
         }
         showPluginError(id, null);
         return plugin;
@@ -750,6 +753,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         script.src = properties.src;
         container.append(script);
         return true;
+    };
+
+    /**
+     * Get plugin.
+     * @param id plugin id, should be unique in the system and match the id value in includes.json
+     */
+    window.plugin = function(id) {
+        return PLUGINS[id]?.instance;
     };
 
     /**
@@ -830,114 +841,117 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         chainLoadModules(module.requires || [], 0, loadSelf);
     }
 
-    /**
-     * Load modules at runtime
-     * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
-     * @param onload function to call on successful finish
-     * @param ids all modules id to be loaded (rest parameter syntax)
-     */
-    UTILITIES.loadModules = function(onload=_=>{}, ...ids) {
-        LOADING_PLUGIN = false;
-        chainLoadModules(ids, 0, onload);
-    };
-
-    /**
-     * Load a plugin at runtime
-     * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
-     * @param id plugin to load
-     * @param onload function to call on successful finish
-     */
-    UTILITIES.loadPlugin = function(id, onload=_=>{}) {
-        let meta = PLUGINS[id];
-        if (!meta || meta.loaded || meta.instance) return;
-        if (window.hasOwnProperty(id)) {
-            Dialogs.show("Could not load the plugin.", 5000, Dialogs.MSG_ERR);
-            return;
-        }
-        if (!Array.isArray(meta.includes)) {
-            Dialogs.show("The selected plugin is corrupted.", 5000, Dialogs.MSG_ERR);
-            return;
-        }
-
-        let successLoaded = function() {
+    window.UTILITIES = {
+        /**
+         * Load modules at runtime
+         * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+         * @param onload function to call on successful finish
+         * @param ids all modules id to be loaded (rest parameter syntax)
+         */
+        loadModules: function(onload=_=>{}, ...ids) {
             LOADING_PLUGIN = false;
+            chainLoadModules(ids, 0, onload);
+        },
 
-            //loaded after page load
-            if (!initializePlugin(PLUGINS[id].instance)) {
-                Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> could not be loaded.`, 2500, Dialogs.MSG_WARN);
+        /**
+         * Load a plugin at runtime
+         * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+         * @param id plugin to load
+         * @param onload function to call on successful finish
+         */
+        loadPlugin: function(id, onload=_=>{}) {
+            let meta = PLUGINS[id];
+            if (!meta || meta.loaded || meta.instance) return;
+            if (window.hasOwnProperty(id)) {
+                Dialogs.show("Could not load the plugin.", 5000, Dialogs.MSG_ERR);
                 return;
             }
-            Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
-
-            if (meta.styleSheet) {  //load css if necessary
-                $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+            if (!Array.isArray(meta.includes)) {
+                Dialogs.show("The selected plugin is corrupted.", 5000, Dialogs.MSG_ERR);
+                return;
             }
-            meta.loaded = true;
-            if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                let plugins = [];
-                for (let p in PLUGINS) {
-                    if (PLUGINS[p].loaded) plugins.push(p);
+
+            let successLoaded = function() {
+                LOADING_PLUGIN = false;
+
+                //loaded after page load
+                if (!initializePlugin(PLUGINS[id].instance)) {
+                    Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> could not be loaded.`, 2500, Dialogs.MSG_WARN);
+                    return;
                 }
-                APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
+                Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
+
+                if (meta.styleSheet) {  //load css if necessary
+                    $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+                }
+                meta.loaded = true;
+                if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
+                    let plugins = [];
+                    for (let p in PLUGINS) {
+                        if (PLUGINS[p].loaded) plugins.push(p);
+                    }
+                    APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
+                }
+                onload();
+            };
+            LOADING_PLUGIN = true;
+            chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
+        },
+
+        /**
+         * Check whether component is loaded
+         * @param {string} id component id
+         * @param {boolean} isPlugin true if check for plugins
+         */
+        isLoaded: function (id, isPlugin=false) {
+            if (isPlugin) {
+                let plugin = PLUGINS[id];
+                return plugin.loaded && plugin.instance;
             }
-            onload();
-        };
-        LOADING_PLUGIN = true;
-        chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
-    };
+            return MODULES[id].loaded;
+        },
 
-    /**
-     * Check whether component is loaded
-     * @param {string} id component id
-     * @param {boolean} isPlugin true if check for plugins
-     */
-    UTILITIES.isLoaded = function (id, isPlugin=false) {
-        if (isPlugin) {
-            let plugin = PLUGINS[id];
-            return plugin.loaded && plugin.instance;
-        }
-        return MODULES[id].loaded;
-    };
-
-    /**
-     * Change background image if not in stacked mode
-     * @param bgIndex
-     */
-    UTILITIES.swapBackgroundImages = function (bgIndex) {
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
-            return;
-        }
-        const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
-        if (activeBackground === bgIndex) return;
-        const image = APPLICATION_CONTEXT.config.background[bgIndex],
-            imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
-            sourceUrlMaker = new Function("path,data", "return " +
-            (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-
-        let prevImage = VIEWER.world.getItemAt(0);
-        let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
-        VIEWER.addTiledImage({
-            tileSource: url,
-            index: 0,
-            opacity: 1,
-            replace: true,
-            success: function (e) {
-                APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-                let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
-                VIEWER.raiseEvent('background-image-swap', {
-                    backgroundImageUrl: url,
-                    prevBackgroundSetup: previousBackgroundSetup,
-                    backgroundSetup: image,
-                    previousTiledImage: prevImage,
-                    tiledImage: e.item,
-                });
-                let container = document.getElementById('tissue-preview-container');
-                container.children[activeBackground].classList.remove('selected');
-                container.children[bgIndex].classList.add('selected');
+        /**
+         * Change background image if not in stacked mode
+         * @param bgIndex
+         */
+        swapBackgroundImages: function (bgIndex) {
+            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+                console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
+                return;
             }
-        });
+            const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            if (activeBackground === bgIndex) return;
+            const image = APPLICATION_CONTEXT.config.background[bgIndex],
+                imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
+                sourceUrlMaker = new Function("path,data", "return " +
+                    (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+
+            let prevImage = VIEWER.world.getItemAt(0);
+            let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+            VIEWER.addTiledImage({
+                tileSource: url,
+                index: 0,
+                opacity: 1,
+                replace: true,
+                success: function (e) {
+                    APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+                    let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
+                    VIEWER.raiseEvent('background-image-swap', {
+                        backgroundImageUrl: url,
+                        prevBackgroundSetup: previousBackgroundSetup,
+                        backgroundSetup: image,
+                        previousTiledImage: prevImage,
+                        tiledImage: e.item,
+                    });
+                    let container = document.getElementById('tissue-preview-container');
+                    container.children[activeBackground].classList.remove('selected');
+                    container.children[bgIndex].classList.add('selected');
+                }
+            });
+        }
     };
+
 
     let isFirstOpen = true;
     window.VIEWER.addHandler('open', function () {
@@ -982,6 +996,8 @@ max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(N
             }
             imageOpts.push("</div></div></div>");
             imageRenderingOptions.html(imageOpts.join());
+
+            $("#global-tissue-visibility").css("display", "none");
         } else if (confBackground.length > 1) {
             let html = "", activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
             for (let idx = 0; idx < confBackground.length; idx++ ) {
@@ -1000,11 +1016,12 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             //use switching panel
             USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
 <div id="tissue-preview-container">${html}</div>`);
-            i++; //rendering group always second
+            i++; //rendering group always x+1th
+            $("#global-tissue-visibility").css("display", "none");
         } else {
             i++; //rendering group always second
+            $("#global-tissue-visibility").css("display", "initial");
         }
-
 
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer
@@ -1131,6 +1148,26 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             window.VIEWER.open(toOpen);
         }
     }
+
+})(window);
+    </script>
+
+    <!-- UI -->
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
+
+    <!-- Basic Tutorial -->
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/tutorials.js"></script>
+
+    <!--Event listeners, Utilities, Exporting...-->
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
+
+    <!--Visualization setup-->
+    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/layers.js"></script>
+
+    <!--Plugins Loading-->
+    <script type="text/javascript">
+
+(function (window) {
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of UI -----------------------*/

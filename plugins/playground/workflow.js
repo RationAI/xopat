@@ -1,7 +1,8 @@
+
 Playground.WorkFlow = class {
 
     constructor(context, selfName) {
-        this.selfCall = `window.opener.${context.id}.${selfName}`;
+        this.selfCall = `window.opener.plugin('${context.id}').${selfName}`;
         this.context = context;
         this.windowId = "playground-workflow";
         this._root = {children: []};
@@ -26,9 +27,9 @@ Playground.WorkFlow = class {
         <span class='f3-light'>Workflow</span> <span class="material-icons btn-pointer" id="enable-disable-playground" title="Enable/disable" style="float: right;" data-ref="on" onclick="
         let self = $(this);
         if (self.attr('data-ref') === 'on'){
-            ${this.id}.setEnabled(false); self.css('color', ''); self.attr('data-ref', 'off');
+            ${this.context.PLUGIN}.setEnabled(false); self.css('color', ''); self.attr('data-ref', 'off');
         } else {
-            ${this.id}.setEnabled(true); self.css('color', 'var(--color-bg-danger-inverse)'); self.attr('data-ref', 'on');
+            ${this.context.PLUGIN}.setEnabled(true); self.css('color', 'var(--color-bg-danger-inverse)'); self.attr('data-ref', 'on');
         }"> track_changes</span>`,
             `<div id="content">${this.refresh()}</div>
 <script>

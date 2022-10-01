@@ -21,19 +21,19 @@ A `JSON` file is required that defines the plugin and it's inclusion:
     "modules": []
 }
 ````
+
+Note that this is meant mainly for a viewer maintainer to set-up the plugin default, static configuration. 
 - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
 - `name` is the plugin name 
 - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
+- `author` is the plugin author
+- `icon` is the plugin icon
+- `version` is the plugin version
 - `includes` is a list of JavaScript files relative to the plugin folder to include 
 - `modules` array of id's of required modules (libraries)
     - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
     instead of creating a module for it
-
-> Everything you define in this file is accessible through `PLUGINS` object interface, so it is a good place to also define your own
->proprietary configuration options.
-
-You can than find the plugin instance stored in `PLUGINS["plugin_id"].instance`. `PLUGINS["plugin_id"]` mirrors
-the plugin `include.json` content with additional data (such as `loaded` flag).
+- `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
 
 ### Must do's
 - A plugin must register itself using the name of its parent class. For more information see below.
@@ -41,25 +41,24 @@ the plugin `include.json` content with additional data (such as `loaded` flag).
 - Any attached HTML to the DOM must be attached by the provided API (see `USER_INTERFACE` global variable)
 - A plugin must have its id in a member variable named after `id` from `includes.json`. This is done automatically after the plugin instantiation, just make sure you
 don't use `id` for anything else
-- The plugin main class should be visible from the global scope. However, try not to pollute the global namespace 
-and define other classes in closures or as a properties of the parent class.
-- The plugin main class should not define two functions `getOption()` and `setOption()` - these are
-set up automatically and available when `YourPLuginClass::pluginReady()` gets called
+- The plugin main class should not define any automatically-defined API functions. See **Interface ``[EXISTS] YourPLuginClass::``** below.
 
 ### Interface
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 
 be able to work flawlessly.
 
+#### `plugin(id)`
+Retrieve an instantiated plugin by its id.
+
 #### `addPlugin(id, PluginRootClass)`
 This (global) function will register the plugin and initialize it. It will make sure that
 - an instance of `PluginRootClass` is created
 - `id` member variable is set
-- global space contains the plugin instance in a variable named after `plugin.id`
+- the API is correctly configured
     - this is mainly for the plugin itself, in case you want to use `on...=""` HTML attributes where you need to access the plugin from the global scope
     - you can do things like 
-      > let html = \`\<tag onclick="${this.id}.callMyPluginFunction(...)"\>\`;
-- `PLUGINS[plugin.id].instance` contains the plugin instance
-- in case `pluginReady` is defined, it will be invoked when the visualisation is ready
+      > let html = \`\<tag onclick="plugin('${this.id}').callMyPluginFunction(...)"\>\`;
+- in case `pluginReady` function within the plugin main class is defined, it will be invoked when the visualisation is ready
 
 #### `YourPLuginClass::constructor(id, params)`
 The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
@@ -68,6 +67,7 @@ exports. Note that the object should not be used to store big amounts of data, f
 event `export-data` together with `YourPLuginClass::getData()` should be used.
 
 #### `YourPLuginClass::pluginReady()`
+You can define this function, and it will get invoked once the plugin is fully ready.
 Because of dynamic loading and behaviour, it is necessary that you do most initialization
 in this function instead of the constructor, especially if
  - you access **the global API**
@@ -82,15 +82,18 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
  
 #### \[EXISTS\] `YourPLuginClass::getOption(key, defaultValue=undefined)`
-Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
-read from the `params` object given to the constructor, unless cookie cache overrides it.
+Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
+read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
 
 #### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
-The value itself is stored in the `params` object given to the constructor.
+The value itself is stored in the `params` object given to the constructor. For cookie support, prefer this method.
 
 #### \[EXISTS\] `YourPLuginClass::getData(key)`
 Return data exported with the viewer if available.
+
+#### \[EXISTS\] `YourPLuginClass::staticData(key)`
+Return data from ``include.json`` together with other data such as the folder the plugin lives in.
 
 ### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own

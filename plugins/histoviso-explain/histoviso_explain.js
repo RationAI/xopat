@@ -7,6 +7,7 @@ class HistovisoExplain  {
         this.params = params;
         this.current_method = undefined;
         this.current_model = undefined;
+        this.PLUGIN = `plugin('${id}')`;
     }
 
     //delayed after OSD initialization is finished...
@@ -14,7 +15,7 @@ class HistovisoExplain  {
         const _this = this;
         USER_INTERFACE.MainMenu.append("Neural Network (NN) inspector",
             `<span class="material-icons btn-pointer" id="show-histoviso-board" title="Show board" 
-style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHistoryWindow();">assignment</span>`,
+style="float: right;" data-ref="on" onclick="${this.PLUGIN}.context.history.openHistoryWindow();">assignment</span>`,
             "Waiting for the server...", "feature-maps", this.id);
 
         this.context = OSDAnnotations.instance();
@@ -54,11 +55,11 @@ style="float: right;" data-ref="on" onclick="${this.id}.context.history.openHist
         // if (APPLICATION_CONTEXT.config.background.length > 1) {
         targetSetup = `<br><br>
 Use Alt+Left Mouse button to draw region of interest.<br>
-<button class="btn" onclick="${this.id}.setMode(this, this.nextElementSibling , 'inspect');">Inspect</button>
-<button class="btn" onclick="${this.id}.setMode(this, this.previousElementSibling, 'measure');">Measure</button>
+<button class="btn" onclick="${this.PLUGIN}.setMode(this, this.nextElementSibling , 'inspect');">Inspect</button>
+<button class="btn" onclick="${this.PLUGIN}.setMode(this, this.previousElementSibling, 'measure');">Measure</button>
 
 <br>Fetching data from &nbsp;<select style="max-width: 240px;" class="form-control" 
-onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(this.value);'>`;
+onchange='${this.PLUGIN}.targetImageSourceName = ${this.PLUGIN}.getNameFromImagePath(this.value);'>`;
         var name;
         for (let i = APPLICATION_CONTEXT.config.background.length-1; i >= 0; i--) {
             name = this.getNameFromImagePath(APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.config.background[i].dataReference]);
@@ -80,10 +81,10 @@ onchange='${this.id}.targetImageSourceName = ${this.id}.getNameFromImagePath(thi
         //controlPanelId is incomming parameter, defines where to add HTML
         USER_INTERFACE.MainMenu.replaceExtended("Neural Network (NN) inspector", "",
             `${notification}<div id="method-setup"></div><div id="model-setup">Loading...</div>
-<div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.id}.reSendRequest();">Re-evaluate selected</button>
-<button class="btn" onclick="${this.id}.reRenderSelectedObject();">Repaint selected</button></div>`,
+<div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.PLUGIN}.reSendRequest();">Re-evaluate selected</button>
+<button class="btn" onclick="${this.PLUGIN}.reRenderSelectedObject();">Repaint selected</button></div>`,
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
-onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
+onchange="${this.PLUGIN}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
         USER_INTERFACE.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
     }
@@ -120,7 +121,7 @@ onchange="${this.id}.viaGL.switchVisualisation($(this).val())"></select><div id=
         }
 
         $("#method-setup").html(`<h3 style="width: 80px;" class="d-inline-block">Method</h3>
-<select id="method-selection" class="form-control" onchange="${this.id}.updateMethodProperties($(this).val());" 
+<select id="method-selection" class="form-control" onchange="${this.PLUGIN}.updateMethodProperties($(this).val());" 
 name="method-selection">${options.join('')}</select><div id="method-specifier"></div>`);
         this.updateMethodProperties(first);
     }
@@ -199,7 +200,7 @@ name="method-selection">${options.join('')}</select><div id="method-specifier"><
         }
 
         container.html(`<br><span class="d-inline-block text-bold ml-2" style="width: 70px;">Layer </span>
-<select id="layer-selection" style="font-size: smaller;" name="layer-selection" class="form-control" onchange="${this.id}.updateFeatureMaps('${model}', $(this).val())">
+<select id="layer-selection" style="font-size: smaller;" name="layer-selection" class="form-control" onchange="${this.PLUGIN}.updateFeatureMaps('${model}', $(this).val())">
 ${options.join('')}</select><div id="feature-map-specifier"></div>`);
         //cascade
         if (first) {

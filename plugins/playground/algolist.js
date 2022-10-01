@@ -1,9 +1,9 @@
 Playground.AlgorithmMenu = class {
 
     constructor(context, selfName) {
-        this.refreshFormsCall = `window.opener.${context.id}.refreshMenuForms`;
+        this.refreshFormsCall = `window.opener.plugin('${context.id}').refreshMenuForms`;
         this.windowId = "pp_algo_list";
-        this.algoChangedCall = `window.opener.${context.id}.switchAlgorithm`;
+        this.algoChangedCall = `window.opener.plugin('${context.id}').switchAlgorithm`;
         this.context = context;
     }
 

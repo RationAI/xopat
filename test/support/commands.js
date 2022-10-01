@@ -62,6 +62,6 @@ Cypress.Commands.addAll({
         })
     },
     canvas() {
-        return cy.get(".openseadragon-canvas > canvas");
+        return cy.get(".openseadragon-canvas>canvas").first()
     }
 });

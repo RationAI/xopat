@@ -5,7 +5,7 @@ AnnotationsGUI.AdvancedControls = class {
 
     constructor(selfName, context) {
         this.context = context;
-        this.self = context.id + '.' + selfName;
+        this.self = `plugin('${context.id}').${selfName}`;
         USER_INTERFACE.AdvancedMenu.setMenu(this.context.id, "annotations-advanced", "Advanced Upload",
             `<div id="annotations-advanced-content" class="width-full"></div>`);
         this.loadDefaultPage();

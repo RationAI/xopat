@@ -4,5 +4,7 @@
     "includes" : [
         "profile.js"
     ],
-    "modules": ["snapshots"]
+    "version": "1.0.0",
+    "modules": ["snapshots"],
+    "permaLoad": false
 }

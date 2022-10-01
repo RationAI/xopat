@@ -1,5 +1,6 @@
 (function (window) {
     window.APPLICATION_CONTEXT.disableRendering = function () {
+        if (!VIEWER.bridge) return;
         const renderingIndex = VIEWER.bridge.getWorldIndex();
         if (renderingIndex || renderingIndex == 0) {
             VIEWER.bridge.removeLayer(renderingIndex);

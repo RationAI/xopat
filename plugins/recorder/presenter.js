@@ -2,7 +2,9 @@ class Presenter {
     constructor(id, params) {
         this.id = id;
         this._toolsMenuId = "presenter-tools-menu";
+        this.PLUGIN = `plugin('${id}')`;
 
+        //todo document option, get via getOption instead
         this.playOnEnter = params.playEnterDelay ?? -1;
     }
 
@@ -10,36 +12,36 @@ class Presenter {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
 
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.id}.import(event);" />
-    <span onclick="${this.id}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
+    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.import(event);" />
+    <span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
 ${UIComponents.Elements.checkBox({
             label: "Capture visualization",
-            onchange: this.id + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
+            onchange: this.PLUGIN + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesVisualization
         })}&emsp;
 ${UIComponents.Elements.checkBox({
             label: "Capture Viewport",
-            onchange: this.id + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
+            onchange: this.PLUGIN + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesViewport
         })}<br><br>
-<button class='btn btn-pointer' onclick="${this.id}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn btn-pointer' onclick="${this.id}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
-<button class='btn btn-pointer' onclick="${this.id}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
-<button class='btn btn-pointer' onclick="${this.id}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' onclick="${this.id}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
+<button class='btn btn-pointer' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
+<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
+<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
 <br><br>`,"auto-recorder", this.id);
 
         USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
             `<div class="d-flex">
-<span class="material-icons timeline-play-small btn-pointer" onclick="${this.id}.addRecord();">radio_button_checked</span>
+<span class="material-icons timeline-play-small btn-pointer" onclick="${this.PLUGIN}.addRecord();">radio_button_checked</span>
 <div class='d-inline-block timeline-path'>
 <div class="d-inline-block"><span style="font-size: xx-small">Delay</span><br>
-<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.id}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
+<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.PLUGIN}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
 </div><div class="d-inline-block"><span style="font-size: xx-small">Duration</span><br>
-<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.id}.setValue('duration', parseFloat($(this).val()));"> s<br>
+<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.PLUGIN}.setValue('duration', parseFloat($(this).val()));"> s<br>
 </div>&emsp;<div class="d-inline-block"><span style="font-size: xx-small">Linear / Ease</span><br>
-<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.id}.setValue('transition', parseFloat($(this).val()));"> 
+<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.PLUGIN}.setValue('transition', parseFloat($(this).val()));"> 
 </div></div>
 <div id='playback-timeline' style="white-space: nowrap; overflow-x: auto; overflow-y: hidden; height: 48px" class="d-inline-block v-align-top position-relative flex-1 ml-3"></div>
 
@@ -161,7 +163,7 @@ ${UIComponents.Elements.checkBox({
         let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
             Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
 
-        this._container.append(`<span onclick="${this.id}.selectPoint(this);" style="
+        this._container.append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
 background: ${color};
 border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};

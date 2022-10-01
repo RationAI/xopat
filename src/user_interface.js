@@ -539,7 +539,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="", withSubmenu=true, container=true) {
                 //todo allow multiple main menus for plugin?
-                let plugin = PLUGINS[ownerPluginId];
+                let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(ownerPluginId);
                 if (!plugin || !ownerPluginId) return;
                 this._buildMenu(plugin, "__selfMenu", ownerPluginId, plugin.name, ownerPluginId, toolsMenuId, title, html,
                     icon, withSubmenu, container);
@@ -576,7 +576,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
                 const didOpenParent = this.openMenu(atPluginId, false);
 
-                let plugin = PLUGINS[atPluginId];
+                let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(atPluginId);
                 if (!plugin) return false;
                 let builder = plugin.__selfMenu;
                 if (builder) {
@@ -814,9 +814,13 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
             UIComponents.Components.SelectableImageRow,
             {multiselect: true, id: 'plug-list-content'});
 
-        for (let pid in PLUGINS) {
-            if (!PLUGINS.hasOwnProperty(pid)) continue;
-            let plugin = PLUGINS[pid];
+        for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+            //todo better approach?
+            let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
+
+            //permaLoad plugins are not available for interaction
+            if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad)) continue;
+
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
             let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;

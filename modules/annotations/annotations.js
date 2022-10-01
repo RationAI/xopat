@@ -3,6 +3,9 @@
  * @type {OSDAnnotations}
  *
  * @typedef {{x: number, y: number}} Point
+ *
+ * 	//TODO https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
+ *   // - blending ?
  */
 var OSDAnnotations = class extends OpenSeadragon.EventSource {
 

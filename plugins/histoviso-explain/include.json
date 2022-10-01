@@ -3,10 +3,12 @@
     "name": "Neural Network Inspector",
     "author": "Jirka Horák",
     "description": "TODO",
+    "version": "1.0.0",
     "icon": "",
     "includes" : [
         "histoviso_explain.js",
         "histoviso_explain_annotation_factory_extension.js"
     ],
-    "modules": ["annotations", "webgl"]
+    "modules": ["annotations", "webgl"],
+    "permaLoad": false
 }
