@@ -1,4 +1,4 @@
-OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
+window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
      * Singleton getter.
@@ -283,7 +283,7 @@ OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         const _this = this;
         VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
 
-        let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
+        let importedJson = this.getData("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));

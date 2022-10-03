@@ -4,7 +4,14 @@ Are basically plugins for plugins - available extensions and libraries.
 For the available API you can see README of plugins, but anything related to
 MUST DO's or plugin ID does not apply.
 
-
+The integration to the global scope, application etc. is left to the module itself.
+You should not pollute the global scope (`window`...) and follow the following:
+ - attach itself to a hierarchy of existing dependencies if you depend on them logically
+    - OSD snapshots and OSD plugins usually attach themselves to ``window.OpenSeadragon`` 'namespace'
+ - otherwise, add only few new elements to the ``window`` object (especially make sure these are visible, later 
+ modules and plugins will be included in `<script>` mode `module`)
+    - extend with helper classes your main class namespace
+    - expose only what's needed, possibly instantiate as singleton if the module should exist just once, such as annotations canvas
 
 ## `include.json`
 It's structure is similar but instead of `modules` here we can

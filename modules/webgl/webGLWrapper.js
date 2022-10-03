@@ -21,7 +21,7 @@
 *  }} Layer
 */
 
-class WebGLModule {
+window.WebGLModule = class {
     /**
      * @param {object} incomingOptions
      * @param {function} incomingOptions.htmlControlsId: "data-layer-options",
@@ -517,7 +517,7 @@ class WebGLModule {
     }
 
     _getDebugInfoPanel() {
-        return `<div id="test-${this.uniqueId}-webgl">
+        return `<div id="test-inner-${this.uniqueId}-webgl">
 <b>WebGL Processing I/O (debug mode)</b>
 <div id="test-${this.uniqueId}-webgl-log"></div>
 Input: <br><div style="border: 1px solid;display: inline-block; overflow: auto;" id='test-${this.uniqueId}-webgl-input'>No input.</div><br>

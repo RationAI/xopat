@@ -1,16 +1,24 @@
 export default {
-    heatmap: (dataIndex, name="Heatmap overlay", value="#12fbff", overrides={}, withControls={}) => ({
-        "name": name,
-        "type": "heatmap",
+    identity: (options={}, ...dataIndexes) => ({
+        "name": options.name || "Identity overlay",
+        "visible": 1,
+        "params": options.controls || {},
+        ...(options.overrides || {}),
+        "type": "identity",
+        "dataReferences": dataIndexes,
+    }),
+    heatmap: (options={}, ...dataIndexes) => ({
+        "name": options.name || "Heatmap overlay",
         "visible": 1,
         "params": {
             "color": {
                 "type": "color",
-                "default": value
+                "default": options.value || "#12fbff"
             },
-            ...withControls
+            ...(options.controls || {})
         },
-        ...overrides, /*todo generic constructor instead*/
-        "dataReferences": [dataIndex],
-    })
+        ...(options.overrides || {}), /*todo generic constructor instead*/
+        "type": "heatmap",
+        "dataReferences": dataIndexes,
+    }),
 }

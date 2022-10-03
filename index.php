@@ -953,8 +953,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
     };
 
 
-    let isFirstOpen = true;
+    let reopenCounter = -1;
     window.VIEWER.addHandler('open', function () {
+        reopenCounter += 1; //so that immediately the value is set
+
         let i = 0, selectedImageLayer = 0;
         let confData = APPLICATION_CONTEXT.config.data,
             confBackground = APPLICATION_CONTEXT.config.background;
@@ -1028,8 +1030,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
         VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
 
         //private API
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge) {
-            VIEWER.bridge._onload(i);
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge && VIEWER.bridge._onload(i)) {
             $("#global-opacity").css('display', 'initial');
         } else {
             $("#global-opacity").css('display', 'none');
@@ -1053,7 +1054,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             });
         }
 
-        if (isFirstOpen) {
+        if (reopenCounter === 0) {
             for (let modID in MODULES) {
                 const module = MODULES.hasOwnProperty(modID) && MODULES[modID];
                 if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
@@ -1096,12 +1097,13 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             }, 2000);";
             }
             ?>
-            VIEWER.raiseEvent('loaded');
         }
-        isFirstOpen = false;
+        VIEWER.raiseEvent('loaded', {reopenCounter: reopenCounter});
     });
 
+
     //todo support white background by rendering nothing - referenced time image must change :/
+    let _allowRecursionReload = true;
     APPLICATION_CONTEXT.prepareViewer = function (
         data,
         background,
@@ -1109,13 +1111,29 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
     ) {
         //todo loading animation?
 
-        // TODO more ingenious in the safety of setup
-        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig;
+        //todo handle invalid background image - in that case visualization tries to treat layers as undefined and the working layers are rendered as background!!!!
+
+        const renderingWithWebGL = visualizations?.length > 0;
+
+        if (renderingWithWebGL) {
+            if (_allowRecursionReload && !window.WebGLModule) {
+                _allowRecursionReload = false;
+                UTILITIES.loadModules(() => APPLICATION_CONTEXT.prepareViewer(data, background, visualizations), "webgl");
+                return;
+            }
+
+            if (!window.WebGLModule) {
+                console.error("Recursion prevented: webgl module failed to load!");
+                //allow to continue...
+            }
+        }
+
+        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         config.data = data;
         config.background = background;
         config.visualizations = visualizations;
 
-        if (!isFirstOpen) {
+        if (reopenCounter > 0) {
             APPLICATION_CONTEXT.disableRendering();
         } else {
             VIEWER.raiseEvent('before-canvas-reload');
@@ -1134,7 +1152,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.config.data[selectedImage.dataReference]));
         }
 
-        if (visualizations.length > 0) {
+        if (renderingWithWebGL) {
             APPLICATION_CONTEXT.prepareRendering();
             VIEWER.bridge.loadShaders(
                 APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),

@@ -7,7 +7,7 @@
  * 	//TODO https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
  *   // - blending ?
  */
-var OSDAnnotations = class extends OpenSeadragon.EventSource {
+window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Get instance of the annotations manger, a singleton
@@ -830,7 +830,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//restore presents if any
 		VIEWER.addHandler('export-data', e =>
 			e.setSerializedData("annotation_presets", JSON.stringify(_this.presets.toObject())));
-		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
+		let presetData = this.getData("annotation_presets");
 		let preset;
 		if (presetData !== undefined) {
 			try {
@@ -845,7 +845,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//restore objects if any
 		VIEWER.addHandler('export-data', e =>
 			e.setSerializedData("annotation-list", JSON.stringify(_this.toObject())));
-		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
+		let imageJson = this.getData("annotation-list");
 		if (imageJson) {
 			try {
 				this.loadObjects(JSON.parse(imageJson)).then(_ => {

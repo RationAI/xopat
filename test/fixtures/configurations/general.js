@@ -1,6 +1,16 @@
 export default {
     data: (key) => ({
         'book': ["https://libimages1.princeton.edu/loris/pudl0001%2F4609321%2Fs42%2F00000001.jp2/info.json"],
+        'tissue': [
+            'cypress/tissue.tif',
+            'cypress/annotation.tif',
+            'cypress/probability.tif',
+            'cypress/explainability.tif',
+        ],
+        'invalid': [
+            'some-bad!-data1',
+            'some-bad-data24&',
+        ]
     }[key]),
     background: (overrides, ...dataIndexes) => {
         return dataIndexes.map(i => ({

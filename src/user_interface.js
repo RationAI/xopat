@@ -609,7 +609,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 buildPluginsMenu(this);
                 buildSettingsMenu(this);
 
-                $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
+                $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" id="advanced-menu-close-button" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
                 $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,

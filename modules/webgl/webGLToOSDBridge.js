@@ -8,7 +8,7 @@
 * TODO always use cache approach, do not rely on events, just program two approaches - with and without cache (setting c2d directly after tile load)
 */
 
-OpenSeadragon.BridgeGL = class {
+window.OpenSeadragon.BridgeGL = class {
 
     constructor(openSeaDragonInstance, webGLEngine, cachedMode=true) {
         let _this  = this;

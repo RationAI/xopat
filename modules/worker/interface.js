@@ -1,4 +1,4 @@
-PathopusWorker = class extends OpenSeadragon.EventSource {
+window.PathopusWorker = class extends OpenSeadragon.EventSource {
 
     /**
      * Callback handlers, if not provided, an event is emitted instead

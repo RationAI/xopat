@@ -140,20 +140,21 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         seaGL._onload = function(firstLayerWorldIndex) {
             let layerWorldItem = VIEWER.world.getItemAt(firstLayerWorldIndex);
+            let activeVis = seaGL.visualization();
             if (layerWorldItem) {
-                let activeVis = seaGL.visualization();
                 if (!(activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
                     layerWorldItem.source.setFormat("png");
                 }
                 layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
             } else {
-                throw 'Should not have happened: failed source should load empty source in its place.';
+                //todo action page reload
+                Dialogs.show(`Failed to load overlays (Visualization <i>${activeVis.name}</i>) - it has been disabled.`, 8000, Dialogs.MSG_ERR);
+                return false;
             }
             seaGL.addLayer(firstLayerWorldIndex);
             seaGL.initAfterOpen();
+            return true;
         };
-
-
 
         function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
             let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);

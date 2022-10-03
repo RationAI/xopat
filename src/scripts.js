@@ -216,10 +216,6 @@ form.submit();<\/script>`;
     //     window.attachEvent('onbeforeunload', preventDirtyClose);
     // }
 
-    window.APPLICATION_CONTEXT.getData = function(key) {
-        return APPLICATION_CONTEXT.postData[key];
-    }
-
     window.UTILITIES.todayISO = function() {
         return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
     };
@@ -334,15 +330,14 @@ ${constructExportVisualisationForm()}
             constructExportVisualisationForm(), `width=${x},height=${y}`);
     };
 
-    //todo consistend dirty
     window.UTILITIES.setDirty = () => APPLICATION_CONTEXT.__cache.dirty = true;
 
     /**
      * Refresh current page with all plugins and their data if export API used
-     * @param formData additional HTML to add to the refresh FORM
+     * @param formInputHtml additional HTML to add to the refresh FORM
      * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
      */
-    window.UTILITIES.refreshPage = function(formData="", includedPluginsList=undefined) {
+    window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
             Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
                 15000, Dialogs.MSG_WARN);
@@ -354,7 +349,7 @@ ${constructExportVisualisationForm()}
         // } else if (window.detachEvent) {
         //     window.detachEvent('onbeforeunload', preventDirtyClose);
         // }
-        $("body").append(UTILITIES.getForm(formData, includedPluginsList, true));
+        $("body").append(UTILITIES.getForm(formInputHtml, includedPluginsList, true));
     };
 
     /**
