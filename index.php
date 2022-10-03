@@ -1179,7 +1179,9 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             }
             ?>
         }
-        VIEWER.raiseEvent('loaded', {reopenCounter: reopenCounter});
+
+        //todo this way of calling open event has in OpenSeadragon todo comment - check for API changes in future
+        VIEWER.raiseEvent('open', {source: VIEWER.world.getItemAt(0)?.source, reopenCounter: reopenCounter});
     }
 
     let _allowRecursionReload = true;
