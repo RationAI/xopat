@@ -34,13 +34,13 @@ to the handler function that might contain a lot of useful data.
 ### General Events
 
 #### `loaded` | e: undefined
-Fired when the viewer is ready.
+Fired when the viewer is ready. **Node that `open` event of OpenSeadragon is never fired, since we open tiles manually.**
 
 #### `export-data` | e: `{setSerializedData: function}`
 Submit your serialized data to the export event. The event gives you a callback to use to 
 save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value
 should be unique - a good idea is to make use of the plugin id value when creating the value.
-When loaded, you can access the data using `this.getData(myUniqueKey)` invoked on the main plugin object.
+When loaded, you can access the data using `APPLICATION_CONTEXT.getData(myUniqueKey)` invoked on the main plugin object.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
@@ -93,11 +93,13 @@ When a different image pyramid is loaded as a background, the viewer notifies yo
 measurements (aspect ratio, dimensions...) might have changed. It gives you the background setup objects from
 the viewer configuration and corresponding `TiledImage` instances.
 
-
 #### `visualisation-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.
+
+#### `close`
+Native OpenSeadragon event called when the canvas gets reloaded. Note that `open` gets never called, instead, subscribe to `loaded`.
 
 
 

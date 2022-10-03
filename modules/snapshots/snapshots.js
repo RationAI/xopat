@@ -283,7 +283,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         const _this = this;
         VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
 
-        let importedJson = this.getData("snapshot-keyframes");
+        let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));

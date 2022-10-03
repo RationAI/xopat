@@ -117,7 +117,6 @@ We will use [R] for required and [O] for optional parameters.
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom
     - [O]`scaleBar` - show scale, does not show if microns not defined, default `true`,
-    - [O]`microns` - real world units to pixels mapping, default `undefined`,
     - [O]`grayscale` - enforce grayscale transfer, default `false`,
     - [O]`tileCache` - use tile caching, default `true`,
     - [O]`permaLoadPlugins` - remember loaded plugins, default `true`,
@@ -128,6 +127,8 @@ We will use [R] for required and [O] for optional parameters.
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`microns` - real world units to pixels mapping, default `undefined`,
+    - [O]`name` - custom tissue name, default the tissue path
     - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`dataGroupIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:

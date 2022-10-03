@@ -94,9 +94,9 @@ if ($layerVisible) {
                 "You must specify <b>type</b> parameter.", print_r($layer, true));
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
-                //todo cached setup -> notify user rendering has changed....
+                //todo fixme cached setup -> notify user rendering has changed....
 
-                //todo not working!!!
+                //todo fixme not working!!!
                 $layer->cache = $cookieCache->{$layer->name};
             }
             if (!isset($layer->params)) {
@@ -316,7 +316,7 @@ foreach ($MODULES as $_ => $mod) {
                 &emsp;
             </span>
 
-            <span class="material-icons btn-pointer ml-2" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
+            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
         </div><!--end of general controls-->
 
         <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
@@ -333,6 +333,7 @@ foreach ($MODULES as $_ => $mod) {
     self.addClass('pressed');
  }
 "> push_pin </span>
+            <div id="tissue-title-header"></div>
         </div>
 
         <div id="panel-images" class="inner-panel mt-2"></div>
@@ -399,7 +400,6 @@ EOF;
         debugMode: false,
         webglDebugMode: false,
         scaleBar: true,
-        microns: undefined,
         viewport: undefined,
         activeBackgroundIndex: 0,
         activeVisualizationIndex: 0,
@@ -499,6 +499,12 @@ EOF;
             if (value === "false") value = false;
             else if (value === "true") value = true;
             this.config.params[name] = value;
+        },
+        getData(key) {
+            return APPLICATION_CONTEXT.postData[key];
+        },
+        setDirty() {
+            this.__cache.dirty = true;
         },
         pluginIds() {
             return Object.keys(PLUGINS);
@@ -677,7 +683,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         PLUGINS[id].instance = plugin;
         plugin.setOption = function(key, value, cookies=true) {
-            //todo encode/sanitize?
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
             APPLICATION_CONTEXT.config.plugins[id][key] = value;
         }
@@ -688,10 +693,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
         }
 
-        //todo better API with data?
-        plugin.getData = function(key) {
-            return APPLICATION_CONTEXT.postData[key];
-        }
         showPluginError(id, null);
         return plugin;
     }
@@ -780,11 +781,6 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         } //else do not initialize plugin, wait untill all files loaded dynamically
     };
 
-    function fileNameOf(imageFilePath) {
-        let begin = imageFilePath.lastIndexOf('/')+1;
-        return imageFilePath.substr(begin, imageFilePath.length - begin - 4);
-    }
-
     function extendIfContains(target, source, ...properties) {
         for (let property of properties) {
             if (source.hasOwnProperty(property)) target[property] = source[property];
@@ -841,7 +837,63 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         chainLoadModules(module.requires || [], 0, loadSelf);
     }
 
+    //properties depentend and important to change on bg image load/swap
+    //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
+    function updateBackgroundChanged(index) {
+        //the viewer scales differently-sized layers sich that the biggest rules the visualization
+        //this is the largest image layer, or possibly the rendering layers layer
+        VIEWER.tools.linkReferenceTileSourceIndex(index);
+        const tiledImage = VIEWER.tools.referencedTiledImage(),
+            imageData = tiledImage.getConfigObject();
+
+        if (imageData) {
+            $("#tissue-title-header").html(imageData.name || UTILITIES.fileNameFromPath(
+                Number.isInteger(imageData.dataReference) ?
+                    APPLICATION_CONTEXT.config.data[imageData.dataReference]
+                    : APPLICATION_CONTEXT.config.data[imageData.dataReferences[0]]
+            ));
+        } else {
+            $("#tissue-title-header").html('');
+        }
+
+        let microns = imageData.microns;
+        if (APPLICATION_CONTEXT.getOption("scaleBar")) {
+            VIEWER.scalebar({
+                pixelsPerMeter: microns * 1e3 || 1,
+                sizeAndTextRenderer: microns ?
+                    OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH : (ppm, minSize) => `${ppm}px`,
+                stayInsideImage: false,
+                location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+                xOffset: 5,
+                yOffset: 10,
+                // color: "var(--color-text-primary)",
+                // fontColor: "var(--color-text-primary)",
+                backgroundColor: "rgba(255, 255, 255, 0.5)",
+                fontSize: "small",
+                barThickness: 2
+            });
+        } else {
+            VIEWER.scalebar({
+                destroy: true
+            });
+        }
+    }
+
     window.UTILITIES = {
+
+        /**
+         * @param imageFilePath image path
+         * @param stripSuffix
+         */
+        fileNameFromPath: function(imageFilePath, stripSuffix=true) {
+            let begin = imageFilePath.lastIndexOf('/')+1;
+            if (stripSuffix) {
+                let end = imageFilePath.lastIndexOf('.');
+                if (end >= 0) return imageFilePath.substr(begin, end - begin);
+            }
+            return imageFilePath.substr(begin, imageFilePath.length - begin);
+        },
+
         /**
          * Load modules at runtime
          * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
@@ -936,6 +988,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 replace: true,
                 success: function (e) {
                     APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+                    updateBackgroundChanged(bgIndex);
                     let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
                     VIEWER.raiseEvent('background-image-swap', {
                         backgroundImageUrl: url,
@@ -952,17 +1005,16 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         }
     };
 
-
+    //initialization of UI and handling of background image load errors
     let reopenCounter = -1;
-    window.VIEWER.addHandler('open', function () {
+    function handleSyntheticOpenEvent() {
         reopenCounter += 1; //so that immediately the value is set
 
-        let i = 0, selectedImageLayer = 0;
         let confData = APPLICATION_CONTEXT.config.data,
             confBackground = APPLICATION_CONTEXT.config.background;
 
-        const imageRenderingOptions = $("#panel-images");
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            let i = 0, selectedImageLayer = 0;
             const imageOpts = [
                 `<div id="panel-images" class="inner-panel mt-2">
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
@@ -978,33 +1030,51 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             if (imageNode) {
                 //reverse order menu since we load images in reverse order
                 for (let revidx = confBackground.length-1; revidx >= 0; revidx-- ) {
-                    let image = confBackground[revidx];
-                    let worldItem =  VIEWER.world.getItemAt(i);
-                    if (image.hasOwnProperty("lossless") && image.lossless) {
-                        worldItem.source.fileFormat = "png";
-                    }
-                    let width = worldItem.getContentSize().x;
-                    if (width > largestWidth) {
-                        largestWidth = width;
-                        selectedImageLayer = i;
-                    }
-                    imageOpts.push(`
+                    const image = confBackground[revidx],
+                        worldItem =  VIEWER.world.getItemAt(i),
+                        referencedImage = worldItem.getConfigObject();
+
+                    if (image == referencedImage) {
+                        if (image.hasOwnProperty("lossless") && image.lossless) {
+                            worldItem.source.fileFormat = "png";
+                        }
+                        let width = worldItem.getContentSize().x;
+                        if (width > largestWidth) {
+                            largestWidth = width;
+                            selectedImageLayer = i;
+                        }
+                        imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
-${fileNameOf(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
-max="1" value="1" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
-                    i++;
+${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
+                        i++;
+                    } else {
+                        imageOpts.push(`
+<div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled checked class="form-control"style="margin: 5px;"> Faulty Image
+${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+max="1" value="0" step="0.1" style="width: 100%;"></div>`);
+                    }
+
                 }
             }
             imageOpts.push("</div></div></div>");
-            imageRenderingOptions.html(imageOpts.join());
+            $("#panel-images").html(imageOpts.join());
 
             $("#global-tissue-visibility").css("display", "none");
-        } else if (confBackground.length > 1) {
-            let html = "", activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            handleSyntheticEventFinish(selectedImageLayer, i);
+            return;
+        }
+
+        const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+        if (confBackground.length > 1) {
+            let html = "";
             for (let idx = 0; idx < confBackground.length; idx++ ) {
-                let image = confBackground[idx],
-                    imagePath = confData[image.dataReference];
+                const image = confBackground[idx],
+                    imagePath = confData[image.dataReference],
+                    worldItem =  VIEWER.world.getItemAt(i),
+                    referencedImage = worldItem.getConfigObject();
+
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
@@ -1014,49 +1084,60 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 }"/></div>
                 `;
             }
-            imageRenderingOptions.html();
+
+            $("#panel-images").html();
             //use switching panel
             USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
 <div id="tissue-preview-container">${html}</div>`);
-            i++; //rendering group always x+1th
-            $("#global-tissue-visibility").css("display", "none");
-        } else {
-            i++; //rendering group always second
-            $("#global-tissue-visibility").css("display", "initial");
         }
 
-        //the viewer scales differently-sized layers sich that the biggest rules the visualization
-        //this is the largest image layer
-        VIEWER.tools.linkReferenceTileSourceIndex(selectedImageLayer);
+        if (confBackground.length > 0) {
+            $("#global-tissue-visibility").css("display", "initial");
+
+            const image = confBackground[activeIndex],
+                worldItem = VIEWER.world.getItemAt(0),
+                referencedImage = worldItem.getConfigObject();
+            if (image != referencedImage) {
+                //todo not tested...
+                const dimensions = worldItem?.getContentSize();
+                VIEWER.addTiledImage({
+                    tileSource : new EmptyTileSource({
+                        height: dimensions?.y || 200000,
+                        width: dimensions?.x || 100000,
+                        tileSize: 512 //todo from the source?
+                    }),
+                    //index: seaGL.getWorldIndex(),
+                    opacity: $("#global-opacity input").val(),
+                    replace: false,
+                    success: () => {
+                        //standard
+                        handleSyntheticEventFinish(0, 1);
+                    }
+                });
+                return;
+            }
+            handleSyntheticEventFinish(0, 1);
+        } else {
+            $("#global-tissue-visibility").css("display", "none");
+            handleSyntheticEventFinish(0, 0);
+        }
+    }
+
+    //fired when all TiledImages are on their respective places
+    function handleSyntheticEventFinish(referenceImage, layerPosition) {
+
+        updateBackgroundChanged(referenceImage);
 
         //private API
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge && VIEWER.bridge._onload(i)) {
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge && VIEWER.bridge._onload(layerPosition)) {
             $("#global-opacity").css('display', 'initial');
         } else {
             $("#global-opacity").css('display', 'none');
         }
 
-        //todo change microns with each background image change -> add as prop to background!!!
-        let microns = APPLICATION_CONTEXT.getOption("microns");
-        if (microns && APPLICATION_CONTEXT.getOption("scaleBar")) {
-            VIEWER.scalebar({
-                pixelsPerMeter: microns * 1e3,
-                sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH,
-                stayInsideImage: false,
-                location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
-                xOffset: 5,
-                yOffset: 10,
-                // color: "var(--color-text-primary)",
-                // fontColor: "var(--color-text-primary)",
-                backgroundColor: "rgba(255, 255, 255, 0.5)",
-                fontSize: "small",
-                barThickness: 2
-            });
-        }
-
         if (reopenCounter === 0) {
             for (let modID in MODULES) {
-                const module = MODULES.hasOwnProperty(modID) && MODULES[modID];
+                const module = MODULES[modID];
                 if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
                     window[module.attach].metadata = module;
                 }
@@ -1099,22 +1180,18 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             ?>
         }
         VIEWER.raiseEvent('loaded', {reopenCounter: reopenCounter});
-    });
+    }
 
-
-    //todo support white background by rendering nothing - referenced time image must change :/
     let _allowRecursionReload = true;
     APPLICATION_CONTEXT.prepareViewer = function (
         data,
         background,
         visualizations=[],
     ) {
+        window.VIEWER.close();
+
         //todo loading animation?
-
-        //todo handle invalid background image - in that case visualization tries to treat layers as undefined and the working layers are rendered as background!!!!
-
-        const renderingWithWebGL = visualizations?.length > 0;
-
+        let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
                 _allowRecursionReload = false;
@@ -1125,6 +1202,8 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             if (!window.WebGLModule) {
                 console.error("Recursion prevented: webgl module failed to load!");
                 //allow to continue...
+                Dialogs.show(`Failed to load overlays - only the tissue will be visible.`, 8000, Dialogs.MSG_ERR);
+                renderingWithWebGL = false;
             }
         }
 
@@ -1140,17 +1219,39 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
         }
 
         const toOpen = [];
-
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            toOpen.push(...APPLICATION_CONTEXT.config.background.map(value => {
-                const urlmaker = new Function("path,data", "return " + (value.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                return urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.config.data[value.dataReference]);
-            }).reverse()); //reverse order: last opened IMAGE is the first visible
-        } else {
-            let selectedImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol))
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, APPLICATION_CONTEXT.config.data[selectedImage.dataReference]));
+            //reverse order: last opened IMAGE is the first visible
+            for (let i = background.length-1; i >= 0; i--) {
+                const bg = background[i];
+                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
+            }
+        } else if (background.length > 0) {
+            let selectedImage = background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
         }
+
+        const opacity = Number.parseFloat($("global-opacity").val()) || 1;
+        let openedSources = 0;
+        const handleFinishOpenImageEvent = () => {
+            openedSources--;
+            if (openedSources <= 0) {
+                handleSyntheticOpenEvent();
+            }
+        };
+        const openImage = (source, index) => {
+            openedSources++;
+            window.VIEWER.addTiledImage({
+                tileSource: source,
+                opacity: opacity,
+                success: (event) => {
+                    event.item.getConfigObject = () => APPLICATION_CONTEXT.config.background[index];
+                    handleFinishOpenImageEvent();
+                },
+                error: () => handleFinishOpenImageEvent()
+            });
+        };
 
         if (renderingWithWebGL) {
             APPLICATION_CONTEXT.prepareRendering();
@@ -1159,11 +1260,12 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
-                    window.VIEWER.open(toOpen)
+
+                    toOpen.map(openImage);
                 }
             );
         } else {
-            window.VIEWER.open(toOpen);
+            toOpen.map(openImage);
         }
     }
 

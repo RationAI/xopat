@@ -64,7 +64,7 @@ This (global) function will register the plugin and initialize it. It will make 
 The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
 is integrated within the system and gets exported - such information is available when sharing the plugin
 exports. Note that the object should not be used to store big amounts of data, for that use general viewer 
-event `export-data` together with `YourPLuginClass::getData()` should be used.
+event `export-data` together with `APPLICATION_CONTEXT::getData()` should be used.
 
 #### `YourPLuginClass::pluginReady()`
 You can define this function, and it will get invoked once the plugin is fully ready.
@@ -86,11 +86,9 @@ Returns stored value if available, supports cookie caching and the value gets au
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
 
 #### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
-Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
+Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
+(constants are OK since they can be converted naturally). The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor. For cookie support, prefer this method.
-
-#### \[EXISTS\] `YourPLuginClass::getData(key)`
-Return data exported with the viewer if available.
 
 #### \[EXISTS\] `YourPLuginClass::staticData(key)`
 Return data from ``include.json`` together with other data such as the folder the plugin lives in.
@@ -142,7 +140,17 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
-  
+### Caveats
+The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
+the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state
+using ``APPLICATION_CONTEXT.setDirty()`` so that the user gets notified if they want to leave.
+
+Furthermore, the layout canvas setup can vary - if you work with canvas in any way relying on dimensions
+or certain tile sources, make sure you subscribe to events related to modification of the canvas and update
+the functionality appropriately. Also, **do not store reference** to any tiled images or sources you do not control.
+Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ Tiled Image: an image wrt. which
+all measures should be done.
+
  
 ### Hints
 If you have a panel registered under your ID, you can use `loading` class to show a loading spinner

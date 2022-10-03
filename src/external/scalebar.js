@@ -22,6 +22,14 @@
     }
 
     $.Viewer.prototype.scalebar = function(options) {
+        if (options.destroy) {
+            if (this.scalebarInstance) {
+                this.scalebarInstance.destroy();
+                delete this.scalebarInstance;
+            }
+            return;
+        }
+
         if (!this.scalebarInstance) {
             options = options || {};
             options.viewer = this;
@@ -93,6 +101,7 @@
         this.divElt.style.position = "relative";
         this.divElt.style.margin = "0";
         this.divElt.style.pointerEvents = "none";
+        this.divElt.id = "viewer-scale-bar";
 
         this.setMinWidth(options.minWidth || "150px");
 
@@ -113,18 +122,23 @@
             $.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
 
         var self = this;
-        this.viewer.addHandler("open", function() {
+        this.refreshHandler = function() {
             self.refresh();
-        });
-        this.viewer.addHandler("animation", function() {
-            self.refresh();
-        });
-        this.viewer.addHandler("resize", function() {
-            self.refresh();
-        });
+        };
+        this.viewer.addHandler("open", this.refreshHandler);
+        this.viewer.addHandler("animation", this.refreshHandler);
+        this.viewer.addHandler("resize", this.refreshHandler);
     };
 
     $.Scalebar.prototype = {
+        destroy: function() {
+            this.viewer.removeHandler("open", this.refreshHandler);
+            this.viewer.removeHandler("animation", this.refreshHandler);
+            this.viewer.removeHandler("resize", this.refreshHandler);
+
+            document.getElementById("viewer-scale-bar").remove();
+        },
+
         updateOptions: function(options) {
             if (!options) {
                 return;

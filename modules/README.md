@@ -56,3 +56,15 @@ Return data exported with the viewer if available. Exporting the data is done th
 Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description
 should be provided. These events should be invoked on the parent instance of the 'module' and
 use the OpenSeadragon Event System.
+
+## Caveats
+Modules should integrate into exporting/importing events, otherwise the user will have to re-create
+the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state
+using ``APPLICATION_CONTEXT.setDirty()`` so that the user gets notified if they want to leave.
+
+Furthermore, the layout canvas setup can vary - if you work with canvas in any way relying on dimensions
+or certain tile sources, make sure you subscribe to events related to modification of the canvas and update
+the functionality appropriately. Also, **do not store reference** to any tiled images or sources you do not control.
+Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ Tiled Image: an image wrt. which
+all measures should be done.
+
