@@ -1,6 +1,6 @@
-import {config, shaders, withBrowser} from "../../fixtures/configurations"
-import {testBasic} from "../routines"
-import {default as utils} from "../../support/utilities"
+import {config, shaders, withBrowser} from "../fixtures/configurations"
+import {testBasic} from "./routines"
+import {default as utils} from "../support/utilities"
 
 describe('Shader Menu Testing', withBrowser, () => {
     it('Start with identity, test out changes', () => {

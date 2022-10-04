@@ -169,9 +169,10 @@
         let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
         if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
 
-        let exported = APPLICATION_CONTEXT.layersAvailable && VIEWER.bridge
-            ? JSON.stringify(APPLICATION_CONTEXT.config, VIEWER.bridge.webGLEngine.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config);
+        //by default ommit underscore
+        let exported = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
+            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
 
         let form = `
       <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
@@ -281,8 +282,8 @@ form.submit();<\/script>`;
         let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
         APPLICATION_CONTEXT.config.params.bypassCookies = true;
 
-        let postData = APPLICATION_CONTEXT.layersAvailable && VIEWER.bridge
-            ? JSON.stringify(APPLICATION_CONTEXT.config, VIEWER.bridge.webGLEngine.jsonReplacer)
+        let postData = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config);
 
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;

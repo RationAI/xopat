@@ -439,7 +439,7 @@
         STANDARD_TIME: function(pps, minSize) {
             var maxSize = minSize * 2;
             if (maxSize < pps * 60) {
-                return getScalebarSizeAndTextForMetric(pps, minSize, "s", false);
+                return getScalebarSizeAndTextForMetric(pps, minSize, "s");
             }
             var ppminutes = pps * 60;
             if (maxSize < ppminutes * 60) {
@@ -487,11 +487,11 @@
         };
     }
 
-    function getScalebarSizeAndTextForMetric(ppm, minSize, unitSuffix) {
+    function getScalebarSizeAndTextForMetric(ppm, minSize, unitSuffix, shouldFactorizeUnit=true) {
         var value = normalize(ppm, minSize);
         var factor = roundSignificand(value / ppm * minSize, 3);
         var size = value * minSize;
-        var valueWithUnit = getWithUnit(factor, unitSuffix);
+        var valueWithUnit = shouldFactorizeUnit ? getWithUnit(factor, unitSuffix) : getWithSpaces(factor, unitSuffix);
         return {
             size: size,
             text: valueWithUnit
@@ -546,7 +546,13 @@
         if (value >= 1000) {
             return value / 1000 + " k" + unitSuffix;
         }
-        return value + " " + unitSuffix;
+        return getWithSpaces(value / 1000, "k" + unitSuffix);
+    }
+
+    function getWithSpaces(value, unitSuffix) {
+        if (value < 0) return "Negative distance!";
+        //https://gist.github.com/MSerj/ad23c73f65e3610bbad96a5ac06d4924
+        return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " " + unitSuffix;
     }
 
     function isDefined(variable) {

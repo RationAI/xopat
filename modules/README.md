@@ -35,6 +35,15 @@ this file enriched by additional data (see `modules.php`) as a *`metadata`* vari
 > Note: to ensure attached metadata, make sure the provided name of an object is accessible
 > via ``window`` variable: use `MyClass = class extends ...` instead of `class MyClass extends ...`
 
+Using third party hosted scripts: an include record should look like this:
+````json
+{
+    "src": "https://host.xy/file.js",
+    "integrity": "hashofthefilesothatitsintegrityisverified",
+    "crossorigin": "anonymous"
+}
+````
+
 ### Interface
 Unlike plugins, options and data is stored on global API level, since we cannot nor want to enforce instantiation 
 or other life cycle behaviour on modules. This means that modules have to care about used keys - these are on global 

@@ -245,6 +245,7 @@ foreach ($MODULES as $_ => $mod) {
     <!--Extensions/modifications-->
     <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=$version"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=$version"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
@@ -844,24 +845,25 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         //this is the largest image layer, or possibly the rendering layers layer
         VIEWER.tools.linkReferenceTileSourceIndex(index);
         const tiledImage = VIEWER.tools.referencedTiledImage(),
-            imageData = tiledImage.getConfigObject();
+            imageData = tiledImage?.getBackgroundConfig();
 
-        if (imageData) {
-            $("#tissue-title-header").html(imageData.name || UTILITIES.fileNameFromPath(
-                Number.isInteger(imageData.dataReference) ?
-                    APPLICATION_CONTEXT.config.data[imageData.dataReference]
-                    : APPLICATION_CONTEXT.config.data[imageData.dataReferences[0]]
+        const title = $("#tissue-title-header").removeClass('error-container');
+        if (Number.isInteger(Number.parseInt(imageData.dataReference))) {
+            title.html(imageData.name || UTILITIES.fileNameFromPath(
+                APPLICATION_CONTEXT.config.data[imageData.dataReference]
             ));
-        } else {
-            $("#tissue-title-header").html('');
+        } else if (!tiledImage || tiledImage.source instanceof EmptyTileSource) {
+            title.addClass('error-container').html('Faulty (background) image');
         }
 
-        let microns = imageData.microns;
-        if (APPLICATION_CONTEXT.getOption("scaleBar")) {
+        if (imageData && APPLICATION_CONTEXT.getOption("scaleBar")) {
+            const microns = imageData.microns;
+            const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
             VIEWER.scalebar({
                 pixelsPerMeter: microns * 1e3 || 1,
                 sizeAndTextRenderer: microns ?
-                    OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH : (ppm, minSize) => `${ppm}px`,
+                    OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
+                    : (ppm, minSize) => metricPx(ppm, minSize, "px", false),
                 stayInsideImage: false,
                 location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
                 xOffset: 5,
@@ -988,7 +990,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 replace: true,
                 success: function (e) {
                     APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-                    updateBackgroundChanged(bgIndex);
+                    e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
+                    updateBackgroundChanged(0);
                     let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
                     VIEWER.raiseEvent('background-image-swap', {
                         backgroundImageUrl: url,
@@ -1015,24 +1018,15 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             let i = 0, selectedImageLayer = 0;
-            const imageOpts = [
-                `<div id="panel-images" class="inner-panel mt-2">
-    <div class="inner-panel-content noselect" id="inner-panel-content-1">
-        <div>
-             <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-             <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
-        </div>
-
-        <div id="image-layer-options" class="inner-panel-hidden">`];
+            const imageOpts = [];
             let largestWidth = 0,
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
-                //reverse order menu since we load images in reverse order
-                for (let revidx = confBackground.length-1; revidx >= 0; revidx-- ) {
-                    const image = confBackground[revidx],
+                for (let idx = 0; idx < confBackground.length; idx++ ) {
+                    const image = confBackground[idx],
                         worldItem =  VIEWER.world.getItemAt(i),
-                        referencedImage = worldItem.getConfigObject();
+                        referencedImage = worldItem?.getBackgroundConfig();
 
                     if (image == referencedImage) {
                         if (image.hasOwnProperty("lossless") && image.lossless) {
@@ -1043,26 +1037,36 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                             largestWidth = width;
                             selectedImageLayer = i;
                         }
-                        imageOpts.push(`
+                        imageOpts.unshift(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
-onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;"> Image
+onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
+<span class="pr-1" style="color: var(--color-text-tertiary)">Image</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
-                        imageOpts.push(`
-<div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled checked class="form-control"style="margin: 5px;"> Faulty Image
+                        imageOpts.unshift(`
+<div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
+<span class="pr-1" style="color: var(--color-text-danger)">Faulty</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
-max="1" value="0" step="0.1" style="width: 100%;"></div>`);
+max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
 
                 }
             }
+            imageOpts.unshift(`<div id="panel-images" class="inner-panel mt-2">
+    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+        <div>
+             <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
+             <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
+        </div>
+
+        <div id="image-layer-options" class="inner-panel-hidden">`);
             imageOpts.push("</div></div></div>");
-            $("#panel-images").html(imageOpts.join());
+            $("#panel-images").html(imageOpts.join(""));
 
             $("#global-tissue-visibility").css("display", "none");
-            handleSyntheticEventFinish(selectedImageLayer, i);
+            handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
             return;
         }
 
@@ -1071,17 +1075,14 @@ max="1" value="0" step="0.1" style="width: 100%;"></div>`);
             let html = "";
             for (let idx = 0; idx < confBackground.length; idx++ ) {
                 const image = confBackground[idx],
-                    imagePath = confData[image.dataReference],
-                    worldItem =  VIEWER.world.getItemAt(i),
-                    referencedImage = worldItem.getConfigObject();
-
+                    imagePath = confData[image.dataReference];
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
 class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
                     previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
-                }"/></div>
+                }" onerror="this.src='<?php echo ASSETS_ROOT ?>/unknown-preview.jpg';"/></div>
                 `;
             }
 
@@ -1095,45 +1096,84 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             $("#global-tissue-visibility").css("display", "initial");
 
             const image = confBackground[activeIndex],
-                worldItem = VIEWER.world.getItemAt(0),
-                referencedImage = worldItem.getConfigObject();
+                worldItem = VIEWER.world.getItemAt(0);
+
+            // if (!worldItem) {
+            //     USER_INTERFACE.Errors.show("Unable to open the image.", 'The requested data is corrupted or not available.', true);
+            //     handleSyntheticEventFinish({error: "Invalid data: no image opened."});
+            //     return false;
+            // }
+
+            const referencedImage = worldItem?.getBackgroundConfig();
+
             if (image != referencedImage) {
-                //todo not tested...
                 const dimensions = worldItem?.getContentSize();
                 VIEWER.addTiledImage({
                     tileSource : new EmptyTileSource({
-                        height: dimensions?.y || 200000,
-                        width: dimensions?.x || 100000,
+                        height: dimensions?.y || 20000,
+                        width: dimensions?.x || 20000,
                         tileSize: 512 //todo from the source?
                     }),
-                    //index: seaGL.getWorldIndex(),
+                    index: 0,
                     opacity: $("#global-opacity input").val(),
                     replace: false,
-                    success: () => {
+                    success: (event) => {
+                        event.item.getBackgroundConfig = () => {
+                            return undefined;
+                        }
+                        $("#global-tissue-visibility").css("display", "none");
                         //standard
-                        handleSyntheticEventFinish(0, 1);
+                        handleSyntheticEventFinishWithValidData(0, 1);
                     }
                 });
                 return;
             }
-            handleSyntheticEventFinish(0, 1);
+            handleSyntheticEventFinishWithValidData(0, 1);
         } else {
             $("#global-tissue-visibility").css("display", "none");
-            handleSyntheticEventFinish(0, 0);
+            handleSyntheticEventFinishWithValidData(0, 0);
         }
     }
 
-    //fired when all TiledImages are on their respective places
-    function handleSyntheticEventFinish(referenceImage, layerPosition) {
-
+    function handleSyntheticEventFinishWithValidData(referenceImage, layerPosition) {
         updateBackgroundChanged(referenceImage);
+        const eventOpts = {};
 
         //private API
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && VIEWER.bridge && VIEWER.bridge._onload(layerPosition)) {
-            $("#global-opacity").css('display', 'initial');
+        const seaGL = VIEWER.bridge;
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && seaGL) {
+            const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
+            const activeVis = seaGL.visualization();
+            if (layerWorldItem) {
+                if (!(activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
+                    layerWorldItem.source.setFormat("png");
+                }
+                layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+
+                $("#panel-shaders").css('display', 'block');
+                $("#global-opacity").css('display', 'initial');
+
+                seaGL.addLayer(layerPosition);
+                seaGL.initAfterOpen();
+            } else {
+                //todo action page reload
+                Dialogs.show(`Failed to load overlays (Visualization <i>${activeVis.name}</i>) - it has been disabled.`, 20000, Dialogs.MSG_ERR);
+
+                $("#panel-shaders").css('display', 'none');
+                $("#global-opacity").css('display', 'none');
+
+                APPLICATION_CONTEXT.disableRendering();
+                eventOpts.error = "Overlays not enabled!";
+            }
         } else {
             $("#global-opacity").css('display', 'none');
         }
+
+        handleSyntheticEventFinish();
+    }
+
+    //fired when all TiledImages are on their respective places
+    function handleSyntheticEventFinish(opts={}) {
 
         if (reopenCounter === 0) {
             for (let modID in MODULES) {
@@ -1166,22 +1206,26 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 OpenSeadragon.Tools.link( window.VIEWER, window.opener.VIEWER);
             }
 
-            if (USER_INTERFACE.Errors.active) {
-                $("#viewer-container").addClass("disabled"); //preventive
-                return;
-            }
-            <?php
-            if ($firstTimeVisited) {
-                echo "        setTimeout(function() {
+            if (!USER_INTERFACE.Errors.active) {
+                <?php
+                if ($firstTimeVisited) {
+                    echo "        setTimeout(function() {
                     USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
                         'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
-            }, 2000);";
+                    }, 2000);";
+                }
+                ?>
             }
-            ?>
+        }
+
+        if (USER_INTERFACE.Errors.active) {
+            $("#viewer-container").addClass("disabled"); //preventive
         }
 
         //todo this way of calling open event has in OpenSeadragon todo comment - check for API changes in future
-        VIEWER.raiseEvent('open', {source: VIEWER.world.getItemAt(0)?.source, reopenCounter: reopenCounter});
+        opts.source = VIEWER.world.getItemAt(0)?.source;
+        opts.reopenCounter = reopenCounter;
+        VIEWER.raiseEvent('open', opts);
     }
 
     let _allowRecursionReload = true;
@@ -1242,16 +1286,19 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 handleSyntheticOpenEvent();
             }
         };
-        const openImage = (source, index) => {
+        const openImage = (lastIndex, source, index) => {
             openedSources++;
+            const dataIndex = lastIndex - index; //reverse order in toOpen
             window.VIEWER.addTiledImage({
                 tileSource: source,
                 opacity: opacity,
                 success: (event) => {
-                    event.item.getConfigObject = () => APPLICATION_CONTEXT.config.background[index];
+                    event.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[dataIndex];
                     handleFinishOpenImageEvent();
                 },
-                error: () => handleFinishOpenImageEvent()
+                error: () => {
+                    handleFinishOpenImageEvent();
+                }
             });
         };
 
@@ -1263,11 +1310,11 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
 
-                    toOpen.map(openImage);
+                    toOpen.map(openImage.bind(this, toOpen.length - 2)); //index to bg, we pushed one non-bg
                 }
             );
         } else {
-            toOpen.map(openImage);
+            toOpen.map(openImage.bind(this, toOpen.length - 1));
         }
     }
 

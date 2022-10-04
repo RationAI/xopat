@@ -184,7 +184,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _updateText(line, text) {
         const tiledImage = VIEWER.tools.referencedTiledImage(),
-            microns = tiledImage.getConfigObject()?.microns || -1;
+            microns = tiledImage.getBackgroundConfig()?.microns || -1;
         let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
             strText;
         if (microns > 0) {

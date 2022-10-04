@@ -6,8 +6,14 @@ export default {
             cy.log("mainMenu:: Test without bypassCookies is not intended to pass.");
         }
 
-        ["#global-tissue-visibility", "#panel-navigator", "#navigator-pin",
+        ["#panel-navigator", "#navigator-pin",
             "#global-export", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
+
+        if (config.params.stackedBackground) {
+            cy.get("#global-tissue-visibility").should('not.be.visible');
+        } else {
+            cy.get("#global-tissue-visibility").should('be.visible');
+        }
 
         cy.get("#navigator-pin").should('have.class', 'inline-pin')
             .should('not.have.class', 'pressed')
@@ -28,7 +34,9 @@ export default {
 
         cy.get("#main-panel-show").click()
 
-        cy.get("#global-tissue-visibility input").should('be.checked');
+        if (!config.params.stackedBackground) {
+            cy.get("#global-tissue-visibility input").should('be.checked');
+        }
 
         ["#add-plugins", "#panel-navigator", "#navigator-pin", "#main-panel-hide",
             "#global-export", "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
@@ -83,4 +91,6 @@ export default {
         cy.get("#advanced-menu-close-button").should('be.visible').click();
         cy.get("#app-settings").should('not.be.visible')
     },
+
+
 }

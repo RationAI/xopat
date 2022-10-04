@@ -353,7 +353,7 @@ window.WebGLModule = class {
      * @param value value to be exported
      * @return {*} value if key passes exportable condition, undefined otherwise
      */
-    jsonReplacer(key, value) {
+    static jsonReplacer(key, value) {
         return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     }
 
@@ -569,7 +569,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             let data = this.webGLImplementation.generateVisualisation(order, visualisation, this.supportsHtmlControls());
             if (data.usableShaders < 1) {
                 this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
-<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, this.jsonReplacer)}</code>
+<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, WebGLModule.jsonReplacer)}</code>
 <br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
                 return null;
             }

@@ -43,12 +43,14 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
         let canvas = document.createElement("canvas");
         let ctx = canvas.getContext('2d');
         if (size.width < 1 || size.height < 1) {
-            canvas.width = 1;
-            canvas.height = 1;
+            canvas.width = 512;
+            canvas.height = 512;
         } else {
-            canvas.width = Math.floor(size.width);
-            canvas.height = Math.floor(size.height);
+            canvas.width = Math.floor(size.x);
+            canvas.height = Math.floor(size.y);
         }
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         context.finish(ctx);
     }
 
@@ -80,5 +82,6 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
     getTileCacheDataAsContext2D(cache) {
         return cache._data;
     }
+
 }
 

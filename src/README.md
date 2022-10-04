@@ -204,23 +204,17 @@ is sent to as `HTTP POST` data in the request.
 In each folder you will find a `README` document that describes the given component in more detail. For now, only
 this README and description of MODULES and PLUGINS system are up-to-date.
 
-### `./`
+### `../`
 Root folder contains 
 - basic application scripts:
     - `index.php` - the viewer itself which you need to send JSON configuration to
     - `config.php` - static viewer configuration (default server URLs, protocols...)
     - `dev_setup.php` - interface for customizable visualization setup which you can open
     - `redirect.php` - internal interface for URL to configuration translation, used with exported URLs
-    - `error.php` where you are redirected when a fatal error occurs (usually malformed/missing configuration)
-- `.js` files together with third-party dependencies inside `./external/` folder
+    
+### `./`    
+- `.js` files together with third-party dependencies inside `./external/` folder and `.php` utility files
 - two basic styles `github.css` (bootstrap _Primer CSS_, [documentation available here](https://primer.style/css)) and `style.css` (see the style sheet for pre-defined classes with use examples)
-
-<!--#### New Handlers
-For flawless execution, `VIEWER` fires additional events:
-TODO move :
-tiled-image-force-remove -> has e.worldIndex
-key-down -> has e.focusCanvas
-key-up -> has e.focusCanvas-->
 
 ### `./external/`
 Always-present third-party libraries and styles which are guaranteed to be included.
@@ -230,16 +224,16 @@ context via the `Dialogs` interface.
 ### `./assets/`
 Own images and styles.
 
-### `plugins.php` and `./plugins/`
+### `plugins.php` and `../plugins/`
 The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integration 
 of functionality to the visualizer GUI. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
-### `modules.php` and `./modules/`
+### `modules.php` and `../modules/`
 The visualizer supports **modules** - a `JavaScript` libraries: it is a more dynamic version of `./external/`.
 Modules allow versatile library inclusion: plugins and other modules can declare dependency: 
 this dependency is resolved and necessary items are included (in the right order).
 See `./modules/README.md`. Modules are placed in `./modules/` folder.
 
-### `./openseadragon/` 
+### `../openseadragon/` 
 OpenSeadragon third-party javascript library the whole visualisation builds on. `debug` contains unminified version for debugging & OSD modifications.
 These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.

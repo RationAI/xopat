@@ -10,6 +10,12 @@ export default {
         'invalid': [
             'some-bad!-data1',
             'some-bad-data24&',
+        ],
+        'even-indexes-valid-only': [
+            'cypress/tissue.tif',
+            'some-bad-data24&',
+            'cypress/annotation.tif',
+            'some-bad!-data1',
         ]
     }[key]),
     background: (overrides, ...dataIndexes) => {
@@ -49,6 +55,7 @@ export default {
             {"zoomLevel":1.856327727513599,"point":{"x":0.5865508469133377,"y":0.6628850942200756}}
         ],
         tissue: [
+            {"zoomLevel":6.300233646209005,"point":{"x":0.32962356991800645,"y":0.44177267064294934}},
             {"zoomLevel":9.072336450540966,"point":{"x":0.30969351493546343,"y":0.5272290789301906}}
         ]
     })[key][index],
