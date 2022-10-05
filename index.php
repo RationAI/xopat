@@ -216,18 +216,28 @@ foreach ($MODULES as $_ => $mod) {
 
     <!--Remember WARNS/ERRORS to be able to export-->
     <script type="text/javascript">
-        console.defaultError = console.error.bind(console);
-        console.savedLogs = [];
-        console.error = function(){
-            console.defaultError.apply(console, arguments);
-            console.savedLogs.push(Array.from(arguments));
-        };
+        (function () {
+            window.console.appTrace = [];
 
-        console.defaultWarn = console.warn.bind(console);
-        console.warn = function(){
-            console.defaultWarn.apply(console, arguments);
-            console.savedLogs.push(Array.from(arguments));
-        };
+            const defaultError = console.error;
+            const timestamp = () => {
+                let ts = new Date(), pad = "000", ms = ts.getMilliseconds().toString();
+                return ts.toLocaleTimeString("cs-CZ") + "." + pad.substring(0, pad.length - ms.length) + ms + " ";
+            };
+            window.console.error = function () {
+                window.console.appTrace.push("ERROR ",
+                    (new Error().stack.split("at ")[1]).trim(), " ",
+                    timestamp(), ...arguments, "\n");
+                defaultError.apply(window.console, arguments);
+            };
+
+            const defaultWarn = console.warn;
+            window.console.warn = function () {
+                window.console.appTrace.push("WARN  ", ...arguments, "\n");
+                defaultWarn.apply(window.console, arguments);
+            };
+        })();
+
         <?php echo $errors_print; ?>
     </script>
 

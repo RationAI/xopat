@@ -1062,21 +1062,19 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	_keyUpHandler(e) {
 		if (this.disabledInteraction) return;
 
-		if (e.code === "Delete") {
-			this.removeActiveObject();
-			return;
+		if (!e.ctrlKey && !e.altKey) {
+			if (e.code === "Delete") return this.removeActiveObject();
+			if ( e.code === "Escape") {
+				this.history._boardItemSave();
+				this.setMode(this.Modes.AUTO);
+				return;
+			}
 		}
 
-		if (!e.ctrlKey && !e.altKey && e.code === "Escape") {
-			this.history._boardItemSave();
-			this.setMode(this.Modes.AUTO);
-			return;
-		}
+		if (e.ctrlKey) {
+			if (e.key === "z") return this.history.redo();
+			if (e.key === "Z") return this.history.back();
 
-		if (e.ctrlKey && e.code === "KeyY") {
-			if (e.shiftKey) this.history.redo();
-			else this.history.back();
-			return;
 		}
 
 		if (this.mode.rejects(e)) {

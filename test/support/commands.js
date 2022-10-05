@@ -45,6 +45,25 @@ if (Cypress.config('hideXHRInCommandLog')) {
     }
 }
 
+function _draw(button) {
+    return (target, ...points) => {
+        if (typeof target === "string") target = cy.get(target);
+        target = target.trigger('mousedown', {
+            eventConstructor: 'MouseEvent', button: button,
+            clientX: points[0].x, clientY: points[0].y, screenX: points[0].x, screenY: points[0].y, pageX: points[0].x, pageY: points[0].y})
+            .wait(100);
+        for (let i = 1; i<points.length-1; i++) {
+            const p = points[i];
+            target = target.trigger('mousemove', { eventConstructor: 'MouseEvent', button: button,
+                clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y, pageX: p.x, pageY: p.y }).wait(20);
+        }
+        const last = points[points.length-1];
+        return target.trigger('mouseup', { eventConstructor: 'MouseEvent', button: button,
+            clientX: last.x, clientY: last.y, screenX: last.x, screenY: last.y, pageX: last.x, pageY: last.y});
+    }
+}
+
+
 Cypress.Commands.addAll({
     /**
      * Load the Pathopus Viewer
@@ -57,6 +76,12 @@ Cypress.Commands.addAll({
             visualisation: configuration,
             ...data
         });
+
+        //unfortunately it has to manually reattach the headers
+        cy.intercept(Cypress.env('interceptDomain'), (req) => {
+            req.headers['authorization'] = Cypress.env('headers').authorization;
+        })
+
         return cy.visit({
             url: Cypress.env('viewer'),
             headers: Cypress.env('headers'),
@@ -74,18 +99,29 @@ Cypress.Commands.addAll({
         return cy.get(".openseadragon-canvas>canvas").first()
     },
     /**
-     * @param type text to type, {key} for specific key names (such as shift...)
+     * Press a key
+     * @param toType text to type, {key} for specific key names (such as shift...)
      * @return Cypress.Chainable - builder pattern
      */
-    keyDown(type) {
-        return cy.get('body').type(type, { release: false });
+    key(toType) {
+        cy.document().type(toType, {parseSpecialCharSequences: true, log: true});
+        return cy;
     },
     /**
-     * @param type text to type, {key} for specific key names (such as shift...)
+     * @param toType text to type, {key} for specific key names (such as shift...)
      * @return Cypress.Chainable - builder pattern
      */
-    keyUp(type) {
-        return cy.get('body').type(type, { release: true });
+    keyDown(toType) {
+        cy.document().type(toType, { release: false, parseSpecialCharSequences: true, log: true });
+        return cy;
+    },
+    /**
+     * @param toType text to type, {key} for specific key names (such as shift...)
+     * @return Cypress.Chainable - builder pattern
+     */
+    keyUp(toType) {
+        cy.document().type(toType, { release: true, parseSpecialCharSequences: true, log: true });
+        return cy;
     },
     /**
      * Draw over 'this' target - must be called on a DOM element
@@ -93,22 +129,14 @@ Cypress.Commands.addAll({
      * @param points objects with x, y props
      * @return Cypress.Chainable - builder pattern
      */
-    draw(target, ...points) {
-        if (typeof target === "string") target = cy.get(target);
-        target = target.trigger('mousedown', {
-            eventConstructor: 'MouseEvent',
-            button: 0,
-            clientX: points[0].x, clientY: points[0].y, screenX: points[0].x, screenY: points[0].y, pageX: points[0].x, pageY: points[0].y})
-            .wait(100);
-        for (let i = 1; i<points.length-1; i++) {
-            const p = points[i];
-            target = target.trigger('mousemove', { eventConstructor: 'MouseEvent',
-                clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y, pageX: p.x, pageY: p.y });
-        }
-        const last = points[points.length-1];
-        return target.trigger('mouseup', { eventConstructor: 'MouseEvent',
-            clientX: last.x, clientY: last.y, screenX: last.x, screenY: last.y, pageX: last.x, pageY: last.y});
-    }
+    draw: _draw(0),
+    /**
+     * Draw over 'this' target with right button - must be called on a DOM element
+     * @param target string selector or a selected DOM element (cy.get(...))
+     * @param points objects with x, y props
+     * @return Cypress.Chainable - builder pattern
+     */
+    drawRight: _draw(2),
 });
 
 

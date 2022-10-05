@@ -307,7 +307,7 @@ form.submit();<\/script>`;
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
-<div>Errors (if any): <pre>${JSON.stringify(console.savedLogs)}</pre></div>
+<div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
 ${constructExportVisualisationForm()}
 </body></html>`;
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;

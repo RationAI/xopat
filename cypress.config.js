@@ -23,7 +23,7 @@ module.exports = defineConfig({
   env: {
     "cypress-plugin-snapshots": {
       imageConfig: {
-        threshold: 0.01
+        threshold: 0.001
       }
     }
   }
