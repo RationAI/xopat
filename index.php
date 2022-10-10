@@ -421,6 +421,7 @@ EOF;
         bypassCookies: false,
         theme: "auto",
         stackedBackground: false,
+        maxImageCacheCount: 1200,
     };
 
     const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
@@ -603,6 +604,7 @@ EOF;
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
         debugMode: APPLICATION_CONTEXT.getOption("debugMode"),
+        maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount")
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);

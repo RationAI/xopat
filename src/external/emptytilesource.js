@@ -9,6 +9,7 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
         super(options);
         this.tilesUrl = 'empty';
         this.fileFormat = ".jpg";
+        this.color = "white";
     }
     supports( data, url ){
         return false; //we want explicit use
@@ -28,6 +29,9 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
     }
     setFormat(format) {
         this.fileFormat = format;
+    }
+    setColor(color) {
+        this.color = color;
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
@@ -49,7 +53,7 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
             canvas.width = Math.floor(size.x);
             canvas.height = Math.floor(size.y);
         }
-        ctx.fillStyle = "white";
+        ctx.fillStyle = this.color;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         context.finish(ctx);
     }
@@ -82,6 +86,5 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
     getTileCacheDataAsContext2D(cache) {
         return cache._data;
     }
-
 }
 

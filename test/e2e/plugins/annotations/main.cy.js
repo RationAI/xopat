@@ -16,13 +16,14 @@ const presetUiNewMetaButton = (presetIndex) =>
 const presetUiSelectLeft = () => cy.get("#select-annotation-preset-left");
 const presetUiSelectRight = () => cy.get("#select-annotation-preset-right");
 
+
 describe('Annotations - User Controls', withBrowser, () => {
 
     //tested: ["polygon", "rect", "ellipse", "ruler"]
 
     let ANNOTATIONS;
 
-    it('Setup Presets', () => {
+    it('Get reference', () => {
 
         let visualisation = {
             params: config.params({
@@ -44,67 +45,67 @@ describe('Annotations - User Controls', withBrowser, () => {
         }
 
         cy.launch(visualisation);
-        utils.waitForViewer();
 
-        //todo keys not triggering modes
-        cy.get('body').type("A")
-
-        cy.window().then(w => {
+        utils.waitForViewer().then(w => {
             ANNOTATIONS = w.OSDAnnotations.instance();
-            expect(ANNOTATIONS.mode).eq(ANNOTATIONS.Modes.AUTO);
-            cy.get('body').type('{alt}', { release: false, parseSpecialCharSequences: true, log: true });
-            cy.keyDown("{alt}")
-            expect(ANNOTATIONS.mode).eq(ANNOTATIONS.Modes.CUSTOM);
-            cy.keyUp("{alt}")
-            expect(ANNOTATIONS.mode).eq(ANNOTATIONS.Modes.AUTO);
-        })
 
-
-
-
-        //
-        // cy.get("#annotations-cloud").should('be.visible')
-        // cy.get("#show-annotation-board").should('be.visible')
-        // cy.get("#enable-disable-annotations").should('be.visible')
-        //
-        // cy.get("#annotations-left-click").click();
-        // cy.get("#preset-add-new").click();
-        // cy.get("#preset-add-new").click();
-        // cy.get("#preset-add-new").click();
-        // cy.get("#preset-add-new").click();
-        //
-        // presetUiNewMetaName(0).type("My New Awesome Meta");
-        // presetUiNewMetaButton(0).click();
-        // presetUiNthMeta(0, 1).type("The AWESOME Value");
-        //
-        // presetUISelect(1).select(1);
-        // presetUiNthMeta(1, 0).type("Ctverecek");
-        //
-        // presetUiNewMetaName(2).type("Empty meta");
-        // presetUiNewMetaButton(2).click();
-        // presetUiNewMetaName(2).type("Another Empty");
-        // presetUiNewMetaButton(2).click();
-        // presetUISelect(2).select(2);
-        //
-        // presetUISelect(3).select(3);
-        //
-        // presetUi(1).click();
-        // presetUiSelectRight().click();
-        //
-        // cy.get("#annotations-left-click").should('contain.text', 'Polygon');
-        // cy.get("#annotations-right-click").should('contain.text', 'Ctverecek');
+        });
     });
+
+    it ('Test Hotkeys', () => {
+        expect(ANNOTATIONS.mode, "Annotations are in Auto Mode").eq(ANNOTATIONS.Modes.AUTO);
+        // cy.keyDown('{alt}').then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+        //cy.keyUp('{alt}').then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    });
+
+    // it ('Setup Presets', () => {
+    //
+    //     cy.get("#annotations-cloud").should('be.visible')
+    //     cy.get("#show-annotation-board").should('be.visible')
+    //     cy.get("#enable-disable-annotations").should('be.visible')
+    //
+    //     cy.get("#annotations-left-click").click();
+    //     cy.get("#preset-add-new").click();
+    //     cy.get("#preset-add-new").click();
+    //     cy.get("#preset-add-new").click();
+    //     cy.get("#preset-add-new").click();
+    //
+    //     presetUiNewMetaName(0).type("My New Awesome Meta");
+    //     presetUiNewMetaButton(0).click();
+    //     presetUiNthMeta(0, 1).type("The AWESOME Value");
+    //
+    //     presetUISelect(1).select(1);
+    //     presetUiNthMeta(1, 0).type("Ctverecek");
+    //
+    //     presetUiNewMetaName(2).type("Empty meta");
+    //     presetUiNewMetaButton(2).click();
+    //     presetUiNewMetaName(2).type("Another Empty");
+    //     presetUiNewMetaButton(2).click();
+    //     presetUISelect(2).select(2);
+    //
+    //     presetUISelect(3).select(3);
+    //
+    //     presetUi(1).click();
+    //     presetUiSelectRight().click();
+    //
+    //     cy.get("#annotations-left-click").should('contain.text', 'Polygon');
+    //     cy.get("#annotations-right-click").should('contain.text', 'Ctverecek');
+    // });
+
 
     // it ("Preset #1", function () {
     //     cy.keyDown("{alt}")
-    //     expect(ANNOTATIONS.mode).eq(ANNOTATIONS.Modes.CUSTOM)
-    //     cy.draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130})
-    //     expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
-    //     cy.expect(ANNOTATIONS.canvas._objects[0].type).to.eq("polygon")
+    //         .draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
     //
     //     cy.get('#osd').toMatchImageSnapshot({name: "S1 - polygon"});
-    //     cy.keyUp("{alt}");
-    //     expect(ANNOTATIONS.mode).eq(ANNOTATIONS.Modes.AUTO);
+    //
+    //     cy.keyUp('{alt}')
+    //
+    //     cy.get('#osd').toMatchImageSnapshot({name: "S1 - polygon finished"});
+    //
+    //     cy.wrap(ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
+    //         .then(() => ANNOTATIONS.canvas._objects.length).should('eq', 1)
+    //         .then(() => ANNOTATIONS.canvas._objects[0].type).should('eq', "polygon")
     //
     // })
     //

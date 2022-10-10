@@ -123,6 +123,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`bypassCookies` - do not use cookies, default `false`, cookies are necessary for user setup memory
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
     - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays 
+    - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'

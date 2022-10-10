@@ -985,6 +985,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		VIEWER.addHandler("canvas-press", function (e) {
 			if (_this.disabledInteraction) return;
+			console.log(e);
 			handleLeftClickDown(e.originalEvent);
 		});
 

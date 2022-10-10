@@ -51,7 +51,7 @@ function _draw(button) {
         target = target.trigger('mousedown', {
             eventConstructor: 'MouseEvent', button: button,
             clientX: points[0].x, clientY: points[0].y, screenX: points[0].x, screenY: points[0].y, pageX: points[0].x, pageY: points[0].y})
-            .wait(100);
+            .wait(250);
         for (let i = 1; i<points.length-1; i++) {
             const p = points[i];
             target = target.trigger('mousemove', { eventConstructor: 'MouseEvent', button: button,
@@ -104,7 +104,7 @@ Cypress.Commands.addAll({
      * @return Cypress.Chainable - builder pattern
      */
     key(toType) {
-        cy.document().type(toType, {parseSpecialCharSequences: true, log: true});
+        cy.get('#osd').children().first().type(toType, {parseSpecialCharSequences: true, log: true});
         return cy;
     },
     /**
@@ -112,7 +112,7 @@ Cypress.Commands.addAll({
      * @return Cypress.Chainable - builder pattern
      */
     keyDown(toType) {
-        cy.document().type(toType, { release: false, parseSpecialCharSequences: true, log: true });
+        cy.get('#osd').children().first().type(toType, { release: false, parseSpecialCharSequences: true, log: true });
         return cy;
     },
     /**
@@ -120,7 +120,7 @@ Cypress.Commands.addAll({
      * @return Cypress.Chainable - builder pattern
      */
     keyUp(toType) {
-        cy.document().type(toType, { release: true, parseSpecialCharSequences: true, log: true });
+        cy.get('#osd').children().first().type(toType, { release: true, parseSpecialCharSequences: true, log: true });
         return cy;
     },
     /**

@@ -4,6 +4,7 @@ export default {
     /**
      * Wait for image loading job finish
      * @param beforeLoadEvent if true, it waits also for 'loaded' event on the viewer
+     * @return {Promise<Window>} iframe window - tested context window object
      */
     waitForViewer(beforeLoadEvent=true) {
 
@@ -23,9 +24,8 @@ export default {
             });
         }
 
-        cy.waitUntil(() => {
-            return initialized && window.VIEWER.imageLoader.jobsInProgress === 0
-        }, {
+        // ... && window is a trick to return that value on success
+        return cy.waitUntil(() => initialized && window.VIEWER.imageLoader.jobsInProgress === 0 && window, {
             description: "Waiting for the images to load.",
             timeout: 30000,
             interval: 600,
