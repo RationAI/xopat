@@ -238,3 +238,20 @@ See `./modules/README.md`. Modules are placed in `./modules/` folder.
 ### `../openseadragon/` 
 OpenSeadragon third-party javascript library the whole visualisation builds on. `debug` contains unminified version for debugging & OSD modifications.
 These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.
+
+
+## Available API
+
+The viewer comes with many available features. Here will be described only where to look for them, most functions are
+either documented or self-explanatory named. Some selected API is described in plugins root ``README``.
+Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
+Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their
+enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
+the engine setup. ``scripts.js`` contain various utility functions - having a look into the source code is always
+encouraged.
+
+Outside, ``../index.php`` file takes care of the main UI layout and basic functionality around parameter and metadata
+handling, plugin and module loading and the viewport and events management.
+
+Many features are available through ``modules`` that implement additional important functionality.
+ 

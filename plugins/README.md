@@ -113,6 +113,7 @@ approaches - first, get familiar with:
     - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
+    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``
   
 And also available modules. Each module provides it's own way of enriching the environment, 
 such as pre-defined color maps, webgl processing, fabricJS canvas, annotation logic or snapshots.   

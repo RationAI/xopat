@@ -227,6 +227,11 @@ form.submit();<\/script>`;
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*'
         });
+
+        if (typeof postData === "object" && !postData.meta) {
+            postData.meta = APPLICATION_CONTEXT.config.meta;
+        }
+
         const response = await fetch(url, {
             method: method,
             mode: 'cors',

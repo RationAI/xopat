@@ -444,6 +444,9 @@ EOF;
             get params () {
                 return setup.params || {};
             },
+            get meta () {
+                return setup.meta || {};
+            },
             get data () {
                 return setup.data || [];
             },
