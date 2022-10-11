@@ -6,10 +6,7 @@ Fired before a sequence starts playing.
 ### `stop` | e: undefined
 Fired after a sequence that has been playing stops.
 
-### `before-enter` | e: undefined
-Fired before each sequence, including the waiting time.
-
-### `enter` | e: undefined
+### `enter` | e: `{index: number, prevIndex: number, step: object}`
 Fired before each sequence, immediately before the animation happens.
 
 ### `create` | e: `{index: number, step: object}`

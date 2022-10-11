@@ -872,7 +872,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let self = this;
 		this.canvas.getActiveObject = function() {
 			let e = get();
-			console.log("GET", e ? e.selectable : "", e, self.overlay.fabric._activeObject);
+			console.log("GET", e ? e.selectable : "", e, self.canvas._activeObject);
 			return e;
 		};
 		const set = this.canvas.setActiveObject.bind(this.canvas);
@@ -882,7 +882,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		};
 		const disc = this.canvas._discardActiveObject.bind(this.canvas);
 		this.canvas._discardActiveObject = function(e, t) {
-			console.log("DISCARD", e, self.overlay.fabric.__eventListeners);
+			console.log("DISCARD", e, self.canvas.__eventListeners);
 			return disc(e, t);
 		};
 	}
@@ -1381,7 +1381,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	_init(o, point, isLeftClick) {
-		let currentObject = this.context.overlay.fabric.getActiveObject(),
+		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
 		if (!currentObject) {

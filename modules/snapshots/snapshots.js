@@ -24,6 +24,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         }
         let view = this.viewer.viewport;
         this._add({
+            id: Date.now(),
             zoomLevel: this._captureViewport ? view.getZoom() : undefined,
             point: this._captureViewport ? view.getCenter() : undefined,
             delay: delay,
@@ -41,6 +42,9 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      * @param {number} index optional, deleted current if unspecified
      */
     remove(index=undefined) {
+        if (this._playing) {
+            return;
+        }
         index = index ?? this._idx;
 
         let step = this._steps[index];
@@ -87,7 +91,6 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     /**
      * Play the sequence. Does nothing when already playing.
      * @event start raised when playing has begun
-     * @event before-enter called at the start of delay of each step
      * @event enter called after the delay waiting is done and the step executes
      */
     play() {
@@ -103,7 +106,6 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     /**
      * Play from index.
      * @event start raised when playing has begun
-     * @event before-enter called at the start of delay of each step
      * @event enter called after the delay waiting is done and the step executes
      * @param {number} index to start from snapshot
      */
@@ -249,14 +251,9 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
         this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
 
-        this.raiseEvent("before-enter", {
-            index: index,
-            step: this._currentStep
-        });
-
         const _this = this;
         this._currentStep.promise.then(atIndex => {
-            _this._jumpAt(atIndex);
+            _this._jumpAt(atIndex, prevIdx);
             _this._idx  = atIndex + 1;
             _this._playStep(_this._idx);
         });
@@ -319,7 +316,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         });
     }
 
-    _jumpAt(index, direct=true) {
+    _jumpAt(index, fromIndex=undefined) {
         let step = this._steps[index];
         if (!step || this._steps.length <= index) {
             return;
@@ -332,7 +329,8 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
         this.raiseEvent("enter", {
             index: index,
-            immediate: direct,
+            prevIndex: fromIndex,
+            prevStep: isNaN(fromIndex) ? undefined : this._steps[fromIndex],
             step: step
         });
     }
