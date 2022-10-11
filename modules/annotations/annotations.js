@@ -166,7 +166,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		const props = [];
 		for (let fid in this.objectFactories) {
 			const factory = this.objectFactories[fid];
-			const newProps = factory.exportsProperties();
+			const newProps = factory.exports();
 			if (Array.isArray(newProps)) props.push(...newProps);
 		}
 		props.push(...OSDAnnotations.PresetManager.exportableProperties);
@@ -786,6 +786,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Text, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Image, false);
 
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);

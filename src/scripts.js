@@ -375,20 +375,45 @@ ${constructExportVisualisationForm()}
 
     /**
      * File input text data loader
-     * @param e event fired on an input (single) type file submit,
+     * @param onUploaded function to handle the result
+     * @param accept file types to accept, e.g. "image/png, image/jpeg"
+     *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
+     * @param mode {"text"|"bytes"} in what mode to read the data; text results in string, bytes in array buffer
      * @returns {Promise<void>}
      */
-    window.UTILITIES.readFileUploadEvent = async function(e) {
+    window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
+        const uploader = $("#file-upload-helper");
+        uploader.attr('accept', accept);
+        uploader.on('change', () => {
+            UTILITIES.readFileUploadEvent(event, mode).then(onUploaded)
+            uploader.val('');
+            uploader.off('change');
+        });
+        uploader.trigger("click");
+    }
+
+    /**
+     * File input text data loader handler, meant to be attached to input[type=file] onchange event
+     * @param e event fired on an input (single) type file submit,
+     * @param mode {"text"|"bytes"|"url"} in what mode to read the data; text results in string, bytes in array buffer, url in the file path.
+     * @returns {Promise<void>}
+     */
+    window.UTILITIES.readFileUploadEvent = function(e, mode="text") {
         return new Promise((resolve, reject) => {
             let file = e.target.files[0];
             if (!file) return reject("Invalid input file: no file.");
             let fileReader = new FileReader();
             fileReader.onload = e => resolve(e.target.result);
-            fileReader.readAsText(file);
+            if (mode === "text") fileReader.readAsText(file);
+            else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
+            else if (mode === "url") resolve(URL.createObjectURL(file));
+            else throw "Invalid read file mode " + mode;
         });
     };
 
-    $("body").append("<a id='link-download-helper' class='d-none'></a>");
+    $("body")
+        .append("<a id='link-download-helper' class='d-none'></a>")
+        .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
 
     UTILITIES.updateTheme();
 })(window);

@@ -148,7 +148,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return [];
     }
 
-
     copyProperties(ofObject, ...withAdditional) {
         // const copy = {...ofObject};
         // delete copy.incrementId;
@@ -311,15 +310,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
-    }
-
-    /**
-     * Which properties should be kept on objects apart from default ones
-     * @return {[string]} a list of properties to keep on native exports,
-     *   geometry-related properties are usually exported automatically
-     */
-    exportsProperties() {
-        return [];
+        return undefined;
     }
 
     /**

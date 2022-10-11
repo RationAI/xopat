@@ -26,8 +26,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} parameters object of the following properties:
      *              - left: offset in the image dimension
      *              - top: offset in the image dimension
-     *              - rx: major axis radius
-     *              - ry: minor axis radius
+     *              - width: rect width
+     *              - height: rect height
      * @param {Object} options see parent class
      */
     create(parameters, options) {
