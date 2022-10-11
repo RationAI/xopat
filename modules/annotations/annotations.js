@@ -985,7 +985,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		VIEWER.addHandler("canvas-press", function (e) {
 			if (_this.disabledInteraction) return;
-			console.log(e);
 			handleLeftClickDown(e.originalEvent);
 		});
 
@@ -1063,9 +1062,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	_keyUpHandler(e) {
 		if (this.disabledInteraction) return;
 
+		console.log(e)
+
 		if (!e.ctrlKey && !e.altKey) {
-			if (e.code === "Delete") return this.removeActiveObject();
-			if ( e.code === "Escape") {
+			if (e.key === "Delete") return this.removeActiveObject();
+			if (e.key === "Escape") {
 				this.history._boardItemSave();
 				this.setMode(this.Modes.AUTO);
 				return;
@@ -1073,9 +1074,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		if (e.ctrlKey) {
-			if (e.key === "z") return this.history.redo();
-			if (e.key === "Z") return this.history.back();
-
+			if (e.key === "z") return this.history.back();
+			if (e.key === "Z") return this.history.redo();
 		}
 
 		if (this.mode.rejects(e)) {
@@ -1482,7 +1482,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 
 	accepts(e) {
 		if (this.context.mode === this.context.Modes.FREE_FORM_TOOL_REMOVE
-			&& e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
+			&& e.key === "Alt" && e.shiftKey && !e.ctrlKey) {
 
 			return true;
 		}
@@ -1508,7 +1508,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	accepts(e) {
 		return !e.ctrlKey
 			&& (this.context.mode === this.context.Modes.FREE_FORM_TOOL_ADD || e.shiftKey)
-			&& e.code === "AltLeft";
+			&& e.key === "Alt";
 	}
 
 	rejects(e) {
@@ -1573,10 +1573,10 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.code === "AltLeft" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "Alt" && !e.ctrlKey && !e.shiftKey;
 	}
 
 	rejects(e) {
-		return e.code === "AltLeft";
+		return e.key === "Alt";
 	}
 };

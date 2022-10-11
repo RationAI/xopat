@@ -65,10 +65,15 @@ Same as above, an error event.
 
 #### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
 Fired when user presses a key. The event object is extended by one property that tells us whether the
-main canvas is in the focus (e.g. not a UI window) at the time.
+main canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
+and ignores OpenSeadragon key event.
+
+//todo override openseadragon hotkeys and trigger them ourselves, disable R rotation
 
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
 Fired when user releases a key. Similar as above.
+
+####
 
 ### OpenSeadragon: User Input Events
 These are listed just for the reference, for other input events see the OpenSeadragon documentation.

@@ -14,7 +14,7 @@ describe('Third party pyramidal image', withBrowser, () => {
         utils.waitForViewer();
 
         testBasic.mainMenu(visualisation);
-        cy.canvas().toMatchImageSnapshot(); //do not move the call, screenshot comparison
+        cy.canvas().matchImage(); //do not move the call, screenshot comparison
 
         testBasic.shadersMainMenu(visualisation);
 

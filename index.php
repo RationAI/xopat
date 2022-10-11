@@ -702,8 +702,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         plugin.getOption = function(key, defaultValue=undefined) {
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
-            return APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
+            let value = APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
+            if (value === "false") value = false; //true will eval to true anyway
+            return value;
         }
 
         showPluginError(id, null);
@@ -860,7 +862,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             imageData = tiledImage?.getBackgroundConfig();
 
         const title = $("#tissue-title-header").removeClass('error-container');
-        if (Number.isInteger(Number.parseInt(imageData.dataReference))) {
+        if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
             title.html(imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             ));

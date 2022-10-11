@@ -16,3 +16,11 @@ javascript objects with pre-defined properties. In case your annotations have di
 structure, you have to translate it in the `dataLoader.js` file. The purpose of this file
 is to translate the response data --- that's why the default implementation does practically
 nothing.
+
+For more internal workings of the underlying module, check ``modules/annotations/README.md``.
+
+### Parameters
+The plugin supports optional parameters:
+
+ - ``focusWithZoom`` whether to zoom automatically on annotation with focus action, default true
+ - ``factories`` a list of enabled annotation factory IDs

@@ -17,3 +17,7 @@ test/videos/
 
 #sensitive data
 cypress.env.json
+
+#image comparison test temp data
+*.diff.png
+*.actual.png

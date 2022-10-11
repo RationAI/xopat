@@ -17,6 +17,7 @@ OSDAnnotations.History = class {
         this._context = context;
         this._presets = presetManager;
         this.containerId = "bord-for-annotations";
+        this._focusWithScreen = true;
     }
 
     /**
@@ -25,6 +26,10 @@ OSDAnnotations.History = class {
      */
     set size(value) {
         this.BUFFER_LENGTH = Math.max(2, value);
+    }
+
+    set focusWithZoom(value) {
+        this._focusWithScreen = value;
     }
 
     /**
@@ -301,7 +306,7 @@ window.addEventListener("beforeunload", (e) => {
             }
         }
 
-        if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
+        if (!this._focusWithScreen || !Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
             return;
         }
 

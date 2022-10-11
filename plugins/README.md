@@ -84,14 +84,17 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
 #### \[EXISTS\] `YourPLuginClass::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
+Available _after_ constructor.
 
 #### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
 (constants are OK since they can be converted naturally). The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor. For cookie support, prefer this method.
+Available _after_ constructor.
 
 #### \[EXISTS\] `YourPLuginClass::staticData(key)`
-Return data from ``include.json`` together with other data such as the folder the plugin lives in.
+Return data from ``include.json`` together with other data such as the folder the plugin lives in. It is mainly
+meant to retrieve the JSON values. Available _before_ constructor.
 
 ### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own

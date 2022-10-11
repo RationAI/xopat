@@ -127,10 +127,10 @@
             }
 
             this._showCustomModalImpl(parentId, title, `
-<script type="text/javascript" src="${APPLICATION_CONTEXT.rootPath}/external/monaco/loader.js"><\/script>
+<script type="text/javascript" src="${APPLICATION_CONTEXT.rootPath}/src/external/monaco/loader.js"><\/script>
 <script type="text/javascript">
 require.config({
-  paths: { vs: "${APPLICATION_CONTEXT.rootPath}/external/monaco" }
+  paths: { vs: "${APPLICATION_CONTEXT.rootPath}/src/external/monaco" }
 });
 
 const DEFAULT_EDITOR_OPTIONS = {
@@ -261,8 +261,8 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
 <html lang="en">
     <head>
         <title>${title}</title>
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/external/primer_css.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/assets/style.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/external/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script>
         <script type="text/javascript">
@@ -287,7 +287,7 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
 
         _destroyModalWindow: function(id, context) {
             //important to clean up
-            let body = context ? context.document.getElementById("body") : undefined;
+            let body = context?.document?.getElementById("body");
             if (body) body.innerHTML = "";
             URL.revokeObjectURL(this._modals[id].objUrl);
             delete this._modals[id];

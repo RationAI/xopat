@@ -24,7 +24,10 @@
 // -- This will overwrite an existing command --
 // Cypress.Commands.overwrite('visit', (originalFn, url, options) => { ... })
 
-import "cypress-plugin-snapshots/commands"
+
+//import "cypress-plugin-snapshots/commands" //not enabled, replaced by below
+import '@frsource/cypress-plugin-visual-regression-diff';
+import "cypress-real-events/support";
 
 
 /**
@@ -99,29 +102,29 @@ Cypress.Commands.addAll({
         return cy.get(".openseadragon-canvas>canvas").first()
     },
     /**
-     * Press a key
-     * @param toType text to type, {key} for specific key names (such as shift...)
      * @return Cypress.Chainable - builder pattern
+     * @param key
+     * @param opts
      */
-    key(toType) {
-        cy.get('#osd').children().first().type(toType, {parseSpecialCharSequences: true, log: true});
-        return cy;
+    key(key, opts) {
+        return cy.keyDown(key, opts).trigger('keyup', { ...opts, eventConstructor: 'KeyboardEvent', key: key, release: true });
     },
     /**
-     * @param toType text to type, {key} for specific key names (such as shift...)
      * @return Cypress.Chainable - builder pattern
+     * @param key
+     * @param opts
      */
-    keyDown(toType) {
-        cy.get('#osd').children().first().type(toType, { release: false, parseSpecialCharSequences: true, log: true });
-        return cy;
+    keyDown(key, opts) {
+        return cy.document().trigger('keydown', { ...opts, eventConstructor: 'KeyboardEvent', key: key, release: false })
+            .trigger('keypress', { eventConstructor: 'KeyboardEvent', key: key, release: false });
     },
     /**
-     * @param toType text to type, {key} for specific key names (such as shift...)
      * @return Cypress.Chainable - builder pattern
+     * @param key
+     * @param opts
      */
-    keyUp(toType) {
-        cy.get('#osd').children().first().type(toType, { release: true, parseSpecialCharSequences: true, log: true });
-        return cy;
+    keyUp(key, opts) {
+        return cy.document().trigger('keyup', { ...opts, eventConstructor: 'KeyboardEvent', key: key, release: true });
     },
     /**
      * Draw over 'this' target - must be called on a DOM element

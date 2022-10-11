@@ -4,7 +4,6 @@ class AnnotationsGUI {
 		this.id = id;
 
 		this._server = this.staticData("server");
-		this._allowedFactories = this.staticData("factories") || ["polygon"];
 		this.PLUGIN = `plugin('${id}')`;
 	}
 
@@ -33,6 +32,8 @@ class AnnotationsGUI {
 		};
 
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
+
+		this.setupFromParams();
 
 		const _this = this;
 
@@ -64,6 +65,11 @@ class AnnotationsGUI {
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
 	} // end of initialize
+
+	setupFromParams() {
+		this._allowedFactories = this.getOption("factories", false) || this.staticData("factories") || ["polygon"];
+		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+	}
 
 	/****************************************************************************************************************
 
