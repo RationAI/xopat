@@ -60,6 +60,15 @@ This (global) function will register the plugin and initialize it. It will make 
       > let html = \`\<tag onclick="plugin('${this.id}').callMyPluginFunction(...)"\>\`;
 - in case `pluginReady` function within the plugin main class is defined, it will be invoked when the visualisation is ready
 
+>
+> You can register the plugin anonymously if you do not need the class namespace:
+> ``` 
+> addPlugin("user-session", class {
+>      ...
+> });
+> ```
+>
+
 #### `YourPLuginClass::constructor(id, params)`
 The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
 is integrated within the system and gets exported - such information is available when sharing the plugin

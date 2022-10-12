@@ -87,7 +87,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
-                                if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
+                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
                                     e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
                                 }
                                 seaGL.addLayer(index);
@@ -101,7 +101,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
-                                if (!newVis.hasOwnProperty("lossless") || newVis.lossless &&  e.item.source.setFormat) {
+                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
                                     e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
                                 }
                                 seaGL.addLayer(index);

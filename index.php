@@ -1046,6 +1046,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                         referencedImage = worldItem?.getBackgroundConfig();
 
                     if (image == referencedImage) {
+                        //todo not very flexible...
                         if (image.hasOwnProperty("lossless") && image.lossless) {
                             worldItem.source.fileFormat = "png";
                         }
@@ -1071,21 +1072,22 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
 
                 }
             }
-            imageOpts.unshift(`<div id="panel-images" class="inner-panel mt-2">
+            imageOpts.unshift(`
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
              <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
              <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
         </div>
-
         <div id="image-layer-options" class="inner-panel-hidden">`);
-            imageOpts.push("</div></div></div>");
-            $("#panel-images").html(imageOpts.join(""));
+            imageOpts.push("</div></div>");
+            $("#panel-images").html(imageOpts.join("")).css('display', 'block');
 
             $("#global-tissue-visibility").css("display", "none");
             handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
             return;
         }
+
+        $("#panel-images").html().css('display', 'none');
 
         const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
         if (confBackground.length > 1) {
@@ -1103,7 +1105,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 `;
             }
 
-            $("#panel-images").html();
             //use switching panel
             USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
 <div id="tissue-preview-container">${html}</div>`);
@@ -1144,7 +1145,13 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                     }
                 });
                 return;
+            } else {
+                //todo not very flexible...
+                if (image.hasOwnProperty("lossless") && image.lossless && worldItem) {
+                    worldItem.source.fileFormat = "png";
+                }
             }
+
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
             $("#global-tissue-visibility").css("display", "none");
@@ -1162,7 +1169,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
             const activeVis = seaGL.visualization();
             if (layerWorldItem) {
-                if (!(activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
+                if ((!activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
                     layerWorldItem.source.setFormat("png");
                 }
                 layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
