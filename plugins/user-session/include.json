@@ -7,6 +7,6 @@
     "icon": "",
     "includes" : ["session.js"],
     "modules": [],
-    "permaLoad": true,
+    "permaLoad": false,
     "server": ""
 }

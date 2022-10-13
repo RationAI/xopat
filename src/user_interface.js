@@ -816,10 +816,12 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
 
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             //todo better approach?
-            let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
+            let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
+                pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
 
             //permaLoad plugins are not available for interaction
-            if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad)) continue;
+            if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
+                (pluginConfig.hasOwnProperty("permaLoad") && pluginConfig.permaLoad)) continue;
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;

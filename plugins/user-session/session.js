@@ -4,18 +4,39 @@ addPlugin("user-session", class {
         this.PLUGIN = `plugin('${id}')`;
         this.server = this.staticData('server');
         this.headers = this.staticData('headers');
+        this.sessionReferenceFile = params.referenceFile || "";
+
+        this.enabled = this.sessionReferenceFile && this.server && true; //retype
     }
 
     pluginReady() {
-        $("#navigator-container").append(`
-<span class="material-icons pointer" onclick="${this.PLUGIN}.export();">save</span>        
+        if (this.enabled) {
+            $("#navigator-container").append(`
+<span class="material-icons pointer" title="Save session" onclick="${this.PLUGIN}.export();">save</span>        
         `);
+        } else {
+            $("#navigator-container").append(`
+<span class="material-icons pointer" title="Not available" style="text-decoration: line-through" onclick="${this.PLUGIN}.export();">save</span>        
+        `);
+        }
     }
 
     export() {
-        UTILITIES.fetchJSON(this.server, {
-            filename: "",//todo
-            session: UTILITIES.getForm()
-        }, this.headers);
+        if (!this.enabled) {
+            console.warn("Cannot save the session: no target WSI found.");
+            Dialogs.show("Cannot save the session: no target WSI found.", 2500, Dialogs.MSG_WARN);
+        } else {
+            UTILITIES.fetchJSON(this.server, {
+                ajax: "storeSession",
+                filename: this.sessionReferenceFile,
+                session: UTILITIES.getForm()
+            }, this.headers).then(response => {
+                //todo response check for success?
+                Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);
+            }).catch(e => {
+                console.warn("Failed to save export to server.", e);
+                Dialogs.show("Failed to save the session!", 2500, Dialogs.MSG_ERR);
+            });
+        }
     }
 });

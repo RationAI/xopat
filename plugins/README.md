@@ -43,16 +43,29 @@ Note that this is meant mainly for a viewer maintainer to set-up the plugin defa
 don't use `id` for anything else
 - The plugin main class should not define any automatically-defined API functions. See **Interface ``[EXISTS] YourPLuginClass::``** below.
 
-### Interface
+### Data
+Plugins can retrieve meta-data from a static source, the ``include.json`` file populated with
+additional values from PHP (todo list them).
+
+Dynamic source meta-data can come from the viewer configuration, the only reserved and inherited
+value is ``permaLoad`` option that indicates the plugin has been included without the user
+consciousness and ability to remove.
+
+Finally, the plugin can listen on export event and attach custom data, such data
+can be retrieved (if available) anytime.
+
+For all the described functionality, see the API description below.
+
+### The plugin Main Class API (Interface)
 Since `HTML` files and `js` scripts work a lot with global scope, we define several functions and variables for plugins to 
 be able to work flawlessly.
 
 #### `plugin(id)`
 Retrieve an instantiated plugin by its id.
 
-#### `addPlugin(id, PluginRootClass)`
+#### `addPlugin(id, PluginMainClass)`
 This (global) function will register the plugin and initialize it. It will make sure that
-- an instance of `PluginRootClass` is created
+- an instance of `PluginMainClass` is created
 - `id` member variable is set
 - the API is correctly configured
     - this is mainly for the plugin itself, in case you want to use `on...=""` HTML attributes where you need to access the plugin from the global scope
@@ -70,7 +83,7 @@ This (global) function will register the plugin and initialize it. It will make 
 >
 
 #### `YourPLuginClass::constructor(id, params)`
-The plugin main class is given it's `id` and `params` object, use them as you wish. `params` object
+The plugin main class is given it's `id` and `params` object (dynamic metadata), use them as you wish. `params` object
 is integrated within the system and gets exported - such information is available when sharing the plugin
 exports. Note that the object should not be used to store big amounts of data, for that use general viewer 
 event `export-data` together with `APPLICATION_CONTEXT::getData()` should be used.

@@ -135,7 +135,8 @@ foreach ($PLUGINS as $key => $plugin) {
     $hasParams = isset($parsedParams->plugins->{$plugin->id});
     $plugin->loaded = !isset($plugin->error) &&
         (isset($parsedParams->plugins->{$plugin->id})
-            || (isset($plugin->permaLoad) && $plugin->permaLoad)
+            || (isset($plugin->permaLoad) && $plugin->permaLoad) //param in the static config
+            || $hasParams && $plugin->$parsedParams->plugins->{$plugin->id}->permaLoad //param in the plugin params
             || in_array($plugin->id, $pluginsInCookies)
         );
 
@@ -536,6 +537,14 @@ EOF;
                 }
             }
             return result;
+        },
+        referencedFileName(stripSuffix=false) { //todo unify namespace, move to tools or other function here?
+            if (setup.background.length < 0) {
+                return undefined;
+            }
+            const bgConfig = VIEWER.tools.referencedTiledImage()?.getBackgroundConfig();
+            if (bgConfig) return UTILITIES.fileNameFromPath(setup.data[bgConfig.dataReference], stripSuffix);
+            return undefined;
         },
         _setCookie(key, value) {
             if (!this.config.params.bypassCookies) {
