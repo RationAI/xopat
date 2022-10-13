@@ -9,8 +9,8 @@
  *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1, mask array size = x, incorrect
  *      values are changed to reflect the color steps
  *  opacity - for more details, see @WebGLModule.UIControls color UI type
+ *  connect - a boolean switch to enable/disable advanced slider mapping to break values
  *
- *  inverse - low values are high opacities instead of high values, 1 or 0, default 0
  *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
  *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
  *

@@ -55,8 +55,13 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     getFragmentShaderExecution() {
         return `
     float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    if (${this.inverse.sample()}) data${this.uid} = 1.0 - data${this.uid};
-    if(data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample(`data${this.uid}`, 'float')}){
+    bool cond${this.uid} = data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample(`data${this.uid}`, 'float')};
+    if (${this.inverse.sample()}) {
+        cond${this.uid} = !cond${this.uid};
+        data${this.uid} = 1.0 - data${this.uid};
+    }
+    
+    if(cond${this.uid}){
         ${this.render(`vec4(${this.color.sample()}, data${this.uid} * ${this.opacity.sample()})`)}
     } else {
         ${this.render(`vec4(.0)`)}
