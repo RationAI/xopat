@@ -1,10 +1,26 @@
-# Pathopus - OpenSeadragon-based histology data visualizer
 
-A flexible way of visualisation of multiple high resolution images overlaid.
+<h1 align="center">Pathopus - Histology Data Visualizer
+</h1>
+<p align="center">
+  <sup>A web based, REST API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</sup>
+</p>
 
-The visualisation is fully flexible. It, in fact, consists of two main logical groups. The first, **image** groups, 
-is rendered AS-IS. It is meant for tissue scan to be shown. The second, **data** groups is rendered using our WebGL 
-extension. 
+![The Pathopus Viewer](src/assets/docs/pathopus-banner.png)
+
+<hr>
+With the focus on flexibility, extensibility and modularity, the Pathopus
+viewer tries to address various issues in digital pathology related to analysis and 
+AI development.
+
+Annotations, and other plugins introduce a powerful set of additional features
+that take the WSI far beyond standard.
+
+Note that the viewer is still in active development. Currently, it is used for interactive
+offline AI data inspection. We work now on integration workflows and in future
+the focus will be on services, namely non-standard integration with a ML pipeline for
+effective algorithm/network debugging and profiling with the help of powerful visualisation platform. 
+
+
 
 ## Setup
 There is _docker_ available: https://github.com/RationAI/pathopus-docker. Although very versatile, setting up

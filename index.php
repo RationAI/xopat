@@ -1096,7 +1096,7 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
             return;
         }
 
-        $("#panel-images").html().css('display', 'none');
+        $("#panel-images").html("").css('display', 'none');
 
         const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
         if (confBackground.length > 1) {
