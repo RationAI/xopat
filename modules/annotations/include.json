@@ -5,8 +5,13 @@
     "includes" : [
         "ext/greiner-hormann.min.js",
         "annotations.js",
+        "convert/convertor.js",
+        "convert/asapXml.js",
+        "presets.js",
         "objects.js",
-        "free_form_tool.js",
+        "objectGenericFactories.js",
+        "objectAdvancedFactories.js",
+        "freeFormTool.js",
         "history.js"
     ],
     "requires": ["webgl", "fabricjs"]

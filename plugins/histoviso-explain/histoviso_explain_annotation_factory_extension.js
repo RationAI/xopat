@@ -171,7 +171,7 @@ class HistovisoImageExplorer extends HistovisoImage {
         //do nothing
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "NN measure";
     }
 
@@ -306,7 +306,7 @@ class HistovisoImageRenderer extends HistovisoImage {
         this._selected = theObject;
     }
 
-    getASAP_XMLTypeName() {
+    title() {
         return "NN inspector";
     }
 

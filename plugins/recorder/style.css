@@ -28,6 +28,15 @@
     color: var( --color-icon-danger) !important;
 }
 
+#playback-timeline-measure  {
+    height: 80%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: var(--color-bg-danger-inverse);
+    width: 2px;
+}
+
 .timeline-play-small {
     color: var( --color-icon-danger) !important;
     font-size: 14px;

@@ -8,7 +8,7 @@
 * TODO always use cache approach, do not rely on events, just program two approaches - with and without cache (setting c2d directly after tile load)
 */
 
-OpenSeadragon.BridgeGL = class {
+window.OpenSeadragon.BridgeGL = class {
 
     constructor(openSeaDragonInstance, webGLEngine, cachedMode=true) {
         let _this  = this;
@@ -51,6 +51,11 @@ OpenSeadragon.BridgeGL = class {
             tiledImage._bridgeId = this.uid;
         }
         //else... the other approach is based on events, no need to enable on the element
+
+        tiledImage.__cached_hasTransparency = tiledImage.hasTransparency;
+        tiledImage.hasTransparency = function(context2D, url, ajaxHeaders, post) {
+            return true; //we always render transparent
+        }
     }
 
     /**
@@ -59,7 +64,13 @@ OpenSeadragon.BridgeGL = class {
      */
     removeLayer(idx) {
         if (!this.uid) {
-            this._unbindFromTiledSource(idx);
+            const source = this._unbindFromTiledSource(idx);
+            if (source) {
+                source.hasTransparency = source.__cached_hasTransparency || source.hasTransparency;
+                delete source.__cached_hasTransparency;
+            } else {
+                console.warn("Could not properly remove bindings on TiledImage index", idx);
+            }
         }
         delete this._rendering[idx];
     }
@@ -394,7 +405,7 @@ OpenSeadragon.BridgeGL = class {
         if (this.uid === e.tiledImage._bridgeId && !e.tile.webglId) {
             e.tile.webglId = this.uid;
             //todo necessary to set?!?! I thougth OSD does this automatically
-            e.tile.image = e.image;
+            e.tile.imageData = e.image;
             e.tile.webglRefresh = 0; // -> will draw immediatelly
             //necessary, the tile is re-drawn upon re-zooming, store the output
             var canvas = document.createElement('canvas');
@@ -411,7 +422,7 @@ OpenSeadragon.BridgeGL = class {
             //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
-            let imageData = e.tile.image;
+            let imageData = e.tile.imageData;
 
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
@@ -430,6 +441,14 @@ OpenSeadragon.BridgeGL = class {
         let layer = this._rendering[index];
         const _context = this;
         let source = layer.source;
+
+        //necessary to modify hash key so as to force the viewer download the image twice
+        source.__cached_getTileHashKey = source.getTileHashKey;
+        source.getTileHashKey = function(level, x, y, url, ajaxHeaders, postData) {
+            //todo implement instead feature of sharing the data :/
+            return source.__cached_getTileHashKey(level, x, y, url, ajaxHeaders, postData) + "_webgl";
+        };
+
         source.__cached_createTileCache = source.createTileCache;
         source.createTileCache = function(cache, data, tile) {
             cache._data = data;
@@ -497,5 +516,8 @@ OpenSeadragon.BridgeGL = class {
         delete source.__cached_getTileCacheData;
         source.getTileCacheDataAsContext2D = source.__cached_tileDataToRenderedContext;
         delete source.__cached_tileDataToRenderedContext;
+        source.getTileHashKey = source.__cached_getTileHashKey;
+        delete source.__cached_getTileHashKey;
+        return source;
     }
 };

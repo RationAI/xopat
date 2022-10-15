@@ -21,7 +21,7 @@
 *  }} Layer
 */
 
-class WebGLModule {
+window.WebGLModule = class {
     /**
      * @param {object} incomingOptions
      * @param {function} incomingOptions.htmlControlsId: "data-layer-options",
@@ -114,6 +114,9 @@ class WebGLModule {
         this.reset();
     }
 
+    /**
+     * Reset the engine to the initial state
+     */
     reset() {
         this._visualisations = [];
         this._dataSources = [];
@@ -350,7 +353,7 @@ class WebGLModule {
      * @param value value to be exported
      * @return {*} value if key passes exportable condition, undefined otherwise
      */
-    jsonReplacer(key, value) {
+    static jsonReplacer(key, value) {
         return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     }
 
@@ -514,7 +517,7 @@ class WebGLModule {
     }
 
     _getDebugInfoPanel() {
-        return `<div id="test-${this.uniqueId}-webgl">
+        return `<div id="test-inner-${this.uniqueId}-webgl">
 <b>WebGL Processing I/O (debug mode)</b>
 <div id="test-${this.uniqueId}-webgl-log"></div>
 Input: <br><div style="border: 1px solid;display: inline-block; overflow: auto;" id='test-${this.uniqueId}-webgl-input'>No input.</div><br>
@@ -566,7 +569,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             let data = this.webGLImplementation.generateVisualisation(order, visualisation, this.supportsHtmlControls());
             if (data.usableShaders < 1) {
                 this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
-<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, this.jsonReplacer)}</code>
+<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, WebGLModule.jsonReplacer)}</code>
 <br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
                 return null;
             }
@@ -700,6 +703,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                 if (vis.shaders.hasOwnProperty(key)) {
                     let layer = vis.shaders[key],
                         ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
+                    if (layer.type === "none") continue;
                     this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
                 }
             }
@@ -716,6 +720,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     }
                     delete layer.error;
                     delete layer.desc;
+                    if (layer.type === "none") continue;
                     let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
                     this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
                 }

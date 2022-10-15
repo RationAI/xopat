@@ -9,8 +9,8 @@
  *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1, mask array size = x, incorrect
  *      values are changed to reflect the color steps
  *  opacity - for more details, see @WebGLModule.UIControls color UI type
+ *  connect - a boolean switch to enable/disable advanced slider mapping to break values
  *
- *  inverse - low values are high opacities instead of high values, 1 or 0, default 0
  *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
  *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
  *
@@ -87,7 +87,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         this.opacity.init();
 
         this.connect.on('connect', function (raw, encoded, ctx) {
-            _this.color.setSteps(_this.connect.raw ? [..._this.threshold.raw, 1] :
+            _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
                 _this.defaultColSteps(_this.color.maxSteps)
             );
             _this.color.updateColormapUI();
@@ -97,7 +97,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
         this.threshold.on('threshold_values', function (raw, encoded, ctx) {
             if (_this.connect.raw) { //if YES
-                _this.color.setSteps([...raw, 1]);
+                _this.color.setSteps([0, ...raw, 1]);
                 _this.color.updateColormapUI();
             }
         }, true);
@@ -108,12 +108,12 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             //console.warn("Invalid todododo");
         }
 
-        if (!this.connect.raw) {
+        if (this.connect.raw) {
+            this.color.setSteps([0, ...this.threshold.raw, 1]);
+
+        } else {
             //default breaks mapping for colormap if connect not enabled
             this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
-            console.log(this.color.steps);
-        } else {
-            this.color.setSteps([...this.threshold.raw, 1]);
         }
 
         this.color.init();

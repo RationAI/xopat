@@ -231,10 +231,12 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
             let layer = visualisation.shaders[dataId];
             layer.rendering = false;
 
-            if (layer.error) {
+            if (layer.type == "none") {
+                //prevents the layer from being accounted for
+                layer.error = "Not an error - layer type none.";
+            } else if (layer.error) {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name, layer.error, dataId, false, layer, false) + html;
                 console.warn(layer.error, layer["desc"]);
-
             } else if (layer._renderContext) {
                 let visible = false;
                 usableShaders++;
@@ -435,8 +437,9 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
             layer.rendering = false;
 
             if (layer.type == "none") {
-                //do nothing
-            } else if (layer.hasOwnProperty("error")) {
+                //prevents the layer from being accounted for
+                layer.error = "Not an error - layer type none.";
+            } else if (layer.error) {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name, layer.error, dataId, false, layer, false) + html;
                 console.warn(layer.error, layer["desc"]);
 

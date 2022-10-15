@@ -3,8 +3,14 @@
 $production = false;
 
 //relative path system in the application
+define('PROJECT_ROOT', 'src');
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
-define('EXTERNAL_SOURCES', 'external');
+define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
+define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
+
+//todo two versions - dev and production
+define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
+
 define('MODULES_FOLDER', 'modules');
 define('PLUGINS_FOLDER', 'plugins');
 
@@ -12,14 +18,22 @@ if ($production) {
     define('PROTOCOL', "https://");
     define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
     //auto domain: ($_SERVER['HTTP_HOST'] != 'localhost') ? $_SERVER['HTTP_HOST'] : false
-    define('JS_COOKIE_SETUP', "expires=Fri, 31 Dec 9999 23:59:59 GMT; SameSite=None; Secure=false; path=/");
+    define('JS_COOKIE_EXPIRE', 365); //days
+    define('JS_COOKIE_PATH', "/");
+    define('JS_COOKIE_SAME_SITE', "None");
+    define('JS_COOKIE_SECURE', "false");
+
 
     define('BG_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
 } else {
     define('PROTOCOL', "http://");
     define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
-    define('JS_COOKIE_SETUP', "expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/");
+    define('JS_COOKIE_EXPIRE', 365); //days
+    define('JS_COOKIE_PATH', "/");
+    define('JS_COOKIE_SAME_SITE', ""); //default
+    define('JS_COOKIE_SECURE', ""); //default
+
     define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
 }

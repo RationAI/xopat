@@ -1,0 +1,12 @@
+{
+    "id": "user-session",
+    "name": "User sessions",
+    "author": "Jirka Horák",
+    "version": "1.0.0",
+    "description": "Export user sessions and store them using custom API.",
+    "icon": "",
+    "includes" : ["session.js"],
+    "modules": [],
+    "permaLoad": false,
+    "server": ""
+}

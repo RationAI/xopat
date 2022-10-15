@@ -1,470 +1,3 @@
-// noinspection JSUnresolvedVariable
-
-OSDAnnotations.Preset = class {
-    /**
-     * Preset: object that pre-defines the type of annotation to be created, along with its parameters
-     * @param {number} id
-     * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
-     * @param {string} category default category meta data
-     * @param {string} color fill color
-     */
-    constructor(id, objectFactory = null, category = "", color = "") {
-        this.color = color;
-        this.objectFactory = objectFactory;
-        this.presetID = id;
-        this.meta = {};
-        this.meta.category = {
-            name: 'Category',
-            value: category
-        };
-    }
-
-    /**
-     * Create the object from JSON representation
-     * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
-     * @param {function} factoryGetter function able to get object factory from id
-     * @return {OSDAnnotations.Preset} instantiated preset
-     */
-    static fromJSONFriendlyObject(parsedObject, factoryGetter) {
-        let factory = factoryGetter(parsedObject.factoryID);
-        if (factory === undefined) {
-            console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
-                "No factory for such object available.");
-            factory = factoryGetter("polygon"); //rely on polygon presence
-        }
-        let preset = new this(parsedObject.presetID, factory, "", parsedObject.color);
-        preset.meta = parsedObject.meta || {};
-        return preset;
-    }
-
-    /**
-     * Convert the preset to JSON-friendly object
-     * @return {{color: string, factoryID: string, meta: {}, presetID: number}}
-     */
-    toJSONFriendlyObject() {
-        return {
-            color: this.color,
-            factoryID: this.objectFactory.factoryId,
-            presetID: this.presetID,
-            meta: this.meta
-        };
-    }
-
-    /**
-     * Read name of a meta value
-     * @param {string} key meta key
-     * @return {string} meta name
-     */
-    getMetaName(key) {
-        return this.meta[key] ? this.meta[key].name : undefined;
-    }
-
-    /**
-     * Read value of a metadata
-     * @param {string} key meta key
-     * @return {string} meta value
-     */
-    getMetaValue(key) {
-        return this.meta[key] ? this.meta[key].value : undefined;
-    }
-}; // end of namespace Preset
-
-/**
- * Preset manager, takes care of GUI and management of presets.
- * Provides API to objects to obtain object options. Has left and right
- * attributes that specify what preset is being active for the left or right button respectively.
- */
-OSDAnnotations.PresetManager = class {
-
-    /**
-     * Shared options, set to each annotation object.
-     */
-    static _commonProperty = {
-        selectable: true,
-        originalStrokeWidth: 3,
-        borderColor: '#fbb802',
-        cornerColor: '#fbb802',
-        stroke: 'black',
-        borderScaleFactor: 3,
-        hasControls: false,
-        lockMovementY: true,
-        lockMovementX: true,
-        hasRotatingPoint: false,
-    };
-
-    /**
-     * Create Preset Manager
-     * @param {string} selfName name of the property 'self' in parent
-     * @param {OSDAnnotations} context parent context
-     */
-    constructor(selfName, context) {
-        this._context = context;
-        this._presets = {};
-        //active presets for mouse buttons
-        this.left = undefined;
-        this.right = undefined;
-        this.modeOutline = APPLICATION_CONTEXT.getOption(`annotation_presets_mode_outline`, true);
-        this._colorSteps = 8;
-        this._colorStep = 0;
-    }
-
-    /**
-     * Get data to set as annotation properties (look, metadata...)
-     * @param {boolean} isLeftClick true if the data should be with preset data bound to the left mouse button
-     * @returns {object} data to populate fabric object with (parameter 'options'
-     * in AnnotationObjectFactory::create(..))
-     */
-    getAnnotationOptions(isLeftClick) {
-        let preset = isLeftClick ? this.left : this.right,
-            result = this._populateObjectOptions(preset);
-        result.isLeftClick = isLeftClick;
-        return result;
-    }
-
-    /**
-     * Set annotations to mode filled or outlined
-     * @param isOutline true if outlined
-     */
-    setModeOutline(isOutline) {
-        if (this.modeOutline === isOutline) return;
-        this.modeOutline = isOutline;
-        APPLICATION_CONTEXT.setOption(`annotation_presets_mode_outline`, isOutline, true);
-        this.updateAllObjectsVisuals();
-        this._context.canvas.requestRenderAll();
-    }
-
-    getModeOutline() {
-        return this.modeOutline;
-    }
-
-    /**
-     * Add new preset with default values
-     * @event preset-create
-     * @returns {OSDAnnotations.Preset} newly created preset
-     */
-    addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now(), this._context.polygonFactory, "", this._randomColorHexString());
-        this._presets[preset.presetID] = preset;
-        this._context.raiseEvent('preset-create', {preset: preset});
-        return preset;
-    }
-
-    /**
-     * Alias for static _commonProperty
-     * @param {OSDAnnotations.Preset} preset
-     */
-    getCommonProperties(withPreset) {
-        if (withPreset) {
-            return this._populateObjectOptions(withPreset);
-        }
-        return this.constructor._commonProperty;
-    }
-
-    /**
-     * Check if preset exists
-     * @param {number} id preset id
-     * @returns true if exists
-     */
-    exists(id) {
-        return this._presets.hasOwnProperty(id);
-    }
-
-    /**
-     * Presets getter
-     * @param {number} id preset id
-     * @returns {OSDAnnotations.Preset} preset instance
-     */
-    get(id) {
-        return this._presets[id];
-    }
-
-    /**
-     * Safely remove preset
-     * @event preset-delete
-     * @param {number} id preset id
-     * @returns deleted preset or false if deletion failed
-     */
-    removePreset(id) {
-        let toDelete = this._presets[id];
-        if (!toDelete) return undefined;
-
-        if (this._context.overlay.fabric._objects.some(o => {
-            return o.presetID === id;
-        })) {
-            Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
-                8000, Dialogs.MSG_WARN);
-            return undefined;
-        }
-        delete this._presets[id];
-        this._context.raiseEvent('preset-delete', {preset: toDelete});
-        return toDelete;
-    }
-
-    /**
-     * Update preset properties
-     * @event preset-update
-     * @param {number} id preset id
-     * @param {object} properties to update in the preset (keys must match)
-     * @return updated preset in case any value changed, false otherwise
-     */
-    updatePreset(id, properties) {
-        let preset = this._presets[id],
-            needsRefresh = false;
-        if (!preset) return undefined;
-
-        for (let key in properties) {
-            let value = properties[key];
-
-            if (preset.hasOwnProperty(key)) {
-                if (preset[key] !== value) {
-                    preset[key] = value;
-                    needsRefresh = true;
-                }
-            } else {
-                if (preset.meta[key] && preset.meta[key].value !== value) {
-                    preset.meta[key].value = value;
-                    needsRefresh = true;
-                }
-            }
-        }
-        if (needsRefresh) this._context.raiseEvent('preset-update', {preset: preset});
-        return needsRefresh ? preset : undefined;
-    }
-
-    /**
-     * Correctly and safely reflect object appearance based on mode
-     * @param object object to update
-     * @param withPreset preset that obect belongs to
-     */
-    updateObjectVisuals(object, withPreset) {
-        if (typeof object.fill === 'string') {
-            if (this.modeOutline) {
-                object.set({
-                    fill: "",
-                    stroke: withPreset.color
-                });
-            } else {
-                object.set({
-                    fill: withPreset.color,
-                    stroke: this.constructor._commonProperty.stroke
-                });
-            }
-        }
-    }
-
-    /**
-     * Update all object visuals
-     */
-    updateAllObjectsVisuals() {
-        this._context.canvas.getObjects().forEach(o => {
-            let preset = this.get(o.presetID);
-            if (preset) this.updateObjectVisuals(o, preset);
-        });
-    }
-
-    /**
-     * Add new metadata field to preset
-     * @event preset-meta-add
-     * @param {string} id preset id
-     * @param {string} name new meta field name
-     * @param {string} value default value
-     * @return {string} the new meta id
-     */
-    addCustomMeta(id, name, value) {
-        let preset = this._presets[id];
-        let key = "k"+Date.now();
-        preset.meta[key] = {
-            name: name,
-            value: value
-        };
-        this._context.raiseEvent('preset-meta-add', {preset: preset});
-        return key;
-    }
-
-    /**
-     * Add new metadata field to preset
-     * @event preset-meta-remove
-     * @param {string} id preset id
-     * @param {string} key meta key
-     */
-    deleteCustomMeta(id, key) {
-        let preset = this._presets[id];
-        if (preset && preset.meta[key]) {
-            delete preset.meta[key];
-            return true;
-        }
-        this._context.raiseEvent('preset-meta-remove', {preset: preset});
-        return false;
-    }
-
-    /**
-     * Iterate call for each preset
-     * @param {function} call
-     */
-    foreach(call) {
-        for (let id in this._presets) {
-            if (!this._presets.hasOwnProperty(id)) continue;
-            call(this._presets[id]);
-        }
-    }
-
-    /**
-     * Export presets
-     * @returns {object} JSON-friendly representation
-     */
-    toObject() {
-        let exported = [];
-        for (let preset in this._presets) {
-            if (!this._presets.hasOwnProperty(preset)) continue;
-            preset = this._presets[preset];
-            exported.push(preset.toJSONFriendlyObject());
-        }
-        return exported;
-    }
-
-    /**
-     * Export presets
-     * @returns {string} JSON-encoded string
-     */
-    export() {
-        return JSON.stringify(this.toObject());
-    }
-
-    /**
-     * Import presets
-     * @param {string|object} presets JSON to decode
-     * @param {boolean} overwrite true if existing presets should be replaced upon ID match
-     * @return {OSDAnnotations.Preset|undefined} preset
-     */
-    import(presets, overwrite=false) {
-        this._presets = {};
-        let first;
-
-        if (typeof presets === 'string' && presets.length > 10) {
-            presets = JSON.parse(presets);
-        }
-
-        if (typeof presets === 'object') {
-            for (let i = 0; i < presets.length; i++) {
-                let p = OSDAnnotations.Preset.fromJSONFriendlyObject(
-                    presets[i], this._context.getAnnotationObjectFactory.bind(this._context)
-                );
-                if (overwrite || ! this._presets.hasOwnProperty(p.presetID)) {
-                    this._presets[p.presetID] = p;
-                    if (!first) first = p;
-                }
-            }
-        } else {
-            first = this.addPreset();
-        }
-        return first;
-    }
-
-    /**
-     * Select preset as active.
-     * @param {number} id preset id
-     * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
-     */
-    selectPreset(id, isLeftClick) {
-        if (!this._presets[id]) return;
-        if (isLeftClick) this.left = this._presets[id];
-        else this.right = this._presets[id];
-    }
-
-    _populateObjectOptions(withPreset) {
-        let zoom = this._context.canvas.getZoom();
-        if (this.modeOutline) {
-            return $.extend({fill: ""},
-                OSDAnnotations.PresetManager._commonProperty,
-                {
-                    presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
-                    stroke: withPreset.color,
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
-                }
-            );
-        } else {
-            //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
-            return $.extend({fill: withPreset.color},
-                OSDAnnotations.PresetManager._commonProperty,
-                {
-                    presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
-                }
-            );
-        }
-    }
-
-    _randomColorHexString() {
-        // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
-        let r, g, b;
-        let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
-        let i = ~~(h * 6);
-        let f = h * 6 - i;
-        let q = 1 - f;
-        switch(i % 6){
-            case 0: r = 1; g = f; b = 0; break;
-            case 1: r = q; g = 1; b = 0; break;
-            case 2: r = 0; g = 1; b = f; break;
-            case 3: r = 0; g = q; b = 1; break;
-            case 4: r = f; g = 0; b = 1; break;
-            case 5: r = 1; g = 0; b = q; break;
-        }
-        let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
-            + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
-            + ("00" + (~ ~(b * 255)).toString(16)).slice(-2);
-        return (c);
-    }
-};
-
-/**
- * A bit new feature, not really used (still)
- * @type {OSDAnnotations.Layer}
- */
-OSDAnnotations.Layer = class {
-
-    /**
-     * Constructor
-     * @param {OSDAnnotations} context Annotation Plugin Context
-     * @param {number} id
-     */
-    constructor(context, id=Date.now()) {
-        this._context = context;
-        this.id = id;
-
-        this.position = -1;
-        for (let id in context._layers) {
-            this.position = Math.max(this.position, context._layers[id]);
-        }
-        this.position++;
-    }
-
-    /**
-     * Set elements of this layer selectable/active
-     * not optimal if called for each layer
-     * @param {boolean} active
-     */
-    setActive(active) {
-        this.iterate((self, object) => object.selectable = active);
-    }
-
-    /**
-     * Iterate over all object of this layer
-     * @param {function} callback
-     */
-    iterate(callback) {
-        const _this = this;
-        this._context.canvas.getObjects().forEach(o => {
-            if (o.layerId === _this.id) callback(_this, o);
-        });
-    }
-};
-
 /**
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
@@ -487,6 +20,52 @@ OSDAnnotations.AnnotationObjectFactory = class {
         this._auto = autoCreationStrategy;
         this.factoryId = identifier;
         this.type = objectType;
+        this._copiedProperties = [
+            "left",
+            "top",
+            "width",
+            "height",
+            "fill",
+            "isLeftClick",
+            "opacity",
+            "strokeWidth",
+            "stroke",
+            "scaleX",
+            "scaleY",
+            "color",
+            "zoomAtCreation",
+            "originalStrokeWidth",
+            "type",
+            "factoryId",
+            "scaleX,",
+            "scaleY,",
+            "hasRotatingPoint",
+            "borderColor",
+            "cornerColor",
+            "borderScaleFactor",
+            "hasControls",
+            "lockMovementX",
+            "lockMovementY",
+            "meta",
+            "presetID",
+            "layerId",
+        ];
+    }
+
+    /**
+     * Human-readable annotation title
+     * @returns {string}
+     */
+    title() {
+        return "Generic Object";
+    }
+
+    /**
+     * What internal structure is kept by this annotation
+     * @returns {string|[string]|[[string]]} (possibly nested) list of types
+     */
+    fabricStructure() {
+        return "object";
     }
 
     /**
@@ -526,6 +105,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Create an annotation object from given parameters, used mostly privately
      * @param {*} parameters geometry, depends on the object type
      * @param {object} options FbaricJS and custom options to set
+     * todo since we use create to instaniate and also fabricjs to instantiate, get rid of create method
      * @returns
      */
     create(parameters, options) {
@@ -542,13 +122,54 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return null;
     }
 
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you should use this function in create(...) to avoid implementing stuff twice,
+     * e.g. in create assemble object, and pass it to the configure. Shortly: in create, merge two elements to
+     * form a native configuration object, instantiate it and configure it here. Options should equal to options arg
+     * from create.
+     * @param object given object type for the factory type
+     * @param options options for correct visuals creation, from presets, same as with create()
+     * @return object from the input parameters (builder-like behaviour)
+     */
+    configure(object, options) {
+        $.extend(object, options, {
+            type: this.type,
+            factoryId: this.factoryId,
+        });
+        return object;
+    }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return [];
+    }
+
+    copyProperties(ofObject, ...withAdditional) {
+        // const copy = {...ofObject};
+        // delete copy.incrementId;
+        // return copy;
+
+        const result = {};
+        for (let prop of this._copiedProperties) {
+            result[prop] = ofObject[prop];
+        }
+        for (let prop of withAdditional) {
+            result[prop] = ofObject[prop];
+        }
+        return result;
+    }
+
 
     /**
      * Create an object at given point with a given strategy
      * @param {OpenSeadragon.Point} screenPoint mouse coordinates (X|Y) in SCREEN coordinates
      *  that this is an exception, other methods work with image coord system
      * @param {boolean} isLeftClick true if the object was created using left mouse button
-     * @return {boolean} true if creation succeeded
+     * @return {boolean|undefined} true if creation succeeded, false if error, undefined if sailently fail
      */
     instantCreate(screenPoint, isLeftClick) {
         return false;
@@ -602,6 +223,31 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Zoom event on canvas, update necessary properties to stay visually appleasing
+     * @param ofObject
+     * @param zoom
+     */
+    onZoom(ofObject, zoom) {
+        ofObject.set({
+            strokeWidth: ofObject.originalStrokeWidth/zoom
+        });
+        // // Update object properties to reflect zoom
+        // var updater = function(x) {
+        //     //todo unify this somehow using a function callback with the limitation, e.g. call only resize when the difference is significant
+        //     if (x.type == "text") {
+        //         x.set({
+        //             scaleX: 1/zoom,
+        //             scaleY: 1/zoom
+        //         });
+        //     } else {
+        //         x.set({
+        //             strokeWidth: x.originalStrokeWidth/zoom
+        //         });
+        //     }
+        // }
+    }
+
+    /**
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was performed directly by the user.
      */
@@ -623,10 +269,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
     selected(theObject) {
     }
 
-    getASAP_XMLTypeName() {
-        return "Generic Object";
-    }
-
     /**
      * If the object is defined implicitly (e.g. control points + formula)
      * if returns false, a 'points' property of the object should exist where its shape is stored
@@ -634,6 +276,29 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     isImplicit() {
         return true;
+    }
+
+    /**
+     * Update object rendering based on rendering mode
+     * @param {boolean} isTransparentFill
+     * @param {object} ofObject
+     * @param {string} color
+     * @param defaultStroke
+     */
+    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+        if (typeof ofObject.color === 'string') {
+            if (isTransparentFill) {
+                ofObject.set({
+                    fill: "",
+                    stroke: color
+                });
+            } else {
+                ofObject.set({
+                    fill: color,
+                    stroke: defaultStroke
+                });
+            }
+        }
     }
 
     /**
@@ -645,6 +310,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, quality=1) {
+        return undefined;
     }
 
     /**
@@ -661,865 +327,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 };
 
-OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "rect", "rect");
-        this._origX = null;
-        this._origY = null;
-        this._current = null;
-    }
-
-    getIcon() {
-        return "crop_5_4";
-    }
-
-    getDescription(ofObject) {
-        return `Rect [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
-    }
-
-    getCurrentObject() {
-        return this._current;
-    }
-
-    /**
-     * @param {Object} parameters object of the following properties:
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - rx: major axis radius
-     *              - ry: minor axis radius
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        return new fabric.Rect($.extend({
-            scaleX: 1,
-            scaleY: 1,
-            type: this.type,
-            factoryId: this.factoryId
-        }, parameters, options));
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Rect object that is being copied
-     * @param {Object} parameters object of the following properties:
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - width: rect width
-     *              - height: rect height
-     */
-    copy(ofObject, parameters=undefined) {
-        if (!parameters) parameters = ofObject;
-        return new fabric.Rect({
-            left: parameters.left,
-            top: parameters.top,
-            width: parameters.width,
-            height: parameters.height,
-            fill: ofObject.fill,
-            isLeftClick: ofObject.isLeftClick,
-            opacity: ofObject.opacity,
-            strokeWidth: ofObject.strokeWidth,
-            stroke: ofObject.stroke,
-            scaleX: ofObject.scaleX,
-            scaleY: ofObject.scaleY,
-            zoomAtCreation: ofObject.zoomAtCreation,
-            originalStrokeWidth: ofObject.originalStrokeWidth,
-            type: ofObject.type,
-            factoryId: ofObject.factoryId,
-            hasRotatingPoint: ofObject.hasRotatingPoint,
-            borderColor: ofObject.borderColor,
-            cornerColor: ofObject.cornerColor,
-            borderScaleFactor: ofObject.borderScaleFactor,
-            hasControls: ofObject.hasControls,
-            lockMovementX: ofObject.lockMovementX,
-            lockMovementY: ofObject.lockMovementY,
-            meta: ofObject.meta,
-            presetID: ofObject.presetID,
-            layerId: ofObject.layerId
-        });
-    }
-
-    edit(theObject) {
-        this._left = theObject.left;
-        this._top = theObject.top;
-        theObject.set({
-            hasControls: true,
-            lockMovementX: false,
-            lockMovementY: false
-        });
-    }
-
-    recalculate(theObject) {
-        let height = theObject.getScaledHeight(),
-            width = theObject.getScaledWidth(),
-            left = theObject.left,
-            top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {
-            left: left, top: top, width: width, height: height
-        });
-        theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint);
-        if (bounds) {
-            this._context.addAnnotation(this.create({
-                left: bounds.left.x,
-                top: bounds.top.y,
-                width: bounds.right.x - bounds.left.x,
-                height: bounds.bottom.y - bounds.top.y
-            }, this._presets.getAnnotationOptions(isLeftClick)));
-            return true;
-        }
-        return false;
-    }
-
-    initCreate(x, y, isLeftClick) {
-        this._origX = x;
-        this._origY = y;
-        this._current = this.create({
-            left: x,
-            top: y,
-            width: 1,
-            height: 1
-        }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addHelperAnnotation(this._current);
-    }
-
-    updateCreate(x, y) {
-        if (!this._current) return;
-        if (this._origX > x) this._current.set({ left: x });
-        if (this._origY > y) this._current.set({ top: y });
-
-        let width = Math.abs(x - this._origX);
-        let height = Math.abs(y - this._origY);
-        this._current.set({ width: width, height: height });
-    }
-
-    finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return;
-        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.deleteHelperAnnotation(obj);
-        this._context.addAnnotation(obj);
-        this._current = undefined;
-    }
-
-    /**
-     * Create array of points - approximation of the object shape
-     * @param {Object} obj fabricJS.Rect obj object that is being approximated
-     * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-     * @return {Array} array of items returned by the converter - points
-     */
-    toPointArray(obj, converter, quality=1) {
-        let w = obj.width, h = obj.height;
-        return [
-            converter(obj.left, obj.top),
-            converter(obj.left + w, obj.top),
-            converter(obj.left + w, obj.top + h),
-            converter(obj.left, obj.top + h)
-        ];
-    }
-
-    getASAP_XMLTypeName() {
-        return "Rectangle";
-    }
-
-
-};
-
-OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ruler", "group");
-        this._current = null;
-    }
-
-    getIcon() {
-        return "square_foot";
-    }
-
-    getDescription(ofObject) {
-        return `Length ${Math.round(ofObject.measure)} mm`;
-    }
-
-    getCurrentObject() {
-        return this._current;
-    }
-
-    isEditable() {
-        return false;
-    }
-
-    /**
-     * @param {array} parameters array of line points [x, y, x, y ..]
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        let parts = this._createParts(parameters, options);
-        return this._createWrap(parts, options);
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Line object that is being copied
-     * @param {array} parameters array of line points [x, y, x, y ..]
-     */
-    copy(ofObject, parameters=undefined) {
-        let line = ofObject.item(0),
-            text = ofObject.item(1);
-        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-        return new fabric.Group([fabric.Line(parameters, {
-            fill: line.fill,
-            opacity: line.opacity,
-            strokeWidth: line.strokeWidth,
-            stroke: line.stroke,
-            scaleX: line.scaleX,
-            scaleY: line.scaleY,
-            hasRotatingPoint: line.hasRotatingPoint,
-            borderColor: line.borderColor,
-            cornerColor: line.cornerColor,
-            borderScaleFactor: line.borderScaleFactor,
-            hasControls: line.hasControls,
-            lockMovementX: line.lockMovementX,
-            lockMovementY: line.lockMovementY,
-            originalStrokeWidth: line.originalStrokeWidth,
-            selectable: false,
-        }), new fabric.Text(text.text), {
-            textBackgroundColor: text.textBackgroundColor,
-            fontSize: text.fontSize,
-            lockUniScaling: true,
-            scaleY: text.scaleY,
-            scaleX: text.scaleX,
-            selectable: false,
-            hasControls: false,
-            stroke: text.stroke,
-            fill: text.fill,
-            paintFirst: 'stroke',
-            strokeWidth: text.strokeWidth,
-        }], {
-            presetID: ofObject.presetID,
-            measure: ofObject.measure,
-            meta: ofObject.meta,
-            factoryId: ofObject.factoryId,
-            isLeftClick: ofObject.isLeftClick,
-            type: ofObject.type,
-            layerId: ofObject.layerId,
-            fill: ofObject.fill,
-            zoomAtCreation: ofObject.zoomAtCreation,
-            selectable: false,
-            hasControls: false
-        });
-    }
-
-    edit(theObject) {
-        //not allowed
-    }
-
-    recalculate(theObject) {
-        //not supported error?
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint, false);
-        if (bounds) {
-            let opts = this._presets.getAnnotationOptions(isLeftClick);
-            let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
-            this._context.addAnnotation(object);
-            return true;
-        }
-        return false;
-    }
-
-    initCreate(x, y, isLeftClick) {
-        let opts = this._presets.getAnnotationOptions(isLeftClick);
-        let parts = this._createParts([x, y, x, y], opts);
-        this._updateText(parts[0], parts[1]);
-        this._current = parts;
-        this._context.addHelperAnnotation(this._current[0]);
-        this._context.addHelperAnnotation(this._current[1]);
-
-    }
-
-    updateCreate(x, y) {
-        if (!this._current) return;
-        let line = this._current[0],
-            text = this._current[1];
-        line.set({ x2: x, y2: y });
-        this._updateText(line, text);
-    }
-
-    finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return;
-        this._context.deleteHelperAnnotation(obj[0]);
-        this._context.deleteHelperAnnotation(obj[1]);
-
-        obj = this._createWrap(obj, this._presets.getCommonProperties());
-        this._context.addAnnotation(obj);
-        this._current = undefined;
-    }
-
-    /**
-     * Create array of points - approximation of the object shape
-     * @return {undefined} not supported, ruler cannot be turned to polygon
-     */
-    toPointArray(obj, converter, quality=1) {
-        return undefined;
-    }
-
-    getASAP_XMLTypeName() {
-        return "Ruler";
-    }
-
-    _getWithUnit(value, unitSuffix) {
-        if (value < 0.000001) {
-            return value * 1000000000 + " n" + unitSuffix;
-        }
-        if (value < 0.001) {
-            return value * 1000000 + " μ" + unitSuffix;
-        }
-        if (value < 1) {
-            return value * 1000 + " m" + unitSuffix;
-        }
-        if (value >= 1000) {
-            return value / 1000 + " k" + unitSuffix;
-        }
-        return value + " " + unitSuffix;
-    }
-
-    _updateText(line, text) {
-        let microns = APPLICATION_CONTEXT.getOption("microns") ?? -1;
-        let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
-            strText;
-        if (microns > 0) {
-            strText = this._getWithUnit(
-                Math.round(d * microns / 10000000) / 100, "m"
-            );
-        } else {
-            strText = Math.round(d) + " px";
-        }
-        text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
-    }
-
-    _createParts(parameters, options) {
-        options.stroke = options.fill || options.stroke;
-        return [new fabric.Line(parameters, $.extend({
-            scaleX: 1,
-            scaleY: 1,
-            selectable: false,
-            hasControls: false,
-        }, options)), new fabric.Text('', {
-            fontSize: 16,
-            selectable: false,
-            hasControls: false,
-            lockUniScaling: true,
-            stroke: 'white',
-            fill: 'black',
-            paintFirst: 'stroke',
-            strokeWidth: 2,
-            scaleX: 1/options.zoomAtCreation,
-            scaleY: 1/options.zoomAtCreation
-        })];
-    }
-
-    _createWrap(parts, options) {
-        this._updateText(parts[0], parts[1]);
-        return new fabric.Group(parts, $.extend({
-            factoryId: this.factoryId,
-            type: this.type,
-            measure: 0,
-            fill: parts[0].fill
-        }, options));
-    }
-};
-
-OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ellipse", "ellipse");
-        this._origX = null;
-        this._origY = null;
-        this._current = null;
-    }
-
-    getIcon() {
-        return "lens";
-    }
-
-    getDescription(ofObject) {
-        return `Ellipse [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
-    }
-
-    getCurrentObject() {
-        return this._current;
-    }
-
-    /**
-     *
-     * @param {Object} parameters object of the following properties:
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - rx: major axis radius
-     *              - ry: minor axis radius
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        return new fabric.Ellipse($.extend({
-            originX: 'left',
-            originY: 'top',
-            angle: 0,
-            scaleX: 1,
-            scaleY: 1,
-            type: this.type,
-            factoryId: this.factoryId
-        }, parameters, options));
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Ellipse object that is being copied
-     * @param {Object} parameters object of the following properties:
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - rx: major axis radius
-     *              - ry: minor axis radius
-     */
-    copy(ofObject, parameters=undefined) {
-        if (!parameters) parameters = ofObject;
-        return new fabric.Ellipse({
-            left: parameters.left,
-            top: parameters.top,
-            rx: parameters.rx,
-            ry: parameters.ry,
-            originX: ofObject.originX,
-            originY: ofObject.originY,
-            angle: ofObject.angle,
-            fill: ofObject.fill,
-            stroke: ofObject.stroke,
-            strokeWidth: ofObject.strokeWidth,
-            opacity: ofObject.opacity,
-            scaleX: ofObject.scaleX,
-            scaleY: ofObject.scaleY,
-            zoomAtCreation: ofObject.zoomAtCreation,
-            originalStrokeWidth: ofObject.originalStrokeWidth,
-            type: ofObject.type,
-            factoryId: ofObject.factoryId,
-            isLeftClick: ofObject.isLeftClick,
-            selectable: ofObject.selectable,
-            hasRotatingPoint: ofObject.hasRotatingPoint,
-            borderColor: ofObject.borderColor,
-            cornerColor: ofObject.cornerColor,
-            borderScaleFactor: ofObject.borderScaleFactor,
-            hasControls: ofObject.hasControls,
-            lockMovementX: ofObject.lockMovementX,
-            lockMovementY: ofObject.lockMovementY,
-            meta: ofObject.meta,
-            presetID: ofObject.presetID,
-            layerId: ofObject.layerId
-        });
-    }
-
-    edit(theObject) {
-        this._left = theObject.left;
-        this._top = theObject.top;
-        theObject.set({
-            hasControls: true,
-            lockMovementX: false,
-            lockMovementY: false
-        });
-    }
-
-    recalculate(theObject) {
-        let rx = theObject.rx * theObject.scaleX,
-            ry = theObject.ry * theObject.scaleY,
-            left = theObject.left,
-            top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {
-            left: left, top: top, rx: rx, ry: ry
-        });
-        theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint);
-        if (bounds) {
-            this._context.addAnnotation(this.create({
-                left: bounds.left.x,
-                top: bounds.top.y,
-                rx: (bounds.right.x - bounds.left.x) / 2,
-                ry: (bounds.bottom.y - bounds.top.y) / 2
-            }, this._presets.getAnnotationOptions(isLeftClick)));
-            return true;
-        }
-        return false;
-    }
-
-    initCreate(x, y, isLeftClick = true) {
-        this._origX = x-1;
-        this._origY = y-1;
-        this._current = this.create({
-            left: x-1,
-            top: y-1,
-            rx: 1,
-            ry: 1
-        }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addHelperAnnotation(this._current);
-    }
-
-    updateCreate(x, y) {
-        if (!this._current) return;
-        let width = Math.abs(x - this._origX);
-        let height = Math.abs(y - this._origY);
-        this._current.set({
-            left:this._origX - width,
-            top:this._origY - height,
-            rx: width, ry: height
-        });
-    }
-
-    finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return;
-        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.deleteHelperAnnotation(obj);
-        this._context.addAnnotation(obj);
-        this._current = undefined;
-    }
-
-    /**
-     * Create array of points - approximation of the object shape
-     * @param {fabric.Ellipse} obj object that is being approximated
-     * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-     * @return {Array} array of items returned by the converter - points
-     */
-    toPointArray(obj, converter, quality=1) {
-        //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
-        //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
-        let reversed = obj.rx < obj.ry, //since I am using sqrt, need rx > ry
-            rx = reversed ? obj.ry : obj.rx,
-            ry = reversed ? obj.rx : obj.ry,
-            pow2e = 1 - (ry * ry) / (rx * rx),
-            pow3e = pow2e * Math.sqrt(pow2e),
-            pow4e = pow2e * pow2e,
-            pow6e = pow3e * pow3e;
-
-        //lets interpret the quality of approximation by number of points generated, 100% = 30 points
-        let step = Math.PI / (30*quality), points = [];
-
-        for (let t = 0; t < 2 * Math.PI; t += step) {
-            let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
-                + ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
-                + (29 * pow6e / 6144) * Math.sin(6 * t);
-            if (reversed) {
-                points.push(converter(ry * Math.sin(param) + obj.left + ry, rx * Math.cos(param) + obj.top + rx));
-            } else {
-                points.push(converter(rx * Math.cos(param) + obj.left + rx, ry * Math.sin(param) + obj.top + ry));
-            }
-        }
-        return points;
-    }
-
-    getASAP_XMLTypeName() {
-        return "Ellipse";
-    }
-};
-
-OSDAnnotations.Polygon = class extends OSDAnnotations.AnnotationObjectFactory {
-
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "polygon", "polygon");
-        this._initialize(false);
-    }
-
-    getIcon() {
-        return "share";
-    }
-
-    getDescription(ofObject) {
-        return `Polygon [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
-    }
-
-    getCurrentObject() {
-        return (this._current /*|| this._edited*/);
-    }
-
-    /**
-     * @param {Array} parameters array of objects with {x, y} properties (points)
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        return new fabric.Polygon(parameters, $.extend({
-            type: this.type,
-            factoryId: this.factoryId
-        }, options));
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {Array} parameters array of points: {x, y} objects
-     */
-    copy(ofObject, parameters) {
-        return new fabric.Polygon(parameters, {
-            hasRotatingPoint: ofObject.hasRotatingPoint,
-            fill: ofObject.fill,
-            stroke: ofObject.stroke,
-            strokeWidth: ofObject.strokeWidth,
-            isLeftClick: ofObject.isLeftClick,
-            opacity: ofObject.opacity,
-            type: ofObject.type,
-            scaleX: ofObject.scaleX,
-            scaleY: ofObject.scaleY,
-            zoomAtCreation: ofObject.zoomAtCreation,
-            originalStrokeWidth: ofObject.originalStrokeWidth,
-            factoryId: ofObject.factoryId,
-            selectable: ofObject.selectable,
-            borderColor: ofObject.borderColor,
-            cornerColor: ofObject.cornerColor,
-            borderScaleFactor: ofObject.borderScaleFactor,
-            meta: ofObject.meta,
-            hasControls: ofObject.hasControls,
-            lockMovementX: ofObject.lockMovementX,
-            lockMovementY: ofObject.lockMovementY,
-            presetID: ofObject.presetID,
-            layerId: ofObject.layerId
-        });
-    }
-
-    edit(theObject) {
-        this._origPoints = [...theObject.points];
-        this._context.canvas.setActiveObject(theObject);
-
-        var lastControl = theObject.points.length - 1;
-        const _this = this;
-        theObject.cornerStyle = 'circle';
-        theObject.cornerColor = '#fbb802';
-        theObject.hasControls = true;
-        theObject.objectCaching = false;
-        theObject.transparentCorners = false;
-        theObject.controls = theObject.points.reduce(function(acc, point, index) {
-            acc['p' + index] = new fabric.Control({
-                positionHandler: _this._polygonPositionHandler,
-                actionHandler: _this._anchorWrapper(index > 0 ? index - 1 : lastControl, _this._actionHandler),
-                actionName: 'modifyPolygon',
-                pointIndex: index
-            });
-            return acc;
-        }, { });
-        this._context.canvas.renderAll();
-    }
-
-    _polygonPositionHandler(dim, finalMatrix, fabricObject) {
-        var x = (fabricObject.points[this.pointIndex].x - fabricObject.pathOffset.x),
-            y = (fabricObject.points[this.pointIndex].y - fabricObject.pathOffset.y);
-        return fabric.util.transformPoint(
-            { x: x, y: y },
-            fabric.util.multiplyTransformMatrices(
-                fabricObject.canvas.viewportTransform,
-                fabricObject.calcTransformMatrix()
-            )
-        );
-    }
-
-    _actionHandler(eventData, transform, x, y) {
-        var polygon = transform.target,
-            mouseLocalPosition = polygon.toLocalPoint(new fabric.Point(x, y), 'center', 'center'),
-            polygonBaseSize = polygon._getNonTransformedDimensions(),
-            size = polygon._getTransformedDimensions(0, 0);
-        polygon.points[polygon.controls[polygon.__corner].pointIndex] = {
-            x: mouseLocalPosition.x * polygonBaseSize.x / size.x + polygon.pathOffset.x,
-            y: mouseLocalPosition.y * polygonBaseSize.y / size.y + polygon.pathOffset.y
-        };
-        return true;
-    }
-
-    _anchorWrapper(anchorIndex, fn) {
-        return function(eventData, transform, x, y) {
-            let fabricObject = transform.target,
-                absolutePoint = fabric.util.transformPoint({
-                    x: (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x),
-                    y: (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y),
-                }, fabricObject.calcTransformMatrix()),
-                actionPerformed = fn(eventData, transform, x, y);
-            fabricObject._setPositionDimensions({});
-            let polygonBaseSize = fabricObject._getNonTransformedDimensions(),
-                newX = (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x) / polygonBaseSize.x,
-                newY = (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y) / polygonBaseSize.y;
-            fabricObject.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
-            return actionPerformed;
-        }
-    }
-
-    recalculate(theObject) {
-        theObject.controls = fabric.Object.prototype.controls;
-        theObject.hasControls = false;
-        theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
-
-        if (!theObject.points.every(
-            (value, index) => value === this._origPoints[index])) {
-            let newObject = this.copy(theObject, theObject.points);
-            theObject.points = this._origPoints;
-            this._context.replaceAnnotation(theObject, newObject, true);
-            this._context.canvas.renderAll();
-        }
-        this._origPoints = null;
-        this._initialize(false);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        const _this = this;
-        //(async function _() {
-        let result = /*await*/ _this._auto.createOutline(screenPoint);
-
-        if (!result || result.length < 3) return false;
-        result = OSDAnnotations.PolygonUtilities.simplify(result);
-        _this._context.addAnnotation(
-            _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
-        );
-        return true;
-        //})();
-    }
-
-    getCreationRequiredMouseDragDurationMS() {
-        return -1; //always allow
-    }
-
-    initCreate(x, y, isLeftClick = true) {
-        if (!this._polygonBeingCreated) {
-            this._initialize();
-        }
-
-        let properties = {
-            selectable: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-            hasBorders: false,
-            lockMovementX: true,
-            lockMovementY: true
-        };
-
-        //create circle representation of the point
-        let polygon = this._current,
-            index = polygon && polygon.points ? polygon.points.length : -1;
-
-        if (index < 1) {
-            this._initPoint = this._createControlPoint(x, y, properties);
-            this._initPoint.set({fill: '#d93442', radius: this._initPoint.radius*2});
-            this._context.addHelperAnnotation(this._initPoint);
-        } else {
-            if (Math.sqrt(Math.pow(this._initPoint.left - x, 2) +
-                    Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.tools.imagePixelSizeOnScreen()) {
-                this.finishIndirect();
-                return;
-            }
-        }
-
-        if (!polygon) {
-            polygon = this.create([{ x: x, y: y }],
-                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
-            );
-            this._context.addHelperAnnotation(polygon);
-            this._current = polygon;
-        } else {
-            if (!this._followPoint) {
-                this._followPoint = this._createControlPoint(x, y, properties);
-                this._context.addHelperAnnotation(this._followPoint);
-            } else {
-                this._followPoint.set({left: x, top: y});
-            }
-            polygon.points.push({x: x, y: y});
-            polygon.setCoords();
-        }
-        this._context.canvas.renderAll();
-    }
-
-    updateCreate(x, y) {
-        if (!this._polygonBeingCreated) return;
-
-        let lastIdx = this._current.points.length - 1,
-            last = this._current.points[lastIdx],
-            dy = last.y - y,
-            dx = last.x - x;
-
-        let powRad = this._getRelativePixelDiffDistSquared(10);
-        //startPoint is twice the radius of distance with relativeDiff 10, if smaller
-        //the drag could end inside finish zone
-        if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)) {
-            this.initCreate(x, y);
-        }
-    }
-
-    isImplicit() {
-        return false;
-    }
-
-    finishIndirect() {
-        if (!this._current) return;
-
-        let points = this._current.points;
-        this._context.deleteHelperAnnotation(this._initPoint);
-        if (this._followPoint) this._context.deleteHelperAnnotation(this._followPoint);
-        this._context.deleteHelperAnnotation(this._current);
-        if (points.length < 3) {
-            this._initialize(false);
-            return;
-        }
-
-        this._current = this.create(OSDAnnotations.PolygonUtilities.simplify(points),
-            this._presets.getAnnotationOptions(this._current.isLeftClick));
-        this._context.addAnnotation(this._current);
-        this._initialize(false);
-    }
-
-    /**
-     * Create array of points - approximation of the object shape
-     * @param {Object} obj fabricjs.Polygon object that is being approximated
-     * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-     * @return {Array} array of items returned by the converter - points
-     */
-    toPointArray(obj, converter, quality=1) {
-        let points = obj.get("points");
-        if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, quality);
-
-        //we already have object points, convert only if necessary
-        if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
-            return points.map(p => converter(p.x, p.y));
-        }
-        return points;
-    }
-
-    getASAP_XMLTypeName() {
-        return "Polygon";
-    }
-
-    _initialize(isNew = true) {
-        this._polygonBeingCreated = isNew;
-        this._initPoint = null;
-        this._current = null;
-        this._followPoint = null;
-    }
-
-    _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.tools.imagePixelSizeOnScreen(),
-            fill: '#fbb802',
-            left: x,
-            top: y,
-            originX: 'center',
-            originY: 'center',
-            factory: "__private",
-        }));
-    }
-
-    _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
-    }
-};
-
+/**
+ * Polygon Utilities that can help with points array simplification and more
+ * todo move here more utils
+ */
 OSDAnnotations.PolygonUtilities = {
 
     simplify: function (points, highestQuality = false) {
@@ -1551,6 +362,134 @@ OSDAnnotations.PolygonUtilities = {
             minY = Math.min(minY, points[i].y);
         }
         return { diffX: maxX - minX, diffY: maxY - minY };
+    },
+
+    polygonsIntersect(p1, p2) {
+        /**
+         *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
+         *  To detect intersection with another Polygon object, this
+         *  function uses the Separating Axis Theorem. It returns false
+         *  if there is no intersection, or an object if there is. The object
+         *  contains 2 fields, overlap and axis. Moving the polygon by overlap
+         *  on axis will get the polygons out of intersection.
+         *
+         *  @jirka Cleaned. Honestly, why people who are good at math cannot keep their code clean.
+         */
+
+        let axis = {x: 0, y: 0},
+            tmp, minA, maxA, minB, maxB, side, i,
+            smallest = null,
+            overlap = 99999999,
+            p1Pts = p1.points, p2Pts = p2.points;
+
+        /* test polygon A's sides */
+        for (side = 0; side < p1Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p1Pts[p1Pts.length - 1].y - p1Pts[0].y;
+                axis.y = p1Pts[0].x - p1Pts[p1Pts.length - 1].x;
+            } else {
+                axis.x = p1Pts[side - 1].y - p1Pts[side].y;
+                axis.y = p1Pts[side].x - p1Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++) {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA) maxA = tmp;
+                else if (tmp < minA) minA = tmp;
+            }
+            /* correct for offset */
+            tmp = axis.x +  axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++) {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x +  axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                let o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+
+        /* test polygon B's sides */
+        for (side = 0; side < p2Pts.length; side++) {
+            /* get the axis that we will project onto */
+            if (side == 0) {
+                axis.x = p2Pts[p2Pts.length - 1].y - p2Pts[0].y;
+                axis.y = p2Pts[0].x - p2Pts[p2Pts.length - 1].x;
+            } else {
+                axis.x = p2Pts[side - 1].y - p2Pts[side].y;
+                axis.y = p2Pts[side].x - p2Pts[side - 1].x;
+            }
+
+            /* normalize the axis */
+            tmp = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+            axis.x /= tmp;
+            axis.y /= tmp;
+
+            /* project polygon A onto axis to determine the min/max */
+            minA = maxA = p1Pts[0].x * axis.x + p1Pts[0].y * axis.y;
+            for (i = 1; i < p1Pts.length; i++)
+            {
+                tmp = p1Pts[i].x * axis.x + p1Pts[i].y * axis.y;
+                if (tmp > maxA)
+                    maxA = tmp;
+                else if (tmp < minA)
+                    minA = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minA += tmp;
+            maxA += tmp;
+
+            /* project polygon B onto axis to determine the min/max */
+            minB = maxB = p2Pts[0].x * axis.x + p2Pts[0].y * axis.y;
+            for (i = 1; i < p2Pts.length; i++)
+            {
+                tmp = p2Pts[i].x * axis.x + p2Pts[i].y * axis.y;
+                if (tmp > maxB) maxB = tmp;
+                else if (tmp < minB) minB = tmp;
+            }
+            /* correct for offset */
+            tmp =  axis.x + axis.y;
+            minB += tmp;
+            maxB += tmp;
+
+            /* test if lines intersect, if not, return false */
+            if (maxA < minB || minA > maxB) {
+                return undefined;
+            } else {
+                var o = (maxA > maxB ? maxB - minA : maxA - minB);
+                if (o < overlap) {
+                    overlap = o;
+                    smallest = {x: axis.x, y: axis.y};
+                }
+            }
+        }
+        return overlap;
     },
 
     /**
@@ -1653,6 +592,7 @@ OSDAnnotations.AutoObjectCreationStrategy = class {
 
 /**
  * Class that contains all logic for automatic annotation creation.
+ * Imported only if WebGL Module is present from the very beginning
  */
 OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.AutoObjectCreationStrategy {
 
@@ -1664,10 +604,24 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         this._renderEngine = new WebGLModule({
             uniqueId: "annot",
             onError: function(error) {
-                //maybe notify
+                //potentially able to cope with it
+                VIEWER.raiseEvent('warn-system', {
+                    originType: "module",
+                    originId: "annotations",
+                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
+                    message: "Error in the webgl module.",
+                    trace: error
+                });
             },
             onFatalError: function (error) {
                 console.error("Error with automatic detection: this feature wil be disabled.");
+                VIEWER.raiseEvent('error-user', {
+                    originType: "module",
+                    originId: "annotations",
+                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
+                    message: "Error with automatic detection: this feature wil be disabled.",
+                    trace: error
+                });
                 _this._running = false;
             }
         });
@@ -1712,6 +666,19 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 let otherLayer = vis.shaders[key];
                 let type;
                 if (key === this._readingKey) {
+                    //todo clipping mask and custom rendering will maybe not work here
+
+                    if (!otherLayer.visible || otherLayer.visible === "false" || otherLayer.visible === "0") {
+
+                        VIEWER.raiseEvent('warn-user', {
+                            originType: "module",
+                            originId: "annotations",
+                            code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
+                            message: "The <a class='pointer' onclick=\"USER_INTERFACE.highlight('sensitivity-auto-outline')\">chosen layer</a> is not visible: auto outline method will not work.",
+                        });
+                        return false;
+                    }
+
                     if (otherLayer.type === "bipolar-heatmap") {
                         this.comparator = function(pixel) {
                             return Math.abs(pixel[0] - this.origPixel[0]) < 10 &&
@@ -1759,6 +726,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             tile.annotationCanvas.height = tile.sourceBounds.height;
             tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
         }
+        return true;
     }
 
     _afterAutoMethod() {
@@ -1766,8 +734,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     approximateBounds(point, growY=true) {
-        this._beforeAutoMethod();
-		if (!this.changeTile(point) || !this._running) {
+		if (!this._beforeAutoMethod() || !this.changeTile(point) || !this._running) {
             this._afterAutoMethod();
             return null;
         }
@@ -1820,8 +787,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     /*async*/ createOutline(eventPosition) {
-        this._beforeAutoMethod();
-        if (!this.changeTile(eventPosition) || !this._running) {
+        if (!this._beforeAutoMethod() || !this.changeTile(eventPosition) || !this._running) {
             this._afterAutoMethod();
             return null;
         }

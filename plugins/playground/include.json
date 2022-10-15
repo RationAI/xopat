@@ -2,6 +2,7 @@
     "id": "playground",
     "name": "Online Playground",
     "author": "Jirka Horák",
+    "version": "1.0.0",
     "description": "Allgorithms and scripts applied online on images.",
     "icon": "",
     "includes" : [
@@ -11,5 +12,6 @@
         "workflow.js",
         "ppprotocol.js"
     ],
-    "modules": ["webgl"]
+    "modules": ["webgl"],
+    "permaLoad": false
 }

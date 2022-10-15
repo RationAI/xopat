@@ -17,6 +17,7 @@ OSDAnnotations.History = class {
         this._context = context;
         this._presets = presetManager;
         this.containerId = "bord-for-annotations";
+        this._focusWithScreen = true;
     }
 
     /**
@@ -25,6 +26,10 @@ OSDAnnotations.History = class {
      */
     set size(value) {
         this.BUFFER_LENGTH = Math.max(2, value);
+    }
+
+    set focusWithZoom(value) {
+        this._focusWithScreen = value;
     }
 
     /**
@@ -286,7 +291,6 @@ window.addEventListener("beforeunload", (e) => {
     _focus(bbox, objectId = undefined, adjustZoom=true) {
         bbox.left = Number.parseFloat(bbox.left || bbox.x);
         bbox.top = Number.parseFloat(bbox.top || bbox.y);
-        if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) return;
 
         let targetObj = undefined;
         if (objectId !== undefined) {
@@ -294,7 +298,16 @@ window.addEventListener("beforeunload", (e) => {
             if (targetObj) {
                 this.highlight(targetObj);
                 this._context.canvas.setActiveObject(targetObj);
+
+                if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
+                    console.warn("Annotation focus BBOX undefined: try to recompute.");
+                    bbox = targetObj.getBoundingRect(true, true);
+                }
             }
+        }
+
+        if (!this._focusWithScreen || !Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
+            return;
         }
 
         if (adjustZoom && bbox.width > 0 && bbox.height > 0) {
@@ -375,17 +388,17 @@ window.addEventListener("beforeunload", (e) => {
         //     }
         // }
         let color = this._context.getAnnotationColor(object);
-        let name = this._context.getAnnotationDescription(PannerNode, "category", false);
-        if (name) {
-            inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
-                name || this._context.getDefaultAnnotationName(object), '</span>');
-        } else {
+        let name = this._context.getAnnotationDescription(object, "category", true);
+        // if (name) {
+        //     inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
+        //         name || this._context.getDefaultAnnotationName(object), '</span>');
+        // } else {
             //with no meta name, object will receive 'category' on edit
             inputs.push('<label class="show-hint d-block" data-hint="Category">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
                 this._context.getDefaultAnnotationName(object), '" name="category"></label>');
-        }
+        // }
 
         const _this = this;
         let focusBox = this._getFocusBBoxAsString(object, factory);
@@ -401,18 +414,12 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
     }
 
     _boardItemEdit(self, focusBBox, object) {
+        let updateUI = false;
         if (this._editSelection) {
             this._boardItemSave(true);
         } else {
-            $('#bord-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
-            this._context.setMouseOSDInteractive(false);
-            this._context.enableInteraction(false);
+            updateUI = true;
         }
-
-        self.parent().find("input").each((e, t) => {
-            $(t).attr('readonly', false);
-        });
-        self.html('save');
 
         let objectId;
         if (typeof object !== "object") {
@@ -422,57 +429,60 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             objectId = object.incrementId;
         }
 
-        this._editSelection = {
-            incrementId: objectId,
-            self: self,
-            target: object
-        };
-
         if (object) {
             let factory = this._context.getAnnotationObjectFactory(object.factoryId);
             if (factory) factory.edit(object);
-        } else console.warn("Object edit: no active object.");
+
+            if (updateUI) {
+                $('#bord-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
+                this._context.setMouseOSDInteractive(false);
+                this._context.enableInteraction(false);
+            }
+
+            self.parent().find("input").each((e, t) => {
+                $(t).attr('readonly', false);
+            });
+            self.html('save');
+
+            this._editSelection = {
+                incrementId: objectId,
+                self: self,
+                target: object
+            };
+
+        } else {
+            this._context.raiseEvent('error', {code: 'NO_OBJECT_ON_EDIT'});
+            console.warn("Object edit: no active object.");
+        }
     }
 
     _boardItemSave(switches=false) {
         if (!this._editSelection) return;
 
         try {
-            let obj = this._editSelection.target;
+            let obj = this._editSelection.target || this._findObjectOnCanvasById(this._editSelection.incrementId);
+            let self = this._editSelection.self,
+            //from user testing: disable modification of meta?
+                inputs = self.parent().find("input"),
+                preset = this._context.presets.get(obj.presetID),
+                metadata = preset ? preset.meta : {};
             if (obj) {
+                if (!obj.meta) obj.meta = {};
+                inputs.each((e, t) => {
+                    if (!metadata[t.name] || metadata[t.name].value != t.value) {
+                        obj.meta[t.name] = t.value;
+                    }
+                    $(t).attr('readonly', true);
+                });
+
                 //if target was set, object could have been edited, update
                 let factory = this._context.getAnnotationObjectFactory(obj.factoryId);
-                let newObject = factory.recalculate(obj);
-                if (newObject) {
-                    this._context.replaceAnnotation(obj, newObject, true);
-                    //from user testing: disable modification of meta
-                    //obj = newObject;
-                } else {
-                    this._context.canvas.renderAll();
-                }
+                factory.recalculate(obj);
             } else {
-                //from user testing: disable modification of meta
-                //obj = this._findObjectOnCanvasById(this._editSelection.incrementId);
+                console.warn("Failed to update object: could not find object with id "
+                    + this._editSelection.incrementId);
+                inputs.each((e, t) => t.readonly = true);
             }
-
-            let self = this._editSelection.self;
-            //from user testing: disable modification of meta
-            //     inputs = self.parent().find("input"),
-            //     preset = this._context.presets.get(obj.presetID),
-            //     metadata = preset ? preset.meta : {};
-            // if (obj) {
-            //     if (!obj.meta) obj.meta = {};
-            //     inputs.each((e, t) => {
-            //         if (!metadata[t.name] || metadata[t.name].value != t.value) {
-            //             obj.meta[t.name] = t.value;
-            //         }
-            //         $(t).attr('readonly', true);
-            //     });
-            // } else {
-            //     console.warn("Failed to update object: could not find object with id "
-            //         + this._editSelection.incrementId);
-            //     inputs.each((e, t) => t.readonly = true);
-            // }
             self.html('edit');
 
             if (!switches) {

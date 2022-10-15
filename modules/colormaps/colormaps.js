@@ -7,7 +7,7 @@
  *
  * TODO exclude usseles schemes, include our own color schemes [yellow + tyrkys]
  */
-ColorMaps = {
+window.ColorMaps = {
     defaults: {
         sequential: "Parula",
         singlehue: "Oranges",

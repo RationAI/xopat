@@ -5,9 +5,10 @@ AnnotationsGUI.Previewer = class {
 
     constructor(selfName, context) {
         this.context = context;
-        this.self = context.id + '.' + selfName;
+        this.self = `plugin('${context.id}').${selfName}`;
         USER_INTERFACE.AdvancedMenu.setMenu(this.context.id, "annotations-preview", "Preview",
-            `<button class="btn" onclick="${this.self}.load();">Reload previews</button><br>
+            `<h3 class="f2-light">Fast Previews</h3><button class="btn float-right" onclick="${this.self}.load();">Reload previews</button><br>
+<p>Inspect existing annotations one by one on a single page. Note that the annotation itself is not drawn (defaults to the whole image rectangle).</p>
 <div id="preview-of-annotations" class="p-2">No previews were loaded yet.</div>`);
         this._previews = {};
     }
@@ -20,7 +21,7 @@ AnnotationsGUI.Previewer = class {
 //             let factory = this.context.context.getAnnotationObjectFactory(object.factoryId);
 //             if (factory) {
 //                 container.append(`
-// <div onclick="${this.context.id}.context.focusObjectOrArea(${factory.getObjectFocusZone(object)});" style="" class="d-inline-block">Click me</div>
+// <div onclick="${this.self}.context.context.focusObjectOrArea(${factory.getObjectFocusZone(object)});" style="" class="d-inline-block">Click me</div>
 //             `);
 //             }
 //         }
@@ -34,11 +35,13 @@ AnnotationsGUI.Previewer = class {
             if (factory) {
                 let name = this.context.context.getAnnotationDescription(object);
                 let bbox = factory.getObjectFocusZone(object);
+
+                //todo hardcoded assets path
                 container.append(`
-<div onclick="${this.context.id}.context.focusObjectOrArea({left: ${bbox.left}, top: ${bbox.top}, 
+<div onclick="${this.self}.context.context.focusObjectOrArea({left: ${bbox.left}, top: ${bbox.top}, 
 width: ${bbox.width}, height: ${bbox.height}}, ${object.incrementId});" class="d-inline-block pointer">
-<img width="120" height="120" data-left="${bbox.left}" data-top="${bbox.top}" id="matrix-${counter}-annotation-preview"
-data-width="${bbox.width}" data-height="${bbox.height}" src="./assets/image.png"><br>${name}
+<img alt="preview" width="120" height="120" data-left="${bbox.left}" data-top="${bbox.top}" id="matrix-${counter}-annotation-preview"
+data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.png"><br>${name}
 </div>
             `);
                 counter++;

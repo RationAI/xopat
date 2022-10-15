@@ -56,9 +56,11 @@
     class FabricOverlay {
         constructor(viewer, scale) {
             var self = this;
+
+
+
             this._viewer = viewer;
             this._scale = scale;
-            this._lastUpdatedZoom = 0; //we usually start zoomed out close to 0
             this._containerWidth = 0;
             this._containerHeight = 0;
             this._canvasdiv = document.createElement('div');
@@ -69,9 +71,12 @@
             this._canvasdiv.style.height = '100%';
             this._viewer.canvas.appendChild(this._canvasdiv);
             this._canvas = document.createElement('canvas');
+
+
             this._id = 'osd-overlaycanvas-' + counter();
             this._canvas.setAttribute('id', this._id);
             this._canvasdiv.appendChild(this._canvas);
+            this._lastZoomUpdate = -99999;
             this.resize();
             this._fabricCanvas = new fabric.Canvas(this._canvas, {
                 imageSmoothingEnabled: false,
@@ -123,27 +128,10 @@
             let zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
-            // Update object properties to reflect zoom
-            let ratio = 0.01 / this._viewer.tools.imagePixelSizeOnScreen();
-            var updater = function(x) {
-                if (x.type == "text") {
-                    x.set({
-                        scaleX: 1/zoom,
-                        scaleY: 1/zoom
-                    });
-                } else {
-                    x.set({
-                        strokeWidth: x.originalStrokeWidth/zoom
-                    });
-                }
-            }
             this._fabricCanvas._objects.forEach(x => {
-                if (x.type === "group") {
-                    x._objects.forEach(updater);
-                } else {
-                    updater(x);
-                }
+                x.zooming?.(zoom);
             });
+            this._lastZoomUpdate = zoom;
 
             var viewportOrigin = this._viewer.viewport.viewportToWindowCoordinates(new OpenSeadragon.Point(0, 0));
             var canvasOffset = this._canvasdiv.getBoundingClientRect();
@@ -153,6 +141,31 @@
                     canvasOffset.top - viewportOrigin.y + pageScroll.y
                 )
             );
+
+
+            // Potential rotation logics implementaiton, together with fabric Layers could work....
+            // {
+            //     var p = this._viewer.viewport.pixelFromPoint(new $.Point(0, 0), true);
+            //     let zoom = this._viewer.viewport.getZoom(true);
+            //     var rotation = this._viewer.viewport.getRotation();
+            //     var flipped = this._viewer.viewport.getFlip();
+            //     // TODO: Expose an accessor for _containerInnerSize in the OSD API so we don't have to use the private variable.
+            //     var containerSizeX = this._viewer.viewport._containerInnerSize.x
+            //     var scaleX = containerSizeX * zoom;
+            //     var scaleY = scaleX;
+            //
+            //     if(flipped){
+            //         // Makes the x component of the scale negative to flip the svg
+            //         scaleX = -scaleX;
+            //         // Translates svg back into the correct coordinates when the x scale is made negative.
+            //         p.x = -p.x + containerSizeX;
+            //     }
+            //
+            //     this._node.setAttribute('transform',
+            //         'translate(' + p.x + ',' + p.y + ') scale(' + scaleX + ',' + scaleY + ') rotate(' + rotation + ')');
+            // }
+
+
 
             this._fabricCanvas.renderAll();
             return zoom;

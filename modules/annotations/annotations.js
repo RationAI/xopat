@@ -3,8 +3,11 @@
  * @type {OSDAnnotations}
  *
  * @typedef {{x: number, y: number}} Point
+ *
+ * 	//TODO https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
+ *   // - blending ?
  */
-var OSDAnnotations = class extends OpenSeadragon.EventSource {
+window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Get instance of the annotations manger, a singleton
@@ -91,84 +94,99 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._registerAnnotationFactory(FactoryClass, atRuntime);
 	}
 
-	/******************* EXPORT, IMPORT **********************/
+	/******************* EXPORT, IMPORT... todo move to convertor? **********************/
 
-	/**
-	 * Export objects in a fabricjs manner (actually just forwards the export command)
-	 * @param {string[]} withProperties list of extra properties to export
-	 * @return {object} exported canvas content
-	 */
-	getObjectContent(...withProperties) {
-		return this.canvas.toObject(['meta', 'a_group', 'threshold', 'borderColor', 'cornerColor', 'borderScaleFactor',
-			'color', 'presetID', 'hasControls', 'factoryId', 'sessionId', 'layerId', ...withProperties]);
-	}
-
-	/**
-	 * ASAP Annotations export, kept from the old version, not really tested
-	 * @return {Document} XML export
-	 */
-	getXMLDocumentContent() {
-		// first, create xml dom
-		let doc = document.implementation.createDocument("", "", null);
-		let ASAP_annot = doc.createElement("ASAP_Annotations");
-		let xml_annotations = doc.createElement("Annotations");
-		ASAP_annot.appendChild(xml_annotations);
-		doc.appendChild(ASAP_annot);
-
-		// for each object (annotation) create new annotation element with coresponding coordinates
-		let canvas_objects = this.canvas._objects;
-		for (let i = 0; i < canvas_objects.length; i++) {
-			let obj = canvas_objects[i];
-			if (!obj.factoryId || obj.factoryId.startsWith("_")) {
-				continue
-			}
-			var xml_annotation = doc.createElement("Annotation");
-			let coordinates=[];
-
-			xml_annotation.setAttribute("Name", "Annotation " + i);
-			let factory = this.getAnnotationObjectFactory(obj.factoryId);
-			if (factory) {
-				xml_annotation.setAttribute("Type", "Polygon");
-				coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
-			}
-			// noinspection JSUnresolvedVariable
-			xml_annotation.setAttribute("PartOfGroup", obj.a_group);
-			xml_annotation.setAttribute("Preset", obj.presetID);
-
-			//get coordinates in ASAP format
-			var xml_coordinates = doc.createElement("Coordinates");
-			// create new coordinate element for each coordinate
-			for (let j = 0; j < coordinates.length; j++) {
-				let xml_coordinate = doc.createElement("Coordinate");
-				xml_coordinate.setAttribute("Order", (j).toString());
-				xml_coordinate.setAttribute("X", coordinates[j][0]);
-				xml_coordinate.setAttribute("Y", coordinates[j][1]);
-				xml_coordinates.appendChild(xml_coordinate);
-			}
-			xml_annotation.appendChild(xml_coordinates);
-			xml_annotations.appendChild(xml_annotation);
+	defaultFileNameFor(format=undefined) {
+		if (!format || format === "native") {
+			return 'annotations_'+UTILITIES.todayISO()+'.json';
 		}
-		return doc;
+		return OSDAnnotations.Convertor.defaultFileName(format);
 	}
 
 	/**
-	 * ASAP Annotations export as string, kept from the old version, not really tested
-	 * @return {string} serialized XML export
+	 * Export annotations and presets
+	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
+	 *     use "native" or undefined for native export
+	 * @param {boolean} withAnnotations
+	 * @param {boolean} withPresets
+	 * @return Promise(string)
 	 */
-	getXMLStringContent() {
-		return new XMLSerializer().serializeToString(this.getXMLDocumentContent());
+	async export(format=undefined, withAnnotations=true, withPresets=true) {
+		if (!format || format === "native") {
+			const result = withAnnotations ? this.toObject() : {};
+			if (withPresets) result.presets = this.presets.toObject();
+			return JSON.stringify(result);
+		}
+		return OSDAnnotations.Convertor.encode(format, this, withAnnotations, withPresets);
 	}
 
 	/**
-	 * Load objects, must keep the same structure that comes from 'export'
-	 * @param {object} annotations objects to import
-	 * @param {function} onfinish
+	 * Import annotations and presets
+	 * @param {string} data serialized data of the given format
+	 * @param {string} format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {boolean} clear erase state upon import
+	 * @return Promise(string)
+	 */
+	async import(data, format=undefined, clear=false) {
+		//todo allow for 'redo' history
+
+		let toImport;
+		if (!format || format === "native") {
+			toImport = JSON.parse(data);
+		} else {
+			toImport = await OSDAnnotations.Convertor.decode(format, data, this);
+		}
+
+		// the import should happen in two stages, one that prepares the data and one that
+		// loads so that integrity is kept -> this is not probably a big issue since the only
+		// 'parsing' is done within preset import and it fails safely with exception in case of error
+
+		if (toImport.presets) {
+			this.presets.import(toImport.presets, clear);
+		}
+
+		if (!Array.isArray(toImport.objects)) {
+			await this._loadObjects(toImport, clear);
+		}
+
+		this.raiseEvent('import', {
+			format: format,
+			clear: clear,
+			data: toImport,
+		});
+	}
+
+	/**
+	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
+	 * for exporting presets, see this.presets.export(...)
+	 * @param {string[]} withProperties list of extra properties to export
+	 * @return {object} exported canvas content {objects:[object]}
+	 */
+	toObject(...withProperties) {
+		const props = [];
+		for (let fid in this.objectFactories) {
+			const factory = this.objectFactories[fid];
+			const newProps = factory.exports();
+			if (Array.isArray(newProps)) props.push(...newProps);
+		}
+		props.push(...OSDAnnotations.PresetManager.exportableProperties);
+		props.push(...withProperties);
+		return this.canvas.toObject(props);
+	}
+
+	/**
+	 * Load annotation objects only, must keep the same structure that comes from 'toObject',
+	 * the load event should be preceded with preset load event
+	 * for loading presets, see this.presets.import(...)
+	 * @param {object} annotations objects to import, {objects:[object]} format
 	 * @param {boolean} clear true if existing objects should be removed, default false
+	 * @return Promise
 	 */
-	loadObjects(annotations, onfinish=function(){}, clear=false) {
+	async loadObjects(annotations, clear=false) {
+		//todo allow for 'redo' history
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
-		this._loadObjects(annotations, onfinish, clear);
+		return this._loadObjects(annotations, clear);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -378,7 +396,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
 	 */
-	setPreset(preset, left=true) {
+	setPreset(preset=undefined, left=true) {
 		if (!preset) {
 			for (let key in this.presets._presets) {
 				if (this.presets.exists(key)) {
@@ -405,15 +423,15 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			if (!preset) {
 				console.log("Object refers to an invalid preset: using default one.");
 				preset = this.presets.left;
-				object.presetID = preset.id;
+				object.presetID = preset.presetID;
 			}
-
 		} else {
+			//todo maybe try to find a preset with the exact same color...
 			preset = this.presets.left;
-			object.presetID = preset.id;
+			object.presetID = preset.presetID;
 		}
 
-		$.extend(object, this.presets.getCommonProperties(preset));
+		const factory = object._factory()?.configure(object, this.presets.getCommonProperties(preset));
 	}
 
 	/************************ Layers *******************************/
@@ -578,10 +596,10 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let preset = this.presets.get(annotation.presetID);
 		if (preset) {
 			for (let key in preset.meta) {
-				let objmeta = annotation.meta || {}, specificElement = objmeta[key] || {};
+				let objmeta = annotation.meta || {}, overridingValue = objmeta[key];
 				let metaElement = preset.meta[key];
 				if (key === desiredKey) {
-					return specificElement.value || metaElement.value ||
+					return overridingValue || metaElement.value ||
 						(defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "");
 				}
 			}
@@ -608,7 +626,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @return {string} annotation name created by factory
 	 */
 	getDefaultAnnotationName(annotation) {
-		let factory = this.getAnnotationObjectFactory(annotation.factoryId);
+		let factory = annotation._factory();
 		if (factory !== undefined) {
 			return factory.getDescription(annotation);
 		}
@@ -627,8 +645,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
-		if (updateHistory) this.history.push(next, previous);
 		this.canvas.renderAll();
+		if (updateHistory) this.history.push(next, previous);
 	}
 
 	/**
@@ -763,10 +781,33 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		const _this = this;
 
 		//after properties initialized
+		// OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polyline, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Text, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Image, false);
+
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+
+		/**
+		 * Attach factory getter to each object
+		 */
+		fabric.Object.prototype._factory = function () {
+			const factory = _this.getAnnotationObjectFactory(this.factoryId);
+			if (factory) this._factory = () => factory;
+			else if (this.factoryId) {
+				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryId);
+				//maybe provide general implementation that can do nearly nothing
+			}
+			return factory;
+		}
+		fabric.Object.prototype.zooming = function(zoom) {
+			this._factory()?.onZoom(this, zoom);
+		}
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -788,17 +829,27 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._layers = {};
 
 		//restore presents if any
-		APPLICATION_CONTEXT.setData("annotation_presets", this.presets.export.bind(this.presets), "annotations");
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation_presets", JSON.stringify(_this.presets.toObject())));
 		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		if (presetData !== undefined) this.presets.import(presetData);
-		else this.presets.addPreset();
+		let preset;
+		if (presetData !== undefined) {
+			try {
+				preset = this.presets.import(presetData);
+			} catch (e) {
+				preset = this.presets.addPreset();
+			}
+		}
+		else preset = this.presets.addPreset();
+		if (preset) this.setPreset(preset);
 
 		//restore objects if any
-		APPLICATION_CONTEXT.setData("annotation-list", _ => JSON.stringify(_this.getObjectContent()), "annotations");
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation-list", JSON.stringify(_this.toObject())));
 		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
 		if (imageJson) {
 			try {
-				this.loadObjects(JSON.parse(imageJson), _ => {
+				this.loadObjects(JSON.parse(imageJson)).then(_ => {
 					_this.history.size = 50;
 				});
 			} catch (e) {
@@ -813,7 +864,6 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 
 		this.setMouseOSDInteractive(true, false);
-		this._setListeners();
 	}
 
 	_debugActiveObjectBinder() {
@@ -822,7 +872,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		let self = this;
 		this.canvas.getActiveObject = function() {
 			let e = get();
-			console.log("GET", e ? e.selectable : "", e, self.overlay.fabric._activeObject);
+			console.log("GET", e ? e.selectable : "", e, self.canvas._activeObject);
 			return e;
 		};
 		const set = this.canvas.setActiveObject.bind(this.canvas);
@@ -832,7 +882,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		};
 		const disc = this.canvas._discardActiveObject.bind(this.canvas);
 		this.canvas._discardActiveObject = function(e, t) {
-			console.log("DISCARD", e, self.overlay.fabric.__eventListeners);
+			console.log("DISCARD", e, self.canvas.__eventListeners);
 			return disc(e, t);
 		};
 	}
@@ -905,6 +955,8 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		/****** E V E N T  L I S T E N E R S: FABRIC (called when not navigating) **********/
 
+			//todo better handling - either add events to the viewer or...
+
 		let annotationCanvas = this.canvas.upperCanvasEl;
 		annotationCanvas.addEventListener('mousedown', function (event) {
 			if (_this.disabledInteraction) return;
@@ -963,7 +1015,7 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryId}`;
 		}
 		_this.objectFactories[factory.factoryId] = factory;
-		if (atRuntime) _this.raiseEvent('factory-registered');
+		if (atRuntime) _this.raiseEvent('factory-registered', {factory: factory});
 	}
 
 	_setModeFromAuto(mode) {
@@ -1011,21 +1063,20 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 	_keyUpHandler(e) {
 		if (this.disabledInteraction) return;
 
-		if (e.code === "Delete") {
-			this.removeActiveObject();
-			return;
+		console.log(e)
+
+		if (!e.ctrlKey && !e.altKey) {
+			if (e.key === "Delete") return this.removeActiveObject();
+			if (e.key === "Escape") {
+				this.history._boardItemSave();
+				this.setMode(this.Modes.AUTO);
+				return;
+			}
 		}
 
-		if (!e.ctrlKey && !e.altKey && e.code === "Escape") {
-			this.history._boardItemSave();
-			this.setMode(this.Modes.AUTO);
-			return;
-		}
-
-		if (e.ctrlKey && e.code === "KeyY") {
-			if (e.shiftKey) this.history.redo();
-			else this.history.back();
-			return;
+		if (e.ctrlKey) {
+			if (e.key === "z") return this.history.back();
+			if (e.key === "Z") return this.history.redo();
 		}
 
 		if (this.mode.rejects(e)) {
@@ -1051,34 +1102,37 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 	}
 
-	_loadObjects(input, callback, clear, reviver) {
+	_loadObjects(input, clear, reviver) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
-		this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
-			if (input.objects.length > 0 && enlivenedObjects.length < 1) {
-				throw "Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?";
-			}
+		return new Promise((resolve, reject) => {
+			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
+				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
+					return reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
+				}
 
-			if (clear) _this.clear();
-			_this._setBgOverlay(input, function () {
-				enlivenedObjects.forEach(function(obj, index) {
-					self.checkLayer(obj);
-					self.checkPreset(obj);
+				if (clear) _this.clear();
+				_this._setBgOverlay(input, function () {
+					enlivenedObjects.forEach(function(obj, index) {
+						self.checkLayer(obj);
+						self.checkPreset(obj);
 
-					obj.on('selected', self._objectClicked.bind(self));
-					_this.insertAt(obj, index);
+						obj.on('selected', self._objectClicked.bind(self));
+						//todo annotation creation event?
+						_this.insertAt(obj, index);
+					});
+					delete input.objects;
+					delete input.backgroundImage;
+					delete input.overlayImage;
+					delete input.background;
+					delete input.overlay;
+					_this._setOptions(input);
+					self.history.assignIDs(_this.getObjects());
+					_this.renderAll();
+					return resolve();
 				});
-				delete input.objects;
-				delete input.backgroundImage;
-				delete input.overlayImage;
-				delete input.background;
-				delete input.overlay;
-				_this._setOptions(input);
-				_this.renderAll();
-				callback && callback();
-			});
-		}, reviver);
-		this.history.assignIDs(this.canvas.getObjects());
+			}, reviver);
+		});
 	}
 
 	static __self = undefined;
@@ -1089,11 +1143,13 @@ var OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		//possibly try to avoid in the future accessing self through a global
-		window.Annotations = this;
-		this.id = "Annotations";
-		this.session = Date.now();
+		window.annotations = this;
+		this.id = "annotations";
+		this.version = "0.0.1";
+		this.session = this.version + "_" + Date.now();
 		this.constructor.__self = this;
 		this._init();
+		this._setListeners();
 	}
 };
 
@@ -1294,9 +1350,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return;
 
 		//instant create wants screen pixels as we approximate based on zoom level
-		if (!updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick)) {
+		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
+		if (created === false) {
 			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
-			onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN);
+onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
+coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
 		}
 	}
 
@@ -1323,7 +1381,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	_init(o, point, isLeftClick) {
-		let currentObject = this.context.overlay.fabric.getActiveObject(),
+		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
 		if (!currentObject) {
@@ -1335,7 +1393,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick);
 			created = true;
 		} else {
-			let	factory = this.context.getAnnotationObjectFactory(currentObject.factoryId),
+			let	factory = currentObject._factory(),
 				willModify, newPolygonPoints;
 
 			//treat as polygon
@@ -1351,7 +1409,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
 			} else {
 				newPolygonPoints = this._geCirclePoints(point);
-				willModify = this.context.freeFormTool.polygonsIntersect(
+				willModify = OSDAnnotations.PolygonUtilities.polygonsIntersect(
 					{points: newPolygonPoints}, currentObject
 				);
 			}
@@ -1425,7 +1483,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 
 	accepts(e) {
 		if (this.context.mode === this.context.Modes.FREE_FORM_TOOL_REMOVE
-			&& e.code === "AltLeft" && e.shiftKey && !e.ctrlKey) {
+			&& e.key === "Alt" && e.shiftKey && !e.ctrlKey) {
 
 			return true;
 		}
@@ -1451,7 +1509,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	accepts(e) {
 		return !e.ctrlKey
 			&& (this.context.mode === this.context.Modes.FREE_FORM_TOOL_ADD || e.shiftKey)
-			&& e.code === "AltLeft";
+			&& e.key === "Alt";
 	}
 
 	rejects(e) {
@@ -1516,10 +1574,10 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.code === "AltLeft" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "Alt" && !e.ctrlKey && !e.shiftKey;
 	}
 
 	rejects(e) {
-		return e.code === "AltLeft";
+		return e.key === "Alt";
 	}
 };

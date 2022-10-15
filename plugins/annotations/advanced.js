@@ -5,7 +5,7 @@ AnnotationsGUI.AdvancedControls = class {
 
     constructor(selfName, context) {
         this.context = context;
-        this.self = context.id + '.' + selfName;
+        this.self = `plugin('${context.id}').${selfName}`;
         USER_INTERFACE.AdvancedMenu.setMenu(this.context.id, "annotations-advanced", "Advanced Upload",
             `<div id="annotations-advanced-content" class="width-full"></div>`);
         this.loadDefaultPage();
@@ -64,9 +64,7 @@ Example:
 
             if (!Array.isArray(data)) data = [data];
 
-            this.context.context.loadObjects({objects: data}, function () {
-                self.loadDefaultPage();
-            });
+            this.context.context.loadObjects({objects: data}).then(_ => self.loadDefaultPage());
         } catch (e) {
             Dialogs.show(`Failed to load annotations. The process did not finish, however, some might have been loaded.<br><code>${e}</code>`,
                 5000, Dialogs.MSG_ERR);

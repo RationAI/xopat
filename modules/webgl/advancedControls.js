@@ -91,17 +91,23 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         }
         this.context.includeGlobalCode('colormap', `
 #define COLORMAP_ARRAY_LEN ${this.MAX_SAMPLES}
-vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float steps[COLORMAP_ARRAY_LEN], in bool interpolate) {
-    for (int i = 0; i < COLORMAP_ARRAY_LEN; i++) {
-        if (ratio <= steps[i] || steps[i] < .0) {
-            if (i == 0) return map[0];           
-            float remainder = ratio - steps[i];               
-            if (ratio > steps[i]) {
-                return map[i];
+vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float steps[COLORMAP_ARRAY_LEN+1], in int max_steps, in bool discrete) {
+    for (int i = 1; i < COLORMAP_ARRAY_LEN+1; i++) {
+        if (ratio <= steps[i]) {
+            if (discrete) return map[i-1];
+            
+            float scale = (ratio - steps[i-1]) / (steps[i] - steps[i-1]) - 0.5; 
+            
+            if (scale < .0) {
+                if (i == 1) return map[0];
+                //scale should be positive, but we need to keep the right direction
+                return mix(map[i-1], map[i-2], -scale);
             }
-            if (interpolate) return mix(map[i], map[i+1], remainder);
-            if (steps[i+1] > steps[i] && remainder > abs(ratio - steps[i+1])) return map[i+1];   
-            return map[i];
+            
+            if (i == max_steps) return map[i-1];    
+            return mix(map[i-1], map[i], scale);
+        } else if (i >= max_steps) {
+            return map[i-1];
         }
     }
 }`);
@@ -110,7 +116,8 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     init() {
         this.value = this.context.loadProperty(this.name, this.params.default);
 
-        this.setSteps();
+        //steps could have been set manually from the outside
+        if (!this.steps) this.setSteps();
 
         if (!this.value || !ColorMaps.schemeGroups[this.params.mode][this.value]) {
             this.value = ColorMaps.defaults[this.params.mode];
@@ -156,34 +163,43 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
         return node;
     }
 
+    /**
+     * Setup the pallete density, the value is trimmed with a cap of MAX_SAMPLES
+     * @param {number|[number]} steps - amount of sampling steps
+     *   number: input number of colors to use
+     *   array: put number of colors + 1 values, example: for three color pallete,
+     *      put 4 numbers: 2 separators and 2 bounds (min, max value)
+     */
     setSteps(steps) {
         this.steps = steps || this.params.steps;
         if (! Array.isArray(this.steps)) {
             if (this.steps < 2) this.steps = 2;
             if (this.steps > this.MAX_SAMPLES) this.steps = this.MAX_SAMPLES;
             this.maxSteps = this.steps;
+
+            this.steps++; //step generated must have one more value (separators for colors)
             let step = 1.0 / this.maxSteps;
-            this.steps = new Array(this.MAX_SAMPLES);
+            this.steps = new Array(this.MAX_SAMPLES+1);
             this.steps.fill(-1);
-            this.steps[0] = step;
+            this.steps[0] = 0;
             for (let i = 1; i < this.maxSteps; i++) this.steps[i] = this.steps[i - 1] + step;
-            this.steps[this.maxSteps-1] = 1.0;
+            this.steps[this.maxSteps] = 1.0;
         } else {
             this.steps = this.steps.filter(x => x >= 0);
             this.steps.sort();
-            let max = this.steps[0];
-            let min = this.steps[this.steps.length-1];
-            this.steps = this.steps.slice(0, this.MAX_SAMPLES);
-            this.maxSteps = this.steps.length;
+            let max = this.steps[this.steps.length-1];
+            let min = this.steps[0];
+            this.steps = this.steps.slice(0, this.MAX_SAMPLES+1);
+            this.maxSteps = this.steps.length - 1;
             this.steps.forEach(x => (x - min) / (max-min));
-            for (let i = this.maxSteps; i < this.MAX_SAMPLES; i++) this.steps.push(-1);
+            for (let i = this.maxSteps+1; i < this.MAX_SAMPLES+1; i++) this.steps.push(-1);
         }
     }
 
     _continuousCssFromPallete(pallete) {
-        let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
-        for (let i = 1; i < this.maxSteps; i++) {
-            css.push(`, ${pallete[i]} ${Math.round((this.steps[i-1]+this.steps[i])*50)}%`);
+        let css = [`linear-gradient(90deg`];
+        for (let i = 0; i < this.maxSteps; i++) {
+            css.push(`, ${pallete[i]} ${Math.round((this.steps[i]+this.steps[i+1])*50)}%`);
         }
         css.push(")");
         return css.join("");
@@ -192,13 +208,13 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     _discreteCssFromPallete(pallete) {
         let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
         for (let i = 1; i < this.maxSteps; i++) {
-            css.push(`, ${pallete[i-1]} ${Math.round(this.steps[i-1]*100)}%, ${pallete[i]} ${Math.round(this.steps[i-1]*100)}%`);
+            css.push(`, ${pallete[i-1]} ${Math.round(this.steps[i]*100)}%, ${pallete[i]} ${Math.round(this.steps[i]*100)}%`);
         }
         css.push(")");
         return css.join("");
     }
 
-    _setPallete(newPallete, stepSize) {
+    _setPallete(newPallete) {
         if (typeof newPallete[0] === "string") {
             let temp = newPallete; //if this.pallete passed
             this.pallete = [];
@@ -212,11 +228,13 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     glDrawing(program, dimension, gl) {
         gl.uniform3fv(this.colormap_gluint, Float32Array.from(this.pallete));
         gl.uniform1fv(this.steps_gluint, Float32Array.from(this.steps));
+        gl.uniform1i(this.colormap_size_gluint, this.maxSteps);
     }
 
     glLoaded(program, gl) {
         this.steps_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_steps[0]");
         this.colormap_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap[0]");
+        this.colormap_size_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap_size");
     }
 
     toHtml(breakLine=true, controlCss="") {
@@ -233,7 +251,8 @@ style="width: 60%;"></select><br>`;
 
     define() {
         return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN];
-uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN];`;
+uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN+1];
+uniform int ${this.webGLVariableName}_colormap_size;`;
     }
 
     get type() {
@@ -244,7 +263,7 @@ uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN];`;
         if (!value || valueGlType !== 'float') {
             return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
         }
-        return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.params.continuous})`;
+        return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.webGLVariableName}_colormap_size, ${!this.params.continuous})`;
     }
 
     get supports() {
