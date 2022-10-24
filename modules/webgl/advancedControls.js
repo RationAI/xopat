@@ -419,7 +419,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                         _this.mask[idx] = _this.mask[idx] > 0 ? 0 : _this._originalMask[idx];
                         this.style.background = (!_this.params.inverted && _this.mask[idx] > 0)
                         || (_this.params.inverted && _this.mask[idx] == 0) ?
-                            "var(--color-bg-danger-inverse)" : "var(--color-bg-primary)";
+                            "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
                         _this.context.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize-1;
                         _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
@@ -470,7 +470,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
         for (let i = 0; i < pips.length; i++) {
             pips[i].style.background = (!this.params.inverted && this.mask[i] > 0)
             || (this.params.inverted && this.mask[i] == 0) ?
-                "var(--color-bg-danger-inverse)" : "var(--color-bg-primary)";
+                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
             pips[i].dataset.index = (i).toString();
         }
     }

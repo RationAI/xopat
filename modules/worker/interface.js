@@ -16,9 +16,9 @@ window.PathopusWorker = class extends OpenSeadragon.EventSource {
     /**
      * Submit a job into detached window
      * @param options
-     * @param {string} options.command global function or member function name
-     * @param {string} options.commandContext name of a class/function to be instantiated if provided,
-     *   the constructor is given context
+     * @param {string} options.command global function or member function name to execute
+     * @param {string} options.commandContext name of a class/function to be instantiated; if provided,
+     *   the command is invoked on the instance of this context, constructor is given options.context
      * @param {any} options.payload payload data
      * @param {any|undefined} options.context context data if necessary, given to the constructor if applicable
      * @param {boolean} options.reset optional, force reset the worker, default false
@@ -28,13 +28,6 @@ window.PathopusWorker = class extends OpenSeadragon.EventSource {
         const onFinish = this.onFinish;
         const onFailure = this.onFailure;
 
-        if (files.length < 1) {
-            onFailure("No worker files submitted: exitting!");
-            return;
-        }
-
-        options.workFiles = files;
-
         if (options.reset) {
             delete options.reset;
             delete this.worker;
@@ -42,21 +35,43 @@ window.PathopusWorker = class extends OpenSeadragon.EventSource {
 
         try {
             if (window.Worker) {
-                const rootPath = PathopusWorker.metadata.directory;
+                const rootPath = PathopusWorker.metadata.directory,
+                    self = this;
 
                 if (!this.worker) {
+                    if (files.length < 1) {
+                        onFailure({
+                            status: "error",
+                            error: "No worker files submitted: exiting!"
+                        });
+                        return;
+                    }
+
                     this.worker = new Worker(`${rootPath}/worker.js`);
+
                     this.worker.onmessage = (e) => {
-                        //todo implement ping progress support?
                         const data = e.data;
                         if (data.status === "success") {
-                            onFinish(data);
+                            //once files are loaded, set default handler and fire the job
+                            self.worker.onmessage = (e) => {
+                                //todo implement ping progress support?
+                                const data = e.data;
+                                (data.status === "success" ? onFinish : onFailure)(data);
+                            };
+                            self.worker.postMessage(options);
                         } else {
+                            data.error = "Failed to load scripts!";
                             onFailure(data);
                         }
                     };
+                    this.worker.postMessage({
+                        command: "",
+                        workFiles: files,
+                    });
+
+                } else {
+                    this.worker.postMessage(options);
                 }
-                this.worker.postMessage(options);
 
                 //todo timeout?
             } else {
