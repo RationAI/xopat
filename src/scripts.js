@@ -228,7 +228,7 @@ form.submit();<\/script>`;
             'Access-Control-Allow-Origin': '*'
         });
 
-        if (typeof postData === "object" && !postData.meta) {
+        if (typeof postData === "object" && postData && postData?.meta) {
             postData.meta = APPLICATION_CONTEXT.config.meta;
         }
 
