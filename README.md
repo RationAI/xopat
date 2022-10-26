@@ -1,14 +1,14 @@
 
-<h1 align="center">Pathopus - Histology Data Visualizer
+<h1 align="center">XOpat - Explainable Open Pathology Analysis Tool
 </h1>
 <p align="center">
   <sup>A web based, REST API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</sup>
 </p>
 
-![The Pathopus Viewer](src/assets/docs/pathopus-banner.png)
+![The XOpat Viewer](src/assets/docs/xopat-banner.png)
 
 <hr>
-With the focus on flexibility, extensibility and modularity, the Pathopus
+With the focus on flexibility, extensibility and modularity, the xOpat
 viewer tries to address various issues in digital pathology related to analysis and 
 AI development.
 
@@ -23,7 +23,7 @@ effective algorithm/network debugging and profiling with the help of powerful vi
 
 
 ## Setup
-There is _docker_ available: https://github.com/RationAI/pathopus-docker. Although very versatile, setting up
+There is _docker_ available: https://github.com/RationAI/xopat-docker. Although very versatile, setting up
 the viewer correctly requires web development knowledge. The docker system is standalone ready to use environment.
 Each Dockerfile also shows how to configure a component so that the system (the viewer, browser and image server) work together - it is a great example on how to configure 
 your servers properly.
@@ -35,7 +35,7 @@ You can use the original repository - here you just have the compatibility confi
 
 In order to install the library you have to clone it and generate the source code:
 
-> ``cd pathopus && git clone https://github.com/RationAI/openseadragon.git``
+> ``cd xopat && git clone https://github.com/RationAI/openseadragon.git``
 >
 > building requires grunt and npm
 >

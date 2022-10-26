@@ -1,4 +1,4 @@
-# Pathopus - OpenSeadragon-based histology data visualizer
+# XOpat - OpenSeadragon-based histology data visualizer
 
 The visualisation is fully flexible. It, in fact, consists of two main logical groups. The first, **image** groups, 
 is rendered AS-IS. It is meant for tissue scan to be shown. The second, **data** groups is rendered using our WebGL 
@@ -11,7 +11,7 @@ and a front-end viewer. However, the usual scenario is:
     gets transformed to a canvas object of appropriate tile size
     - or not handled at all, and use only one layer per data group visualization (still can re-use up to 4 channels of data)
  - a viewer listens for POST request configuration and renders the visualization along with necessary modules and plugins loaded
- - an external system (such as pathopus browser) knows how to configure the viewer and how to open desired visualizations though UI interface
+ - an external system (such as xopat browser) knows how to configure the viewer and how to open desired visualizations though UI interface
 
 Such scenario can be found in our ready-to-use docker system.
 
@@ -37,7 +37,7 @@ image server together with image queries. In case you change the image server UR
  - check that the plugin knows how to connect to the server, i.e. setting up a correct URL in the `include.json` file
 
 #### DYI - Frontend
-0. Add and build OpenSeadragon - requires `npm` and `grunt` (``cd pathopus && git clone https://github.com/RationAI/openseadragon.git && cd openseadragon && npm install && grunt build``), details [here](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
+0. Add and build OpenSeadragon - requires `npm` and `grunt` (``cd xopat && git clone https://github.com/RationAI/openseadragon.git && cd openseadragon && npm install && grunt build``), details [here](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
 1. Place the application to a folder from which PHP (**VERSION > 7.1**) can serve files (e.g. create WampServer configuration for localhost).
 2. Change **config.php** configuration, most importantly the protocol used, correct paths and default URL(s) to image server(s).
 3. Use the visualization by sending the `JSON` configuration via `HTTP POST` to the `index.php` (you will most likely want to have 

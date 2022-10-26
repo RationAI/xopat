@@ -1,4 +1,4 @@
-# Thread Worker for Pathopus
+# Thread Worker for xOpat
 
 A simple, unified, generic interface for asynchronous offscreen workload. Callbacks are given the same
 objects as events. For the API description, see JS docs of ``interface.js``.

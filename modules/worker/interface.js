@@ -1,4 +1,4 @@
-window.PathopusWorker = class extends OpenSeadragon.EventSource {
+window.XOpatWorker = class extends OpenSeadragon.EventSource {
 
     /**
      * Callback handlers, if not provided, an event is emitted instead
@@ -35,7 +35,7 @@ window.PathopusWorker = class extends OpenSeadragon.EventSource {
 
         try {
             if (window.Worker) {
-                const rootPath = PathopusWorker.metadata.directory,
+                const rootPath = XOpatWorker.metadata.directory,
                     self = this;
 
                 if (!this.worker) {

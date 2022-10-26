@@ -145,7 +145,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			this.presets.import(toImport.presets, clear);
 		}
 
-		if (!Array.isArray(toImport.objects)) {
+		if (Array.isArray(toImport.objects)) {
 			await this._loadObjects(toImport, clear);
 		}
 

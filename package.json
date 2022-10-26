@@ -1,5 +1,5 @@
 {
-  "name": "pathopus",
+  "name": "xopat",
   "version": "1.0.0",
   "description": "A flexible multipurose browser-based WSI viewer.",
   "main": "index.php",
@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RationAI/pathopus.git"
+    "url": "git+https://github.com/RationAI/xopat.git"
   },
   "keywords": [
     "viewer",
@@ -21,14 +21,14 @@
     "annotations",
     "slide",
     "tissue",
-    "pathopus"
+    "xopat"
   ],
   "author": "Jirka Horák",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/RationAI/pathopus/issues"
+    "url": "https://github.com/RationAI/xopat/issues"
   },
-  "homepage": "https://github.com/RationAI/pathopus#readme",
+  "homepage": "https://github.com/RationAI/xopat#readme",
   "devDependencies": {
     "@frsource/cypress-plugin-visual-regression-diff": "^2.3.5",
     "cypress": "^10.9.0",

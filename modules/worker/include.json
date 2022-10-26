@@ -1,8 +1,8 @@
 {
-    "id": "pathopus-worker",
-    "name": "Pathopus Thread Worker",
+    "id": "xopat-worker",
+    "name": "xOpat Thread Worker",
     "description": "Generic asynchronous detached worker for offscreen computation.",
     "includes" : ["interface.js"],
     "requires": [],
-    "attach": "PathopusWorker"
+    "attach": "XOpatWorker"
 }
