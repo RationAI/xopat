@@ -40,7 +40,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas
     type            fabricjs object type - drives which object will be internally created (rect -> fabricjs.Rect)
-    factoryId       pathopus annotation type - drives which pathopus annotation factory implementation will be taking 
+    factoryId       xopat annotation type - drives which xopat annotation factory implementation will be taking 
                         care of the annotation object; these define what object can or cannot do and how (convert to 
                         explicit/polygonize, modify with free form tool...), 'Unknown Annotation' means this property 
                         has no registered factory active for the given factoryId 

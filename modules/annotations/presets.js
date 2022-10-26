@@ -35,7 +35,9 @@ OSDAnnotations.Preset = class {
 
         const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
         let preset = new this(id, factory, "", parsedObject.color);
-        preset.meta = parsedObject.meta || {};
+        if (parsedObject.meta) {
+            preset.meta = parsedObject.meta;
+        }
         return preset;
     }
 

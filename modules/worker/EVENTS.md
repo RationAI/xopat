@@ -1,4 +1,4 @@
-# Events in Pathopus Worker
+# Events in xOpat Worker
 
 ### `success` | e: `{status:string, payload: any}`
 Fired on success if the worker was not provided with a success callback.

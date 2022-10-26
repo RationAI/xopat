@@ -8,21 +8,23 @@ onmessage = function(e) {
         command = data.command,
         context = data.context;
 
-    let status, result;
+    let status = "error", result;
     try {
-        importScripts(...workFiles);
-        const parser = commandContext ? new commandContext(context) : window;
-
-        if (parser && parser[command]) {
-            result = parser[command](payload, context);
+        if (command === "") {
+            importScripts(...workFiles);
             status = "success";
         } else {
-            result = "Unknown command: " + command;
-            status = "error";
+            const target = self[commandContext] ? new self[commandContext](context) : window;
+
+            if (target && target[command]) {
+                result = target[command](payload, context);
+                status = "success";
+            } else {
+                result = "Unknown command: " + command;
+            }
         }
     } catch (e) {
         result = e;
-        status = "error";
     }
 
     postMessage({

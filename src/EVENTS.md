@@ -1,4 +1,4 @@
-# Pathopus - Events
+# xOpat - Events
 
 Events in the system are either native OpenSeadragon events, 
 or events emitted directly by the viewer. OpenSeadragon events

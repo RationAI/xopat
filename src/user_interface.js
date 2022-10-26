@@ -777,9 +777,9 @@ To apply changes, please <a onclick="UTILITIES.refreshPage()" class="pointer">re
 <path class="svg-bg" style="stroke:none;" d="M138 189L135 195C137.756 193.487 139.001 192.137 138 189z"/>
 <path class="svg-fg" style="stroke:none;" d="M111 196C110.984 201.944 107.113 208.424 107.581 213.867C108.017 218.936 115.737 218.201 118.606 215.991C126.648 209.793 118.205 198.065 111 196z"/>
 </svg>
-<span class="f3-light text-shadow" style="position: absolute; top: 80px; right: 70px;">Pathopus</span>
-<span class="f3-light text-shadow" style="position: absolute; top: 97px;right: 61px;">Viewer</span>
-<span class="f6" style="color: var(--color-text-tertiary);    position: absolute;top: 73px;right: 59px;">v${APPLICATION_CONTEXT.version}</span>
+<span class="f3-light text-shadow" style="position: absolute; top: 80px; right: 84px;">xOpat</span>
+<span class="f3-light text-shadow" style="position: absolute; top: 97px;right: 71px;">Viewer</span>
+<span class="f6" style="color: var(--color-text-tertiary);position: absolute;top: 73px;right: 70px;">v${APPLICATION_CONTEXT.version}</span>
 <span class="f3-light header-sep">Appearance</span><br>
 Theme &emsp; ${inputs.select({
                 classes: "select-sm",
@@ -821,7 +821,7 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
 
             //permaLoad plugins are not available for interaction
             if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
-                (pluginConfig.hasOwnProperty("permaLoad") && pluginConfig.permaLoad)) continue;
+                (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) continue;
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;

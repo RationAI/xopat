@@ -401,16 +401,18 @@ window.addEventListener("beforeunload", (e) => {
         // }
 
         const _this = this;
-        let focusBox = this._getFocusBBoxAsString(object, factory);
+        const focusBox = this._getFocusBBoxAsString(object, factory);
+        const editIcon = factory.isEditable() ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
+title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
+opener.${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
+else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         this._performAtJQNode("annotation-logs", node => node.prepend(`
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
-<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
-title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
-opener.${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
-else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span></div>`));
+${editIcon}
+</div>`));
     }
 
     _boardItemEdit(self, focusBBox, object) {
@@ -431,24 +433,25 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
 
         if (object) {
             let factory = this._context.getAnnotationObjectFactory(object.factoryId);
-            if (factory) factory.edit(object);
 
-            if (updateUI) {
-                $('#bord-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
-                this._context.setMouseOSDInteractive(false);
-                this._context.enableInteraction(false);
+            if (factory && factory.isEditable()) {
+                factory.edit(object);
+                if (updateUI) this._disableForEdit();
+
+                self.parent().find("input").each((e, t) => {
+                    $(t).attr('readonly', "false");
+                });
+                self.html('save');
+
+                this._editSelection = {
+                    incrementId: objectId,
+                    self: self,
+                    target: object
+                };
+            } else {
+                //if no update needed we are in blocked state, unblock since no edit
+                if (!updateUI) this._enableAfterEdit();
             }
-
-            self.parent().find("input").each((e, t) => {
-                $(t).attr('readonly', false);
-            });
-            self.html('save');
-
-            this._editSelection = {
-                incrementId: objectId,
-                self: self,
-                target: object
-            };
 
         } else {
             this._context.raiseEvent('error', {code: 'NO_OBJECT_ON_EDIT'});
@@ -485,15 +488,23 @@ else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span
             }
             self.html('edit');
 
-            if (!switches) {
-                $('#bord-for-annotations .Box-header').css('background', 'none');
-                this._context.setMouseOSDInteractive(true);
-                this._context.enableInteraction(true);
-            }
+            if (!switches) this._enableAfterEdit();
         } catch (e) {
             console.warn(e);
         }
         this._editSelection = undefined;
+    }
+
+    _enableAfterEdit() {
+        $('#bord-for-annotations .Box-header').css('background', 'none');
+        this._context.setMouseOSDInteractive(true);
+        this._context.enableInteraction(true);
+    }
+
+    _disableForEdit() {
+        $('#bord-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
+        this._context.setMouseOSDInteractive(false);
+        this._context.enableInteraction(false);
     }
 
     async _performSwap(canvas, toAdd, toRemove) {

@@ -35,6 +35,16 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     /**
+     *
+     * @param instance
+     * @param options
+     */
+    configure(instance, options) {
+        this._configureParts(instance.item(0), instance.item(1), options);
+        this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+    }
+
+    /**
      * @param {Object} ofObject fabricjs.Line object that is being copied
      * @param {array} parameters array of line points [x, y, x, y ..]
      */
@@ -202,15 +212,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["measure"];
     }
 
-    _createParts(parameters, options) {
+    _configureParts(line, text, options) {
         options.stroke = options.color;
-        return [new fabric.Line(parameters, $.extend({
+
+        $.extend(line, {
             scaleX: 1,
             scaleY: 1,
             selectable: false,
             factoryId: this.factoryId,
             hasControls: false,
-        }, options)), new fabric.Text('', {
+        }, options);
+        $.extend(text, {
             fontSize: 16,
             selectable: false,
             hasControls: false,
@@ -222,16 +234,29 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             strokeWidth: 2,
             scaleX: 1/options.zoomAtCreation,
             scaleY: 1/options.zoomAtCreation
-        })];
+        });
     }
 
-    _createWrap(parts, options) {
-        return new fabric.Group(parts, $.extend({
+    _configureWrapper(wrapper, line, text, options) {
+        $.extend(wrapper, {
             factoryId: this.factoryId,
             type: this.type,
             presetID: options.presetID,
-            measure: this._updateText(parts[0], parts[1]),
-        }, options));
+            measure: this._updateText(line, text),
+        }, options);
+    }
+
+    _createParts(parameters, options) {
+        const line = new fabric.Line(parameters),
+            text = new fabric.Text('');
+        this._configureParts(line, text, options);
+        return [line, text];
+    }
+
+    _createWrap(parts, options) {
+        const wrap = new fabric.Group(parts);
+        this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
+        return wrap;
     }
 };
 
@@ -545,6 +570,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.set({ left: this._left, top: this._top, hasControls: false,
             lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top});
+        delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
         theObject.calcACoords();
         this._context.replaceAnnotation(theObject, newObject, true);
     }

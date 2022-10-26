@@ -1,11 +1,11 @@
 @font-face {
-  font-family: 'pathopus';
-  src: url('pathopus.eot?38475159');
-  src: url('pathopus.eot?38475159#iefix') format('embedded-opentype'),
-       url('pathopus.woff2?38475159') format('woff2'),
-       url('pathopus.woff?38475159') format('woff'),
-       url('pathopus.ttf?38475159') format('truetype'),
-       url('pathopus.svg?38475159#pathopus') format('svg');
+  font-family: 'xopat';
+  src: url('xopat.eot?38475159');
+  src: url('xopat.eot?38475159#iefix') format('embedded-opentype'),
+       url('xopat.woff2?38475159') format('woff2'),
+       url('xopat.woff?38475159') format('woff'),
+       url('xopat.ttf?38475159') format('truetype'),
+       url('xopat.svg?38475159#xopat') format('svg');
   font-weight: normal;
   font-style: normal;
 }
@@ -14,13 +14,13 @@
 /*
 @media screen and (-webkit-min-device-pixel-ratio:0) {
   @font-face {
-    font-family: 'pathopus';
-    src: url('../font/pathopus.svg?38475159#pathopus') format('svg');
+    font-family: 'xopat';
+    src: url('../font/xopat.svg?38475159#xopat') format('svg');
   }
 }
 */
-.pathopus {
-  font-family: "pathopus";
+.xopat {
+  font-family: "xopat";
   font-style: normal;
   font-weight: normal;
   speak: never;

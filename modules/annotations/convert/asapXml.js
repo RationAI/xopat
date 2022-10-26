@@ -135,6 +135,13 @@ OSDAnnotations.Convertor.AsapXml = class {
                 }
             }
 
+            if (!meta.category) {
+                meta.category = {
+                    name: 'Category',
+                    value: presetId
+                };
+            }
+
             presets[presetId] = {
                 color: elem.getAttribute("Color") || "#ff0000",
                 presetID: presetId,

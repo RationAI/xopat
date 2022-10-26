@@ -69,7 +69,7 @@ function _draw(button) {
 
 Cypress.Commands.addAll({
     /**
-     * Load the Pathopus Viewer
+     * Load the xOpat Viewer
      * @param configuration config objects with data and params, plugins, rendering opts...
      * @param data additional data to include
      * @return {Cypress.Chainable<Cypress.AUTWindow>}

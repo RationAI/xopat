@@ -11,13 +11,11 @@ addPlugin("user-session", class {
 
     pluginReady() {
         if (this.enabled) {
-            $("#navigator-container").append(`
-<span class="material-icons pointer" title="Save session" onclick="${this.PLUGIN}.export();">save</span>        
-        `);
+            $("#shaders").parent().append(`
+<span class="material-icons pointer" title="Save session" style="text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`);
         } else {
-            $("#navigator-container").append(`
-<span class="material-icons pointer" title="Not available" style="text-decoration: line-through" onclick="${this.PLUGIN}.export();">save</span>        
-        `);
+            $("#navigator-container").parent().append(`
+<span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`);
         }
     }
 
@@ -27,7 +25,7 @@ addPlugin("user-session", class {
             Dialogs.show("Cannot save the session: no target WSI found.", 2500, Dialogs.MSG_WARN);
         } else {
             UTILITIES.fetchJSON(this.server, {
-                ajax: "storeSession",
+                ajax: "storeSession", //todo not flexible :/
                 filename: this.sessionReferenceFile,
                 session: UTILITIES.getForm()
             }, this.headers).then(response => {
