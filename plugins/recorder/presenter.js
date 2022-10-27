@@ -28,7 +28,7 @@ ${UIComponents.Elements.checkBox({
             onchange: this.PLUGIN + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesViewport
         })}
-<span class="btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Test</span>
+<span class="btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Annotation</span>
 <br><br>
 <button class='btn btn-pointer' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>

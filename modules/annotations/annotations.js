@@ -163,15 +163,28 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @return {object} exported canvas content {objects:[object]}
 	 */
 	toObject(...withProperties) {
-		const props = [];
-		for (let fid in this.objectFactories) {
-			const factory = this.objectFactories[fid];
-			const newProps = factory.exports();
-			if (Array.isArray(newProps)) props.push(...newProps);
-		}
+		const props = this.exportedPropertiesGlobal();
 		props.push(...OSDAnnotations.PresetManager.exportableProperties);
 		props.push(...withProperties);
 		return this.canvas.toObject(props);
+	}
+
+	/**
+	 * Compute properties registered for export
+	 * @return {*[]}
+	 */
+	exportedPropertiesGlobal() {
+		const props = new Set();
+		for (let fid in this.objectFactories) {
+			const factory = this.objectFactories[fid];
+			const newProps = factory.exports();
+			if (Array.isArray(newProps)) {
+				for (let p of newProps) {
+					props.add(p);
+				}
+			}
+		}
+		return Array.from(props);
 	}
 
 	/**
@@ -431,7 +444,9 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			object.presetID = preset.presetID;
 		}
 
-		const factory = object._factory()?.configure(object, this.presets.getCommonProperties(preset));
+		const props = this.presets.getCommonProperties(preset);
+		if (!isNaN(object.zoomAtCreation)) props.zoomAtCreation = object.zoomAtCreation;
+		object._factory()?.configure(object, props);
 	}
 
 	/************************ Layers *******************************/
@@ -1103,6 +1118,15 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	_loadObjects(input, clear, reviver) {
+		const originalToObject = fabric.Object.prototype.toObject;
+		const inclusionProps = this.exportedPropertiesGlobal();
+
+		//we ignore incoming props as we later reset the override
+		fabric.Object.prototype.toObject = function (_) {
+			return originalToObject.call(this, inclusionProps);
+		}
+		const reset = () => fabric.Object.prototype.toObject = originalToObject;
+
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		return new Promise((resolve, reject) => {
@@ -1132,7 +1156,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 					return resolve();
 				});
 			}, reviver);
-		});
+		}).then(reset).catch(reset);
 	}
 
 	static __self = undefined;

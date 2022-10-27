@@ -439,7 +439,7 @@ ${editIcon}
                 if (updateUI) this._disableForEdit();
 
                 self.parent().find("input").each((e, t) => {
-                    $(t).attr('readonly', "false");
+                    $(t).removeAttr('readonly');
                 });
                 self.html('save');
 
@@ -475,7 +475,7 @@ ${editIcon}
                     if (!metadata[t.name] || metadata[t.name].value != t.value) {
                         obj.meta[t.name] = t.value;
                     }
-                    $(t).attr('readonly', true);
+                    $(t).attr('readonly', "true");
                 });
 
                 //if target was set, object could have been edited, update

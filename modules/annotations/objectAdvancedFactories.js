@@ -551,7 +551,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {[string]}
      */
     exports() {
-        return ["left", "top", "width", "height", "opacity", "scaleX", "scaleY"];
+        return ["scaleX", "scaleY"]; //"left", "top", "width", "height", "opacity",
     }
 
     edit(theObject) {

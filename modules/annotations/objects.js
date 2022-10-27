@@ -145,7 +145,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return {[string]}
      */
     exports() {
-        return [];
+        return ["zoomAtCreation"];
     }
 
     copyProperties(ofObject, ...withAdditional) {

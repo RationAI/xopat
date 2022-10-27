@@ -67,13 +67,13 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
-        return ["left", "top", "width", "height"];
-    }
+    // /**
+    //  * A list of extra properties to export upon export event
+    //  * @return {[string]}
+    //  */
+    // exports() {
+    //     return ["left", "top", "width", "height"];
+    // }
 
     edit(theObject) {
         this._left = theObject.left;
@@ -219,13 +219,13 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
-        return ["left", "top", "rx", "ry"];
-    }
+    // /**
+    //  * A list of extra properties to export upon export event
+    //  * @return {[string]}
+    //  */
+    // exports() {
+    //     return ["left", "top", "rx", "ry"];
+    // }
 
     /**
      * @param {Object} ofObject fabricjs.Ellipse object that is being copied
@@ -378,13 +378,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
-        return ["points"];
-    }
+    // /**
+    //  * A list of extra properties to export upon export event
+    //  * @return {[string]}
+    //  */
+    // exports() {
+    //     return ["points"];
+    // }
 
     /**
      * @param {Object} ofObject fabricjs.Polygon object that is being copied
@@ -677,13 +677,13 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
-        return ["x1", "x2", "y1", "y2"];
-    }
+    // /**
+    //  * A list of extra properties to export upon export event
+    //  * @return {[string]}
+    //  */
+    // exports() {
+    //     return ["x1", "x2", "y1", "y2"];
+    // }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
         //do nothing - a line is always 'transparent'
@@ -962,7 +962,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        options.autoScale = options.autoScale || false;
+        options.autoScale = object.autoScale || options.autoScale || false;
         if (options.autoScale) {
             $.extend(object, options, {
                 fontSize: options.fontSize || 16,
@@ -1032,7 +1032,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {[string]}
      */
     exports() {
-        return ["autoScale", "text", "left", "top", "fontSize"];
+        return ["autoScale"]; //"text", "left", "top", "fontSize"
     }
 
     /**
