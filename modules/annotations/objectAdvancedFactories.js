@@ -152,12 +152,24 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._context.deleteHelperAnnotation(obj[0]);
         this._context.deleteHelperAnnotation(obj[1]);
 
-        const pid = obj[0].presetID;
-
-        obj = this._createWrap(obj, this._presets.getCommonProperties());
+        const line = obj[0],
+            text = obj[1],
+            pid = line.presetID;
+        text.scaleX = text.scaleY = 1;
+        const props = this._presets.getCommonProperties();
+        // this._configureParts(obj[0], obj[1], props);
+        obj = this._createWrap(obj, props);
         obj.presetID = pid;
+
+        text.top = line.top + line.height / 2;
+        text.left = line.left + line.width / 2;
+
         this._context.addAnnotation(obj);
         this._current = undefined;
+    }
+
+    finishIndirect() {
+        this.finishDirect();
     }
 
     title() {

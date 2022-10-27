@@ -134,7 +134,7 @@ OSDAnnotations.PresetManager = class {
         let preset = this.getActivePreset(isLeftClick),
             result = this._populateObjectOptions(preset);
         result.isLeftClick = isLeftClick;
-        return result;
+        return this._withDynamicOptions(result);
     }
 
     /**
@@ -169,11 +169,11 @@ OSDAnnotations.PresetManager = class {
      * Alias for static _commonProperty
      * @param {OSDAnnotations.Preset} withPreset
      */
-    getCommonProperties(withPreset) {
+    getCommonProperties(withPreset=undefined) {
         if (withPreset) {
-            return this._populateObjectOptions(withPreset);
+            return this._withDynamicOptions(this._populateObjectOptions(withPreset));
         }
-        return this.constructor._commonProperty;
+        return this._withDynamicOptions(this.constructor._commonProperty);
     }
 
     /**
@@ -375,19 +375,24 @@ OSDAnnotations.PresetManager = class {
         else this.right = this._presets[id];
     }
 
-    _populateObjectOptions(withPreset) {
+    _withDynamicOptions(options) {
         let zoom = this._context.canvas.getZoom();
+        return $.extend(options, {
+            layerId: this._context.getLayer().id,
+            opacity: this._context.getOpacity(),
+            zoomAtCreation: zoom,
+            strokeWidth: 3 / zoom
+        });
+    }
+
+    _populateObjectOptions(withPreset) {
         if (this.modeOutline) {
             return $.extend({fill: ""},
                 OSDAnnotations.PresetManager._commonProperty,
                 {
                     presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
                     stroke: withPreset.color,
                     color: withPreset.color,
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
                 }
             );
         } else {
@@ -396,11 +401,7 @@ OSDAnnotations.PresetManager = class {
                 OSDAnnotations.PresetManager._commonProperty,
                 {
                     presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
                     color: withPreset.color,
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
                 }
             );
         }

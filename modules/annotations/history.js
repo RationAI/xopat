@@ -67,11 +67,13 @@ window.addEventListener('load', (e) => {
 document.addEventListener('keydown', (e) => {
     const parentContext = opener.${this._context.id};  
     opener.focus();
+    e.focusCanvas = true; //fake focus
     parentContext._keyDownHandler(e);
 });
 
 document.addEventListener('keyup', (e) => {
-    const parentContext = opener.${this._context.id};   
+    const parentContext = opener.${this._context.id};  
+    e.focusCanvas = true; //fake focus
     parentContext._keyUpHandler(e);
 });
 
@@ -168,17 +170,15 @@ window.addEventListener("beforeunload", (e) => {
 
     /**
      * Add new event to the history, at least one object should be specified
-     * @param {object || null} newObject, if undefined it is deletion (no new object)
-     * @param {object || null} previous, if undefined it is creation (no old object)
+     * @param {object || undefined} newObject, if undefined it is deletion (no new object)
+     * @param {object || undefined} previous, if undefined it is creation (no old object)
      */
-    push(newObject, previous = null) {
+    push(newObject, previous = undefined) {
         UTILITIES.setDirty();
         if (newObject) {
-            this._addToBoard(newObject);
+            this._addToBoard(newObject, previous);
             this.highlight(newObject);
-        }
-
-        if (previous) {
+        } else if (previous) {
             this._removeFromBoard(previous);
         }
 
@@ -275,6 +275,7 @@ window.addEventListener("beforeunload", (e) => {
 
     _syncLoad() {
         let _this = this;
+        //todo sort by incrementId?
         this._context.canvas.getObjects().some(o => {
             if (o.presetID) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
@@ -359,7 +360,7 @@ window.addEventListener("beforeunload", (e) => {
         }
     }
 
-    _addToBoard(object) {
+    _addToBoard(object, replaced=undefined) {
         let desc, inputs = [];
         let factory = this._context.getAnnotationObjectFactory(object.factoryId);
         let icon = factory ? factory.getIcon() : "question_mark";
@@ -406,13 +407,25 @@ window.addEventListener("beforeunload", (e) => {
 title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
 opener.${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
 else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
-        this._performAtJQNode("annotation-logs", node => node.prepend(`
+        const html = `
 <div id="log-object-${object.incrementId}" class="rounded-2"
 onclick="opener.${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
-</div>`));
+</div>`;
+
+        if (typeof replaced === "object" && replaced?.incrementId) {
+            this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
+                if (node.length) {
+                    node.replaceWith(html);
+                } else {
+                    _this._performAtJQNode("annotation-logs", node => node.prepend(html));
+                }
+            });
+        } else {
+            this._performAtJQNode("annotation-logs", node => node.prepend(html));
+        }
     }
 
     _boardItemEdit(self, focusBBox, object) {
@@ -512,12 +525,12 @@ ${editIcon}
             this._focus(this._getFocusBBox(toAdd));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
-            this._addToBoard(toAdd);
+            this._addToBoard(toAdd, toRemove);
 
-            if (toRemove) {
-                canvas.remove(toRemove);
-                this._removeFromBoard(toRemove);
-            }
+            // if (toRemove) {
+            //     canvas.remove(toRemove);
+            //     this._removeFromBoard(toRemove);
+            // }
             this._context.canvas.setActiveObject(toAdd);
         } else if (toRemove) {
             this._focus(this._getFocusBBox(toRemove));

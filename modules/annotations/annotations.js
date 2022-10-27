@@ -1066,7 +1066,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	_keyDownHandler(e) {
 		// switching mode only when no mode AUTO and mouse is up
-		if (this.cursor.isDown || this.disabledInteraction) return;
+		if (this.cursor.isDown || this.disabledInteraction || !e.focusCanvas) return;
 
 		let modeFromCode = this._getModeByKeyEvent(e);
 		if (modeFromCode) {
@@ -1078,20 +1078,20 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	_keyUpHandler(e) {
 		if (this.disabledInteraction) return;
 
-		console.log(e)
-
-		if (!e.ctrlKey && !e.altKey) {
-			if (e.key === "Delete") return this.removeActiveObject();
-			if (e.key === "Escape") {
-				this.history._boardItemSave();
-				this.setMode(this.Modes.AUTO);
-				return;
+		if (e.focusCanvas) {
+			if (!e.ctrlKey && !e.altKey) {
+				if (e.key === "Delete") return this.removeActiveObject();
+				if (e.key === "Escape") {
+					this.history._boardItemSave();
+					this.setMode(this.Modes.AUTO);
+					return;
+				}
 			}
-		}
 
-		if (e.ctrlKey) {
-			if (e.key === "z") return this.history.back();
-			if (e.key === "Z") return this.history.redo();
+			if (e.ctrlKey) {
+				if (e.key === "z") return this.history.back();
+				if (e.key === "Z") return this.history.redo();
+			}
 		}
 
 		if (this.mode.rejects(e)) {
