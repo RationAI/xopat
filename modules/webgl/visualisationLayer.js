@@ -90,6 +90,8 @@ WebGLModule.VisualisationLayer = class {
      * @param {string} id unique ID among all webgl instances and shaders
      * @param {object} options
      *  options.channel: "r", "g" or "b" channel to sample, default "r"
+     *  options.use_mode: blending mode - default alpha ("show"), custom blending ("mask") and clipping mask blend ("mask_clip")
+     *  options.use_[*]: filtering, gamma/exposure/logscale with a float filter parameter (e.g. "use_gamma" : 1.5)
      * @param {object} privateOptions options that should not be touched, necessary for linking the layer to the core
      */
     constructor(id, options, privateOptions) {
@@ -243,7 +245,8 @@ WebGLModule.VisualisationLayer = class {
      */
     static modes = {
         show: "show",
-        mask: "blend"
+        mask: "blend",
+        mask_clip: "blend_clip"
     };
 
     /**

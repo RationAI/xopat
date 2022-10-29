@@ -926,12 +926,15 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 		}.bind(this);
 
+		//prevents event bubling if the up event was handled by annotations
 		function handleRightClickUp(event) {
 			if (!_this.cursor.isDown || _this.disabledInteraction) return;
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
-			_this.mode.handleClickUp(event, point, false, factory);
+			if (_this.mode.handleClickUp(event, point, false, factory)) {
+				event.preventDefault();
+			}
 
 			_this.cursor.isDown = false;
 		}
@@ -952,7 +955,9 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
-			_this.mode.handleClickUp(event, point, true, factory);
+			if (_this.mode.handleClickUp(event, point, true, factory)) {
+				event.preventDefault();
+			}
 
 			_this.cursor.isDown = false;
 		}
@@ -1203,9 +1208,10 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
+	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		//do nothing
+		return false;
 	}
 
 	/**
@@ -1346,7 +1352,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) return;
-		this._finish(o, isLeftClick, objectFactory);
+		return this._finish(o, isLeftClick, objectFactory);
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
@@ -1371,7 +1377,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		this.clickInBetweenDelta = clickTime;
 
 		// just navigate if click longer than 100ms or other conds not met, fire if double click
-		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return;
+		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return false;
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
@@ -1380,6 +1386,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
 coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
 		}
+		return true;
 	}
 
 	customHtml() {
@@ -1394,6 +1401,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		this._finish();
+		return true;
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
@@ -1547,8 +1555,9 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) return;
+		if (!objectFactory) return false;
 		this._finish(objectFactory);
+		return true;
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {

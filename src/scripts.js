@@ -35,6 +35,12 @@
         e.focusCanvas = focusOnViewer;
         VIEWER.raiseEvent('key-up', e);
     });
+    //consider global mouseup/down events. or maybe not - clicking is
+    // contextual and is enough to implement listeners on elements (unlike key hits)...
+    // document.addEventListener('mouseup', function (e) {
+    //     e.focusCanvas = focusOnViewer;
+    //     VIEWER.raiseEvent('mouse-up', e);
+    // });
 
     let failCount = new WeakMap();
     VIEWER.addHandler('tile-load-failed', function(e) {

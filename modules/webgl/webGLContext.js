@@ -185,9 +185,26 @@ WebGLModule.WebGLImplementation = class {
      *     << glslCode >>
      * }
      *
+     * void blend_clip(vec4 input) {
+     *     //for details on clipping mask approach see show() below
+     *     <<use some_blending_name_etc() to blend input onto output color of the shader using a clipping mask>>
+     * }
+     *
      * void blend(vec4 input) { //must be called blend, API
      *     <<use some_blending_name_etc() to blend input onto output color of the shader>>
      * }
+     *
+     * Also, default alpha blending equation 'show' must be implemented:
+     * void show(vec4 color) {
+     *    pseudocode
+     *    note that the blending output should not immediatelly work with 'color' but perform caching of the color,
+     *    render the color given in previous call and at the execution end of main call show(vec4(.0))
+     *    this way, the previous color is not yet blended for the next layer show/blend/blend_clip which can use it to create a clipping mask
+     *
+     *    compute t = color.a + background.a - color.a*background.a;
+     *    output vec4((color.rgb * color.a + background.rgb * background.a - background.rgb * (background.a * color.a)) / t, t)
+     * }
+}
      */
     setBlendEquation(glslCode) {
         this.glslBlendCode = glslCode;
@@ -308,23 +325,33 @@ uniform float pixel_size_in_fragments;
 uniform float zoom_level;
 ${this.texture.declare(indicesOfImages)}
 varying vec2 tile_texture_coords;
+vec4 _last_rendered_color = vec4(.0);
 
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
 
 void show(vec4 color) {
-    if (close(color.a, 0.0)) return;
-    float t = color.a + gl_FragColor.a - color.a*gl_FragColor.a;
-    gl_FragColor = vec4((color.rgb * color.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * color.a)) / t, t);
+    vec4 fg = _last_rendered_color;
+    _last_rendered_color = color;
+
+    if (close(fg.a, 0.0)) return;
+    float t = fg.a + gl_FragColor.a - fg.a*gl_FragColor.a;
+    gl_FragColor = vec4((fg.rgb * fg.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * fg.a)) / t, t);
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
 ${this.glslBlendCode}
 }
 
+void blend_clip(vec4 foreground) {
+    _last_rendered_color = blend_equation(foreground, _last_rendered_color);
+}
+
 void blend(vec4 foreground) {
+    show(_last_rendered_color);
     gl_FragColor = blend_equation(foreground, gl_FragColor);
+    _last_rendered_color = vec4(.0);
 }
 
 ${Object.values(globalScopeCode).join("\n")}
@@ -333,6 +360,8 @@ ${definition}
 
 void main() {
     ${execution}
+    
+    show(vec4(.0));
 }
 `;
     }
@@ -520,6 +549,7 @@ ${this.texture.declare(indicesOfImages)}
 uniform float pixel_size_in_fragments;
 uniform float zoom_level;
 uniform vec2 u_tile_size;
+vec4 _last_rendered_color = vec4(.0);
 
 in vec2 tile_texture_coords;
         
@@ -530,17 +560,26 @@ bool close(float value, float target) {
 }
         
 void show(vec4 color) {
-    if (close(color.a, 0.0)) return;
-    float t = color.a + final_color.a - color.a*final_color.a;
-    final_color = vec4((color.rgb * color.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * color.a)) / t, t);
+    vec4 fg = _last_rendered_color;
+    _last_rendered_color = color;
+    
+    if (close(fg.a, 0.0)) return;
+    float t = fg.a + final_color.a - fg.a*final_color.a;
+    final_color = vec4((fg.rgb * fg.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * fg.a)) / t, t);
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
 ${this.glslBlendCode}
 }
 
+void blend_clip(vec4 foreground) {
+    _last_rendered_color = blend_equation(foreground, _last_rendered_color);
+}
+
 void blend(vec4 foreground) {
+    show(_last_rendered_color);
     final_color = blend_equation(foreground, final_color);
+    _last_rendered_color = vec4(.0);
 }
 
 ${Object.values(globalScopeCode).join("\n")}
@@ -551,6 +590,8 @@ void main() {
     final_color = vec4(1., 1., 1., 0.);
         
     ${execution}
+    
+    show(vec4(.0));
 }`;
     }
 

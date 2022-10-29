@@ -334,6 +334,87 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     }; // end of namespace Dialogs
     Dialogs.init();
 
+
+    window.DropDown = {
+
+        _calls: [],
+
+        init: function() {
+            document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
+            $("body").append(`<ul id="drop-down-menu" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
+
+            this._body = $("#drop-down-menu");
+        },
+
+        /**
+         *
+         * @param context a string or html node element, where to bind the click event
+         * @param optionsGetter callback that generates array of config options
+         *   config object:
+         *   config.title {string} title, required
+         *   config.action {function} callback, argument given is 'selected' current value from config.icon
+         *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
+         *   config.styles {object} custom css styles, optional
+         *   config.selected {boolean} whether to mark the option as selected, optional
+         *   config.icon {string} custom option icon name, optional
+         */
+        bind: function(context, optionsGetter) {
+            if (typeof context === "string") {
+                context = document.getElementById(context);
+            }
+            if (! context?.nodeType) {
+                console.error("Registered dropdown for non-existing or invalid element", context);
+                return;
+            }
+            const _this = this;
+            context.addEventListener("contextmenu", (e) => {
+                _this._toggle(e, optionsGetter);
+                e.preventDefault();
+            });
+        },
+
+        _toggle: function(mouseEvent, optionsGetter) {
+            if (mouseEvent === undefined || this._calls.length > 0) {
+                this._calls = [];
+                this._body.html("");
+                this._body.css({
+                    display: "none",
+                    top: 99999,
+                    left: 99999,
+                });
+            } else {
+                optionsGetter().forEach(this._with.bind(this));
+                this._body.css({
+                    display: "block",
+                    top: mouseEvent.pageY + 5,
+                    left: mouseEvent.pageX - 15
+                });
+            }
+        },
+
+        _with(opts, i) {
+            const clbck = opts.action;
+            if (clbck) {
+                opts.selected = opts.selected || false;
+                this._calls.push(() => {
+                    clbck(opts.selected);
+                    window.DropDown._toggle(undefined, undefined);
+                });
+                const icon = opts.icon ? `<span class="material-icons pl-0" style="width: 20px;font-size: 17px;" onclick="">${opts.icon}</span>`
+                    : "<span class='d-inline-block' style='width: 20px'></span>";
+                const selected = opts.selected ? "style=\"background: var(--color-text-link) !important;\"" : "";
+
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
+            } else {
+                this._calls.push(null);
+                this._body.append(`<li class="header-sep px-2" style="font-size: 10px;
+    border-bottom: 1px solid var(--color-border-primary);">${opts.title}</li>`);
+            }
+        }
+    };
+    DropDown.init();
+
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {

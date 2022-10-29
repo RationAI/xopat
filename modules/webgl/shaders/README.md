@@ -75,7 +75,10 @@ params field (such as custom 'color' in the example above):
  to respect this value (if set): then, the shader samples the channel given in this parameter
     - e.g. if `params.channel = "rrr"` the shader will sample the `RED` channel three times and obtain `vec3`
 
-And the following filters, where no action is performed if the value is not set. The order of definition in the params sets the order of application.    
+To specify blending, the params field can specify
+ - `use_mode` - with values `"show"` (default alpha blending), `"mask"` or `"mask_clip"` (custom blending with default hard mask implementation)
+
+The following three filters can be specified. The order of definition in the params sets the order of application.    
  - `use_gamma` - a gamma scale applied on the intensities, 
  - `use_exposure` - remapping intensities onto
  - `use_logscale` - logarithm scale applied on the intensities (safer version of gamma when arg > 1 used)
