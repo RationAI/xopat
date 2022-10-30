@@ -16,8 +16,8 @@ const presetUiNewMetaButton = (presetIndex) =>
 const presetUiSelectLeft = () => cy.get("#select-annotation-preset-left");
 const presetUiSelectRight = () => cy.get("#select-annotation-preset-right");
 
-const ALTdown = () => cy.keyDown("Alt", {altKey: true})
-const ALTup = () => cy.keyUp("Alt", {altKey: true})
+const ALTdown = () => cy.keyDown("Alt", {altKey: true, focusCanvas: true})
+const ALTup = () => cy.keyUp("Alt", {altKey: true, focusCanvas: true})
 
 
 describe('Annotations - User Controls', withBrowser, () => {
@@ -100,7 +100,7 @@ describe('Annotations - User Controls', withBrowser, () => {
         ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
 
-        ALTup()
+        ALTup();
 
         cy.canvas().matchImage({title: "S1 - polygon finished"});
         cy.wrap(ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)

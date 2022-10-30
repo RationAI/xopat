@@ -10,14 +10,19 @@
     }, {
         'next #navigator-container' : 'An interactive navigator can be used <br> for orientation or to jump quickly on different areas.',
     }, {
-        'next #general-controls' : 'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.<br>You can control the data layer opacity here.',
+        'next #general-controls' : 'The whole visualisation consists of two layers: <br> the background canvas and the data layer above.',
         runIf: function() {return APPLICATION_CONTEXT.config.background.length == 1 && withLayers();}
-    }, {
-        'next #panel-images' : 'There are several background images available: <br> you can turn them on/off or blend using an opacity slider.',
-        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 0;}
     },{
-        'next #general-controls' : 'The data layer opacity atop background images can be controlled here.',
+        'next #general-controls' : 'You can toggle background visibility <br> and control the data layer opacity. <br> The button on the right clones the viewer and synchronizes the navigation.',
         runIf: withLayers
+    }, {
+        'next #tissue-list-menu' : 'The viewer supports multiple backgrounds<br>you can switch between if available at the bottom of the screen.',
+    }, {
+        'click #images-pin' : 'There are several background images available. Click to open.',
+        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.config.params.stackedBackground;}
+    }, {
+       'next #panel-images' : 'You can turn them on/off or blend using an opacity slider.',
+        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.config.params.stackedBackground;}
     }, {
         'next #panel-shaders': 'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be controlled here.',
         runIf: withLayers
@@ -31,7 +36,7 @@
         'next #data-layer-options': 'Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.',
         runIf: withLayers
     }, {
-        'next #cache-snapshot': 'Your settings can be saved here. <br> Saved adjustments are applied on layers of the same name.',
+        'next #cache-snapshot': 'Your settings can be saved here. <br> This feature works only with enabled cookies. <br> Saved adjustments are applied on layers of the same name.',
         runIf: withLayers
     }, {
         'next #copy-url' : 'Your setup can be shared with a link.'

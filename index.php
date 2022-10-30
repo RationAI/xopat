@@ -95,10 +95,8 @@ if ($layerVisible) {
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 //todo fixme cached setup -> notify user rendering has changed....
-
-                //todo fixme not working!!!
                 $layer->cache = $cookieCache->{$layer->name};
-            }
+            } //todo else if not cookies enabled notify user they have been disabled
             if (!isset($layer->params)) {
                 $layer->params = (object)array();
             }
@@ -1044,12 +1042,12 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             let i = 0, selectedImageLayer = 0;
-            const imageOpts = [];
+            let imageOpts = [];
             let largestWidth = 0,
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
-                for (let idx = 0; idx < confBackground.length; idx++ ) {
+                for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
                     const image = confBackground[idx],
                         worldItem =  VIEWER.world.getItemAt(i),
                         referencedImage = worldItem?.getBackgroundConfig();
@@ -1064,7 +1062,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                             largestWidth = width;
                             selectedImageLayer = i;
                         }
-                        imageOpts.unshift(`
+                        imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
 <span class="pr-1" style="color: var(--color-text-tertiary)">Image</span>
@@ -1072,22 +1070,21 @@ ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range"
 max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
-                        imageOpts.unshift(`
+                        imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
 <span class="pr-1" style="color: var(--color-text-danger)">Faulty</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
-
                 }
             }
-            imageOpts.unshift(`
-    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+            imageOpts.push(`<div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
              <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
              <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
         </div>
         <div id="image-layer-options" class="inner-panel-hidden">`);
+            imageOpts = imageOpts.reverse();
             imageOpts.push("</div></div>");
             $("#panel-images").html(imageOpts.join("")).css('display', 'block');
 

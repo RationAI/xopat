@@ -142,9 +142,9 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);
             //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
 
-            let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
+            let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
             let modeChange = fixed ? "display: none;" : 'display: block;';
-            let isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
+            const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
             modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
 id="${dataId}-mode-toggle"
  style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
