@@ -139,7 +139,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         };
 
         function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
-            let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);
+            let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
             //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
 
             let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
@@ -184,7 +184,7 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="To
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
               &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
               <div class="d-inline-block label-render-type pointer" style="float: right;">
-                  <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
 onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
                 </div>

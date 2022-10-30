@@ -227,6 +227,17 @@ form.submit();<\/script>`;
         return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
     };
 
+    /**
+     * Safely evaluate boolean parameter from JSON config, e.g. undefined | "false" | "True" | 0 | 1 | false
+     * string values are treated as true except for 'false' literals and empty string
+     * @param {any} value to evaluate
+     * @param {boolean} defaultValue true or false
+     * @return {*|boolean}
+     */
+    window.UTILITIES.isJSONBoolean = function(value, defaultValue) {
+        return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
+    };
+
     window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}) {
         let method = postData ? "POST" : "GET";
         $.extend(headers, {

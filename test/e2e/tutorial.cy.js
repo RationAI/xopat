@@ -3,15 +3,12 @@ import {testBasic, testElements} from "./routines"
 import {default as utils} from "../support/utilities"
 
 
-//todo does not work in cypress broken tutorial  libs
 function tutorialStep() {
     cy.wait(500);
     cy.get(".enjoyhint_next_btn", {timeout: 1000}).click();
 }
 
 describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', withBrowser, () => {
-
-
     it('Init', () => {
         let visualisation = {
             params: config.params({
