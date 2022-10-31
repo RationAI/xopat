@@ -427,12 +427,12 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 let viz = seaGL.visualization();
                 if (viz.shaders.hasOwnProperty(layerId)) {
                     const layer = viz.shaders[layerId];
-                    let useMask = !layer.params.use_mode || layer.params.use_mode !== "show";
+                    let didRenderAsMask = layer.params.use_mode && layer.params.use_mode !== "show";
                     if (toggle) {
-                        layer.params.use_mode = useMask ? "show" : otherMode;
+                        layer.params.use_mode = didRenderAsMask ? "show" : otherMode;
                     } else {
-                        if (!useMask) return; //no need to re-render, toggle in show does nothing
-                        layer.params.use_mode = otherMode;
+                        if (!didRenderAsMask) return; //no need to re-render, "show" is already on
+                        layer.params.use_mode = otherMode; //re-render, there are multiple modes to choose from
                     }
                     layer.error = "force_rebuild"; //error will force reset
                     seaGL.reorder(null);
