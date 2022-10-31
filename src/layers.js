@@ -23,6 +23,7 @@
             webglProcessing = new WebGLModule({
                 htmlControlsId: "data-layer-options",
                 htmlShaderPartHeader: createHTMLLayerControls,
+                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 ready: function() {
                     var i = 0;

@@ -421,6 +421,7 @@ EOF;
         theme: "auto",
         stackedBackground: false,
         maxImageCacheCount: 1200,
+        webGlPreferredVersion: "2.0",
     };
 
     const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
@@ -440,7 +441,7 @@ EOF;
 
     window.APPLICATION_CONTEXT = {
         config: {
-            get params () {
+            get params () { // getOption should be preferred over params access
                 return setup.params || {};
             },
             get meta () {

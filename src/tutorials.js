@@ -19,10 +19,10 @@
         'next #tissue-list-menu' : 'The viewer supports multiple backgrounds<br>you can switch between if available at the bottom of the screen.',
     }, {
         'click #images-pin' : 'There are several background images available. Click to open.',
-        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.config.params.stackedBackground;}
+        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
     }, {
        'next #panel-images' : 'You can turn them on/off or blend using an opacity slider.',
-        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.config.params.stackedBackground;}
+        runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
     }, {
         'next #panel-shaders': 'The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be controlled here.',
         runIf: withLayers
