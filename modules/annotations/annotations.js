@@ -123,6 +123,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/**
 	 * Import annotations and presets
 	 * @param {string} data serialized data of the given format
+	 * 	- either object with 'presets' and/or 'objects' data content - arrays
+	 * 	- or a plain array, treated as objects
 	 * @param {string} format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {boolean} clear erase state upon import
 	 * @return Promise(string)
@@ -141,12 +143,15 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		// loads so that integrity is kept -> this is not probably a big issue since the only
 		// 'parsing' is done within preset import and it fails safely with exception in case of error
 
-		if (toImport.presets) {
+		if (Array.isArray(toImport.presets)) {
 			this.presets.import(toImport.presets, clear);
-		}
-
-		if (Array.isArray(toImport.objects)) {
+		} else if (Array.isArray(toImport)) {
+			//if no presets, maybe we are importing object array
+			await this._loadObjects({objects: toImport}, clear);
+		} else if (Array.isArray(toImport.objects)) {
 			await this._loadObjects(toImport, clear);
+		} else {
+			throw "Invalid data for import!";
 		}
 
 		this.raiseEvent('import', {
@@ -446,7 +451,17 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		const props = this.presets.getCommonProperties(preset);
 		if (!isNaN(object.zoomAtCreation)) props.zoomAtCreation = object.zoomAtCreation;
-		object._factory()?.configure(object, props);
+
+		let factory = object._factory();
+		if (!factory) {
+			factory = this.getAnnotationObjectFactory(object.type);
+			if (!factory) {
+				throw "TODO: solve factory deduction - accepts method on factory?";
+			} else {
+				object.factoryId = factory.factoryId;
+			}
+		}
+		factory.configure(object, props);
 	}
 
 	/************************ Layers *******************************/

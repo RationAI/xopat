@@ -277,7 +277,7 @@ window.addEventListener("beforeunload", (e) => {
         let _this = this;
         //todo sort by incrementId?
         this._context.canvas.getObjects().some(o => {
-            if (o.presetID) {
+            if (o.presetID && o.factoryId) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }

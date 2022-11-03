@@ -395,14 +395,14 @@ ${constructExportVisualisationForm()}
      * @param onUploaded function to handle the result
      * @param accept file types to accept, e.g. "image/png, image/jpeg"
      *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
-     * @param mode {"text"|"bytes"} in what mode to read the data; text results in string, bytes in array buffer
+     * @param mode {"text"|"bytes"|"url"} in what mode to read the data; text results in string, bytes in array buffer
      * @returns {Promise<void>}
      */
     window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
         const uploader = $("#file-upload-helper");
         uploader.attr('accept', accept);
         uploader.on('change', () => {
-            UTILITIES.readFileUploadEvent(event, mode).then(onUploaded)
+            UTILITIES.readFileUploadEvent(event, mode).then(onUploaded).catch(onUploaded);
             uploader.val('');
             uploader.off('change');
         });

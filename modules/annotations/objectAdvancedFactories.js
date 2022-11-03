@@ -40,8 +40,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(instance, options) {
-        this._configureParts(instance.item(0), instance.item(1), options);
-        this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+       if (instance.type === "group") {
+           this._configureParts(instance.item(0), instance.item(1), options);
+           this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+       }
     }
 
     /**
@@ -120,6 +122,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     instantCreate(screenPoint, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(screenPoint, false);
         if (bounds) {
+            //todo bugged
             let opts = this._presets.getAnnotationOptions(isLeftClick);
             let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
             this._context.addAnnotation(object);
@@ -135,7 +138,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current = parts;
         this._context.addHelperAnnotation(this._current[0]);
         this._context.addHelperAnnotation(this._current[1]);
-
     }
 
     updateCreate(x, y) {
@@ -155,14 +157,19 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = obj[0],
             text = obj[1],
             pid = line.presetID;
-        text.scaleX = text.scaleY = 1;
+
         const props = this._presets.getCommonProperties();
         // this._configureParts(obj[0], obj[1], props);
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
 
-        text.top = line.top + line.height / 2;
-        text.left = line.left + line.width / 2;
+        text.set({
+            scaleX: 1,
+            scaleY: 1,
+            top: line.top + line.height / 2,
+            left: line.left + line.width / 2
+        });
+        text.calcOCoords();
 
         this._context.addAnnotation(obj);
         this._current = undefined;
@@ -224,7 +231,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["measure"];
     }
 
-    _configureParts(line, text, options) {
+    _configureLine(line, options) {
         options.stroke = options.color;
 
         $.extend(line, {
@@ -234,6 +241,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryId: this.factoryId,
             hasControls: false,
         }, options);
+    }
+
+    _configureText(text, options) {
         $.extend(text, {
             fontSize: 16,
             selectable: false,
@@ -249,13 +259,20 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
+    _configureParts(line, text, options) {
+        this._configureText(text, options);
+        this._configureLine(line, options);
+    }
+
     _configureWrapper(wrapper, line, text, options) {
-        $.extend(wrapper, {
+        $.extend(wrapper, options, {
             factoryId: this.factoryId,
             type: this.type,
             presetID: options.presetID,
             measure: this._updateText(line, text),
-        }, options);
+            selectable: false,
+            hasBorders: false,
+        });
     }
 
     _createParts(parameters, options) {
@@ -623,7 +640,6 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const self = this;
         UTILITIES.uploadFile(url => {
-            console.log(url)
             const image = document.createElement('img');
             image.onload = () => {
                 self._context.deleteHelperAnnotation(obj);
@@ -635,9 +651,19 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
                         img: image
                 }, this._presets.getAnnotationOptions(obj.isLeftClick)));
             };
+            image.onerror = () => {
+                self._context.deleteHelperAnnotation(obj);
+            };
+            image.onabort = () => {
+                self._context.deleteHelperAnnotation(obj);
+            }
             image.setAttribute('src', url);
         }, "image/*", "url");
         this._current = undefined;
+    }
+
+    finishIndirect() {
+        this.finishDirect();
     }
 
     title() {

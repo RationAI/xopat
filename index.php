@@ -225,7 +225,7 @@ foreach ($MODULES as $_ => $mod) {
             };
             window.console.error = function () {
                 window.console.appTrace.push("ERROR ",
-                    (new Error().stack.split("at ")[1]).trim(), " ",
+                    // (new Error().stack.split("at ")[1]).trim(), " ",
                     timestamp(), ...arguments, "\n");
                 defaultError.apply(window.console, arguments);
             };

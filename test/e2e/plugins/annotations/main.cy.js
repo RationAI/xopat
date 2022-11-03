@@ -1,24 +1,6 @@
 import {config, shaders, withBrowser} from "../../../fixtures/configurations"
-import {testBasic, testElements} from "./../../routines"
 import {default as utils} from "../../../support/utilities"
-
-const presetUi = (presetIndex) => cy.get("#preset-no-" + presetIndex);
-const presetUiColor = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(1).find("input");
-const presetUISelect = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(0).find("select");
-const presetUiNthMeta = (presetIndex, metaIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(metaIndex + 2).find("input");
-const presetUiNewMetaName = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children().last().find("input");
-const presetUiNewMetaButton = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children().last().find("span");
-const presetUiSelectLeft = () => cy.get("#select-annotation-preset-left");
-const presetUiSelectRight = () => cy.get("#select-annotation-preset-right");
-
-const ALTdown = () => cy.keyDown("Alt", {altKey: true, focusCanvas: true})
-const ALTup = () => cy.keyUp("Alt", {altKey: true, focusCanvas: true})
-
+import helpers from "./helpers";
 
 describe('Annotations - User Controls', withBrowser, () => {
 
@@ -57,8 +39,8 @@ describe('Annotations - User Controls', withBrowser, () => {
 
     it ('Test Hotkeys', () => {
         expect(ANNOTATIONS.mode, "Annotations are in Auto Mode").eq(ANNOTATIONS.Modes.AUTO);
-        ALTdown().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
-        ALTup().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+        helpers.ALTdown().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+        helpers.ALTup().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
     });
 
     it ('Setup Presets', () => {
@@ -73,23 +55,23 @@ describe('Annotations - User Controls', withBrowser, () => {
         cy.get("#preset-add-new").click();
         cy.get("#preset-add-new").click();
 
-        presetUiNewMetaName(0).type("My New Awesome Meta");
-        presetUiNewMetaButton(0).click();
-        presetUiNthMeta(0, 1).type("The AWESOME Value");
+        helpers.presetUiNewMetaName(0).type("My New Awesome Meta");
+        helpers.presetUiNewMetaButton(0).click();
+        helpers.presetUiNthMeta(0, 1).type("The AWESOME Value");
 
-        presetUISelect(1).select(1);
-        presetUiNthMeta(1, 0).type("Ctverecek");
+        helpers.presetUISelect(1).select(1);
+        helpers.presetUiNthMeta(1, 0).type("Ctverecek");
 
-        presetUiNewMetaName(2).type("Empty meta");
-        presetUiNewMetaButton(2).click();
-        presetUiNewMetaName(2).type("Another Empty");
-        presetUiNewMetaButton(2).click();
-        presetUISelect(2).select(2);
+        helpers.presetUiNewMetaName(2).type("Empty meta");
+        helpers.presetUiNewMetaButton(2).click();
+        helpers.presetUiNewMetaName(2).type("Another Empty");
+        helpers.presetUiNewMetaButton(2).click();
+        helpers.presetUISelect(2).select(2);
 
-        presetUISelect(3).select(3);
+        helpers.presetUISelect(3).select(3);
 
-        presetUi(1).click();
-        presetUiSelectRight().click();
+        helpers.presetUi(1).click();
+        helpers.presetUiSelectRight().click();
 
         cy.get("#annotations-left-click").should('contain.text', 'Polygon');
         cy.get("#annotations-right-click").should('contain.text', 'Ctverecek');
@@ -97,10 +79,10 @@ describe('Annotations - User Controls', withBrowser, () => {
 
 
     it ("Preset #1", function () {
-        ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+        helpers.ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
 
-        ALTup();
+        helpers.ALTup();
 
         cy.canvas().matchImage({title: "S1 - polygon finished"});
         cy.wrap(ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
