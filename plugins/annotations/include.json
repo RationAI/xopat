@@ -9,5 +9,6 @@
   "modules": ["annotations"],
   "permaLoad": false,
   "server": "/iipsrv.fcgi",
-  "factories": ["polygon", "rect", "ellipse", "ruler", "text"]
+  "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
+  "ioFormat": "native"
 }

@@ -312,7 +312,7 @@ class Playground  {
     _handleErrorResponse(details, error) {
         this.strategy.clear();
         if (error instanceof HTTPError) {
-            switch (error.code) {
+            switch (error.response.code) {
                 case 503:
                     details = "No response: is the server running? <br>URL:&nbsp;<code>\" + this.setup.server + \"</code>\"";
                     Dialogs.show("Playground: " + details, 5000, Dialogs.MSG_ERR);

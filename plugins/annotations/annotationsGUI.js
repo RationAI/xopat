@@ -1,9 +1,12 @@
 class AnnotationsGUI {
-
+//todo test with multiple swap bgimages
 	constructor(id, params) {
 		this.id = id;
 
 		this._server = this.staticData("server");
+
+		//todo parse validity on OSDAnnotations.Convertor.formats ?
+		this._format = this.staticData("ioFormat") || "native";
 		this.PLUGIN = `plugin('${id}')`;
 	}
 
@@ -22,7 +25,7 @@ class AnnotationsGUI {
 		this.context.setPreset();
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
-			format: "native",
+			format: this._format,
 			flags: [true, true],
 			availableFlags: {
 				"everything": [true, true],
@@ -37,15 +40,10 @@ class AnnotationsGUI {
 
 		const _this = this;
 
-		//todo cannot use more than one tissue at time, hardcoded :/
-		let bgImage = APPLICATION_CONTEXT.config.background[0];
-		if (!bgImage) {
-			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
-			return;
-		}
+		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
+		this.setupActiveTissue(bgImage); // if (!...) return...
 
-		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImage.dataReference];
-
+		//todo disable-able?
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
@@ -69,6 +67,16 @@ class AnnotationsGUI {
 	setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.staticData("factories") || ["polygon"];
 		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+	}
+
+	setupActiveTissue(bgImageConfigObject) {
+		if (!bgImageConfigObject) {
+			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
+			return false;
+		}
+
+		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
+		return true;
 	}
 
 	/****************************************************************************************************************
@@ -137,6 +145,10 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		const _this = this;
 
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
+		VIEWER.addHandler('background-image-swap', e => {
+			_this.setupActiveTissue(e.backgroundSetup);
+			_this.loadAnnotationsList();
+		});
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('import', e => {
@@ -144,6 +156,30 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				_this.updatePresetsHTML();
 			}
 		});
+
+		//todo debug this and also enable the user to remove preset from the selection
+		// function showContextMenu(isPrimary, e) {
+		// 	const _this = this, actions = [{
+		// 		title: `Select preset for ${isPrimary ? 'right' : 'right'} click.`
+		// 	}];
+		// 	this.context.presets.foreach(preset => {
+		// 		console.log(preset.presetID);
+		// 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
+		// 		let icon = preset.objectFactory.getIcon();
+		// 		actions.push({
+		// 			icon: icon,
+		// 			title: category,
+		// 			action: () => {
+		// 				_this._presetSelection = preset.presetID;
+		// 				_this._clickPresetSelect(isPrimary);
+		// 			},
+		// 		});
+		// 	});
+		//
+		// 	USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+		// }
+		// this.context.addHandler('canvas-release', showContextMenu.bind(this, true));
+		// this.context.addHandler('canvas-nonprimary-release', showContextMenu.bind(this, false));
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);
@@ -465,7 +501,10 @@ style="width: 115px;">${category}</span>
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		const toFormat = this.exportOptions.format || "native";
+		//probably do not enable since users would mess it up
+		//const toFormat = this.exportOptions.format || this._format
+
+		const toFormat = this._format;
 		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
@@ -661,21 +700,14 @@ class="btn m-2">Set for left click </button>
 		this.updatePresetsHTML();
 	}
 
-	/*** GETTERS **/
-
-	getFullExportData(name) {
-		let now = Date.now();
-		return {
-			annotations: this.context.toObject(),
-			presets: this.context.presets.toObject(),
-			metadata: {
-				name: name || `a${now}`,
-				exported: new Date(now).toLocaleString(),
-				userAgent: UTILITIES.getUserMeta().userAgent
-				//todo other metadata?
-			}
-		};
+	getAnnotationsHeadMenu(error="") {
+		let upload = error ? "" : `<button class="btn float-right" onclick="${this.PLUGIN}.uploadAnnotation()">Create: upload current state</button>`;
+		error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
+		return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}${upload}
+`;
 	}
+
+	/*** HTTP API **/
 
     loadAnnotationsList() {
 		this.annotationsMenuBuilder.clear();
@@ -684,16 +716,18 @@ class="btn m-2">Set for left click </button>
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0;
 			//_this.availableAnnotations = json;
-			for (let available of json.annotations) {
-				let meta = available.metadata;
+			for (let available of json) {
+				let meta = new MetaStore(available.metadata);
+				let id = available.id;
+
 				let actionPart = `
-<span onclick="${this.PLUGIN}.loadAnnotation('${available.id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
-<span onclick="${this.PLUGIN}.updateAnnotation('${available.id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
-<span onclick="${this.PLUGIN}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
+<span onclick="${this.PLUGIN}.loadAnnotation('${id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
+<span onclick="${this.PLUGIN}.updateAnnotation('${id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
+<span onclick="${this.PLUGIN}.removeAnnotation('${id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
-					title: meta.name,
-					author: "Author",
-					details: `Uploaded ${new Date(meta.exported).toDateString()}. Client: ${meta.userAgent ? meta.userAgent.split(" ")[0] : "undefined"}`,
+					title: _this.dataLoader.getMetaName(meta),
+					author: _this.dataLoader.getMetaAuthor(meta),
+					details: _this.dataLoader.getMetaDescription(meta), //todo date?
 					contentAction:actionPart
 				});
 				count++;
@@ -709,33 +743,32 @@ class="btn m-2">Set for left click </button>
 				});
 			}
 		}, error => {
+			console.error(_this.dataLoader.getErrorResponseMessage(error))
 			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu("Could not load annotations list."));
 		});
-    }
-
-    getAnnotationsHeadMenu(error="") {
-        let upload = error ? "" : `<button class="btn float-right" onclick="${this.PLUGIN}.uploadAnnotation()">Create: upload current state</button>`;
-        error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
-        return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}${upload}
-`;
     }
 
     loadAnnotation(id, force=false) {
         const _this = this;
 
-		//todo move the logics to the data loader
 		this.dataLoader.loadAnnotation(this._server, id, json => {
                 $('#preset-modify-dialog').remove();
-                _this.context.presets.import(json.presets); //todo fixme
-                _this.updatePresetsHTML();
 
-				//todo then, catch
-				_this.context.loadObjects(json.annotations);
-                $("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
-                Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
+				//todo test IO for different formats
+				const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
+				_this.context.import(json.data, format).then(()=>{
+					_this.updatePresetsHTML();
+					$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
+					Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
+				}).catch(e => {
+					console.error("Import failed!", e);
+					Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
+						`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
+						20000, Dialogs.MSG_ERR);
+				});
             },
 			e => {
-                console.error(e);
+				console.error("Import request failed!", _this.dataLoader.getErrorResponseMessage(e));
                 Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
                     `<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
                     20000, Dialogs.MSG_ERR);
@@ -745,18 +778,20 @@ class="btn m-2">Set for left click </button>
 
     updateAnnotation(id) {
         const _this = this;
-        this.dataLoader.updateAnnotation(this._server, Number.parseInt(id), this.getFullExportData(),
-			json => {
-				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-				_this.loadAnnotationsList();
-			},
-			e => {
-				Dialogs.show(`Failed to upload annotations. You can 
+		this.context.export(this.exportOptions.format).then(data => {
+			_this.dataLoader.updateAnnotation(_this._server, id, data,
+				json => {
+					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
+					_this.loadAnnotationsList();
+				},
+				e => {
+					Dialogs.show(`Failed to upload annotations. You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
-					7000, Dialogs.MSG_ERR);
-				console.error("Failed to update annotation id " + id, e);
-			}
-		);
+						7000, Dialogs.MSG_ERR);
+					console.error("Failed to update annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
+				}
+			);
+		})
     }
 
     removeAnnotation(id) {
@@ -768,25 +803,28 @@ class="btn m-2">Set for left click </button>
 			},
 			e => {
 				Dialogs.show(`Failed to delete annotation id '${id}'.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to delete annotation id " + id, e);
+				console.error("Failed to delete annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
 			}
 		);
     }
 
     uploadAnnotation() {
         const _this = this;
-        this.dataLoader.uploadAnnotation(this._server, this.activeTissue, this.getFullExportData(),
-			json => {
-				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-				_this.loadAnnotationsList();
-			},
-			e => {
-				Dialogs.show(`Failed to upload annotations. You can 
+		this.context.export(this.exportOptions.format).then(data => {
+			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
+				json => {
+					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
+					_this.loadAnnotationsList();
+				},
+				e => {
+					Dialogs.show(`Failed to upload annotations. You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
-					7000, Dialogs.MSG_ERR);
-				console.error("Failed to upload annotations.", e);
-			}
-		);
+						7000, Dialogs.MSG_ERR);
+					console.error("Failed to upload annotations.", _this.dataLoader.getErrorResponseMessage(e));
+				}
+			);
+		});
+
     }
 }
 

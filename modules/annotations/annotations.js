@@ -143,15 +143,16 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		// loads so that integrity is kept -> this is not probably a big issue since the only
 		// 'parsing' is done within preset import and it fails safely with exception in case of error
 
-		if (Array.isArray(toImport.presets)) {
-			this.presets.import(toImport.presets, clear);
-		} else if (Array.isArray(toImport)) {
+		if (Array.isArray(toImport)) {
 			//if no presets, maybe we are importing object array
 			await this._loadObjects({objects: toImport}, clear);
-		} else if (Array.isArray(toImport.objects)) {
-			await this._loadObjects(toImport, clear);
 		} else {
-			throw "Invalid data for import!";
+			if (Array.isArray(toImport.presets)) {
+				this.presets.import(toImport.presets, clear);
+			}
+			if (Array.isArray(toImport.objects)) {
+				await this._loadObjects(toImport, clear);
+			}
 		}
 
 		this.raiseEvent('import', {
@@ -943,12 +944,26 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		//prevents event bubling if the up event was handled by annotations
 		function handleRightClickUp(event) {
-			if (!_this.cursor.isDown || _this.disabledInteraction) return;
+			if (_this.disabledInteraction) return;
+			if (!_this.cursor.isDown) {
+				if (_this.cursor.mouseTime === 0) {
+					_this.raiseEvent('canvas-nonprimary-release', {
+						originalEvent: event
+					});
+				}
+				_this.cursor.mouseTime = -1;
+				return;
+			}
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, false, factory)) {
 				event.preventDefault();
+			} else if (!_this.isModeAuto()) {
+				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
+				_this.raiseEvent('canvas-nonprimary-release', {
+					originalEvent: event
+				});
 			}
 
 			_this.cursor.isDown = false;
@@ -966,12 +981,26 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		function handleLeftClickUp(event) {
-			if (!_this.cursor.isDown || _this.disabledInteraction) return;
+			if (_this.disabledInteraction) return;
+			if (!_this.cursor.isDown) {
+				if (_this.cursor.mouseTime === 0) {
+					_this.raiseEvent('canvas-release', {
+						originalEvent: event
+					});
+				}
+				_this.cursor.mouseTime = -1;
+				return;
+			}
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, true, factory)) {
 				event.preventDefault();
+			} else if (!_this.isModeAuto()) {
+				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
+				_this.raiseEvent('canvas-release', {
+					originalEvent: event
+				});
 			}
 
 			_this.cursor.isDown = false;

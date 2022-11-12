@@ -136,6 +136,8 @@ approaches - first, get familiar with:
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
     - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``
+    - builtin property with POST request is a ``metadata`` value that passes the viewer metadata to every request
+    - TODO describe this more prominently
   
 And also available modules. Each module provides it's own way of enriching the environment, 
 such as pre-defined color maps, webgl processing, fabricJS canvas, annotation logic or snapshots.   

@@ -1,5 +1,8 @@
 <?php
 
+//TODO descriptions
+//Also check config_meta.js
+
 $production = false;
 
 //relative path system in the application

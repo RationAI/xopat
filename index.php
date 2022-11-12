@@ -248,6 +248,8 @@ foreach ($MODULES as $_ => $mod) {
         integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
         crossorigin="anonymous"></script>
 
+    <script src="config_meta.js"></script>
+
     <!-- OSD -->
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
@@ -439,13 +441,15 @@ EOF;
     //optimization allways present
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
+    const metaStore = new MetaStore(setup.meta || {});
+
     window.APPLICATION_CONTEXT = {
         config: {
             get params () { // getOption should be preferred over params access
                 return setup.params || {};
             },
             get meta () {
-                return setup.meta || {};
+                return metaStore;
             },
             get data () {
                 return setup.data || [];
@@ -573,10 +577,11 @@ EOF;
     };
 
     window.HTTPError = class extends Error {
-        constructor(message, response) {
+        constructor(message, response, textData) {
             super();
             this.message = message;
-            this.code = response;
+            this.response = response;
+            this.textData = textData;
         }
     };
 

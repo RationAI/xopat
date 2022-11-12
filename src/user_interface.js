@@ -341,9 +341,14 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-            $("body").append(`<ul id="drop-down-menu" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
+            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
 
             this._body = $("#drop-down-menu");
+        },
+
+        open: function (mouseEvent, optionsGetter) {
+             this._toggle(mouseEvent, optionsGetter);
+             mouseEvent.preventDefault();
         },
 
         /**
@@ -375,16 +380,20 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         },
 
         _toggle: function(mouseEvent, optionsGetter) {
-            if (mouseEvent === undefined || this._calls.length > 0) {
-                this._calls = [];
-                this._body.html("");
-                this._body.css({
-                    display: "none",
-                    top: 99999,
-                    left: 99999,
-                });
+            const opened = this._calls.length > 0;
+
+            if (mouseEvent === undefined || opened) {
+                if (opened) {
+                    this._calls = [];
+                    this._body.html("");
+                    this._body.css({
+                        display: "none",
+                        top: 99999,
+                        left: 99999,
+                    });
+                }
             } else {
-                optionsGetter().forEach(this._with.bind(this));
+                ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
                 this._body.css({
                     display: "block",
                     top: mouseEvent.pageY + 5,

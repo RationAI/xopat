@@ -238,15 +238,24 @@ form.submit();<\/script>`;
         return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
     };
 
+    /**
+     * Send requests - both request and response format JSON
+     * with POST, the viewer meta is automatically included
+     *  - makes the viewer flexible for integration within existing APIs
+     * @param url
+     * @param postData
+     * @param headers
+     * @return {Promise<string|any>}
+     */
     window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}) {
         let method = postData ? "POST" : "GET";
-        $.extend(headers, {
+        headers = $.extend({
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*'
-        });
+        }, headers);
 
-        if (typeof postData === "object" && postData && postData?.meta) {
-            postData.meta = APPLICATION_CONTEXT.config.meta;
+        if (typeof postData === "object" && postData && !postData.metadata) {
+            postData.metadata = APPLICATION_CONTEXT.config.meta.all();
         }
 
         const response = await fetch(url, {
@@ -260,7 +269,7 @@ form.submit();<\/script>`;
 
         if (response.status < 200 || response.status > 299) {
             return response.text().then(text => {
-                throw new HTTPError(`Server returned ${response.status}: ${text}`, response);
+                throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
             });
         }
         return response.json();
