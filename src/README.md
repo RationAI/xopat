@@ -254,4 +254,34 @@ Outside, ``../index.php`` file takes care of the main UI layout and basic functi
 handling, plugin and module loading and the viewport and events management.
 
 Many features are available through ``modules`` that implement additional important functionality.
+
+### Metadata in the Viewer
+It is important to keep the viewer context free: this is done by sending all 
+necessary data through the configuration in the POST. You probably noticed already
+that everything is handled here using JSON.
+However, you might
+need to send and integrate these further in the viewer. To do so, you are
+encouraged to employ the global metadata API:
+
+ - metadata can be set and read using the global ``APPLICATION_CONTEXT.config.meta``
+   - a ``MetaStore`` object you can configure the behaviour of in `config_meta.js`
+   - this class can be re-used for internal metadata parsing as well
+ - this metadata is sent within all JSON POST requests automatically, unless set
+   - prefer using ``UTILITIES.fetchJSON``
+   - to avoid sending the config metadata, do 
+     - not use POST or
+     - define ``metadata`` in the POST object, e.g. your own metadata object
+   - use the last parameter of the function
+     - ``false`` to disable the sending of metadata
+     - ``["array", "of", "keys"]`` to specify what meta to send
+     
+So for example, an authentication can look like follows:
+ - send your data in the viewer configuration (`meta` property)
+ - possibly adjust the ``MetaStore`` implementation 
+   - do not modify existing API - functions
+ - use the metadata
+   - read the user data through ``APPLICATION_CONTEXT.config.meta`` as `MetaStore` instance anywhere in the viewer
+   - read the user data in the POST requests as ``metadata`` field made from viewer via ``UTILITIES.fetchJSON``
+       - builtin API always uses this method
+   - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``
  

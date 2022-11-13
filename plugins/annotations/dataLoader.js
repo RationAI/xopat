@@ -30,6 +30,10 @@ AnnotationsGUI.DataLoader = class {
         meta.set("annotations-name", "");
     }
 
+    setActiveMetadata(metaData) {
+        this.currentMeta = metaData;
+    }
+
     /**
      * Parse error response from the server,
      * @param {HTTPError} httpError class
@@ -97,7 +101,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure  call on failure with the error object
      */
     loadAnnotation(server, annotationId, onSuccess, onFailure) {
-        this._fetchWorker(server + "?Annotation=load/" + annotationId, null, onSuccess, onFailure, false);
+        this._fetchWorker(server + "?Annotation=load/" + annotationId, null, onSuccess, onFailure);
     }
 
     /**
@@ -109,8 +113,11 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure  call on failure with the error object
      */
     updateAnnotation(server, annotationId, data, onSuccess, onFailure) {
+        //set the data according to the current metadata values
+        APPLICATION_CONTEXT.config.meta.set("annotations-name", this.getMetaName(this.currentMeta));
+        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.getMetaFormat(this.currentMeta));
         this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
-            onSuccess, onFailure);
+            onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
     }
 
     /**
@@ -137,21 +144,24 @@ AnnotationsGUI.DataLoader = class {
         //set metadata for annotations name
         const now = Date.now();
         APPLICATION_CONTEXT.config.meta.set("annotations-name", `a${now}`);
+        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.getMetaFormat(this.currentMeta));
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',
                 command: 'save',
                 tissuePath: tissueId,
-                data: data,
-            }, onSuccess, onFailure
-        );
+                data: data
+            },
+            onSuccess,
+            onFailure,
+            ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
     }
 
-    _fetchWorker(url, post, onsuccess, onfail, successProperty=true) {
+    _fetchWorker(url, post, onSuccess, onFail, metaList=false) {
         if (this.context.context.disabledInteraction) {
             Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
             return;
         }
-        UTILITIES.fetchJSON(url, post).then(onsuccess).catch(onfail);
+        UTILITIES.fetchJSON(url, post, {}, metaList).then(onSuccess).catch(onFail);
     }
 };

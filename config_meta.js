@@ -37,6 +37,19 @@ window.MetaStore = class {
     }
 
     /**
+     * Exports all metadata with given key list
+     */
+    allWith(keys) {
+        const result = {};
+        for (let key in this._data) {
+            if (keys.includes(key)) {
+                result[key] = this._data[key];
+            }
+        }
+        return result;
+    }
+
+    /**
      * Some methods are extracted to explicitly define necessary meta present for the system
      *
      * todo somehow handle unavailability...
@@ -44,16 +57,28 @@ window.MetaStore = class {
 
     //string
     getUser(defaultValue) {
-        return this.get("user", defaultValue);
+        return this.get(MetaStore.userKey, defaultValue);
+    }
+
+    static get userKey() {
+        return "user";
     }
 
     //UTC timestamp, important consistence - if set, return set value else NOW
     getUTC() {
-        return this.get("date", Date.now());
+        return this.get(MetaStore.dateKey, Date.now());
+    }
+
+    static get dateKey() {
+        return "date";
     }
 
     //this session identifier
     getSession(defaultValue) {
-        return this.get("session", defaultValue);
+        return this.get(MetaStore.sessionKey, defaultValue);
+    }
+
+    static get sessionKey() {
+        return "session";
     }
 }

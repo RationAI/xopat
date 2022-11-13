@@ -245,17 +245,22 @@ form.submit();<\/script>`;
      * @param url
      * @param postData
      * @param headers
+     * @param metaKeys metadata key list to include
      * @return {Promise<string|any>}
      */
-    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}) {
+    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}, metaKeys=true) {
         let method = postData ? "POST" : "GET";
         headers = $.extend({
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*'
         }, headers);
 
-        if (typeof postData === "object" && postData && !postData.metadata) {
-            postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+        if (typeof postData === "object" && postData && metaKeys !== false) {
+            if (postData.metadata === undefined) {
+                postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+            } else if (Array.isArray(metaKeys)) {
+                postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+            }
         }
 
         const response = await fetch(url, {

@@ -711,14 +711,14 @@ class="btn m-2">Set for left click </button>
 
     loadAnnotationsList() {
 		this.annotationsMenuBuilder.clear();
-
+		this._serverAnnotationList = null;
 		const _this = this;
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0;
-			//_this.availableAnnotations = json;
-			for (let available of json) {
-				let meta = new MetaStore(available.metadata);
-				let id = available.id;
+			this._serverAnnotationList = json;
+			for (let available of this._serverAnnotationList) {
+				available.metadata = new MetaStore(available.metadata);
+				let id = available.id, meta = available.metadata;
 
 				let actionPart = `
 <span onclick="${this.PLUGIN}.loadAnnotation('${id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
@@ -750,6 +750,7 @@ class="btn m-2">Set for left click </button>
 
     loadAnnotation(id, force=false) {
         const _this = this;
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
 
 		this.dataLoader.loadAnnotation(this._server, id, json => {
                 $('#preset-modify-dialog').remove();
@@ -778,6 +779,8 @@ class="btn m-2">Set for left click </button>
 
     updateAnnotation(id) {
         const _this = this;
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+
 		this.context.export(this.exportOptions.format).then(data => {
 			_this.dataLoader.updateAnnotation(_this._server, id, data,
 				json => {
@@ -796,7 +799,9 @@ class="btn m-2">Set for left click </button>
 
     removeAnnotation(id) {
         const _this = this;
-        this.dataLoader.removeAnnotation(this._server, id,
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+
+		this.dataLoader.removeAnnotation(this._server, id,
 			json => {
 				Dialogs.show(`Annotation id '${id}' removed.`, 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
@@ -810,6 +815,8 @@ class="btn m-2">Set for left click </button>
 
     uploadAnnotation() {
         const _this = this;
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+
 		this.context.export(this.exportOptions.format).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
 				json => {
