@@ -24,9 +24,9 @@ AnnotationsGUI.DataLoader = class {
     constructor(context) {
         this.context = context;
 
-        //register metadata
+        //register metadata use
         const meta = APPLICATION_CONTEXT.config.meta;
-        meta.set("annotations-format", context._format);
+        meta.set("annotations-format", "");
         meta.set("annotations-name", "");
     }
 
@@ -114,6 +114,8 @@ AnnotationsGUI.DataLoader = class {
      */
     updateAnnotation(server, annotationId, data, onSuccess, onFailure) {
         //set the data according to the current metadata values
+        //must have available active annotation meta
+        if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
         APPLICATION_CONTEXT.config.meta.set("annotations-name", this.getMetaName(this.currentMeta));
         APPLICATION_CONTEXT.config.meta.set("annotations-format", this.getMetaFormat(this.currentMeta));
         this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
@@ -141,10 +143,10 @@ AnnotationsGUI.DataLoader = class {
      */
     uploadAnnotation(server, tissueId, data, onSuccess, onFailure) {
 
-        //set metadata for annotations name
+        //set metadata, no available active annotation meta
         const now = Date.now();
         APPLICATION_CONTEXT.config.meta.set("annotations-name", `a${now}`);
-        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.getMetaFormat(this.currentMeta));
+        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.context._format);
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',

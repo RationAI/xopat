@@ -750,7 +750,7 @@ class="btn m-2">Set for left click </button>
 
     loadAnnotation(id, force=false) {
         const _this = this;
-		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		this.dataLoader.loadAnnotation(this._server, id, json => {
                 $('#preset-modify-dialog').remove();
@@ -779,7 +779,7 @@ class="btn m-2">Set for left click </button>
 
     updateAnnotation(id) {
         const _this = this;
-		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		this.context.export(this.exportOptions.format).then(data => {
 			_this.dataLoader.updateAnnotation(_this._server, id, data,
@@ -799,7 +799,7 @@ class="btn m-2">Set for left click </button>
 
     removeAnnotation(id) {
         const _this = this;
-		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		this.dataLoader.removeAnnotation(this._server, id,
 			json => {
@@ -815,7 +815,7 @@ class="btn m-2">Set for left click </button>
 
     uploadAnnotation() {
         const _this = this;
-		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id === id)?.metadata);
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		this.context.export(this.exportOptions.format).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,

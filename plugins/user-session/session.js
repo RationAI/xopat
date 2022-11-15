@@ -11,8 +11,13 @@ addPlugin("user-session", class {
 
     pluginReady() {
         if (this.enabled) {
-            $("#shaders").parent().append(`
-<span class="material-icons pointer" title="Save session" style="text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`);
+            USER_INTERFACE.MainMenu.append(
+                "Session Store",
+                `<span class="material-icons pointer" title="Save session" style="text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`,
+                '',
+                "user-session-panel",
+                this.id
+            );
         } else {
             $("#navigator-container").parent().append(`
 <span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`);
@@ -26,10 +31,11 @@ addPlugin("user-session", class {
         } else {
             UTILITIES.fetchJSON(this.server, {
                 ajax: "storeSession", //todo not flexible :/
+                user: APPLICATION_CONTEXT.config.meta.getUser(),
                 filename: this.sessionReferenceFile,
                 session: UTILITIES.getForm()
-            }, this.headers).then(response => {
-                //todo response check for success?
+            }, this.headers, false).then(response => {
+                if (response?.status !== "success") throw response?.message; //todo not flexible :/
                 Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);
             }).catch(e => {
                 console.warn("Failed to save export to server.", e);

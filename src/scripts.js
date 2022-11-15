@@ -257,9 +257,11 @@ form.submit();<\/script>`;
 
         if (typeof postData === "object" && postData && metaKeys !== false) {
             if (postData.metadata === undefined) {
-                postData.metadata = APPLICATION_CONTEXT.config.meta.all();
-            } else if (Array.isArray(metaKeys)) {
-                postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+                if (Array.isArray(metaKeys)) {
+                    postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+                } else {
+                    postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+                }
             }
         }
 
@@ -277,7 +279,13 @@ form.submit();<\/script>`;
                 throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
             });
         }
-        return response.json();
+
+        const data = await response.text();
+        try {
+            return JSON.parse(data);
+        } catch (e) {
+            throw new HTTPError(`Server returned non-JSON data: ${data}`, response, data);
+        }
     };
 
     window.UTILITIES.updateTheme = function() {
