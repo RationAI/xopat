@@ -29,7 +29,8 @@ function ensureDefined($object, $property, $default) {
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
  */
-//todo rename to something else sz ugly
+//todo visualisation -> visualization
+//todo translation
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
 throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
@@ -53,6 +54,7 @@ ensureDefined($parsedParams, "dataPage", (object)array());
 
 $bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
+$locale = $parsedParams->params->locale ?? "en";
 
 foreach ($parsedParams->background as $bg) {
     throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
@@ -191,6 +193,11 @@ foreach ($MODULES as $_ => $mod) {
     }
 }
 
+if (!file_exists(LOCALES_ROOT . "/$locale.json")) {
+    $locale = "en";
+}
+$locale_data = file_get_contents(LOCALES_ROOT . "/$locale.json");
+
 ?>
 <!DOCTYPE html>
 <html lang="en" dir="ltr" data-light-theme="light">
@@ -250,18 +257,22 @@ foreach ($MODULES as $_ => $mod) {
 
     <script src="config_meta.js"></script>
 
+    <!-- basic utilities-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.jquery.min.js"></script>
+
     <!-- OSD -->
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
-    <!--Extensions/modifications-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
+    <!--OSD extensions-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=<?php echo $version?>"></script>
 
     <!--Tutorials-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/kinetic-v5.1.0.min.js"></script>
     <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.css">
     <script src="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.min.js"></script>
@@ -281,6 +292,8 @@ foreach ($MODULES as $_ => $mod) {
 
 </head>
 
+
+
 <body style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
@@ -289,10 +302,13 @@ foreach ($MODULES as $_ => $mod) {
 
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
+    <div id="system-message-warn" class="f00-light text-center">
+        <span class="material-icons f0-light mr-1" style="transform: translate(0px, -5px);">error_outline</span>
+        <span data-i18n="error.title">Error</span>
+    </div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
-    <div class="text-small text-center"> [ if you want to report a problem, please include exported file ] </div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
+    <div class="text-small text-center" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 </div>
 
@@ -303,7 +319,7 @@ foreach ($MODULES as $_ => $mod) {
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
-    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();">Exit</button>
+    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();" data-i18n="common.Exit">Exit</button>
 </div>
 
 <!-- Main Panel -->
@@ -316,19 +332,21 @@ foreach ($MODULES as $_ => $mod) {
 
             <span id="global-opacity">
                 <label>
-                    Layer Opacity &nbsp;<input type="range"  min="0" max="1" value="1" step="0.1" style="width: 100px;">
+                    <span data-i18n="main.global.layerOpacity">Layer Opacity</span>
+                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
                 </label>
                 &emsp;
             </span>
 
             <span id="global-tissue-visibility">
                 <label>
-                    Tissue &nbsp;<input type="checkbox" style="align-self: center;" checked class="form-control" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                    <span data-i18n="main.global.tissue">Tissue</span>
+                    <input type="checkbox" style="align-self: center;" checked class="form-control ml-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
                 </label>
                 &emsp;
             </span>
 
-            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
+            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone">repeat_on</span>
         </div><!--end of general controls-->
 
         <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
@@ -365,7 +383,7 @@ foreach ($MODULES as $_ => $mod) {
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
+                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" data-i18n="[title]main.shaders.saveCookies" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
                     </div>
 
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
@@ -381,11 +399,23 @@ EOF;
         </div>
 
         <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
-            <span id="copy-url" class="pl-1 btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1" style="font-size: 22px;">link</span>URL</span>&emsp;
-            <span id="global-export" class="pl-1 btn-pointer" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1" style="font-size: 22px;">download</span>Export</span>&emsp;
-            <span id="add-plugins" class="pl-1 btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
-            <span id="global-help" class="pl-1 btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
-            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>
+            <span id="copy-url" class="btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
+                <span class="material-icons pr-0" style="font-size: 22px;">link</span>
+                <span data-i18n="main.bar.exportUrl">URL</span>
+            </span>&emsp;
+            <span id="global-export" class="btn-pointer" onclick="UTILITIES.export();" data-i18n="[title]main.bar.explainExportFile">
+                <span class="material-icons pr-0" style="font-size: 22px;">download</span>
+                <span data-i18n="main.bar.exportFile">Export</span>
+            </span>&emsp;
+            <span id="add-plugins" class="btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+                <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
+                <span data-i18n="main.bar.plugins">Plugins</span>
+            </span>&emsp;
+            <span id="global-help" class="btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+                <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
+                <span data-i18n="main.bar.tutorials">Tutorial</span>
+            </span>&emsp;
+            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
     </div>
 
@@ -406,8 +436,10 @@ EOF;
     const MODULES = <?php echo json_encode((object)$MODULES) ?>;
 
     const setup = <?php echo $visualisation ?>;
+    const locale_data = <?php echo $locale_data ?? '{}' ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = {
+        locale: "en",
         customBlending: false,
         debugMode: false,
         webglDebugMode: false,
@@ -585,7 +617,7 @@ EOF;
         }
     };
 
-    //preventive error message, that will be discarded after the full initialization
+    //preventive error message, that will be discarded after the full initialization, no translation
     window.onerror = function (message, file, line, col, error) {
         let ErrUI = USER_INTERFACE.Errors;
         if (ErrUI.active) return false;
@@ -593,6 +625,32 @@ EOF;
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
         return false;
     };
+
+    i18next.init({
+        debug: APPLICATION_CONTEXT.getOption("debugMode"),
+        resources: {
+            '<?php echo $locale ?>' : <?php echo $locale_data ?>
+        },
+        lng: '<?php echo $locale ?>',
+        fallbackLng: 'en',
+    }, (err, t) => {
+        if (err) throw err;
+
+        jqueryI18next.init(i18next, $, {
+            tName: 't', // $.t = i18next.t
+            i18nName: 'i18n', // $.i18n = i18next
+            handleName: 'localize', // $(selector).localize(opts);
+            selectorAttr: 'data-i18n', // data-() attribute
+            targetAttr: 'i18n-target', // data-() attribute
+            optionsAttr: 'i18n-options', // data-() attribute
+            useOptionsAttr: false, // see optionsAttr
+            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
+        });
+        //clean up
+        delete window.jqueryI18next;
+        delete window.i18next;
+        $('body').localize();
+    });
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -649,11 +707,9 @@ EOF;
             $(`#load-plugin-${id}`).html("");
             return;
         }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">This plugin has been automatically
-removed: there was an error. <br><code>[${e}]</code></div>`);
-        $(`#load-plugin-${id}`).html(`<button disabled class="btn">Failed</button>`);
-        Dialogs.show(`Plugin <b>${PLUGINS[id].name}<b> has been removed: there was an error.`,
-            4000, Dialogs.MSG_ERR);
+        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
+        $(`#load-plugin-${id}`).html(`<button disabled class="btn">${$.t('common.Failed')}</button>`);
+        Dialogs.show($.t('messages.pluginRemovedNamed', {plugin: PLUGINS[id].name}), 4000, Dialogs.MSG_ERR);
     }
 
     function cleanUpScripts(id) {
@@ -661,7 +717,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         LOADING_PLUGIN = false;
     }
 
-    function cleanUpPlugin(id, e="Unknown error") {
+    function cleanUpPlugin(id, e=$.t('error.unknown')) {
         delete PLUGINS[id].instance;
         PLUGINS[id].loaded = false;
         PLUGINS[id].error = e;
@@ -705,7 +761,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         let possiblyExisting = PLUGINS[id].instance;
         if (possiblyExisting) {
             console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
-            Dialogs.show(`Plugin ${plugin.name} could not be loaded: please, contact administrator.`, 7000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}), 7000, Dialogs.MSG_WARN);
             cleanUpPlugin(plugin.id);
             return;
         }
@@ -761,7 +817,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         };
 
         if (!properties.hasOwnProperty('src')) {
-            errHandler("Script property must contain 'src' attribute!");
+            errHandler($.t('messages.pluginScriptSrcMissing'));
             return;
         }
 
@@ -947,11 +1003,13 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
             if (window.hasOwnProperty(id)) {
-                Dialogs.show("Could not load the plugin.", 5000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
+                console.warn("Plugin id collision on global scope", id);
                 return;
             }
             if (!Array.isArray(meta.includes)) {
-                Dialogs.show("The selected plugin is corrupted.", 5000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
+                console.warn("Plugin include invalid.");
                 return;
             }
 
@@ -960,10 +1018,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
                 //loaded after page load
                 if (!initializePlugin(PLUGINS[id].instance)) {
-                    Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> could not be loaded.`, 2500, Dialogs.MSG_WARN);
+                    Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_WARN);
                     return;
                 }
-                Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
+                Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_INFO);
 
                 if (meta.styleSheet) {  //load css if necessary
                     $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
@@ -1071,14 +1129,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                         imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
-<span class="pr-1" style="color: var(--color-text-tertiary)">Image</span>
+<span class="pr-1" style="color: var(--color-text-tertiary)">${$.t('common.Image')}</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
                         imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
-<span class="pr-1" style="color: var(--color-text-danger)">Faulty</span>
+<span class="pr-1" style="color: var(--color-text-danger)">${$.t('common.Faulty')}</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
@@ -1113,13 +1171,11 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
 class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
                     previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
-                }" onerror="this.src='<?php echo ASSETS_ROOT ?>/unknown-preview.jpg';"/></div>
-                `;
+                }" onerror="this.src='<?php echo ASSETS_ROOT ?>/unknown-preview.jpg';"/></div>`;
             }
 
             //use switching panel
-            USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
-<div id="tissue-preview-container">${html}</div>`);
+            USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', $.t('common.Tissues'), `<div id="tissue-preview-container">${html}</div>`);
         }
 
         if (confBackground.length > 0) {
@@ -1193,13 +1249,13 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
-                Dialogs.show(`Failed to load overlays (Visualization <i>${activeVis.name}</i>) - it has been disabled.`, 20000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.visualisationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
                 $("#global-opacity").css('display', 'none');
 
                 APPLICATION_CONTEXT.disableRendering();
-                eventOpts.error = "Overlays not enabled!";
+                eventOpts.error = $.t('messages.overlaysDisabled');
             }
         } else {
             $("#global-opacity").css('display', 'none');
@@ -1246,8 +1302,8 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 <?php
                 if ($firstTimeVisited) {
                     echo "        setTimeout(function() {
-                    USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
-                        'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
+                    USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'), 
+                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic')});
                     }, 2000);";
                 }
                 ?>
@@ -1284,7 +1340,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             if (!window.WebGLModule) {
                 console.error("Recursion prevented: webgl module failed to load!");
                 //allow to continue...
-                Dialogs.show(`Failed to load overlays - only the tissue will be visible.`, 8000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.overlaysLoadFail'), 8000, Dialogs.MSG_ERR);
                 renderingWithWebGL = false;
             }
         }

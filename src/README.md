@@ -107,6 +107,7 @@ Example configuration:
 We will use [R] for required and [O] for optional parameters.
 - [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
 - [O]`params` - an object, visualisation parameters, supported:
+    - [O]`locale` - language locale, default `en`
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
@@ -284,4 +285,3 @@ So for example, an authentication can look like follows:
    - read the user data in the POST requests as ``metadata`` field made from viewer via ``UTILITIES.fetchJSON``
        - builtin API always uses this method
    - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``
- 

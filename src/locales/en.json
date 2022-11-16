@@ -1,0 +1,56 @@
+{
+  "translation": {
+    "error": {
+      "title": "Error",
+      "doExport": " [ if you want to report a problem, please include exported file ] ",
+      "detailsBtn": "details",
+      "unknown": "Unknown error"
+    },
+    "main": {
+      "global": {
+        "tissue": "Tissue",
+        "layerOpacity": "Layer Opacity",
+        "clone": "Clone the viewer and synchronize"
+      },
+      "shaders": {
+        "saveCookies": "Remember settings"
+      },
+      "bar": {
+        "exportUrl": "URL",
+        "explainExportUrl": "Get the link without data",
+        "exportFile": "Export",
+        "explainExportFile": "Download together with plugins data",
+        "plugins": "Plugins",
+        "explainPlugins": "Add plugins to the visualisation",
+        "tutorials": "Tutorials",
+        "explainTutorials": "Show tutorials",
+        "settings": "Settings"
+      }
+    },
+    "messages": {
+      "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
+      "pluginRemovedNamed": "Plugin <b>{{plugin}}<b> has been removed: there was an error.",
+      "pluginLoadFailed": "Plugin could not be loaded.",
+      "pluginLoadFailedNamed": "Plugin {{plugin}} could not be loaded: please, contact administrator.",
+      "pluginLoadedNamed": "Plugin {{plugin}} has been loaded.",
+      "pluginScriptSrcMissing": "Script property must contain 'src' attribute!",
+      "visualisationDisabled": "Failed to load overlays (Visualization <i>{{name}}</i>) - it has been disabled.",
+      "overlaysDisabled": "Overlays not enabled!",
+      "overlaysLoadFail": "Failed to load overlays - only the tissue will be visible.",
+      "pluginsWelcome": "It looks like this is your first time here",
+      "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
+
+    },
+    "tutorials": {
+      "basic": "Basic Functionality"
+    },
+    "common": {
+      "Exit": "Exit",
+      "Failed": "Failed",
+      "Image": "Image",
+      "Faulty": "Faulty",
+      "Tissues": "Tissues"
+
+    }
+  }
+}

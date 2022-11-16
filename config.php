@@ -10,6 +10,7 @@ define('PROJECT_ROOT', 'src');
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
 define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
 define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
+define('LOCALES_ROOT', PROJECT_ROOT . '/locales');
 
 //todo two versions - dev and production
 define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');

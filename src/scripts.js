@@ -246,6 +246,7 @@ form.submit();<\/script>`;
      * @param postData
      * @param headers
      * @param metaKeys metadata key list to include
+     * @throws HTTPError
      * @return {Promise<string|any>}
      */
     window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}, metaKeys=true) {

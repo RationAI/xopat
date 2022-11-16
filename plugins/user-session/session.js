@@ -35,7 +35,8 @@ addPlugin("user-session", class {
                 filename: this.sessionReferenceFile,
                 session: UTILITIES.getForm()
             }, this.headers, false).then(response => {
-                if (response?.status !== "success") throw response?.message; //todo not flexible :/
+                //todo not flexible :/
+                if (response?.status !== "success") throw new HTTPError(response.message, response, response.error);
                 Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);
             }).catch(e => {
                 console.warn("Failed to save export to server.", e);
