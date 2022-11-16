@@ -1,10 +1,16 @@
 <?php
 
-function show_error($err_title, $err_desc, $err_details) {
+function show_error($err_title, $err_desc, $err_details, $locale='en') {
+
+    error_reporting(E_ERROR);
+    ini_set('display_errors', 1);
 
 $title = isset($err_title) ? $err_title : false;
 $description = isset($err_desc) ? $err_desc : false;
 $techNFO = isset($err_details) ? $err_details : false;
+
+require_once PROJECT_ROOT . '/i18n.class.php';
+$t = i18n::default($locale, LOCALES_ROOT);
 
 ?>
 
@@ -26,12 +32,12 @@ $techNFO = isset($err_details) ? $err_details : false;
 
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
+    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<?php echo $t->t('error.title') ?></div>
     <div id="system-message-title" class="f2-light text-center clearfix color-text-primary"></div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><?php echo $t->t('error.detailsBtn') ?></button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
 
-    <button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button">Back to experiments</button>
+    <button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button"><?php echo $t->t('error.back') ?></button>
 
 </div>
 
@@ -62,7 +68,7 @@ $techNFO = isset($err_details) ? $err_details : false;
         }
     };
 
-    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>` || "No details provided.");
+    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>` || '<?php echo $t->t('error.noDetails') ?>');
 </script>
 </body>
 </html>

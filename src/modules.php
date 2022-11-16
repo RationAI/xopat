@@ -1,5 +1,6 @@
 <?php
 
+//todo translate
 $MODULES = array();
 
 foreach (array_diff(scandir(MODULES_FOLDER), array('..', '.')) as $_=>$dir) {

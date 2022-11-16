@@ -12,10 +12,10 @@ function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
-function throwFatalErrorIf($condition, $title, $description, $details) {
+function throwFatalErrorIf($condition, $title, $description, $details, $locale='en') {
     if ($condition) {
         require_once(PROJECT_ROOT . "/error.php");
-        show_error($title, $description, $details);
+        show_error($title, $description, $details, $locale);
         exit;
     }
 }
@@ -59,12 +59,12 @@ $locale = $parsedParams->params->locale ?? "en";
 foreach ($parsedParams->background as $bg) {
     throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
         "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
-        print_r($parsedParams->background, true));
+        print_r($parsedParams->background, true), $locale);
 
     throwFatalErrorIf(!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data),
         "Invalid image.",
         "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
-        "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
+        "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true), $locale);
 }
 
 $layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
@@ -93,7 +93,7 @@ if ($layerVisible) {
             }
 
             throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
-                "You must specify <b>type</b> parameter.", print_r($layer, true));
+                "You must specify <b>type</b> parameter.", print_r($layer, true), $locale);
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 //todo fixme cached setup -> notify user rendering has changed....

@@ -1,5 +1,6 @@
 <?php
 
+//todo translate
 require_once(PROJECT_ROOT . "/modules.php");
 $PLUGINS = array();
 
