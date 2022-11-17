@@ -30,6 +30,11 @@
       }
     },
     "messages": {
+      "urlInvalid": "Invalid link",
+      "invalidPostData": "The request has no setup data. See POST data:",
+      "postDataSyntaxErr": "The visualisation setup is not parse-able.",
+      "bgReferenceMissing": "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
+      "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualisation layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
       "pluginLoadFailed": "Plugin could not be loaded.",
@@ -51,7 +56,8 @@
       "Failed": "Failed",
       "Image": "Image",
       "Faulty": "Faulty",
-      "Tissues": "Tissues"
+      "Tissues": "Tissues",
+      "Source": "Source"
 
     }
   }

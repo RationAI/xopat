@@ -114,6 +114,7 @@ class i18n {
     protected $isInitialized = false;
 
     private $data = array();
+    private $raw = "{}";
 
 
     /**
@@ -251,6 +252,10 @@ class i18n {
         $this->sectionSeparator = $sectionSeparator;
     }
 
+    public function getRawData() {
+        return $this->raw;
+    }
+
     /**
      * @deprecated Use setSectionSeparator.
      */
@@ -336,7 +341,7 @@ class i18n {
             case 'json':
                 $config = json_decode(file_get_contents($filename), true);
                 if ($config == NULL) throw new InvalidArgumentException("Provided file failed to load: " . json_last_error_msg());
-
+                $this->raw = $config;
                 break;
             default:
                 throw new InvalidArgumentException($ext . " is not a valid extension!");

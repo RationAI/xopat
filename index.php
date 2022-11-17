@@ -6,16 +6,18 @@ if (version_compare(phpversion(), '7.1', '<')) {
 
 require_once("config.php");
 require_once(PROJECT_ROOT . "/plugins.php");
+
+global $version, $i18n;
 $version = VERSION;
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
-function throwFatalErrorIf($condition, $title, $description, $details, $locale='en') {
+function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
         require_once(PROJECT_ROOT . "/error.php");
-        show_error($title, $description, $details, $locale);
+        show_error($title, $description, $details, $_GET["lang"] ?? 'en');
         exit;
     }
 }
@@ -30,10 +32,9 @@ function ensureDefined($object, $property, $default) {
  * Redirection: based on parameters, either setup visualisation or redirect
  */
 //todo visualisation -> visualization
-//todo translation
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
-throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
+throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
         print_r($_POST, true));
 
 /**
@@ -42,7 +43,7 @@ throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup da
 
 //params that come in might be associative arrays :/
 $parsedParams = json_decode(is_string($visualisation) ? $visualisation : json_encode($visualisation));
-throwFatalErrorIf(!is_object($parsedParams), "Invalid link.", "The visualisation setup is not parse-able.",
+throwFatalErrorIf(!is_object($parsedParams), "messages.urlInvalid", "messages.postDataSyntaxErr",
     "JSON Error: " . json_last_error() . "<br>" . $visualisation);
 
 ensureDefined($parsedParams, "params", (object)array());
@@ -56,15 +57,17 @@ $bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->p
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 $locale = $parsedParams->params->locale ?? "en";
 
+//now we can translate - translation known
+require_once PROJECT_ROOT . '/i18n.class.php';
+$i18n = i18n::default($locale, LOCALES_ROOT);
+
 foreach ($parsedParams->background as $bg) {
-    throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
-        "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
-        print_r($parsedParams->background, true), $locale);
+    throwFatalErrorIf(!isset($bg->dataReference), "messages.urlInvalid", "messages.bgReferenceMissing",
+        print_r($parsedParams->background, true));
 
     throwFatalErrorIf(!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data),
-        "Invalid image.",
-        "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
-        "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true), $locale);
+        "messages.urlInvalid", "messages.bgReferenceMissing",
+        "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
 }
 
 $layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
@@ -85,15 +88,16 @@ if ($layerVisible) {
         }
 
         $shader_count = 0;
+        $source = $i18n->t("common.Source");
         foreach ($visualisationTarget->shaders as $data=>$layer) {
             if (!isset($layer->name)) {
                 $temp = substr($data, max(0, strlen($data)-24), 24);
                 if (strlen($temp) != strlen($data)) $temp  = "...$temp";
-                $layer->name = "Source: $temp";
+                $layer->name = "$source: $temp";
             }
 
-            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
-                "You must specify <b>type</b> parameter.", print_r($layer, true), $locale);
+            throwFatalErrorIf(!isset($layer->type), "messages.urlInvalid",
+                "messages.shaderTypeMissing", print_r($layer, true));
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 //todo fixme cached setup -> notify user rendering has changed....
@@ -192,11 +196,6 @@ foreach ($MODULES as $_ => $mod) {
         }
     }
 }
-
-if (!file_exists(LOCALES_ROOT . "/$locale.json")) {
-    $locale = "en";
-}
-$locale_data = file_get_contents(LOCALES_ROOT . "/$locale.json");
 
 ?>
 <!DOCTYPE html>
@@ -436,7 +435,6 @@ EOF;
     const MODULES = <?php echo json_encode((object)$MODULES) ?>;
 
     const setup = <?php echo $visualisation ?>;
-    const locale_data = <?php echo $locale_data ?? '{}' ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = {
         locale: "en",
@@ -629,9 +627,9 @@ EOF;
     i18next.init({
         debug: APPLICATION_CONTEXT.getOption("debugMode"),
         resources: {
-            '<?php echo $locale ?>' : <?php echo $locale_data ?>
+            '<?php echo $i18n->getAppliedLang() ?>' : <?php echo $i18n->getRawData() ?>
         },
-        lng: '<?php echo $locale ?>',
+        lng: '<?php echo $i18n->getAppliedLang() ?>',
         fallbackLng: 'en',
     }, (err, t) => {
         if (err) throw err;
