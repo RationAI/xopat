@@ -5,13 +5,28 @@ if (version_compare(phpversion(), '7.1', '<')) {
 }
 
 require_once("config.php");
-require_once(PROJECT_ROOT . "/plugins.php");
 
 global $version, $i18n;
 $version = VERSION;
+$errors_print = "";
+
+set_exception_handler(function (Throwable $exception) {
+    global $i18n;
+    if (!isset($i18n)) {
+        require_once PROJECT_ROOT . '/i18m.class.php';
+        $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
+    }
+    throwFatalErrorIf(true, "error.unknown", "", $exception->getMessage());
+});
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
+}
+
+function printJSConsole($message, $is_error=true) {
+    global $errors_print;
+    $fn = $is_error ? "error" : "warn";
+    $errors_print .= "console.$fn(`$message`);";
 }
 
 function throwFatalErrorIf($condition, $title, $description, $details) {
@@ -53,13 +68,23 @@ ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
 ensureDefined($parsedParams, "dataPage", (object)array());
 
+error_reporting(E_ERROR);
+ini_set('display_errors', 1);
+
+if ($parsedParams->params->debugMode) {
+    error_reporting(E_ERROR);
+    ini_set('display_errors', 1);
+}
 $bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
-$locale = $parsedParams->params->locale ?? "en";
+$locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
 
 //now we can translate - translation known
 require_once PROJECT_ROOT . '/i18n.class.php';
 $i18n = i18n::default($locale, LOCALES_ROOT);
+
+//load modules and plugins after translation is ready
+require_once(PROJECT_ROOT . "/plugins.php");
 
 foreach ($parsedParams->background as $bg) {
     throwFatalErrorIf(!isset($bg->dataReference), "messages.urlInvalid", "messages.bgReferenceMissing",
@@ -73,7 +98,7 @@ foreach ($parsedParams->background as $bg) {
 $layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
-$errors_print = "";
+
 
 if ($layerVisible) {
     $layerVisible--;
@@ -128,7 +153,7 @@ $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(','
 
 foreach ($PLUGINS as $key => $plugin) {
     if (!$plugin->id) {
-        $errors_print .= "console.warn('Plugin ?? removed: probably include.json misconfiguration.');";
+        $errors_print .= "console.warn('Plugin ($key) removed: probably include.json misconfiguration.');";
         unset($PLUGINS[$key]);
     }
 
@@ -606,6 +631,11 @@ EOF;
         }
     };
 
+    /**
+     * Common Error thrown in JSON requests with failures (via fetchJSON(...)
+     * The content is not guaranteed to be translated.
+     * @type {Window.HTTPError}
+     */
     window.HTTPError = class extends Error {
         constructor(message, response, textData) {
             super();
@@ -1301,7 +1331,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 if ($firstTimeVisited) {
                     echo "        setTimeout(function() {
                     USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'), 
-                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic')});
+                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')});
                     }, 2000);";
                 }
                 ?>
@@ -1414,9 +1444,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
     <!-- UI -->
     <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
 
-    <!-- Basic Tutorial -->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/tutorials.js"></script>
-
     <!--Event listeners, Utilities, Exporting...-->
     <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
 
@@ -1427,6 +1454,43 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
     <script type="text/javascript">
 
 (function (window) {
+
+    /*---------------------------------------------------------*/
+    /*------------ Basic Tutorial       -----------------------*/
+    /*---------------------------------------------------------*/
+
+    const withLayers = function() {
+        return APPLICATION_CONTEXT.layersAvailable;
+    };
+
+    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
+        {'next #viewer-container' : $.t('tutorials.basic.1')
+        }, {'next #main-panel' : $.t('tutorials.basic.2')
+        }, {'next #navigator-container' : $.t('tutorials.basic.3')
+        }, {'next #general-controls' : $.t('tutorials.basic.4'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
+        }, {'next #general-controls' : $.t('tutorials.basic.5'), runIf: withLayers
+        }, {'next #tissue-list-menu' : $.t('tutorials.basic.6')}, {
+            'click #images-pin' : $.t('tutorials.basic.7'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-images' : $.t('tutorials.basic.8'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
+        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
+        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
+        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
+        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
+        }, {'next #copy-url' : $.t('tutorials.basic.14')
+        }, {'next #global-export' : $.t('tutorials.basic.15')
+        }, {'next #global-help' : $.t('tutorials.basic.16')}], function() {
+        if (withLayers()) {
+            //prerequisite - pin in default state
+            let pin = $("#shaders-pin");
+            let container = pin.parents().eq(1).children().eq(1);
+            pin.removeClass('pressed');
+            container.removeClass('force-visible');
+        }
+    });
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of UI -----------------------*/

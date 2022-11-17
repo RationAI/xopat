@@ -51,6 +51,9 @@ The name of the argument is **`visualization`**, a JSON structure that sets up e
 > _unless_ the post data is sent in `GET`. Note that this is not recommended as the size of the JSON configuration
 > can be enormous.
 
+Note that language setting is an parameter that behaves a bit differently: you can either specify ``locale`` parameter
+or override any specification by sending ``lang=[code]`` as a GET parameter - for simple localization overrides.
+
 Example configuration:
 ````JSON
 {    
@@ -285,3 +288,11 @@ So for example, an authentication can look like follows:
    - read the user data in the POST requests as ``metadata`` field made from viewer via ``UTILITIES.fetchJSON``
        - builtin API always uses this method
    - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``
+
+### Localization
+Is possible through ``i18next`` library and also server-side with `i18n` class (with limited capabilities).
+To access the api, use ``$.t(...)`` method to translate. The `i18n` instance is stored in `$.i18n`.
+You can use also the (other) API of ``jquery i18next``.
+In spawned child window, the translation is available also through ``$`` symbol, but ``jquery i18next`` is not available.
+
+For plugins localization, see the plugins README.

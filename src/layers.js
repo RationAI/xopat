@@ -50,7 +50,7 @@
 display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
 <span class="blob-code"><span class="blob-code-inner">}</span></span>
 <button class="btn" onclick="VIEWER.bridge.webGLEngine.changeBlending($('#custom-blend-equation-code').val()); VIEWER.bridge.redraw();"
-style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> Set blending</button>`);
+style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
                     }
                 },
                 visualisationInUse: function(visualisation) {
@@ -149,7 +149,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
 id="${dataId}-mode-toggle"
  style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="Toggle blending (default: mask)">payments</span>`;
+onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
 
             let availableShaders = "";
             for (let available of WebGLModule.ShaderMediator.availableShaders()) {
@@ -217,13 +217,13 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             const id = item.dataset.id;
             window.DropDown.bind(item, () => [{
-                title: "Custom blending (default mask)",
+                title: $.t('main.shaders.defaultBlending'),
             }, {
-                title: "Enable mask",
+                title: $.t('main.shaders.maskEnable'),
                 action: (selected) => UTILITIES.shaderPartCustomBlendEnable(!selected, id),
                 selected: document.getElementById(`${id}-mode-toggle`)?.style.display !== 'none'
             }, {
-                title: "Clipping mask",
+                title: $.t('main.shaders.clipMask'),
                 icon: "payments",
                 action: (selected) => {
                     const node = document.getElementById(`${id}-mode-toggle`);
@@ -324,7 +324,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             window.UTILITIES.makeCacheSnapshot = function() {
                 if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    Dialogs.show("Cookies are disabled. You can change this option in 'Settings'.", 5000, Dialogs.MSG_WARN);
+                    Dialogs.show($.t('messages.cookiesDisabled'), 5000, Dialogs.MSG_WARN);
                     return;
                 }
 
@@ -337,7 +337,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     }
                 }
                 APPLICATION_CONTEXT._setCookie('_cache', JSON.stringify(shaderCache));
-                Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
+                Dialogs.show($.t('messages.cookieConfSaved'), 5000, Dialogs.MSG_INFO);
             };
 
             // load desired shader upon selection

@@ -233,12 +233,12 @@ ${contentAction}
             container.classList.add("d-flex", "flex-row-reverse");
             let btn = document.createElement("button");
             btn.onclick = this.selectAll.bind(this);
-            btn.innerHTML = "Select All";
+            btn.innerHTML = $.t('common.selectAll');
             btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
             container.append(btn);
             btn = document.createElement("button");
             btn.onclick = this.deselectAll.bind(this);
-            btn.innerHTML = "Deselect All";
+            btn.innerHTML = $.t('common.deselectAll');
             btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
             container.append(btn);
             document.getElementById(this.contextId).prepend(container);

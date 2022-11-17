@@ -169,7 +169,6 @@ class i18n {
             throw new RuntimeException('No language file was found.');
         }
 
-
         $config = $this->load($this->langFilePath);
         if ($this->mergeFallback)
             $config = array_replace_recursive($this->load($this->getConfigFilename($this->fallbackLang)), $config);
@@ -187,9 +186,16 @@ class i18n {
         if ($i >= $len || !isset($node[$keys[$i]])) return $key;
         $node = $node[$keys[$i]];
         if ($i == $len - 1 && gettype($node) === "string") {
-            return $args ? vsprintf($node, $args) : $node;
+            return $args ? $this->_sub($node, $args) : $node;
         };
         return $this->_t($key, $keys, $i+1, $node, $args);
+    }
+
+    private function _sub($str, $args) {
+        foreach ($args as $key=>$value) {
+            $str = str_replace("{{{$key}}}", $value ?? "undefined", $str);
+        }
+        return $str;
     }
 
     public function isInitialized() {
@@ -254,13 +260,6 @@ class i18n {
 
     public function getRawData() {
         return $this->raw;
-    }
-
-    /**
-     * @deprecated Use setSectionSeparator.
-     */
-    public function setSectionSeperator($sectionSeparator) {
-        $this->setSectionSeparator($sectionSeparator);
     }
 
     /**
@@ -339,9 +338,10 @@ class i18n {
 //                $config = spyc_load_file($filename);
 //                break;
             case 'json':
-                $config = json_decode(file_get_contents($filename), true);
-                if ($config == NULL) throw new InvalidArgumentException("Provided file failed to load: " . json_last_error_msg());
+                $config = file_get_contents($filename);
                 $this->raw = $config;
+                $config = json_decode($config, true);
+                if ($config == NULL) throw new InvalidArgumentException("Provided file for the language translation failed to load: " . json_last_error_msg());
                 break;
             default:
                 throw new InvalidArgumentException($ext . " is not a valid extension!");

@@ -132,7 +132,6 @@
 require.config({
   paths: { vs: "${APPLICATION_CONTEXT.rootPath}/src/external/monaco" }
 });
-
 const DEFAULT_EDITOR_OPTIONS = {
   value: \`${inputText}\`,
   lineNumbers: "on",
@@ -160,7 +159,7 @@ const save = () => {
     try {
          Diag._modals['${parentId}'].callback(editor.getValue());
     } catch(e) {
-         Diag.warn("Could not save the code.", 3500, Diag.MSG_ERR);
+         Diag.warn($.t('monaco.saveError'), 3500, Diag.MSG_ERR);
     }
 };
 
@@ -243,9 +242,7 @@ window.addEventListener("beforeunload", (e) => {
             this._cachedCall = customCall;
             let result = this._openModalWindow(id, title, html, size);
             if (!result.context) {
-                this.show(`An application modal window '${title}' was blocked by your browser. <a onclick="
-Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide();" class='pointer'>Click here to open.</a>`,
-                    15000, this.MSG_WARN);
+                this.show($.t('messages.modalWindowBlocked', {id, title, size}), 15000, this.MSG_WARN);
             } else {
                 result.callback = this._cachedCall;
                 this._modals[id] = result;
@@ -264,13 +261,16 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/external/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-        <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script>
+        <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script><!--todo integrity tags-->
         <script type="text/javascript">
             //route to the parent context
             window.confirm = function(message) {
                 window.opener.focus();
                 window.opener.confirm(message);
             };
+            $.t = window.opener.$.t;
+            $.i18n = window.opener.$.i18n;
+            $.prototype.localize = () => {console.error("localize() not supported in child window!")};
         <\/script>
     </head>
     <body style="overflow: hidden; height: 100vh;">
@@ -742,8 +742,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             steps: [],
             prerequisites: [],
 
-            show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
+            show: function(title=undefined, description=undefined) {
                 if (USER_INTERFACE.Errors.active || this.running) return;
+
+                if (!title) title = $.t('tutorials.menu.title');
+                if (!description) description = $.t('tutorials.menu.description')
 
                 $("#tutorials-container").removeClass("d-none");
                 $("#viewer-container").addClass("disabled");
@@ -881,27 +884,27 @@ Theme &emsp; ${inputs.select({
                 classes: "select-sm",
                 onchange: `${updateOption("theme", true)} UTILITIES.updateTheme();`,
                 default: APPLICATION_CONTEXT.getOption("theme"),
-                options: {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"}
+                options: {auto: $.t('settings.theme.auto'), light: $.t('settings.theme.light'), dark_dimmed: $.t('settings.theme.dimmed'), dark: $.t('settings.theme.dark')}
 })}
 <br> ${inputs.checkBox({
-                label: "Show ToolBar",
+                label: $.t('settings.toolBar'),
                 onchange: "$('#plugin-tools-menu').toggleClass('d-none')",
                 default: true
 })}
-<br> ${standardBoolInput("scaleBar", "Show ScaleBar")}
+<br> ${standardBoolInput("scaleBar", $.t('settings.scaleBar'))}
 <br><br><span class="f3-light header-sep">Behaviour</span><br>
-${standardBoolInput("bypassCookies", "Disable Cookies")}
+${standardBoolInput("bypassCookies", $.t('settings.cookies'))}
 <br><br><span class="f3-light header-sep">Other</span><br>
-<br>${standardBoolInput("debugMode", "Debug Mode")}
-<br>${standardBoolInput("webglDebugMode", "Debug Rendering")}
+<br>${standardBoolInput("debugMode", $.t('settings.debugMode'))}
+<br>${standardBoolInput("webglDebugMode", $.t('settings.debugRender'))}
 `, 'settings', false, true);
     }
 
     let pluginsMenuBuilder;
     function buildPluginsMenu(ctx) {
         ctx._buildMenu(ctx, "__pMenu", "", "", APPLICATION_CONTEXT.pluginsMenuId,
-            APPLICATION_CONTEXT.pluginsMenuId, "Plugins",  `<div class="d-flex flex-column-reverse">
-<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">Load with selected</button>
+            APPLICATION_CONTEXT.pluginsMenuId, $.t('plugins.title'),  `<div class="d-flex flex-column-reverse">
+<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">${$.t('plugins.loadBtn')}</button>
 </div><hr>
 <div id='plug-list-content-inner'></div>
 `, 'extension', false, true);
@@ -921,7 +924,7 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
-            let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;
+            let actionPart = errMessage ? "" : `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">${$.t('common.Load')}</button></div>`;
             pluginsMenuBuilder.addRow({
                 title: plugin.name,
                 author: plugin.author,
@@ -980,7 +983,7 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
             }
         } catch (e) {
             console.warn("Failed to generate HTML.", root, e);
-            return ["<div class=\"error-container\">Unable to show this field: invalid configuration.</div>"];
+            return [`<div class=\"error-container\">${$.t('messages.elementsBuilderErr')}</div>`];
         }
         return html;
     }

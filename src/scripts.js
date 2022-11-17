@@ -339,7 +339,7 @@ form.submit();<\/script>`;
         $temp.val(baseUrl + encodeURIComponent(postData)).select();
         document.execCommand("copy");
         $temp.remove();
-        Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
+        Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
     window.UTILITIES.export = function () {
@@ -385,8 +385,7 @@ ${constructExportVisualisationForm()}
      */
     window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
-            Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
-                15000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN);
             return;
         }
 

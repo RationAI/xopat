@@ -9,9 +9,6 @@
  */
 function show_error(string $err_title, string $err_desc, string $err_details, string $locale='en') {
 
-    error_reporting(E_ERROR);
-    ini_set('display_errors', 1);
-
 $title = $err_title ?? false;
 $description = $err_desc ?? false;
 $techNFO = $err_details ?? false;

@@ -15,7 +15,12 @@
         "clone": "Clone the viewer and synchronize"
       },
       "shaders": {
-        "saveCookies": "Remember settings"
+        "saveCookies": "Remember settings",
+        "setBlending": "Set blending",
+        "blendingExplain": "Toggle blending (default: mask)",
+        "defaultBlending": "Custom blending (default: mask)",
+        "maskEnable": "Enable mask",
+        "clipMask": "Clipping mask"
       },
       "bar": {
         "exportUrl": "URL",
@@ -33,6 +38,8 @@
       "urlInvalid": "Invalid link",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualisation setup is not parse-able.",
+      "cookiesDisabled": "Cookies are disabled. You can change this option in <a onclick=\"$('#settings').click()\">Settings</a>.",
+      "cookieConfSaved": "Modifications in parameters saved.",
       "bgReferenceMissing": "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualisation layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
@@ -45,20 +52,77 @@
       "overlaysDisabled": "Overlays not enabled!",
       "overlaysLoadFail": "Failed to load overlays - only the tissue will be visible.",
       "pluginsWelcome": "It looks like this is your first time here",
-      "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment."
-
+      "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
+      "urlCopied": "The URL was copied to your clipboard.",
+      "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"UTILITIES.export();\" class='btn-pointer'>export</a> your setup first. <a onclick=\"APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();\" class='btn-pointer'>Reload now.</a>",
+      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"Dialogs._showCustomModalImpl('{{id}}', '{{title}}', null, '{{size}}'); Dialogs.hide();\" class='pointer'>Click here to open.</a>",
+      "elementsBuilderErr": "Unable to show this field: invalid configuration."
+    },
+    "php": {
+      "invalidDeps": "Invalid dependency in {{context}}: {{dependency}}",
+      "transitiveInvalidDeps": "Dependency in {{context}}: {{dependency}} but {{transitive}} has an error.",
+      "cyclicDeps": "Found cyclic dependency in {{context}}: {{dependency}}",
+      "removedInvalidDeps": "Removed due to invalid dependency, one of: {{dependencies}}",
+      "pluginUnknownDeps": "The plugin requires unknown module.",
+      "pluginInvalidDeps": "Failure: plugin relies on dependencies with errors. <code>{{error}}</code>",
+      "pluginInvalid": "Invalid plugin! <code>{{error}}</code>"
+    },
+    "monaco": {
+      "saveError": "Could not save the code."
     },
     "tutorials": {
-      "basic": "Basic Functionality"
+      "menu": {
+        "title": "Select a tutorial",
+        "description": "The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated."
+      },
+      "basic": {
+        "title": "Basic Functionality",
+        "description": "learn how the visualiser works",
+        "1": "You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.",
+        "2": "On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.",
+        "3": "An interactive navigator can be used <br> for orientation or to jump quickly on different areas.",
+        "4": "The whole visualisation consists of two layers: <br> the background canvas and the data layer above.",
+        "5": "You can toggle background visibility <br> and control the data layer opacity. <br> The button on the right clones the viewer and synchronizes the navigation.",
+        "6": "The viewer supports multiple backgrounds<br>you can switch between if available at the bottom of the screen.",
+        "7": "There are several background images available. Click to open.",
+        "8": "You can turn them on/off or blend using an opacity slider.",
+        "9": "The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be controlled here.",
+        "10": "Click to set <br>this controls subpanel to be always visible.",
+        "11": "In case multiple different visualisations <br>are set, you can select <br>which one is being displayed.",
+        "12": "Each visualisation consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.",
+        "13": "Your settings can be saved here. <br> This feature works only with enabled cookies. <br> Saved adjustments are applied on layers of the same name.",
+        "14": "Your setup can be shared with a link.",
+        "15": "You can share also a file: this option <br>includes (most) plugins data too (unlike URL sharing). <br> That means, if you export a file with <br> drawn annotations, these will be included too.",
+        "16": "That's all for now.<br> For more functionality, see Plugins menu. <br> With attached plugins, more tutorials will appear here."
+      }
+    },
+    "settings": {
+      "theme": {
+        "auto": "Automatic",
+        "light": "Light Theme",
+        "dark": "Dark Theme",
+        "dimmed": "Dimmed Theme"
+      },
+      "toolBar": "Show ToolBar",
+      "debugRender": "Debug Rendering",
+      "debugMode": "Debug Mode",
+      "cookies": "Disable Cookies",
+      "scaleBar": "Show ScaleBar"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "loadBtn": "Load with selected"
     },
     "common": {
+      "Load": "Load",
       "Exit": "Exit",
       "Failed": "Failed",
       "Image": "Image",
       "Faulty": "Faulty",
       "Tissues": "Tissues",
-      "Source": "Source"
-
+      "Source": "Source",
+      "selectAll": "Select All",
+      "deselectAll": "Deselect All"
     }
   }
 }
