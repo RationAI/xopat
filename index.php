@@ -798,7 +798,7 @@ EOF;
         plugin.setOption = function(key, value, cookies=true) {
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
             APPLICATION_CONTEXT.config.plugins[id][key] = value;
-        }
+        };
         plugin.getOption = function(key, defaultValue=undefined) {
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
@@ -806,7 +806,13 @@ EOF;
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
             if (value === "false") value = false; //true will eval to true anyway
             return value;
-        }
+        };
+        plugin.localize = function (data) {
+            $.i18n.addResourceBundle($.i18n.language, id, data);
+        };
+        plugin.translate = function (key, ...args) {
+            return $.t(`${id}.key`, ...args);
+        };
 
         showPluginError(id, null);
         return plugin;

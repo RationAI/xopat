@@ -103,20 +103,24 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
  
-#### \[EXISTS\] `YourPLuginClass::getOption(key, defaultValue=undefined)`
+#### \[EXISTS\] `this.getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
 Available _after_ constructor.
 
-#### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
+#### \[EXISTS\] `this.setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
 (constants are OK since they can be converted naturally). The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor. For cookie support, prefer this method.
 Available _after_ constructor.
 
-#### \[EXISTS\] `YourPLuginClass::staticData(key)`
+#### \[EXISTS\] `this.staticData(key)`
 Return data from ``include.json`` together with other data such as the folder the plugin lives in. It is mainly
 meant to retrieve the JSON values. Available _before_ constructor.
+
+#### \[EXISTS\] `this.localize(data)`
+Add entries for your plugin in ``i18n`` within your plugin ID namespace.
+//todo translation and translate function!
 
 ### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
@@ -168,6 +172,13 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+### Localization
+Of course you can make use of ``i18n``, but we recommend using
+``this.localize({...})`` for your plugin, where you put the data
+for current active localization. A language currently used can be
+accessed via ``$.i18n.language``.
+
+
 ### Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state
