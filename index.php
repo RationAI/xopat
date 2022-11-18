@@ -23,6 +23,11 @@ function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
+function isBoolFlagInObject($object, $key) {
+    $v = $object->$key;
+    return isset($v) && ((gettype($v) === "string" && $v && $v !== "false") || $v);
+}
+
 function printJSConsole($message, $is_error=true) {
     global $errors_print;
     $fn = $is_error ? "error" : "warn";
@@ -68,19 +73,18 @@ ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
 ensureDefined($parsedParams, "dataPage", (object)array());
 
-error_reporting(E_ERROR);
-ini_set('display_errors', 1);
-
-if ($parsedParams->params->debugMode) {
+$is_debug = isBoolFlagInObject($parsedParams->params, "debugMode");
+if ($is_debug) {
     error_reporting(E_ERROR);
     ini_set('display_errors', 1);
 }
-$bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
+$bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 $locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
 
 //now we can translate - translation known
 require_once PROJECT_ROOT . '/i18n.class.php';
+i18n::$debug = $is_debug;
 $i18n = i18n::default($locale, LOCALES_ROOT);
 
 //load modules and plugins after translation is ready
@@ -776,6 +780,16 @@ EOF;
                 if (metaKey === "instance") return undefined;
                 return PLUGINS[id]?.[metaKey];
             };
+            PluginClass.prototype.getLocaleFile = function(locale) {
+                return `locales/${locale}.json`;
+            };
+            PluginClass.prototype.localize = function (locale=undefined, data=undefined) {
+                return UTILITIES.loadPluginLocale(id, locale, data || this.getLocaleFile(locale || $.i18n.language));
+            };
+            PluginClass.prototype.t = function (key, options={}) {
+                options.ns = id;
+                return $.t(key, options);
+            };
 
             plugin = new PluginClass(id, parameters);
         } catch (e) {
@@ -806,12 +820,6 @@ EOF;
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
             if (value === "false") value = false; //true will eval to true anyway
             return value;
-        };
-        plugin.localize = function (data) {
-            $.i18n.addResourceBundle($.i18n.language, id, data);
-        };
-        plugin.translate = function (key, ...args) {
-            return $.t(`${id}.key`, ...args);
         };
 
         showPluginError(id, null);
@@ -896,7 +904,7 @@ EOF;
         if (!plugin) return;
 
         if (registeredPlugins !== undefined) {
-            if (plugin && OpenSeadragon.isFunction(plugin["pluginReady"])) {
+            if (plugin && typeof plugin["pluginReady"] === "function") {
                 registeredPlugins.push(plugin);
             }
         } //else do not initialize plugin, wait untill all files loaded dynamically
@@ -1001,7 +1009,46 @@ EOF;
         }
     }
 
+    async function _getLocale(id, path, directory, data, locale) {
+        if (!locale) locale = $.i18n.language;
+
+        if (typeof data === "string" && directory) {
+            await fetch(`${path}/${directory}/${data}`).then(response => {
+                    if (!response.ok) {
+                        throw new HTTPError("HTTP error " + response.status, response, '');
+                    }
+                    return response.json();
+                }).then(json => {
+                    $.i18n.addResourceBundle(locale, id, json);
+                });
+        } else if (data) {
+            $.i18n.addResourceBundle(locale, id, data);
+        } else {
+            throw "Invalid translation for item " + id;
+        }
+    }
+
     window.UTILITIES = {
+
+        /**
+         * Load localization data for plugin
+         *  @param id
+         *  @param locale the current locale if undefined
+         *  @param data string to a file name relative to the plugin folder or a data containing the translation
+         */
+        loadPluginLocale: function(id, locale=undefined, data=undefined) {
+            return _getLocale(id, '<?php echo PLUGINS_FOLDER ?>', PLUGINS[id]?.directory, data, locale);
+        },
+
+        /**
+         * Load localization data for module
+         *  @param id
+         *  @param locale the current locale if undefined
+         *  @param data string to a file name relative to the module folder or a data containing the translation
+         */
+        loadModuleLocale: function(id, locale=undefined, data=undefined) {
+            return _getLocale(id, '<?php echo MODULES_FOLDER ?>', MODULES[id]?.directory, data, locale)
+        },
 
         /**
          * @param imageFilePath image path

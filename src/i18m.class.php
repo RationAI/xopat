@@ -9,7 +9,9 @@ class i18n_mock {
         return new i18n_mock($locale);
     }
 
-    public function __construct($lang, $filePath = NULL, $cachePath = NULL, $fallbackLang = NULL, $prefix = NULL) {
+    static $debug = false;
+
+    public function __construct($lang, $filePath = NULL, $namespace = NULL, $fallbackLang = NULL, $prefix = NULL) {
         //noop
     }
 

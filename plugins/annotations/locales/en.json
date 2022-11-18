@@ -1,0 +1,8 @@
+{
+  "errors": {
+    "noTargetTissue": "No target tissue (background image) available."
+  },
+  "showBoard": "Show board",
+  "onOff": "Enable/disable annotations",
+  "outlineOnly": "Show outline only."
+}

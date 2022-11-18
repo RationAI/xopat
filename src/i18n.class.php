@@ -17,6 +17,8 @@ class i18n {
         return $t;
     }
 
+    static $debug = false;
+
     /**
      * Language to translate to
      * @var string
@@ -110,11 +112,11 @@ class i18n {
 
     protected $appliedLang = NULL;
     protected $langFilePath = NULL;
-    protected $cacheFilePath = NULL;
     protected $isInitialized = false;
 
     private $data = array();
     private $raw = "{}";
+    private $namespace = "translation";
 
 
     /**
@@ -126,16 +128,12 @@ class i18n {
      * @param string [$fallbackLang] This is the language which is used when there is no language file for all other user languages. It has the lowest priority.
      * @param string [$prefix] The class name of the compiled class that contains the translated texts. Defaults to 'L'.
      */
-    public function __construct($lang, $filePath = NULL, $cachePath = NULL, $fallbackLang = NULL, $prefix = NULL) {
+    public function __construct($lang, $filePath = NULL, $namespace = "translation", $fallbackLang = NULL, $prefix = NULL) {
         // Apply settings
         $this->lang = $lang;
 
         if ($filePath != NULL) {
             $this->filePath = $filePath;
-        }
-
-        if ($cachePath != NULL) {
-            $this->cachePath = $cachePath;
         }
 
         if ($fallbackLang != NULL) {
@@ -145,10 +143,14 @@ class i18n {
         if ($prefix != NULL) {
             $this->prefix = $prefix;
         }
+
+        if ($namespace) {
+            $this->namespace = $namespace;
+        }
     }
 
     public function init() {
-        if ($this->isInitialized()) {
+        if ($this->isInitialized() && i18n::$debug) {
             throw new BadMethodCallException('This object from class ' . __CLASS__ . ' is already initialized. It is not possible to init one object twice!');
         }
 
@@ -166,14 +168,22 @@ class i18n {
             }
         }
         if ($this->appliedLang == NULL) {
-            throw new RuntimeException('No language file was found.');
+            if (i18n::$debug) throw new RuntimeException('No language file was found.');
         }
 
-        $config = $this->load($this->langFilePath);
-        if ($this->mergeFallback)
-            $config = array_replace_recursive($this->load($this->getConfigFilename($this->fallbackLang)), $config);
+        try {
+            $config = $this->load($this->langFilePath);
+            
+            $fallback = $this->load($this->getConfigFilename($this->fallbackLang));
+            if (count($fallback) > 0) {
+                $config = array_replace_recursive($fallback, $config);
+                $this->raw = json_encode($config);
+            }
+        } catch (Exception $e) {
+            if (i18n::$debug) throw $e;
+        }
 
-        $this->data = $config["translation"] ?? array(); //translation resides in translation object
+        $this->data = $config[$this->namespace] ?? array(); //translation resides in namespace object
     }
 
     public function t($key, $args=NULL) {
@@ -341,17 +351,22 @@ class i18n {
                 $config = file_get_contents($filename);
                 $this->raw = $config;
                 $config = json_decode($config, true);
-                if ($config == NULL) throw new InvalidArgumentException("Provided file for the language translation failed to load: " . json_last_error_msg());
+                if ($config == NULL) {
+                    if (i18n::$debug) throw new InvalidArgumentException("Provided file for the language translation failed to load: " . json_last_error_msg());
+                    $config = array();
+                }
                 break;
             default:
-                throw new InvalidArgumentException($ext . " is not a valid extension!");
+                if (i18n::$debug) throw new InvalidArgumentException($ext . " is not a valid extension!");
+                $config = array();
+                break;
         }
         return $config;
     }
 
     protected function fail_after_init() {
         if ($this->isInitialized()) {
-            throw new BadMethodCallException('This ' . __CLASS__ . ' object is already initalized, so you can not change any settings.');
+            if (i18n::$debug) throw new BadMethodCallException('This ' . __CLASS__ . ' object is already initalized, so you can not change any settings.');
         }
     }
 }
