@@ -27,4 +27,4 @@ preset-meta-add
 
 import
 
-error
+Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

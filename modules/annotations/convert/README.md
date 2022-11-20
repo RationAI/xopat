@@ -40,24 +40,24 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas
     type            fabricjs object type - drives which object will be internally created (rect -> fabricjs.Rect)
-    factoryId       xopat annotation type - drives which xopat annotation factory implementation will be taking 
+    factoryID       xopat annotation type - drives which xopat annotation factory implementation will be taking 
                         care of the annotation object; these define what object can or cannot do and how (convert to 
                         explicit/polygonize, modify with free form tool...), 'Unknown Annotation' means this property 
-                        has no registered factory active for the given factoryId 
+                        has no registered factory active for the given factoryID 
                         example: polygon -> PolygonFactory
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
-    layerId         a numerical layer id binding, experimental
+    layerID         a numerical layer id binding, experimental
 
-The geometric properties are directly dependent on `type` and `factoryId` used. The `factoryId` is HAS-A relationship
+The geometric properties are directly dependent on `type` and `factoryID` used. The `factoryID` is HAS-A relationship
 to the `type` hierarchy. Each factory defines which fabricjs (hierarchical) type is supported. Mostly, it is 1-1 mapping.
 Multiple factories can use the same fabricjs type as they can have different purposes (a rect annotation and a tool selection
 with a rect shape that is removed upon completion and the obtained area coordinates are sent as a request for further processing...).
 
 Examples: 
-`[factoryId] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
-`[factoryId] rect` --> `[type] rect`: a rectangle annotation is simply an identity
-`[factoryId] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
+`[factoryID] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
+`[factoryID] rect` --> `[type] rect`: a rectangle annotation is simply an identity
+`[factoryID] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
 
 #### Native objects: type-dependent properties
 Each `type` supports its own geometry-related properties. These are directly from favricjs documentation and only

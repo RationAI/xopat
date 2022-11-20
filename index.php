@@ -471,6 +471,7 @@ EOF;
         debugMode: false,
         webglDebugMode: false,
         scaleBar: true,
+        statusBar: true,
         viewport: undefined,
         activeBackgroundIndex: 0,
         activeVisualizationIndex: 0,
@@ -715,16 +716,16 @@ EOF;
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
 
-    VIEWER.addHandler('warn-user', e => {
-        //todo time deduction from the message length
-        //todo make this as a last handler
-        Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
-    });
-    VIEWER.addHandler('error-user', e => {
-        //todo time deduction from the message length
-        //todo make this as a last handler
-        Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
-    });
+    // VIEWER.addHandler('warn-user', e => {
+    //     //todo time deduction from the message length
+    //     //todo make this as a last handler
+    //     Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
+    // });
+    // VIEWER.addHandler('error-user', e => {
+    //     //todo time deduction from the message length
+    //     //todo make this as a last handler
+    //     Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
+    // });
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
@@ -1250,13 +1251,13 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
-class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
+class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
                     previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
-                }" onerror="this.src='<?php echo ASSETS_ROOT ?>/unknown-preview.jpg';"/></div>`;
+                }') center; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
             }
 
             //use switching panel
-            USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', $.t('common.Tissues'), `<div id="tissue-preview-container">${html}</div>`);
+            USER_INTERFACE.Tools.setMenu('__viewer', '__tisue_list', $.t('common.Tissues'), `<div id="tissue-preview-container">${html}</div>`);
         }
 
         if (confBackground.length > 0) {
@@ -1550,6 +1551,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
     /*---------------------------------------------------------*/
 
     USER_INTERFACE.AdvancedMenu._build();
+    USER_INTERFACE.MainMenu._sync();
 })(window);
     </script>
 

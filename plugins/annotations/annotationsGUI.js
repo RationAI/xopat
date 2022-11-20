@@ -155,6 +155,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			_this.setupActiveTissue(e.backgroundSetup);
 			_this.loadAnnotationsList();
 		});
+		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
+
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('import', e => {
@@ -313,6 +315,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	annotationModeChanged(e) {
 		$("#mode-custom-items").html(e.mode.customHtml());
 		$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
+		USER_INTERFACE.Status.show(e.mode.getDescription()); //todo better description or another getter
 	}
 
 	annotationsEnabledHandler(e) {
@@ -324,6 +327,26 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			$("#annotations-opacity").attr("disabled", true);
 		}
 	}
+
+	//todo event handler prevent default / return false?
+	_errorHandlers = {
+		W_NO_PRESET: (e) => {
+			Dialogs.show(this.t('errors.noPresetAction', {selfId: this.id,
+					selectorId: e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}),
+				3000, Dialogs.MSG_WARN, false);
+			return false;
+		},
+		W_AUTO_CREATION_FAIL: (e) => {
+			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
+onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
+coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
+			return false;
+		},
+		E_AUTO_OUTLINE_INVISIBLE_LAYER: (e) => {
+			Dialogs.show(`The <a class='pointer' onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">chosen layer</a> is not visible: auto outline method will not work.`, 5000, Dialogs.MSG_WARN, false);
+			return false;
+		}
+};
 
 	_toggleEnabled(node) {
 		let self = $(node);
@@ -440,8 +463,8 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	 * @returns {string} HTML
 	 */
 	getMissingPresetHTML(isLeftClick) {
-		return `<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" 
-onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
+		return `<div class="p-1" onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
+<span class="one-liner d-inline-block v-align-middle">Add</span></div>`;
 	}
 
 	/**
@@ -456,20 +479,21 @@ onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icon
 
 		let changeHtml = "";
 		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
+			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
 
-			if (factory.factoryId !== preset.objectFactory.factoryId) {
+			if (factory.factoryID !== preset.objectFactory.factoryID) {
 				changeHtml += `<div onclick="${this.PLUGIN}.updatePreset(${preset.presetID}, 
-{objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryId}')}); 
+{objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
 			}
 		});
 
-		return `<div class="position-relative border-md p-1 mx-2 rounded-3 px-1" style="border-width:3px!important;"
-onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons pr-0" 
-style="color: ${preset.color};">${icon}</span>  <span class="one-liner d-inline-block v-align-middle" 
-style="width: 115px;">${category}</span>
+		return `<div class="position-relative p-1" onclick="${this.PLUGIN}.showPresets(${isLeftClick});">
+<span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
+ onclick="event.stopPropagation(); ${this.PLUGIN}.selectPreset(${isLeftClick}, null);">close</span>
+<span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
+<span class="one-liner d-inline-block v-align-middle" style="width: 115px;">${category}</span>
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
 	}
 
@@ -524,9 +548,9 @@ style="width: 115px;">${category}</span>
 	 * @returns {string} HTML
 	 */
 	presetControls() {
-		return `<span id="annotations-left-click" class="d-inline-block position-relative mt-1" 
-style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
-class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointer;"></span>`;
+		return `<span id="annotations-left-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3"
+style="width: 170px; cursor:pointer;border-width:3px!important;"></span><span id="annotations-right-click" 
+class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="width: 170px; cursor:pointer;border-width:3px!important;"></span>`;
 	}
 
 	/**
@@ -536,11 +560,11 @@ class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointe
 		let leftPreset = this.context.getPreset(true),
 			rightPreset = this.context.getPreset(false);
 
-		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) {
+		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryID === t)) {
 			$("#annotations-left-click").html(this.getPresetControlHTML(leftPreset, true));
 		} else $("#annotations-left-click").html(this.getMissingPresetHTML(true));
 
-		if (rightPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
+		if (rightPreset && this._allowedFactories.find(t => rightPreset.objectFactory.factoryID === t)) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
 		else $("#annotations-right-click").html(this.getMissingPresetHTML(false));
 	}
 
@@ -556,12 +580,12 @@ class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointe
 			currentPreset = this.context.getPreset(isLeftClick);
 
 		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
+			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
 
-			if (factory.factoryId === preset.objectFactory.factoryId) {
-				select += `<option value="${factory.factoryId}" selected>${factory.title()}</option>`;
+			if (factory.factoryID === preset.objectFactory.factoryID) {
+				select += `<option value="${factory.factoryID}" selected>${factory.title()}</option>`;
 			} else {
-				select += `<option value="${factory.factoryId}">${factory.title()}</option>`;
+				select += `<option value="${factory.factoryID}">${factory.title()}</option>`;
 			}
 		});
 
@@ -701,8 +725,9 @@ class="btn m-2">Set for left click </button>
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
 	}
 
-	selectPreset(isLeftClick) {
-		this.context.presets.selectPreset(this._presetSelection, isLeftClick);
+	selectPreset(isLeftClick, selection = this._presetSelection) {
+		selection = typeof selection === "number" ? selection : Number.parseInt(selection);
+		this.context.presets.selectPreset(selection, isLeftClick);
 		this.updatePresetsHTML();
 	}
 

@@ -66,6 +66,26 @@ Modules (and possibly plugins) can have their own event system - in that case, t
 should be provided. These events should be invoked on the parent instance of the 'module' and
 use the OpenSeadragon Event System.
 
+## Translation
+Can be done using ``loadModuleLocale: function(id, locale, data)`` which behaves almost like plugin's `localize` function
+(i.e. both ``locale`` and `data` can be undefined),
+except that you have to specify the module id manually. Also, to load a file instead of a translation data you
+have to pass the translation data relative path yourself: i.e. 
+````javascript
+const locale = $.i18n.language;
+//load locale/en.json for english locale in the module directory
+loadModuleLocale: function(id, locale, `locales/${locale}.json`) 
+//load raw data for 'cs'
+loadModuleLocale: function(id, 'cs', {"x":"y"}) 
+````
+ 
+ The translation can be obtained in the module id namespace, i.e. ``$.t(key, {ns: id})``.
+
+> Modules must not wait with initialization after locales had been loaded: modules define dependency trees that
+>are not explicitly synchronized. For delayed translations, ``$.localize([selector])`` of `jqueryI18next` might be useful.
+>However, most modules should act only when needed: instantiate your module after it had been used, then you are
+>guaranteed your locales had been loaded if you did so at the module inclusion time.
+
 ## Caveats
 Modules should integrate into exporting/importing events, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state

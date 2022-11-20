@@ -18,7 +18,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         this._context = context;
         this._presets = presetManager;
         this._auto = autoCreationStrategy;
-        this.factoryId = identifier;
+        this.factoryID = identifier;
         this.type = objectType;
         this._copiedProperties = [
             "left",
@@ -36,7 +36,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             "zoomAtCreation",
             "originalStrokeWidth",
             "type",
-            "factoryId",
+            "factoryID",
             "scaleX,",
             "scaleY,",
             "hasRotatingPoint",
@@ -48,7 +48,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             "lockMovementY",
             "meta",
             "presetID",
-            "layerId",
+            "layerID",
         ];
     }
 
@@ -135,7 +135,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
     configure(object, options) {
         $.extend(object, options, {
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }
@@ -674,7 +674,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                             originType: "module",
                             originId: "annotations",
                             code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
-                            message: "The <a class='pointer' onclick=\"USER_INTERFACE.highlight('sensitivity-auto-outline')\">chosen layer</a> is not visible: auto outline method will not work.",
+                            message: "Creating annotation in an invisible layer.",
                         });
                         return false;
                     }

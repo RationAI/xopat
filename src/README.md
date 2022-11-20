@@ -114,6 +114,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
+    - [O]`statusBar` - whether to show user action and system status hints, default `true`
     - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`
     - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)

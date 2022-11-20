@@ -32,7 +32,7 @@ class HistovisoImage extends OSDAnnotations.AnnotationObjectFactory {
         //approximated by a rectangle
         return new fabric.Rect($.extend({}, options, parameters, {
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             stroke: 'gray',
             fill: this._pattern,
             strokeWidth: 16,
@@ -327,7 +327,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                     width: _this._selected.width,
                     height: _this._selected.height,
                     type: _this.type,
-                    factoryId: _this.factoryId
+                    factoryID: _this.factoryID
                 }
             ));
             img.originalImage = myImage;
@@ -475,7 +475,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                             width: imageBounds.width,
                             height: imageBounds.height,
                             type: _this.type,
-                            factoryId: _this.factoryId,
+                            factoryID: _this.factoryID,
                             comment: `(${data.expl_method}) Layer ${data.expl_params.layer_name} [feature ${data.expl_params.feature_map_id}]`
                         }
                     ));

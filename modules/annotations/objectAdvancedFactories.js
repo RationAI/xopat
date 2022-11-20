@@ -86,10 +86,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
             meta: ofObject.meta,
-            factoryId: ofObject.factoryId,
+            factoryID: ofObject.factoryID,
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
-            layerId: ofObject.layerId,
+            layerID: ofObject.layerID,
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: false,
@@ -238,7 +238,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             scaleX: 1,
             scaleY: 1,
             selectable: false,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             hasControls: false,
         }, options);
     }
@@ -250,7 +250,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             lockUniScaling: true,
             stroke: 'white',
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             fill: 'black',
             paintFirst: 'stroke',
             strokeWidth: 2,
@@ -266,7 +266,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _configureWrapper(wrapper, line, text, options) {
         $.extend(wrapper, options, {
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
             measure: this._updateText(line, text),
@@ -374,10 +374,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             presetID: ofObject.presetID,
 //             measure: ofObject.measure,
 //             meta: ofObject.meta,
-//             factoryId: ofObject.factoryId,
+//             factoryID: ofObject.factoryID,
 //             isLeftClick: ofObject.isLeftClick,
 //             type: ofObject.type,
-//             layerId: ofObject.layerId,
+//             layerID: ofObject.layerID,
 //             color: ofObject.color,
 //             zoomAtCreation: ofObject.zoomAtCreation,
 //             selectable: false,
@@ -504,7 +504,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //     _createWrap(parts, options) {
 //         this._updateText(parts[0], parts[1]);
 //         return new fabric.Group(parts, $.extend({
-//             factoryId: this.factoryId,
+//             factoryID: this.factoryID,
 //             type: this.type,
 //             measure: 0,
 //         }, options));
@@ -557,7 +557,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
             strokeWidth: 1,
             originalStrokeWidth: 1,
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }

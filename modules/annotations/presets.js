@@ -48,7 +48,7 @@ OSDAnnotations.Preset = class {
     toJSONFriendlyObject() {
         return {
             color: this.color,
-            factoryID: this.objectFactory.factoryId,
+            factoryID: this.objectFactory.factoryID,
             presetID: this.presetID,
             meta: this.meta
         };
@@ -101,7 +101,7 @@ OSDAnnotations.PresetManager = class {
      */
     static exportableProperties = [
         'meta', 'borderColor', 'cornerColor', 'borderScaleFactor', 'color', 'presetID',
-        'hasControls', 'factoryId', 'sessionId', 'layerId'
+        'hasControls', 'factoryID', 'sessionId', 'layerID'
     ];
 
     /**
@@ -253,7 +253,7 @@ OSDAnnotations.PresetManager = class {
      * @param withPreset preset that obect belongs to
      */
     updateObjectVisuals(object, withPreset) {
-        const factory = this._context.getAnnotationObjectFactory(object.factoryId);
+        const factory = this._context.getAnnotationObjectFactory(object.factoryID);
         factory.updateRendering(this.modeOutline, object, withPreset.color, this.constructor._commonProperty.stroke);
     }
 
@@ -370,15 +370,19 @@ OSDAnnotations.PresetManager = class {
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
     selectPreset(id, isLeftClick) {
-        if (!this._presets[id]) return;
-        if (isLeftClick) this.left = this._presets[id];
-        else this.right = this._presets[id];
+        let preset = undefined;
+        if (id) {
+            if (!this._presets[id]) return;
+            preset = this._presets[id];
+        }
+        if (isLeftClick) this.left = preset;
+        else this.right = preset;
     }
 
     _withDynamicOptions(options) {
         let zoom = this._context.canvas.getZoom();
         return $.extend(options, {
-            layerId: this._context.getLayer().id,
+            layerID: this._context.getLayer().id,
             opacity: this._context.getOpacity(),
             zoomAtCreation: zoom,
             strokeWidth: 3 / zoom
@@ -467,7 +471,7 @@ OSDAnnotations.Layer = class {
     iterate(callback) {
         const _this = this;
         this._context.canvas.getObjects().forEach(o => {
-            if (o.layerId === _this.id) callback(_this, o);
+            if (o.layerID === _this.id) callback(_this, o);
         });
     }
 };

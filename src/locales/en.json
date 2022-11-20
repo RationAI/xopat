@@ -115,6 +115,7 @@
     },
     "common": {
       "Load": "Load",
+      "Loading": "Loading",
       "Exit": "Exit",
       "Failed": "Failed",
       "Image": "Image",

@@ -54,8 +54,6 @@ ${UIComponents.Elements.checkBox({
 
 </div>`, 'play_circle_outline');
 
-        this._container = $("#playback-timeline");
-
         const _this = this;
         this.snapshots.addHandler('play', function () {
             if (_this._loopMeasure) {
@@ -126,11 +124,12 @@ ${UIComponents.Elements.checkBox({
                     });
                 }
 
+                let container = $("#playback-timeline");
                 _this._delay = false;
                 _this._duration = e.step.duration + 2.5;
                 _this._referenceStamp = Date.now();
-                _this._absoluteOffset = _this._container.children().eq(e.index)[0].getBoundingClientRect().left
-                    - _this._container[0].getBoundingClientRect().left - 7;
+                _this._absoluteOffset = container.children().eq(e.index)[0].getBoundingClientRect().left
+                    - container[0].getBoundingClientRect().left - 7;
             }
         });
 
@@ -201,7 +200,7 @@ ${UIComponents.Elements.checkBox({
 
         let index = this.snapshots.currentStepIndex;
 
-        let node = this._container.children()[index];
+        let node = $("#playback-timeline").children()[index];
         if (node) {
             this.snapshots.currentStep[key] = value;
             node.style[this._getStyleFor(key)] = this._convertValue(key, value);
@@ -210,7 +209,7 @@ ${UIComponents.Elements.checkBox({
 
     removeHighlightedRecord() {
         let index = this.snapshots.currentStepIndex;
-        let child = this._container.children()[index];
+        let child = $("#playback-timeline").children()[index];
         if (child) {
             this.snapshots.remove(index);
             $(child).remove();
@@ -234,7 +233,7 @@ ${UIComponents.Elements.checkBox({
         if (this._oldHighlight) {
             this._oldHighlight.removeClass("selected");
         }
-        this._oldHighlight = $(this._container.children()[index]); //todo just keep no-jquery node?
+        this._oldHighlight = $($("#playback-timeline").children()[index]); //todo just keep no-jquery node?
         this._oldHighlight.addClass("selected");
         $("#point-delay").val(step.delay);
         $("#point-duration").val(step.duration);
@@ -252,7 +251,7 @@ ${UIComponents.Elements.checkBox({
         let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
             Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
 
-        this._container.append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
+        $("#playback-timeline").append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
 background: ${color};
 border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};

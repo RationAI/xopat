@@ -277,7 +277,7 @@ window.addEventListener("beforeunload", (e) => {
         let _this = this;
         //todo sort by incrementId?
         this._context.canvas.getObjects().some(o => {
-            if (o.presetID && o.factoryId) {
+            if (o.presetID && o.factoryID) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }
@@ -362,7 +362,7 @@ window.addEventListener("beforeunload", (e) => {
 
     _addToBoard(object, replaced=undefined) {
         let desc, inputs = [];
-        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
+        let factory = this._context.getAnnotationObjectFactory(object.factoryID);
         let icon = factory ? factory.getIcon() : "question_mark";
 
         if (!object.hasOwnProperty("incrementId")) {
@@ -445,7 +445,7 @@ ${editIcon}
         }
 
         if (object) {
-            let factory = this._context.getAnnotationObjectFactory(object.factoryId);
+            let factory = this._context.getAnnotationObjectFactory(object.factoryID);
 
             if (factory && factory.isEditable()) {
                 factory.edit(object);
@@ -467,8 +467,12 @@ ${editIcon}
             }
 
         } else {
-            this._context.raiseEvent('error', {code: 'NO_OBJECT_ON_EDIT'});
-            console.warn("Object edit: no active object.");
+            VIEWER.raiseEvent('warn-system', {
+                originType: "module",
+                originId: "annotations",
+                code: "E_NO_OBJECT_ON_EDIT",
+                message: "Attempt to edit undefined object.",
+            });
         }
     }
 
@@ -492,7 +496,7 @@ ${editIcon}
                 });
 
                 //if target was set, object could have been edited, update
-                let factory = this._context.getAnnotationObjectFactory(obj.factoryId);
+                let factory = this._context.getAnnotationObjectFactory(obj.factoryID);
                 factory.recalculate(obj);
             } else {
                 console.warn("Failed to update object: could not find object with id "
@@ -542,7 +546,7 @@ ${editIcon}
     }
 
     _getFocusBBox(of, factory) {
-        factory = factory || this._context.getAnnotationObjectFactory(of.factoryId);
+        factory = factory || this._context.getAnnotationObjectFactory(of.factoryID);
         let bbox;
         if (factory) {
             bbox = factory.getObjectFocusZone(of);

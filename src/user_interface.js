@@ -428,10 +428,28 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {
-        highlight(id, timeout=2000, animated=true) {
+        highlightElementId(id, timeout=2000, animated=true) {
             let cls = animated ? "ui-highlight-animated" : "ui-highlight";
             $(`#${id}`).addClass(cls);
             setTimeout( () => $(`#${id}`).removeClass(cls), timeout);
+        },
+
+        highlight(menuName, menuId, id, timeout=2000, animated=true) {
+            switch (menuName) {
+                case "MainMenu":
+                    this.MainMenu.open();
+                    $("#main-panel-content").scrollTo("#" + id);
+                    break;
+                case "Tools":
+                    this.Tools.open(menuId);
+                    break;
+                case "AdvancedMenu":
+                    this.AdvancedMenu.openMenu(menuId);
+                    break;
+                default:
+                    console.warn("Invalid menu name for USER_INTERFACE::highlight!");
+            }
+            this.highlightElementId(id, timeout, animated);
         },
 
         /**
@@ -523,6 +541,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
                 if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
+
+                let status = USER_INTERFACE.Status.context;
+                if (status) status.style.right = this.opened ? "408px" : "8px";
             }
         },
 
@@ -571,46 +592,44 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
-         * Tools menu by default invisible (top)
+         * Status bar
          */
-        TissueList: {
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
-                if (!tissueMenuBuilder) {
-                    tissueMenuBuilder = new UIComponents.Containers.PanelMenu("tissue-list-menu");
-                    tissueMenuBuilder.isMenuBelow = true;
-                    tissueMenuBuilder.context.classList.add("bg-opacity");
+        Status: {
+            context: null,
+            closed: false,
+            show(message) {
+                if (this.closed) return;
+                if (!this.context)  {
+                    this._init();
                     USER_INTERFACE.MainMenu._sync();
                 }
-                tissueMenuBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
-                if (tissueMenuBuilder.isVisible) {
-                    USER_INTERFACE.Margins.bottom = tissueMenuBuilder.height;
-                }
-            },
-            /**
-             * Show desired toolBar menu. Also opens the toolbar if closed.
-             * @param {string|undefined} toolsId menu id to open at
-             */
-            open(toolsId=undefined) {
-                if (tissueMenuBuilder) {
-                    USER_INTERFACE.Margins.top = tissueMenuBuilder.height;
-                    tissueMenuBuilder.show(toolsId);
-                }
-            },
-            /**
-             * Notify menu. The menu tab will receive a counter that notifies the user something has happened.
-             * @param {string} menuId menu id to open at
-             * @param {string} symbol a html symbol (that can be set as data- attribute) to show, shows increasing
-             *  counter if undefined (e.g. 3 if called 3 times)
-             */
-            notify(menuId, symbol=undefined) {
-                if (tissueMenuBuilder) tissueMenuBuilder.setNotify(menuId, symbol);
+                // this.context.classList.remove("hover-dim"); not working: does not trigger animation
+                this.context.firstElementChild.innerHTML = message;
+                // this.context.classList.add("hover-dim");
             },
             /**
              * Close the menu, so that it is not visible at all.
              */
-            close() {
-                USER_INTERFACE.Margins.top = 0;
-                if (tissueMenuBuilder) tissueMenuBuilder.hide();
+            setClosed(closed) {
+                if (closed && this.context) {
+                    document.body.removeChild(this.context);
+                    delete this.context;
+                }
+                this.closed = closed;
+            },
+            _init() {
+                let node = document.createElement("div");
+                node.setAttribute("id", "viewer-status-bar");
+                node.setAttribute("class", "position-fixed fixed-bg-opacity bg-opacity px-2 py-1 rounded-2 overflow-hidden");
+                node.style.color = "var(--color-text-primary)";
+                node.style.pointerEvents = 'none';
+                node.style.maxWidth = 'calc(100vw - 750px)';
+                node.style.bottom = '10px';
+                let content = document.createElement("span");
+                content.setAttribute("class","one-liner");
+                node.appendChild(content);
+                document.body.appendChild(node);
+                this.context = node;
             }
         },
 
@@ -696,7 +715,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
             },
             _build() {
-                USER_INTERFACE.MainMenu._sync();
                 this.selfContext.isHorizontal = false;
                 this.selfContext.menuWith1Element = true;
                 this.selfContext.isFullSize = true;
@@ -853,8 +871,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
         let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
         let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
-        let standardBoolInput = (id, title) => inputs.checkBox({
-            label: title, onchange: updateBool(id) + notifyNeedRefresh, default: APPLICATION_CONTEXT.getOption(id)
+        let standardBoolInput = (id, title, onChange=notifyNeedRefresh) => inputs.checkBox({
+            label: title, onchange: updateBool(id) + onChange, default: APPLICATION_CONTEXT.getOption(id)
         });
 
         ctx._buildMenu(ctx, "__sMenu", "", "", APPLICATION_CONTEXT.settingsMenuId,
@@ -891,10 +909,11 @@ Theme &emsp; ${inputs.select({
                 onchange: "$('#plugin-tools-menu').toggleClass('d-none')",
                 default: true
 })}
-<br> ${standardBoolInput("scaleBar", $.t('settings.scaleBar'))}
-<br><br><span class="f3-light header-sep">Behaviour</span><br>
-${standardBoolInput("bypassCookies", $.t('settings.cookies'))}
-<br><br><span class="f3-light header-sep">Other</span><br>
+<br>${standardBoolInput("scaleBar", $.t('settings.scaleBar'))}
+<br>${standardBoolInput("statusBar", $.t('settings.statusBar'), `USER_INTERFACE.Status.setClosed(!this.checked);`)}
+<br><br><span class="f3-light header-sep">Behaviour</span>
+<br>${standardBoolInput("bypassCookies", $.t('settings.cookies'))}
+<br><br><span class="f3-light header-sep">Other</span>
 <br>${standardBoolInput("debugMode", $.t('settings.debugMode'))}
 <br>${standardBoolInput("webglDebugMode", $.t('settings.debugRender'))}
 `, 'settings', false, true);
@@ -924,7 +943,10 @@ ${standardBoolInput("bypassCookies", $.t('settings.cookies'))}
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
-            let actionPart = errMessage ? "" : `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">${$.t('common.Load')}</button></div>`;
+
+
+            let actionPart = errMessage ? "" : `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');
+this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span class=\\'AnimatedEllipsis\\'></span>';return false;" class="btn">${$.t('common.Load')}</button></div>`;
             pluginsMenuBuilder.addRow({
                 title: plugin.name,
                 author: plugin.author,

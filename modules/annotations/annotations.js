@@ -280,8 +280,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
-	 * Get object factory for given object type (stored in object.factoryId)
-	 * @param {string} objectType the type is stored as a factoryId property
+	 * Get object factory for given object type (stored in object.factoryID)
+	 * @param {string} objectType the type is stored as a factoryID property
 	 * @return {OSDAnnotations.AnnotationObjectFactory | undefined}
 	 */
 	getAnnotationObjectFactory(objectType) {
@@ -459,7 +459,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			if (!factory) {
 				throw "TODO: solve factory deduction - accepts method on factory?";
 			} else {
-				object.factoryId = factory.factoryId;
+				object.factoryID = factory.factoryID;
 			}
 		}
 		factory.configure(object, props);
@@ -473,11 +473,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @return {OSDAnnotations.Layer} layer it belongs to
 	 */
 	checkLayer(ofObject) {
-		if (!ofObject.hasOwnProperty("layerId")) {
-			if (this._layer) ofObject.layerId = this._layer.id;
-		} else if (!this._layers.hasOwnProperty(ofObject.layerId)) {
+		if (!ofObject.hasOwnProperty("layerID")) {
+			if (this._layer) ofObject.layerID = this._layer.id;
+		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
 			//todo mode?
-			return this.createLayer(ofObject.layerId);
+			return this.createLayer(ofObject.layerID);
 		}
 	}
 
@@ -529,7 +529,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		const _this = this;
 		this.canvas.forEachObject(function (obj) {
-			if (obj.layerId === layer.id) _this.deleteObject(obj, false);
+			if (obj.layerID === layer.id) _this.deleteObject(obj, false);
 		});
 		this.raiseEvent('layer-removed', {layer: layer});
 		this.canvas.renderAll();
@@ -553,8 +553,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	sortObjects() {
 		let _this = this;
 		this.canvas._objects.sort((x, y) => {
-			if (!x.hasOwnProperty('layerId') || !y.hasOwnProperty('layerId')) return 0;
-			return _this._layers[x.layerId].position - _this._layers[y.layerId].position;
+			if (!x.hasOwnProperty('layerID') || !y.hasOwnProperty('layerID')) return 0;
+			return _this._layers[x.layerID].position - _this._layers[y.layerID].position;
 		});
 		this.canvas.renderAll();
 	}
@@ -828,10 +828,10 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		 * Attach factory getter to each object
 		 */
 		fabric.Object.prototype._factory = function () {
-			const factory = _this.getAnnotationObjectFactory(this.factoryId);
+			const factory = _this.getAnnotationObjectFactory(this.factoryID || this.factoryId); //todo fallback factoryId remove in future
 			if (factory) this._factory = () => factory;
-			else if (this.factoryId) {
-				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryId);
+			else if (this.factoryID) {
+				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
 				//maybe provide general implementation that can do nearly nothing
 			}
 			return factory;
@@ -1075,10 +1075,10 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.__self;
 		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
-		if (_this.objectFactories.hasOwnProperty(factory.factoryId)) {
-			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryId}`;
+		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
+			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
-		_this.objectFactories[factory.factoryId] = factory;
+		_this.objectFactories[factory.factoryID] = factory;
 		if (atRuntime) _this.raiseEvent('factory-registered', {factory: factory});
 	}
 
@@ -1161,7 +1161,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 				});
 			}
 		} else {
-			let factory = this.getAnnotationObjectFactory(object.factoryId);
+			let factory = this.getAnnotationObjectFactory(object.factoryID);
 			if (factory) factory.selected(object);
 		}
 	}
@@ -1326,10 +1326,21 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * For internal use, abort handleClickDown
 	 * so that handleClickUp is not called
+	 * @param isLeftClick true if primary button pressed
+	 * @param noPresetError raise error event 'W_NO_PRESET'
 	 */
-	abortClick() {
+	abortClick(isLeftClick, noPresetError=false) {
 		this.context.cursor.mouseTime = 0;
 		this.context.cursor.isDown = false;
+		if (noPresetError) {
+			VIEWER.raiseEvent('warn-user', {
+				originType: "module",
+				originId: "annotations",
+				code: "W_NO_PRESET",
+				message: "Annotation creation requires active preset selection!",
+				isLeftClick: isLeftClick
+			});
+		}
 	}
 
 	/**
@@ -1395,16 +1406,14 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) return;
 		return this._finish(o, isLeftClick, objectFactory);
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) this.abortClick();
-		this._init(o);
+		this._init(o, objectFactory);
 	}
 
-	_init(event) {
+	_init(event, factory) {
 		//if clicked on object, highlight it
 		let active = this.context.canvas.findTarget(event);
 		if (active) {
@@ -1423,12 +1432,21 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		// just navigate if click longer than 100ms or other conds not met, fire if double click
 		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return false;
 
+		if (!updater) {
+			this.abortClick(isLeftClick, true);
+			return false;
+		}
+
 		//instant create wants screen pixels as we approximate based on zoom level
 		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
 		if (created === false) {
-			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
-onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
-coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
+			VIEWER.raiseEvent('warn-user', {
+				originType: "module",
+				originId: "annotations",
+				code: "W_AUTO_CREATION_FAIL",
+				message: "Automatic annotation creation failed!",
+				isLeftClick: isLeftClick
+			});
 		}
 		return true;
 	}
@@ -1449,24 +1467,24 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, point, isLeftClick);
+		this._init(o, point, isLeftClick, objectFactory);
 	}
 
 	handleMouseMove(point) {
 		this.context.freeFormTool.update(point);
 	}
 
-	_init(o, point, isLeftClick) {
+	_init(o, point, isLeftClick, objectFactory) {
 		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
 		if (!currentObject) {
 			if (!this.context.freeFormTool.modeAdd) {
 				//subtract needs active object
-				this.abortClick();
+				this.abortClick(isLeftClick);
 				return;
 			}
-			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick);
+			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick, objectFactory);
 			created = true;
 		} else {
 			let	factory = currentObject._factory(),
@@ -1493,25 +1511,31 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!willModify) {
 				if (!this.context.freeFormTool.modeAdd) {
 					//subtract needs active object
-					this.abortClick();
+					this.abortClick(isLeftClick);
 					return;
 				}
 				currentObject = this._initFromPoints(
-					newPolygonPoints || this._geCirclePoints(point), isLeftClick
+					newPolygonPoints || this._geCirclePoints(point), isLeftClick, objectFactory
 				);
 				created = true;
 			}
 		}
 
-		this.context.freeFormTool.init(currentObject, created);
-		this.context.freeFormTool.update(point);
+		if (currentObject) {
+			this.context.freeFormTool.init(currentObject, created);
+			this.context.freeFormTool.update(point);
+		}
 	}
 
 	_geCirclePoints(point) {
 		return this.context.freeFormTool.getCircleShape(point);
 	}
 
-	_initFromPoints(points, isLeftClick) {
+	_initFromPoints(points, isLeftClick, objectFactory) {
+		if (!objectFactory) {
+			this.abortClick(isLeftClick, true);
+			return undefined;
+		}
 		return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(isLeftClick));
 	}
 
@@ -1605,7 +1629,10 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) this.abortClick();
+		if (!objectFactory) {
+			this.abortClick(isLeftClick,true);
+			return;
+		}
 		this._init(point, isLeftClick, objectFactory);
 	}
 

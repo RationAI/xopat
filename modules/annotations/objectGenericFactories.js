@@ -44,7 +44,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     configure(object, options) {
         $.extend(object, {
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         }, options);
         return object;
     }
@@ -214,7 +214,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         $.extend(object, {
             angle: 0,
             type: this.type,
-            factoryId: this.factoryId
+            factoryID: this.factoryID
         }, options);
         return object;
     }
@@ -358,8 +358,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
 OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager, factoryId, type, fabricClass, withHelperPoints=true) {
-        super(context, autoCreationStrategy, presetManager, factoryId, type);
+    constructor(context, autoCreationStrategy, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
+        super(context, autoCreationStrategy, presetManager, factoryID, type);
         this._initialize(false);
         this.Class = fabricClass;
         this.withHelperPoints = withHelperPoints;
@@ -672,7 +672,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             fill: "",
             stroke: options.color,
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }
@@ -967,7 +967,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             $.extend(object, options, {
                 fontSize: options.fontSize || 16,
                 type: this.type,
-                factoryId: this.factoryId,
+                factoryID: this.factoryID,
                 selectable: false,
                 hasControls: false,
                 lockUniScaling: true,
@@ -983,7 +983,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             $.extend(object, options, {
                 fontSize: (options.fontSize || 16) / options.zoomAtCreation,
                 type: this.type,
-                factoryId: this.factoryId,
+                factoryID: this.factoryID,
                 selectable: false,
                 hasControls: false,
                 lockUniScaling: true,
@@ -1122,7 +1122,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager);
-        this.factoryId = "point";
+        this.factoryID = "point";
     }
 
 
@@ -1162,7 +1162,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             originX: 'center',
             originY: 'center',
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             fill: options.color,
         });
         return object;
@@ -1318,16 +1318,16 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
 //         //todo copy properties of inner objects such as meta?
 //         return new fabric.Group(parameters, $.extend({
 //             type: this.type,
-//             factoryId: this.factoryId
+//             factoryID: this.factoryID
 //         }, options));
 //     }
 //
 //     _eachChildAndFactory(ofObject, executor, method="map") {
 //         const self = this;
 //         return ofObject._objects[method](o => {
-//             const factory = self._context.getAnnotationObjectFactory(o.factoryId);
+//             const factory = self._context.getAnnotationObjectFactory(o.factoryID);
 //             if (!factory) {
-//                 console.warn("Group annotation foreach routine error: ", o.factoryId, "unknown factory.");
+//                 console.warn("Group annotation foreach routine error: ", o.factoryID, "unknown factory.");
 //                 return undefined;
 //             }
 //             return executor(o, factory);
@@ -1350,7 +1350,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
 //             scaleY: ofObject.scaleY,
 //             zoomAtCreation: ofObject.zoomAtCreation,
 //             originalStrokeWidth: ofObject.originalStrokeWidth,
-//             factoryId: ofObject.factoryId,
+//             factoryID: ofObject.factoryID,
 //             selectable: ofObject.selectable,
 //             borderColor: ofObject.borderColor,
 //             cornerColor: ofObject.cornerColor,
@@ -1360,7 +1360,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
 //             lockMovementX: ofObject.lockMovementX,
 //             lockMovementY: ofObject.lockMovementY,
 //             presetID: ofObject.presetID,
-//             layerId: ofObject.layerId
+//             layerID: ofObject.layerID
 //         });
 //     }
 //
