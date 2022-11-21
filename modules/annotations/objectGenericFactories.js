@@ -67,13 +67,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
-    // /**
-    //  * A list of extra properties to export upon export event
-    //  * @return {[string]}
-    //  */
-    // exports() {
-    //     return ["left", "top", "width", "height"];
-    // }
+    exportsGeometry() {
+        return ["left", "top", "width", "height"];
+    }
 
     edit(theObject) {
         this._left = theObject.left;
@@ -219,13 +215,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    // /**
-    //  * A list of extra properties to export upon export event
-    //  * @return {[string]}
-    //  */
-    // exports() {
-    //     return ["left", "top", "rx", "ry"];
-    // }
+    exportsGeometry() {
+        return ["left", "top", "rx", "ry"];
+    }
 
     /**
      * @param {Object} ofObject fabricjs.Ellipse object that is being copied
@@ -378,13 +370,10 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
-    // /**
-    //  * A list of extra properties to export upon export event
-    //  * @return {[string]}
-    //  */
-    // exports() {
-    //     return ["points"];
-    // }
+
+    exportsGeometry() {
+         return ["points"];
+    }
 
     /**
      * @param {Object} ofObject fabricjs.Polygon object that is being copied
@@ -677,13 +666,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    // /**
-    //  * A list of extra properties to export upon export event
-    //  * @return {[string]}
-    //  */
-    // exports() {
-    //     return ["x1", "x2", "y1", "y2"];
-    // }
+    exportsGeometry() {
+        return ["x1", "x2", "y1", "y2"];
+    }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
         //do nothing - a line is always 'transparent'
@@ -1033,6 +1018,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     exports() {
         return ["autoScale"]; //"text", "left", "top", "fontSize"
+    }
+
+    exportsGeometry() {
+        return ["text", "left", "top", "fontSize"];
     }
 
     /**

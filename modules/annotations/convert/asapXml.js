@@ -6,6 +6,8 @@ OSDAnnotations.Convertor.AsapXml = class {
         return 'annotations_' + UTILITIES.todayISO() + '.xml';
     }
 
+    static includeAllAnnotationProps = true;
+
     encode(annotationsGetter, presetsGetter, annotationsModule) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
 

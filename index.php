@@ -449,7 +449,6 @@ EOF;
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
     <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
-    <div id="tissue-list-menu" class="position-absolute bottom-0 right-0 left-0 noselect"></div>
 
     <!-- Values Initialization -->
     <script type="text/javascript">
@@ -1523,8 +1522,13 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style
         }, {'next #navigator-container' : $.t('tutorials.basic.3')
         }, {'next #general-controls' : $.t('tutorials.basic.4'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
+        }, {'next #general-controls' : $.t('tutorials.basic.4a'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
         }, {'next #general-controls' : $.t('tutorials.basic.5'), runIf: withLayers
-        }, {'next #tissue-list-menu' : $.t('tutorials.basic.6')}, {
+        }, {
+            'next #__tisue_list' : $.t('tutorials.basic.6'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {
             'click #images-pin' : $.t('tutorials.basic.7'),
             runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
         }, {'next #panel-images' : $.t('tutorials.basic.8'),

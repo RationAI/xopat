@@ -6,6 +6,8 @@
  *     title = 'My Custom Format';
  *     description = 'This is the best format in the universe.';
  *
+ *     static includeAllAnnotationProps = true | false; //select whether you want to get all or necessary props only
+ *
  *     static getFileName(context) {
  *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
  *     }
@@ -68,8 +70,9 @@ OSDAnnotations.Convertor = class {
     static async encode(format, context, widthAnnotations=true, withPresets=true) {
         const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
+        const exportAll = parserCls.includeAllAnnotationProps;
         return new parserCls().encode(
-            (...exportedProps) => widthAnnotations ? context.toObject(...exportedProps).objects : [],
+            (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : [],
             () => withPresets ? context.presets.toObject() : [],
             context
         );

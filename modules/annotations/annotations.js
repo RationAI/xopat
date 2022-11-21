@@ -113,7 +113,14 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 */
 	async export(format=undefined, withAnnotations=true, withPresets=true) {
 		if (!format || format === "native") {
-			const result = withAnnotations ? this.toObject() : {};
+			const _this = this,
+				result = withAnnotations ? this.toObject(false) : {};
+			if (result.objects) {
+				result.objects = result.objects.map(x => {
+					const factory = _this.getAnnotationObjectFactory(x.factoryID);
+					return factory.copyNecessaryProperties(x);
+				});
+			}
 			if (withPresets) result.presets = this.presets.toObject();
 			return JSON.stringify(result);
 		}
@@ -165,13 +172,20 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/**
 	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
 	 * for exporting presets, see this.presets.export(...)
+	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones, string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
-	 * @return {object} exported canvas content {objects:[object]}
+	 * @return {object} exported canvas content in {objects:[object]} format
 	 */
-	toObject(...withProperties) {
-		const props = this.exportedPropertiesGlobal();
-		props.push(...OSDAnnotations.PresetManager.exportableProperties);
+	toObject(withAllProps=false, ...withProperties) {
+		let props;
+		if (typeof withAllProps === "boolean") {
+			props = this.exportedPropertiesGlobal(withAllProps);
+		} else if (typeof withAllProps === "string") {
+			props = this.exportedPropertiesGlobal(true);
+			props.push(withAllProps);
+		}
 		props.push(...withProperties);
+		//todo test actually exported props
 		return this.canvas.toObject(props);
 	}
 
@@ -179,8 +193,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * Compute properties registered for export
 	 * @return {*[]}
 	 */
-	exportedPropertiesGlobal() {
-		const props = new Set();
+	exportedPropertiesGlobal(all=true) {
+		const props = new Set(
+			all ? OSDAnnotations.AnnotationObjectFactory.copiedProperties :
+				OSDAnnotations.AnnotationObjectFactory.necessaryProperties
+		);
 		for (let fid in this.objectFactories) {
 			const factory = this.objectFactories[fid];
 			const newProps = factory.exports();
@@ -577,7 +594,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
-		annotation.sessionId = this.session;
+		annotation.sessionID = this.session;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -959,7 +976,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, false, factory)) {
 				event.preventDefault();
-			} else if (!_this.isModeAuto()) {
+			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-nonprimary-release', {
 					originalEvent: event
@@ -996,7 +1013,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, true, factory)) {
 				event.preventDefault();
-			} else if (!_this.isModeAuto()) {
+			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-release', {
 					originalEvent: event
@@ -1007,7 +1024,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		function handleLeftClickDown(event) {
-			if (_this.cursor.isDown || !_this.presets.left || _this.disabledInteraction) return;
+			if (_this.cursor.isDown || _this.disabledInteraction) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;

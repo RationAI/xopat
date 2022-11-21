@@ -97,14 +97,6 @@ OSDAnnotations.PresetManager = class {
     };
 
     /**
-     * Properties that get exported from annotations by default
-     */
-    static exportableProperties = [
-        'meta', 'borderColor', 'cornerColor', 'borderScaleFactor', 'color', 'presetID',
-        'hasControls', 'factoryID', 'sessionId', 'layerID'
-    ];
-
-    /**
      * Create Preset Manager
      * @param {string} selfName name of the property 'self' in parent
      * @param {OSDAnnotations} context parent context

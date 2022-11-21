@@ -1,5 +1,7 @@
 (function (window) {
 
+    $.extend($.scrollTo.defaults, {axis: 'y'});
+
     //https://github.com/mrdoob/stats.js
     if (APPLICATION_CONTEXT.getOption("debugMode")) {
         //todo hardcoded source path

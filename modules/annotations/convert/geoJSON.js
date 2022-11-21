@@ -6,8 +6,41 @@ OSDAnnotations.Convertor.GeoJSON = class {
         return 'annotations_' + UTILITIES.todayISO() + '.json';
     }
 
+    static includeAllAnnotationProps = false;
+
+    _getAsPolygon(object) {
+        const factory = this.context.getAnnotationObjectFactory(object.factoryID);
+        const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint)
+        if (poly?.length > 0) {
+            poly.push(poly[0]); //linear ring
+            return {
+                geometry: {
+                    type: "Polygon",
+                    coordinates: poly
+                },
+                properties: factory.copyNecessaryProperties(object)
+            }
+        }
+        //failure
+        return {
+            geometry: {
+                type: "Point",
+                coordinates: []
+            },
+            properties: {}
+        }
+    }
+
     encoders = {
-        "rect": (object) => {}, "ellipse": (object) => {}, "polygon": (object) => {}, "polyline": (object) => {}, "text": (object) => {}, "ruler": (object) => {}, "point": (object) => {}
+        "rect": (object) => this._getAsPolygon(object),
+        "ellipse": (object) => this._getAsPolygon(object),
+        "polygon": (object) => this._getAsPolygon(object),
+        "polyline": (object) => this._getAsPolygon(object),
+        "text": (object) => {
+
+        }, "ruler": (object) => {
+
+        }, "point": (object) => this._getAsPolygon(object)
     };
 
     gDecoders = {
@@ -34,6 +67,8 @@ OSDAnnotations.Convertor.GeoJSON = class {
     };
 
     encode(annotationsGetter, presetsGetter, annotationsModule) {
+        this.context = annotationsModule;
+
         //https://github.com/computationalpathologygroup/ASAP/issues/167
 
         const annotations = annotationsGetter();
@@ -44,8 +79,6 @@ OSDAnnotations.Convertor.GeoJSON = class {
             features: []
         };
         let list = output.features;
-
-        const presetsIdSet = new Set();
 
         // for each object (annotation) create new annotation element with coresponding coordinates
         for (let i = 0; i < annotations.length; i++) {
@@ -58,31 +91,17 @@ OSDAnnotations.Convertor.GeoJSON = class {
             if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
                 let encoded = this.encoders[obj.factoryID]?.(obj);
                 if (encoded) {
-                    let feature = {
-                        type: "Feature",
-                        geometry: encoded
-                    };
-                    let preset = presets[obj.presetID];
-                    if (preset) {
-                        feature.properties = preset.toJSONFriendlyObject();
-                        presetsIdSet.add(obj.presetID);
-                    }
-                    list.push(feature);
+                    encoded.type = "Feature";
+                    list.push(encoded);
                 }
             }
         }
 
-        if (Array.isArray(presets)) {
-            for (let preset of presets) {
-                if (!presetsIdSet.has(preset.presetID)) {
-                    list.push({
-                        type: "Feature",
-                        //todo? geometry: "",
-                        properties: preset.toJSONFriendlyObject()
-                    });
-                }
-            }
-        }
+        list.push(...presets.map(p => ({
+            type: "Feature",
+            //todo? geometry: "",
+            properties: p
+        })));
         return JSON.stringify(output);
     }
 

@@ -39,10 +39,40 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
         tutorialStep(); //panel
         tutorialStep(); //navigator
         tutorialStep(); //global controls
-        tutorialStep(); //bottom image swap
         cy.wait(500);
         cy.get("#images-pin", {timeout: 1000}).click();
         tutorialStep(); //stacked images menu
+        tutorialStep(); //url
+        tutorialStep(); //export
+        tutorialStep(); //finish
+        cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
+        cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
+    })
+})
+
+describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', withBrowser, () => {
+    it('Init', () => {
+        let visualisation = {
+            params: config.params({
+                viewport: config.viewport('tissue', 0),
+                stackedBackground: false
+            }),
+            data: config.data('tissue'),
+            background: config.background({}, 0, 1, 2),
+        }
+
+        cy.launch(visualisation);
+        utils.waitForViewer();
+
+        cy.get("#global-help").click();
+        cy.get("#tutorials").children().eq(0).click();
+    })
+
+    it('Main Panel', () => {
+        tutorialStep(); //panel
+        tutorialStep(); //navigator
+        tutorialStep(); //global controls
+        tutorialStep(); //tollbar stacked
         tutorialStep(); //url
         tutorialStep(); //export
         tutorialStep(); //finish
@@ -85,7 +115,6 @@ describe('Basic Tutorial Walkthrough With Layer', withBrowser, () => {
         tutorialStep(); //navigator
         tutorialStep(); //global controls
         tutorialStep(); //global controls #2
-        tutorialStep(); //bottom image swap
         tutorialStep(); //data layer explanation
         cy.wait(500);
         cy.get("#shaders-pin", {timeout: 1000}).click();

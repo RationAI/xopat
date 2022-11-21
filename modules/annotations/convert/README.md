@@ -35,7 +35,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     hasControls     auto, disables fabricjs buildin controls, internally enabled if the system decides to
     lockMovementX   auto, disables the annotation movement in X
     lockMovementY   auto, disables the annotation movement in Y
-    sessionId       auto, technical id of the session
+    sessionID       auto, technical id of the session
 
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas

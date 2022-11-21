@@ -82,8 +82,9 @@
         "2": "On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.",
         "3": "An interactive navigator can be used <br> for orientation or to jump quickly on different areas.",
         "4": "The whole visualisation consists of two layers: <br> the background canvas and the data layer above.",
+        "4a": "For now, there is only background image visible. <br> You can toggle its opacity here.",
         "5": "You can toggle background visibility <br> and control the data layer opacity. <br> The button on the right clones the viewer and synchronizes the navigation.",
-        "6": "The viewer supports multiple backgrounds<br>you can switch between if available at the bottom of the screen.",
+        "6": "The viewer supports multiple backgrounds<br>you can switch between in the Tools Menu.",
         "7": "There are several background images available. Click to open.",
         "8": "You can turn them on/off or blend using an opacity slider.",
         "9": "The data layer <br>-the core visualisation functionality-<br> is highly flexible and can be controlled here.",
@@ -107,7 +108,8 @@
       "debugRender": "Debug Rendering",
       "debugMode": "Debug Mode",
       "cookies": "Disable Cookies",
-      "scaleBar": "Show ScaleBar"
+      "scaleBar": "Show Scale Bar",
+      "statusBar": "Show Status Bar"
     },
     "plugins": {
       "title": "Plugins",

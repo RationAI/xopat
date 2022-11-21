@@ -363,6 +363,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.iconCss {string} css for icon
          */
         bind: function(context, optionsGetter) {
             if (typeof context === "string") {
@@ -410,7 +411,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     clbck(opts.selected);
                     window.DropDown._toggle(undefined, undefined);
                 });
-                const icon = opts.icon ? `<span class="material-icons pl-0" style="width: 20px;font-size: 17px;" onclick="">${opts.icon}</span>`
+                const icon = opts.icon ? `<span class="material-icons pl-0" 
+style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon}</span>`
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 

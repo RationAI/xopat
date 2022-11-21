@@ -1,4 +1,5 @@
 
+//todo implement as composition of line and text
 OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "ruler", "group");
@@ -229,6 +230,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     exports() {
         return ["measure"];
+    }
+
+    exportsGeometry() {
+        return ["x1", "x2", "y1", "y2", "text"]; //todo test
     }
 
     _configureLine(line, options) {

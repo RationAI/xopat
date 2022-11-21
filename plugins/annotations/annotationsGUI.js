@@ -6,7 +6,7 @@ class AnnotationsGUI {
 		this._server = this.staticData("server");
 
 		//todo parse validity on OSDAnnotations.Convertor.formats ?
-		this._format = this.staticData("ioFormat") || "native";
+		this._defaultFormat = this.staticData("ioFormat") || "native";
 		this.PLUGIN = `plugin('${id}')`;
 	}
 
@@ -31,7 +31,7 @@ class AnnotationsGUI {
 		this.context.setPreset();
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
-			format: this._format,
+			format: this._defaultFormat,
 			flags: [true, true],
 			availableFlags: {
 				"everything": [true, true],
@@ -165,29 +165,29 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			}
 		});
 
-		//todo debug this and also enable the user to remove preset from the selection
-		// function showContextMenu(isPrimary, e) {
-		// 	const _this = this, actions = [{
-		// 		title: `Select preset for ${isPrimary ? 'right' : 'right'} click.`
-		// 	}];
-		// 	this.context.presets.foreach(preset => {
-		// 		console.log(preset.presetID);
-		// 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
-		// 		let icon = preset.objectFactory.getIcon();
-		// 		actions.push({
-		// 			icon: icon,
-		// 			title: category,
-		// 			action: () => {
-		// 				_this._presetSelection = preset.presetID;
-		// 				_this._clickPresetSelect(isPrimary);
-		// 			},
-		// 		});
-		// 	});
-		//
-		// 	USER_INTERFACE.DropDown.open(e.originalEvent, actions);
-		// }
-		// this.context.addHandler('canvas-release', showContextMenu.bind(this, true));
-		// this.context.addHandler('canvas-nonprimary-release', showContextMenu.bind(this, false));
+		//allways select primary button preset since context menu shows only on non-primary
+		function showContextMenu(e) {
+			const _this = this, actions = [{
+				title: `Select preset for left click.`
+			}];
+			this.context.presets.foreach(preset => {
+				let category = preset.getMetaValue('category') || preset.objectFactory.title();
+				let icon = preset.objectFactory.getIcon();
+				actions.push({
+					icon: icon,
+					iconCss: `color: ${preset.color};`,
+					title: category,
+					action: () => {
+						_this._presetSelection = preset.presetID;
+						_this._clickPresetSelect(true);
+					},
+				});
+			});
+
+			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+		}
+		this.context.addHandler('canvas-nonprimary-release', showContextMenu.bind(this));
+
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);
@@ -195,6 +195,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		// this.context.addHandler('layer-added', e => {
 		// 	_this.insertLayer(e.layer, e.layer.name);
 		// });
+
 
 		let strategy = this.context.automaticCreationStrategy;
 		if (strategy && this.context.autoSelectionEnabled) {
@@ -531,10 +532,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		//probably do not enable since users would mess it up
-		//const toFormat = this.exportOptions.format || this._format
-
-		const toFormat = this._format;
+		const toFormat = this.exportOptions.format || this._defaultFormat;
 		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
@@ -812,7 +810,8 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
-		this.context.export(this.exportOptions.format).then(data => {
+		//server IO only supports default format
+		this.context.export(this._defaultFormat).then(data => {
 			_this.dataLoader.updateAnnotation(_this._server, id, data,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
@@ -848,7 +847,8 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
-		this.context.export(this.exportOptions.format).then(data => {
+		//server IO only supports default format
+		this.context.export(this._defaultFormat).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);

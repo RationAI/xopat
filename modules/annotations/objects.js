@@ -20,37 +20,57 @@ OSDAnnotations.AnnotationObjectFactory = class {
         this._auto = autoCreationStrategy;
         this.factoryID = identifier;
         this.type = objectType;
-        this._copiedProperties = [
-            "left",
-            "top",
-            "width",
-            "height",
-            "fill",
-            "isLeftClick",
-            "opacity",
-            "strokeWidth",
-            "stroke",
-            "scaleX",
-            "scaleY",
-            "color",
-            "zoomAtCreation",
-            "originalStrokeWidth",
-            "type",
-            "factoryID",
-            "scaleX,",
-            "scaleY,",
-            "hasRotatingPoint",
-            "borderColor",
-            "cornerColor",
-            "borderScaleFactor",
-            "hasControls",
-            "lockMovementX",
-            "lockMovementY",
-            "meta",
-            "presetID",
-            "layerID",
-        ];
     }
+
+    /**
+     * Properties copied with 'all' (+exports())
+     * @type {string[]}
+     */
+    static copiedProperties = [
+        "left",
+        "top",
+        "width",
+        "height",
+        "fill",
+        "isLeftClick",
+        "opacity",
+        "strokeWidth",
+        "stroke",
+        "scaleX",
+        "scaleY",
+        "color",
+        "zoomAtCreation",
+        "originalStrokeWidth",
+        "type",
+        "factoryID",
+        "scaleX,",
+        "scaleY,",
+        "hasRotatingPoint",
+        "borderColor",
+        "cornerColor",
+        "borderScaleFactor",
+        "hasControls",
+        "lockMovementX",
+        "lockMovementY",
+        "meta",
+        "sessionID",
+        "presetID",
+        "layerID",
+    ];
+
+    /**
+     * Properties copied with 'necessary' (+exports())
+     * @type {string[]}
+     */
+    static necessaryProperties = [
+        "factoryID",
+        "type",
+        "sessionID",
+        "zoomAtCreation",
+        "meta",
+        "presetID",
+        "layerID",
+    ];
 
     /**
      * Human-readable annotation title
@@ -141,23 +161,50 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * A list of extra properties to export upon export event
+     * A list of extra custom properties to export upon export event
      * @return {[string]}
      */
     exports() {
-        return ["zoomAtCreation"];
+        return [];
     }
 
-    copyProperties(ofObject, ...withAdditional) {
-        // const copy = {...ofObject};
-        // delete copy.incrementId;
-        // return copy;
+    /**
+     * A list of extra properties defining the object geometry required to be included
+     */
+    exportsGeometry() {
+        return [];
+    }
 
+    /**
+     * Copy all module-recognized properties of object
+     * @param ofObject
+     * @param withAdditional
+     * @return {{}}
+     */
+    copyProperties(ofObject, ...withAdditional) {
+        return this.__copyProps(ofObject, this.constructor.copiedProperties, withAdditional);
+    }
+
+    /**
+     * Copy all necessary properties of object
+     * @param ofObject
+     * @param withAdditional
+     * @return {{}}
+     */
+    copyNecessaryProperties(ofObject, ...withAdditional) {
+        return this.__copyProps(ofObject, this.constructor.necessaryProperties, withAdditional);
+    }
+
+    __copyProps(ofObject, defaultProps, additionalProps) {
         const result = {};
-        for (let prop of this._copiedProperties) {
+        for (let prop of defaultProps) {
             result[prop] = ofObject[prop];
         }
-        for (let prop of withAdditional) {
+        if (!(additionalProps?.length > 0)) additionalProps = this.exports();
+        for (let prop of additionalProps) {
+            result[prop] = ofObject[prop];
+        }
+        for (let prop of this.exportsGeometry()) {
             result[prop] = ofObject[prop];
         }
         return result;
