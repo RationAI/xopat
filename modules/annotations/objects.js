@@ -70,6 +70,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
+        "color"
     ];
 
     /**
@@ -1011,7 +1012,11 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 		}
 		if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y - 1))) {
 			result += 1;
-		}
+		} 
 		return result;
 	}
 };
+
+OSDAnnotations.TiledImageMagicWand  = class extends OSDAnnotations.AutoObjectCreationStrategy {
+//todo implement magic wand
+}

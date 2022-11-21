@@ -49,19 +49,33 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
 
+This does not list all the properties though.
 The geometric properties are directly dependent on `type` and `factoryID` used. The `factoryID` is HAS-A relationship
 to the `type` hierarchy. Each factory defines which fabricjs (hierarchical) type is supported. Mostly, it is 1-1 mapping.
 Multiple factories can use the same fabricjs type as they can have different purposes (a rect annotation and a tool selection
 with a rect shape that is removed upon completion and the obtained area coordinates are sent as a request for further processing...).
+
+> Each factory defines ``exports()`` and `exportsGeometry()` to get custom props and geometry props keys respectively.
 
 Examples: 
 `[factoryID] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
 `[factoryID] rect` --> `[type] rect`: a rectangle annotation is simply an identity
 `[factoryID] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
 
-#### Native objects: type-dependent properties
-Each `type` supports its own geometry-related properties. These are directly from favricjs documentation and only
-the basic ones are described also here:
+##### Available exporting
+The module can export objects with all props or necessary props only (i.e. not an `auto` value). But fabric exports
+by default many other properties, the list above only lists _guaranteed_ properties. Convertor can specify 
+``static includeAllAnnotationProps = false;`` to not to force `auto` props inclusion, however, many will still be present.
+In order to extract necessary properties when exporting, call
+
+````
+const factory = module.getAnnotationObjectFactory(object.factoryID);
+object = factory.copyNecessaryProperties(object); //automatically incluses exports*() factory props
+````
+
+#### Native objects: geometry properties
+Each `type` supports its own geometry-related properties. These are defined in respective factory `exportsGeometry`
+method and only basic ones are listed here:
 
 ##### rect
     left        left-top corner X coord
@@ -96,12 +110,12 @@ factory instance to provide its features.
 
 ### Gotchas
 In general, `type` is the only general property an annotation object must provide when importing (but you should
-provide all **type-dependent properties**), other things
-will be set up for you automatically. However, doing so mean two subsequent imports of annotations are type-and-id-wise
-incompatible, although they look identically.
+provide all **geometry properties**), other things
+will be set up for you automatically. However, doing so mean two subsequent imports of the same annotations are 
+type-and-id-wise different, although they look identically.
 
-By default, a ``polygon`` factory is always available, so that you can set this value as a fallback. Other factories
-might not be available on the current session: for safety, check the presence with the OSDAnnotations API.
+By default, a ``polygon`` factory is always available, so that you can use polygon and its factory as a fallback. 
+Other factories might not be available on the current session: for safety, check their presence with the OSDAnnotations API.
 
 
 

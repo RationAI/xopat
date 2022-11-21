@@ -170,7 +170,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Check if preset exists
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns true if exists
      */
     exists(id) {
@@ -179,7 +179,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Presets getter
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id) {
@@ -189,7 +189,7 @@ OSDAnnotations.PresetManager = class {
     /**
      * Safely remove preset
      * @event preset-delete
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns deleted preset or false if deletion failed
      */
     removePreset(id) {
@@ -211,7 +211,7 @@ OSDAnnotations.PresetManager = class {
     /**
      * Update preset properties
      * @event preset-update
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @param {object} properties to update in the preset (keys must match)
      * @return updated preset in case any value changed, false otherwise
      */
@@ -347,6 +347,7 @@ OSDAnnotations.PresetManager = class {
                 if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
+                    _this._colorStep++; //generate new colors
                     if (!first) first = p;
                 }
             });
@@ -358,7 +359,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Select preset as active.
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
     selectPreset(id, isLeftClick) {

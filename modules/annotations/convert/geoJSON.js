@@ -8,17 +8,19 @@ OSDAnnotations.Convertor.GeoJSON = class {
 
     static includeAllAnnotationProps = false;
 
-    _getAsPolygon(object) {
+    _getAsPoints(object, type="Polygon", deleteProps=[]) {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint)
         if (poly?.length > 0) {
             poly.push(poly[0]); //linear ring
+            const props = factory.copyNecessaryProperties(object);
+            for (let p of deleteProps) delete props[p];
             return {
                 geometry: {
-                    type: "Polygon",
+                    type: type,
                     coordinates: poly
                 },
-                properties: factory.copyNecessaryProperties(object)
+                properties: props
             }
         }
         //failure
@@ -31,19 +33,55 @@ OSDAnnotations.Convertor.GeoJSON = class {
         }
     }
 
+    _getAsNativeObject(imported, geometryConvertor=()=>{}) {
+        const result = imported.properties;
+        geometryConvertor(result, imported.geometry);
+        return result;
+    }
+
+    //encode all supported factory types
+    //todo support default object by export strategy
     encoders = {
-        "rect": (object) => this._getAsPolygon(object),
-        "ellipse": (object) => this._getAsPolygon(object),
-        "polygon": (object) => this._getAsPolygon(object),
-        "polyline": (object) => this._getAsPolygon(object),
+        "rect": (object) => this._getAsPoints(object),
+        "ellipse": (object) => this._getAsPoints(object),
+        "polygon": (object) => this._getAsPoints(object, "Polygon", ["points"]),
+        "polyline": (object) => this._getAsPoints(object, "LineString", ["points"]),
         "text": (object) => {
 
         }, "ruler": (object) => {
 
-        }, "point": (object) => this._getAsPolygon(object)
+        }, "point": (object) => {
+            object = this._getAsPoints(object, "Point");
+            object.geometry.coordinates = object.geometry.coordinates[0] || [];
+        }
     };
 
-    gDecoders = {
+
+    //decode all supported factory types if factoryID present
+    //todo support default object by export strategy
+    nativeDecoders = {
+        "rect": (object) => this._getAsNativeObject(object),
+        "ellipse": (object) => this._getAsNativeObject(object),
+        "polygon": (object) => this._getAsNativeObject(object, (object, geometry) => {
+            geometry.splice(-1, 1);
+            object.points = geometry.map(o => ({x: o.x, y: o.y}));
+        }),
+        "polyline": (object) => this._getAsNativeObject(object, (object, geometry) => {
+            geometry.splice(-1, 1);
+            object.points = geometry.map(o => ({x: o.x, y: o.y}));
+        }),
+        "text": (object) => {
+
+        }, "ruler": (object) => {
+
+        }, "point": (object) => this._getAsNativeObject(object, (object, geometry) => {
+            object.left = geometry[0];
+            object.top = geometry[1];
+        }),
+    };
+
+    //decode all unsupported geometries
+    decoders = {
         Point: (object) => {},
         MultiPoint: (object) => {},
         LineString: (object) => {},
@@ -52,19 +90,6 @@ OSDAnnotations.Convertor.GeoJSON = class {
         MultiPolygon: (object) => {},
         GeometryCollection: (object) => {},
     }
-
-    decoders = {
-        FeatureCollection: (preset) => {
-
-        },
-        Feature: (preset, object) => {
-
-        },
-        //todo this.gEncoders[object.<???>.type]?.(object)
-        Geometry: (object) => {
-
-        }
-    };
 
     encode(annotationsGetter, presetsGetter, annotationsModule) {
         this.context = annotationsModule;
@@ -99,96 +124,53 @@ OSDAnnotations.Convertor.GeoJSON = class {
 
         list.push(...presets.map(p => ({
             type: "Feature",
-            //todo? geometry: "",
+            geometry: null,
             properties: p
         })));
         return JSON.stringify(output);
     }
 
-    decode(data, annotationsModule) {
-        //todo
 
-        // let xmlDoc;
-        // if (window.DOMParser) {
-        //     const parser = new DOMParser();
-        //     xmlDoc = parser.parseFromString(data, "text/xml");
-        // } else { // Internet Explorer
-        //     xmlDoc = new ActiveXObject("Microsoft.XMLDOM");
-        //     xmlDoc.async = false;
-        //     xmlDoc.loadXML(data);
-        // }
-        //
-        // const presets = {}, annotations = [];
-        //
-        // for (const elem of xmlDoc.getElementsByTagName("Group")) {
-        //     let presetId = elem.getAttribute("Name");
-        //     //in case of numbers, try to parse and otherwise accept string
-        //     presetId = Number.parseInt(presetId) || presetId || Date.now();
-        //
-        //     const meta = {};
-        //     const attrs = elem.firstElementChild; //todo probably incorrect...
-        //     const factoryID = attrs?.getAttribute("FactoryID") || "polygon";
-        //
-        //     if (attrs) {
-        //         attrs.removeAttribute("FactoryID");
-        //         for (let attrMetaElem of attrs.attributes) {
-        //             if (attrMetaElem.nodeName.endsWith("Name")) {
-        //                 const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-4);
-        //                 let ctx = meta[key] || {};
-        //                 ctx.name = attrMetaElem.nodeValue;
-        //                 meta[key] = ctx;
-        //             } else if (attrMetaElem.nodeName.endsWith("Value")) {
-        //                 const key = attrMetaElem.nodeName.substring(0, attrMetaElem.nodeName.length-5);
-        //                 let ctx = meta[key] || {};
-        //                 ctx.value = attrMetaElem.nodeValue; //todo parse?
-        //                 meta[key] = ctx;
-        //             }
-        //         }
-        //     }
-        //
-        //     if (!meta.category) {
-        //         meta.category = {
-        //             name: 'Category',
-        //             value: presetId
-        //         };
-        //     }
-        //
-        //     presets[presetId] = {
-        //         color: elem.getAttribute("Color") || "#ff0000",
-        //         presetID: presetId,
-        //         factoryID: factoryID,
-        //         meta: meta
-        //     };
-        // }
-        //
-        // for (const elem of xmlDoc.getElementsByTagName("Annotation")) {
-        //     const coords = elem.firstElementChild,
-        //         pointArray = [];
-        //     for (const coordElem of coords.getElementsByTagName("Coordinate")) {
-        //         const index = Number.parseInt(coordElem.getAttribute("Order"));
-        //         pointArray[index] = {
-        //             x: Number.parseInt(coordElem.getAttribute("X")),
-        //             y: Number.parseInt(coordElem.getAttribute("Y"))
-        //         }
-        //     }
-        //
-        //     const presetID = elem.getAttribute("PartOfGroup");
-        //
-        //     //todo support: Dot, Rectangle, Polygon, Spline, and PointSet by implementation of general annotation structure
-        //     //todo attr name could be set as category custom meta
-        //     annotations.push({
-        //         type: "polygon",
-        //         points: pointArray,
-        //         presetID: presetID,
-        //         factoryID: "polygon",
-        //         color: elem.getAttribute("Color") || undefined
-        //     });
-        // }
-        //
-        // return {
-        //     objects: annotations,
-        //     presets: Object.values(presets)
-        // };
+
+    decode(data, annotationsModule) {
+
+        const parseFeature = function (object, presets, annotations) {
+            if (object.geometry === null && object.properties.presetID) {
+                //null features not part of our preset API ignored
+                const preset = object.properties;
+                presets[preset.presetID] = preset;
+            } else {
+                let result;
+                const type = object.properties["factoryID"] || object.properties["type"];
+                if (type) result = this.nativeDecoders[type]?.(object);
+                if (!result) {
+                    //not a native object, parse as well as possible
+                    result = this.decoders[object.geometry.type]?.(object.geometry);
+                    if (result) $.extend(result, object.properties); //attach properties for partial compatibility
+                }
+
+                if (result) {
+                    annotations.push(result);
+                } //todo else notify?
+            }
+        }.bind(this);
+
+        const presets = {}, annotations = [];
+
+        if (data.type === "FeatureCollection") {
+            data.features.forEach(f => parseFeature(f, presets, annotations));
+        } else if (data.type === "Feature") {
+            parseFeature(data, presets, annotations);
+        } else {
+            const o = this.decoders[data.type]?.(data);
+            if (!o) throw "Unsupported global GEOJson Text Type " + data.type;
+            annotations.push(o);
+        }
+
+        return {
+             objects: annotations,
+             presets: Object.values(presets)
+        };
     }
 }
 

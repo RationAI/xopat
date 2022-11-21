@@ -724,7 +724,6 @@ class="btn m-2">Set for left click </button>
 	}
 
 	selectPreset(isLeftClick, selection = this._presetSelection) {
-		selection = typeof selection === "number" ? selection : Number.parseInt(selection);
 		this.context.presets.selectPreset(selection, isLeftClick);
 		this.updatePresetsHTML();
 	}
