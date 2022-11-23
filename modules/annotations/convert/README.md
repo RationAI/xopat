@@ -143,3 +143,6 @@ all properties automatically, **in depth**
    - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached
  - all children are copied over only using ``factory.copyInnerProperties``
 
+Note that this function is implemented using factory's ``iterate`` method (that should work
+generically for any annotation but also offers the flexibility of overriding).
+

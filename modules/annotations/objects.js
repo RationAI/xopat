@@ -176,6 +176,39 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return [];
     }
 
+    trimExportJSON(objectList) {
+        let array = objectList;
+        if (typeof array === "object") {
+            array = objectList.objects;
+        }
+        const _this = this;
+
+        return array;
+    }
+
+    /**
+     * Iterate hierarchy of objects and deep-transform them using transformer
+     * @param o object to iterate
+     * @param transformer transformer function, receives parameters -
+     *      the object x, current node in the hierarchy
+     *      the boolean isRoot,
+     *      the boolean isGroup, if this node can contain child nodes
+     *      the object factory, reference to the annotation factory
+     * @return {*}
+     */
+    iterate(o, transformer=x=>x) {
+        const it = (x, isRoot, factory) => {
+            //recursive clone of objects
+            if (x.type !== "group") {
+                return transformer(x, isRoot, false, factory);
+            }
+            let result = transformer(x, isRoot, true, factory);
+            result.objects = o.objects?.map(y => it(y, false, factory));
+            return result;
+        };
+        return it(o, true, this);
+    }
+
     /**
      * Copy all module-recognized properties of object
      * @param ofObject

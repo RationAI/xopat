@@ -114,27 +114,21 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			array = objectList.objects;
 		}
 		const _this = this;
-		const trim = (o, factory=undefined) => {
-			let result;
-			if (!factory) {
-				factory = _this.getAnnotationObjectFactory(o.factoryID);
-				result = factory.copyNecessaryProperties(o);
-			} else {
-				//factory defined, no need to copy all necessary props, just inner props
-				result = factory.copyInnerProperties(o);
-			}
-
-			//recursive clone of objects
-			if (o.type === "group") {
-				result.objects = o.objects?.map(x => trim(x, factory));
-				result.left = o.left;
-				result.top = o.top;
-				result.width = o.width;
-				result.height = o.height;
-			}
-			return result;
-		};
-		array = array.map(x => trim(x));
+		array = array.map(x => {
+			//we define factories for types as default implementations too
+			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
+			if (!factory) return undefined; //todo error? or skips?
+			return factory.iterate(x, (x, isRoot, isGroup, f) => {
+				let res = isRoot ? f.copyNecessaryProperties(x) : f.copyInnerProperties(x);
+				if (isGroup) { //groups need BB so that it renders correctly
+					res.left = x.left;
+					res.top = x.top;
+					res.width = x.width;
+					res.height = x.height;
+				}
+				return res;
+			});
+		});
 		if (typeof objectList === "object") {
 			objectList.objects = array;
 			return objectList;
