@@ -104,6 +104,45 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Creates a copy of exported list of objects with necessary values only
+	 * @param {[]|{}} objectList array of annotations or object with 'objects' array (as comes from this.toObject())
+	 * @return {[]|{}} clone array with trimmed values or modified object where 'objects' prop refers to the trimmed data
+	 */
+	trimExportJSON(objectList) {
+		let array = objectList;
+		if (typeof array === "object") {
+			array = objectList.objects;
+		}
+		const _this = this;
+		const trim = (o, factory=undefined) => {
+			let result;
+			if (!factory) {
+				factory = _this.getAnnotationObjectFactory(o.factoryID);
+				result = factory.copyNecessaryProperties(o);
+			} else {
+				//factory defined, no need to copy all necessary props, just inner props
+				result = factory.copyInnerProperties(o);
+			}
+
+			//recursive clone of objects
+			if (o.type === "group") {
+				result.objects = o.objects?.map(x => trim(x, factory));
+				result.left = o.left;
+				result.top = o.top;
+				result.width = o.width;
+				result.height = o.height;
+			}
+			return result;
+		};
+		array = array.map(x => trim(x));
+		if (typeof objectList === "object") {
+			objectList.objects = array;
+			return objectList;
+		}
+		return array;
+	}
+
+	/**
 	 * Export annotations and presets
 	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
 	 *     use "native" or undefined for native export
@@ -116,10 +155,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			const _this = this,
 				result = withAnnotations ? this.toObject(false) : {};
 			if (result.objects) {
-				result.objects = result.objects.map(x => {
-					const factory = _this.getAnnotationObjectFactory(x.factoryID);
-					return factory.copyNecessaryProperties(x);
-				});
+				this.trimExportJSON(result);
 			}
 			if (withPresets) result.presets = this.presets.toObject();
 			return JSON.stringify(result);

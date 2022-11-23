@@ -38,6 +38,7 @@ if ($production) {
     define('JS_COOKIE_SAME_SITE', ""); //default
     define('JS_COOKIE_SECURE', ""); //default
 
+    //note: you probably want to set up a reverse proxy for localhost rather than changing this (CORS)
     define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
 }

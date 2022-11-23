@@ -51,7 +51,12 @@ is managed internally and is not advised to set. `preset` keyword means this pro
 
 This does not list all the properties though.
 The geometric properties are directly dependent on `type` and `factoryID` used. The `factoryID` is HAS-A relationship
-to the `type` hierarchy. Each factory defines which fabricjs (hierarchical) type is supported. Mostly, it is 1-1 mapping.
+to the `type` hierarchy. Each factory defines which fabricjs type is supported (top level only in case of hierarchies). 
+
+> In case of hierarchical annotations (based on _groups_), the top-level group should contain all _non-auto_ properties
+>  (see exporting in depth explanation)
+
+Mostly, it is 1-1 mapping.
 Multiple factories can use the same fabricjs type as they can have different purposes (a rect annotation and a tool selection
 with a rect shape that is removed upon completion and the obtained area coordinates are sent as a request for further processing...).
 
@@ -117,5 +122,24 @@ type-and-id-wise different, although they look identically.
 By default, a ``polygon`` factory is always available, so that you can use polygon and its factory as a fallback. 
 Other factories might not be available on the current session: for safety, check their presence with the OSDAnnotations API.
 
+### Exporting in depth
+Raw exporting can be done via `toObject` method, this method simply
+exports all or necessary properties of each annotation objects. This
+**does not mean the export contains only these properties**, but
+it guarantees their presence. To trim down the properties, you can
+use an object own factory methods that correspond to the categories below:
 
+There are three levels of exports:
+ - **all** (``factory.copyProperties``) - creates a shallow copy that contains all properties defined by the
+static object describing module-recognized properties as well as below
+ - **necessary** (``factory.copyNecessaryProperties``) - creates a shallow copy that contains all properties defined by the
+static object describing necessary content for exporting as well as below
+ - **inner** (``factory.copyInnerProperties``) - creates a shallow copy that copies over only properties defined in the factory's 
+`exports()` and `exportsGeometry()` methods
+
+Furthermore, you can use ``module.trimExportJSON`` method to trim
+all properties automatically, **in depth**
+ - top-level objects (i.e. the parent group) are trimmed using ``factory.copyNecessaryProperties``
+   - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached
+ - all children are copied over only using ``factory.copyInnerProperties``
 

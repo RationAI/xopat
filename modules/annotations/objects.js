@@ -182,33 +182,56 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param withAdditional
      * @return {{}}
      */
-    copyProperties(ofObject, ...withAdditional) {
-        return this.__copyProps(ofObject, this.constructor.copiedProperties, withAdditional);
+    copyProperties(ofObject, withAdditional) {
+        const result = {};
+        this.__copyProps(ofObject, result, this.constructor.copiedProperties, withAdditional);
+        this.__copyInnerProps(ofObject, result);
+        return result;
     }
 
     /**
-     * Copy all necessary properties of object
+     * Copy only necessary properties of object (subset of copyProperties)
      * @param ofObject
      * @param withAdditional
      * @return {{}}
      */
     copyNecessaryProperties(ofObject, ...withAdditional) {
-        return this.__copyProps(ofObject, this.constructor.necessaryProperties, withAdditional);
+        const result = {};
+        this.__copyProps(ofObject, result, this.constructor.necessaryProperties, withAdditional);
+        this.__copyInnerProps(ofObject, result);
+        return result;
     }
 
-    __copyProps(ofObject, defaultProps, additionalProps) {
+    /**
+     * Copy only geometry and explicitly-defined properties (subset of copyNecessaryProperties)
+     * @param ofObject
+     */
+    copyInnerProperties(ofObject) {
         const result = {};
+        this.__copyInnerProps(ofObject, result);
+        return result;
+    }
+
+    __copyProps(ofObject, toObject, defaultProps, additionalProps) {
         for (let prop of defaultProps) {
-            result[prop] = ofObject[prop];
+            toObject[prop] = ofObject[prop];
         }
-        if (!(additionalProps?.length > 0)) additionalProps = this.exports();
-        for (let prop of additionalProps) {
-            result[prop] = ofObject[prop];
+        if (additionalProps?.length > 0) {
+            for (let prop of additionalProps) {
+                toObject[prop] = ofObject[prop];
+            }
+        }
+        this.__copyInnerProps(ofObject, toObject);
+    }
+
+    __copyInnerProps(ofObject, toObject) {
+        for (let prop of this.exports()) {
+            toObject[prop] = ofObject[prop];
         }
         for (let prop of this.exportsGeometry()) {
-            result[prop] = ofObject[prop];
+            toObject[prop] = ofObject[prop];
         }
-        return result;
+        toObject.type = ofObject.type; //always
     }
 
 
@@ -1012,7 +1035,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 		}
 		if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y - 1))) {
 			result += 1;
-		} 
+		}
 		return result;
 	}
 };
