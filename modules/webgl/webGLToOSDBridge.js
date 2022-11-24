@@ -231,6 +231,7 @@ window.OpenSeadragon.BridgeGL = class {
         // Raise tstamp to force redraw
         this._refreshTimeStamp = Date.now();
         this._randomDelay = Math.max(0, randomDelay);
+        this.draw();
     }
 
     /**

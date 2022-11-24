@@ -9,18 +9,26 @@
  */
 window.ColorMaps = {
     defaults: {
-        sequential: "Parula",
+        sequential: "Viridis",
         singlehue: "Oranges",
         diverging: "RdBu",
         cyclic: "TwilightShift",
         qualitative: "Accent"
     },
     schemeGroups: {
-        sequential: ["Parula", "Winter", "Turbo", "Hot", "Inferno", "Magma", "Plasma", "BuGn", "BuPu", "GnBu", "OrRd", "PuBu", "PuBuGn", "PuRd", "RdPu", "YlGn", "YlGnBu", "YlOrBr", "YlOrRd"],
+        sequential: ["Viridis", "Parula", "Winter", "Turbo", "Hot", "Inferno", "Magma", "Plasma", "BuGn", "BuPu", "GnBu", "OrRd", "PuBu", "PuBuGn", "PuRd", "RdPu", "YlGn", "YlGnBu", "YlOrBr", "YlOrRd"],
         singlehue: ["Blues", "Greens", "Greys", "Oranges", "Purples", "Reds"],
         diverging: ["BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "Spectral"],
         cyclic: ["Twilight", "TwilightShift"],
         qualitative: ["Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", "Turbo"],
+    }, Viridis: {
+        2: ["#440154", "#fde725"],
+        3: ["#440154", "#21918c", "#fde725"],
+        4: ["#440154", "#31688e", "#35b779", "#fde725"],
+        5: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+        6: ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"],
+        7: ["#440154", "#443983", "#31688e", "#21918c", "#35b779", "#90d743", "#fde725"],
+        8: ["#440154", "#46327e", "#365c8d", "#277f8e", "#1fa187", "#4ac16d", "#a0da39", "#fde725"],
     }, Parula: {
         2: ["#12beb9", "#f9fb15"],
         3: ["#3e26a8", "#12beb9", "#f9fb15"],

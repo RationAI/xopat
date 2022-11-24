@@ -30,11 +30,11 @@ ${UIComponents.Elements.checkBox({
         })}
 <span class="btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Annotation</span>
 <br><br>
-<button class='btn btn-pointer' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.play();"><span id='presenter-play-icon' class="material-icons">play_arrow</span></button>
-<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.stop();"><span id='presenter-play-icon' class="material-icons">stop</span></button>
-<button class='btn btn-pointer' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
+<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
+<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
+<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
 
 <br><br>`,"auto-recorder", this.id);
 
@@ -62,7 +62,7 @@ ${UIComponents.Elements.checkBox({
                 delete _this._measureNode;
             }
 
-            $("#presenter-play-icon").addClass("timeline-play");
+            $("#presenter-play-icon span").addClass("timeline-play");
             USER_INTERFACE.Tools.notify(_this._toolsMenuId, '➤');
 
             _this._referenceStamp = Date.now();
@@ -76,7 +76,7 @@ ${UIComponents.Elements.checkBox({
         });
 
         this.snapshots.addHandler('stop', function () {
-            $("#presenter-play-icon").removeClass("timeline-play");
+            $("#presenter-play-icon span").removeClass("timeline-play");
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
                 delete _this._loopMeasure;
@@ -142,7 +142,7 @@ ${UIComponents.Elements.checkBox({
 
         //todo create event fired during instantiation possibly --> now hotfix add them here
         for (let step of this.snapshots._steps) {
-            _this._addUIStepFrom(step);
+            _this._addUIStepFrom(step, false);
         }
 
         VIEWER.addHandler('key-down', function(e) {
@@ -240,7 +240,7 @@ ${UIComponents.Elements.checkBox({
         $("#point-spring").val(step.transition);
     }
 
-    _addUIStepFrom(step) {
+    _addUIStepFrom(step, withNav=true) {
         let color = "#000";
         if (this.snapshots.stepCapturesVisualization(step)) {
             color = this.snapshots.stepCapturesViewport(step) ? "#ff8800" : "#9dff00";
@@ -258,7 +258,7 @@ border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; 
 height: ${height}px; 
 margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
-        this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
+        if (withNav) this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
     }
 
     _convertValue(key, value) {

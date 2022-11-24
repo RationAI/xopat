@@ -165,7 +165,7 @@ it is an inherited configuration interface of the WebGL module extended by optio
         - [O]`classes` - a space separated list of classes to add to the generated HTML
         - [R type=columns]`children` - a list of nodes to place in columns
         - [R type=vega]`specs` - a VEGA visualization grammar configuration for a particular GRAPH
-    
+   
 <details>
  <summary>Advanced features:</summary>
 

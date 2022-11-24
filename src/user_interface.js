@@ -793,6 +793,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 APPLICATION_CONTEXT._setCookie('_shadersPin', 'false');
             },
 
+            /**
+             * Add tutorial to options
+             * @param plugidId
+             * @param name
+             * @param description
+             * @param icon
+             * @param steps the tutorials object array, keys are "rule selector" strings
+             *  rules are 'next', 'click', selectors define what element to highlight
+             * @param prerequisites a function to execute at the beginning, default undefined
+             */
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
                 if (!icon) icon = "school";
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
@@ -803,9 +813,21 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.prerequisites.push(prerequisites);
             },
 
-            run: function(index) {
-                if (index >= this.steps.length || index < 0) return;
-                USER_INTERFACE.MainMenu.open();
+            /**
+             * Run tutorial
+             * @param {number|[]} ctx index to the attached tutorials list (internal use) or tutorials data
+             *  see add(..) steps parameter
+             */
+            run: function(ctx) {
+                let prereq, data;
+
+                if (Number.isInteger(ctx)) {
+                    if (ctx >= this.steps.length || ctx < 0) return;
+                    prereq = this.prerequisites[ctx];
+                    data = this.steps[ctx];
+                } else {
+                    data = ctx;
+                }
 
                 //reset plugins visibility
                 $(".plugins-pin").each(function() {
@@ -815,7 +837,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     container.removeClass('force-visible');
                 });
 
-                let prereq = this.prerequisites[index];
                 let enjoyhintInstance = new EnjoyHint({
                     onStart: function () {
                         window.addEventListener("resize", enjoyhintInstance.reRender, false);
@@ -832,7 +853,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                enjoyhintInstance.set(this.steps[index]);
+                USER_INTERFACE.MainMenu.open();
+                enjoyhintInstance.set(data);
                 this.hide();
                 enjoyhintInstance.run();
                 this.running = false;

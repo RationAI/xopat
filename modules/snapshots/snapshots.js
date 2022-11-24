@@ -345,7 +345,10 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         for (let key in curVis.shaders) {
             let shaderSetup = curVis.shaders[key];
             //we stored only cache of visible elements
-            shaderSetup.visible = from.cache.hasOwnProperty(key);
+            let isVisible = shaderSetup.visible;
+            let willBeVisible = from.cache.hasOwnProperty(key);
+            if (willBeVisible !== isVisible) needsRefresh = true;
+            shaderSetup.visible = willBeVisible;
             if (shaderSetup.visible) {
                 let cachedCache = from.cache[key];
                 if (!needsRefresh && !this._equalCache(shaderSetup.cache, cachedCache)) {
