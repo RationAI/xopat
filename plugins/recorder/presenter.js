@@ -13,10 +13,16 @@ class Presenter {
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
 
-        USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
+        USER_INTERFACE.MainMenu.appendExtended("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
 <span onclick="this.nextElementSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.importFromFile(event);$(this).val('');" />
 <span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
+<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
+<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
+<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button>`, `
+<br>
 ${UIComponents.Elements.checkBox({
             label: "Capture visuals",
             onchange: this.PLUGIN + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
@@ -27,13 +33,11 @@ ${UIComponents.Elements.checkBox({
             onchange: this.PLUGIN + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesViewport
         })}
-<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Animate</button>
-<br>
-<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
-<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
-<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button>`,"auto-recorder", this.id);
+<br><br>
+<h5 class="d-inline-block">Annotations in keyframes</h5>&emsp;
+<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Capture</button>
+<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.releaseAnnotation()">Release</button>
+`, "auto-recorder", this.id);
 
         USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
             `<div class="d-flex">
@@ -65,7 +69,7 @@ ${UIComponents.Elements.checkBox({
     captureAnnotation() {
         const engine = this.annotations;
         if (!engine) {
-            Dialogs.show('Annotations are not available.', 3000, Dialogs.MSG_WARN);
+            Dialogs.show('Annotations are not available. You can <a onclick="UTILITIES.loadPlugin(\'gui_annotations\')">import the annotations plugin.</a> to create some.', 3000, Dialogs.MSG_WARN);
         } else {
             const annotation = engine.canvas.getActiveObject();
             if (annotation) {
@@ -77,6 +81,27 @@ ${UIComponents.Elements.checkBox({
                 Dialogs.show('Animated with step ' + sid, 1000, Dialogs.MSG_INFO);
             } else {
                 Dialogs.show('Select an annotation to animate.', 3000, Dialogs.MSG_WARN);
+            }
+        }
+    }
+
+    releaseAnnotation() {
+        const engine = this.annotations;
+        if (!engine) {
+            Dialogs.show('Annotations are not available. You can <a onclick="UTILITIES.loadPlugin(\'gui_annotations\')">import the annotations plugin.</a> to create some.', 3000, Dialogs.MSG_WARN);
+        } else {
+            const annotation = engine.canvas.getActiveObject();
+            if (annotation) {
+                let sid = this.snapshots.currentStep.id;
+
+                if (this._removeAnnotationRef(sid, annotation)) {
+                    this._arrRemove(annotation.presenterSids, sid);
+                    Dialogs.show('Removed from step ' + sid, 1000, Dialogs.MSG_INFO);
+                } else {
+                    Dialogs.show('This annotation is not animated with any key frame.', 1000, Dialogs.MSG_INFO);
+                }
+            } else {
+                Dialogs.show('You have to select an annotation for keyframe removal.', 3000, Dialogs.MSG_WARN);
             }
         }
     }
@@ -237,6 +262,16 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         this._annotationRefs[sid] = refs;
     }
 
+    _removeAnnotationRef(sid, annotation) {
+        if (annotation.presenterSids) {
+            for (let sid of annotation.presenterSids) {
+                this._arrRemove(this._annotationRefs[sid], annotation);
+            }
+            return true;
+        }
+        return false;
+    }
+
     _bindAnnotations() {
         const update = this._recordAnnotationRef.bind(this);
         this.annotations.canvas.forEachObject(o => (o.presenterSids || []).forEach(sid => update(sid, o)));
@@ -252,12 +287,36 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         }
     }
 
+    _arrRemove(array, item) {
+        if (!array) return;
+        const index = array.indexOf(item);
+        if (index > -1) array.splice(index, 1);
+    };
+
     _handleInitAnnotationsModule() {
+        //todo had to enable the module from the beginning since we dont know if annnotations are present :/
+        //todo remove all if module logics
         if (window.OSDAnnotations && !this.annotations) {
             this.annotations = OSDAnnotations.instance();
             this.annotations.forceExportsProp = "presenterSids";
             this.annotations?.bindIO(); //enable IO export so we can work with annotations if any
             this._bindAnnotations();
+
+            const _this = this;
+
+            const addSidRecord = (o) => {
+                if (o.presenterSids) {
+                    o.presenterSids.forEach(sid => _this._recordAnnotationRef(sid, o));
+                }
+            }
+
+            this.annotations.addHandler('annotation-create', e => addSidRecord(e.object));
+            this.annotations.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
+            this.annotations.addHandler('annotation-replace', e => {
+                _this._removeAnnotationRef(e.previous);
+                e.next.presenterSids = e.previous.presenterSids;
+                addSidRecord(e.next);
+            });
         }
     }
 
@@ -379,6 +438,19 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
 
             //todo create WRT current position
             _this._addUIStepFrom(e.step);
+        });
+
+        this.snapshots.addHandler('remove', function (e) {
+            const sid = e.step.id,
+                refs = _this._annotationRefs[sid];
+            if (refs) {
+                refs.forEach(o => {
+                    if (o.presenterSids) {
+                        let index = o.presenterSids.indexOf(sid);
+                        if (index !== -1) o.presenterSids.splice(index, 1);
+                    }
+                })
+            }
         });
 
         VIEWER.addHandler('module-loaded', e => {

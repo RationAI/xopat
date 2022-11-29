@@ -725,15 +725,18 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @param {fabric.Object} previous
 	 * @param {fabric.Object} next
 	 * @param {boolean} updateHistory false to ignore the history change, creates artifacts if used incorrectly
-	 * 	e.g. redo/undo buttons duplicate objects
+	 *    e.g. redo/undo buttons duplicate objects
+	 * @param _raise invoke event if true (default)
 	 */
-	replaceAnnotation(previous, next, updateHistory=false) {
+	replaceAnnotation(previous, next, updateHistory=false, _raise=true) {
 		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
 		if (updateHistory) this.history.push(next, previous);
+
+		if (_raise) this.raiseEvent('annotation-replace', {previous, next});
 	}
 
 	/**

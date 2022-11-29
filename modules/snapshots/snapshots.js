@@ -27,6 +27,8 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             id: Date.now(),
             zoomLevel: this._captureViewport ? view.getZoom() : undefined,
             point: this._captureViewport ? view.getCenter() : undefined,
+            bounds: this._captureViewport ? view.getBounds() : undefined,
+            preferSameZoom: true, //possible param?
             delay: delay,
             duration: duration,
             transition: transition,

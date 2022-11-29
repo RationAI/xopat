@@ -435,6 +435,7 @@ ${editIcon}
         } else {
             updateUI = true;
         }
+        this._focusWithScreen = false;
 
         let objectId;
         if (typeof object !== "object") {
@@ -461,6 +462,9 @@ ${editIcon}
                     self: self,
                     target: object
                 };
+
+                this._context.raiseEvent('annotation-edit', {object});
+
             } else {
                 //if no update needed we are in blocked state, unblock since no edit
                 if (!updateUI) this._enableAfterEdit();
@@ -509,6 +513,7 @@ ${editIcon}
         } catch (e) {
             console.warn(e);
         }
+        this._focusWithScreen = true;
         this._editSelection = undefined;
     }
 
@@ -530,7 +535,9 @@ ${editIcon}
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
             this._addToBoard(toAdd, toRemove);
+            this._context.raiseEvent('annotation-create', {object: toAdd});
 
+            //todo why commented out?
             // if (toRemove) {
             //     canvas.remove(toRemove);
             //     this._removeFromBoard(toRemove);
@@ -541,6 +548,7 @@ ${editIcon}
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
+            this._context.raiseEvent('annotation-delete', {object: toAdd});
         }
         canvas.renderAll();
     }
