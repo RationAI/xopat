@@ -12,52 +12,11 @@ class Presenter {
 
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
-        const _this = this;
-
-        this.annotations = OSDAnnotations.instance();
-        this.annotations.bindIO(); //enable IO so we can work with annotations if any
-
-        VIEWER.addHandler('export-data', e => {
-            const module = OSDAnnotations.instance();
-            let result = {};
-            for (let sid in _this._annotationRefs) {
-                let data = _this._annotationRefs[sid].map(o => o.toObject('presenterSid'));
-                //todo does not work with groups --> exported prop names differ!!!
-                result[sid] = module.trimExportJSON(data, 'presenterSid');
-            }
-
-            // let objects = module.toObject(false, 'presenterSid').objects?.filter(x => x.presenterSid !== undefined);
-            // let result = module.trimExportJSON(objects, 'presenterSid');
-            e.setSerializedData("presented-annotations", JSON.stringify(result));
-        });
-        let data = APPLICATION_CONTEXT.getData("presented-annotations");
-        if (data) {
-            try {
-                data = JSON.parse(data);
-                for (let sid in data) {
-                    let step = data[sid];
-                    this._annotationRefs[sid] = [];
-
-                    //hide them and set our ID
-                    step.forEach(o => {
-                        o.visible = false;
-                    });
-                }
-                this.annotations.loadObjects({objects: Object.values(data).flat(1)}).then(() => {
-                    this.annotations.canvas.forEachObject(o => {
-                        if (o.presenterSid !== undefined) {
-                            _this._annotationRefs[o.presenterSid].push(o);
-                        }
-                    })
-                });
-            } catch(e) {
-                Dialogs.show("Failed to load annotations for stories: these will be unavailable.", 3000, Dialogs.MSG_WARN);
-            }
-        }
 
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <!--todo implement using common API--><span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.import(event);" />
-    <span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
+<span onclick="this.nextElementSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span>
+<input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.importFromFile(event);$(this).val('');" />
+<span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
 ${UIComponents.Elements.checkBox({
             label: "Capture visuals",
             onchange: this.PLUGIN + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
@@ -92,6 +51,244 @@ ${UIComponents.Elements.checkBox({
 
 </div>`, 'play_circle_outline');
 
+        this._handleInitIO();
+        this._initEvents();
+
+        if (Number.isInteger(this.playOnEnter) && this.playOnEnter >= 0) {
+            const _this = this;
+            setTimeout(function() {
+                _this.snapshots.playFromIndex(0);
+            }, this.playOnEnter);
+        }
+    }
+
+    captureAnnotation() {
+        const engine = this.annotations;
+        if (!engine) {
+            Dialogs.show('Annotations are not available.', 3000, Dialogs.MSG_WARN);
+        } else {
+            const annotation = engine.canvas.getActiveObject();
+            if (annotation) {
+                let sid = this.snapshots.currentStep.id;
+                //todo listener remove prevent removal of binded annotations? or remove them...
+
+                this._recordAnnotationRef(sid, annotation); //note which annotations
+                this._recordAnnotationSid(annotation, sid); //keep record on annotations too
+                Dialogs.show('Animated with step ' + sid, 1000, Dialogs.MSG_INFO);
+            } else {
+                Dialogs.show('Select an annotation to animate.', 3000, Dialogs.MSG_WARN);
+            }
+        }
+    }
+
+    addRecord() {
+        this.snapshots.create(
+            parseFloat($("#point-delay").val()),
+            parseFloat($("#point-duration").val()),
+            parseFloat($("#point-spring").val())
+        );
+    }
+
+    selectPoint(node) {
+        let index = Array.prototype.indexOf.call(node.parentNode.children, node);
+        this.snapshots.goToIndex(index);
+    }
+
+    setValue(key, value) {
+        if (this.snapshots.snapshotCount < 1) return;
+
+        let index = this.snapshots.currentStepIndex;
+
+        let node = $("#playback-timeline").children()[index];
+        if (node) {
+            this.snapshots.currentStep[key] = value;
+            node.style[this._getStyleFor(key)] = this._convertValue(key, value);
+        }
+    }
+
+    removeHighlightedRecord() {
+        let index = this.snapshots.currentStepIndex;
+        let child = $("#playback-timeline").children()[index];
+        if (child) {
+            this.snapshots.remove(index);
+            $(child).remove();
+        }
+    }
+
+    /****** IO FOR MANUAL USE *****/
+
+    exportAnnotations(serialize=true) {
+        const module = this.annotations;
+        if (!module) return serialize ? "{}" : {};
+
+        let result = {};
+        for (let sid in this._annotationRefs) {
+            let data = this._annotationRefs[sid].map(o => o.toObject('presenterSids'));
+            //todo does not work with groups --> exported prop names differ!!!
+            result[sid] = module.trimExportJSON(data, 'presenterSids');
+        }
+        return serialize ? JSON.stringify(result) : result;
+    }
+
+    importAnnotations(content) {
+        if (!content || !Object.keys(content)?.length) return false;
+
+        if (!this.annotations) {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                _this._handleInitAnnotationsModule();
+                _this._importAnnotations(content);
+            }, 'annotations');
+            return true;
+        }
+        this._importAnnotations(content);
+        return true;
+    }
+
+    export() {
+        UTILITIES.downloadAsFile("visualisation-recording.json", JSON.stringify({
+            "snapshots": this.snapshots.exportJSON(false),
+            "annotations": this.exportAnnotations(false)
+        }));
+    }
+
+    importFromFile(e) {
+        const _this = this;
+        UTILITIES.readFileUploadEvent(e).then(data => {
+            data = JSON.parse(data);
+            _this.snapshots.importJSON(data?.snapshots || []);
+            if (!_this.importAnnotations(data?.annotations)) {
+                //will not handle message - no data loaded
+                Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
+            }
+        }).catch(e => {
+            console.log(e);
+            Dialogs.show("Failed to load the file.", 2500, Dialogs.MSG_ERR);
+        });
+    }
+
+    /****** PRIVATE *****/
+
+    _highlight(step, index) {
+        if (this._oldHighlight) {
+            this._oldHighlight.removeClass("selected");
+        }
+        this._oldHighlight = $($("#playback-timeline").children()[index]); //todo just keep no-jquery node?
+        this._oldHighlight.addClass("selected");
+        $("#point-delay").val(step.delay);
+        $("#point-duration").val(step.duration);
+        $("#point-spring").val(step.transition);
+    }
+
+    _addUIStepFrom(step, withNav=true) {
+        let color = "#000";
+        if (this.snapshots.stepCapturesVisualization(step)) {
+            color = this.snapshots.stepCapturesViewport(step) ? "#ffd500" : "#9dff00";
+        } else if (this.snapshots.stepCapturesViewport(step)) {
+            color = "#00d0ff";
+        }
+
+        let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
+            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
+
+        $("#playback-timeline").append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
+background: ${color};
+border-color: ${color};
+border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
+width: ${this._convertValue('duration', step.duration)}; 
+height: ${height}px; 
+margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
+        if (withNav) this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
+    }
+
+    _convertValue(key, value) {
+        return `${this._getValueFor(key, value)}px`;
+    }
+
+    _getValueFor(key, value) {
+        switch (key) {
+            case 'delay': return value * 2;
+            case 'duration': return value * 4 + 6;
+            case 'transition':
+            default: return value;
+        }
+    }
+
+    _getStyleFor(key) {
+        switch (key) {
+            case 'delay': return "margin-left";
+            case 'duration': return "width";
+            case 'transition': return "border-bottom-left-radius";
+            default: return value;
+        }
+    }
+
+    _recordAnnotationSid(annotation, sid) {
+        let sids = annotation.presenterSids || [];
+        if (!sids.includes(sid)) {
+            sids.push(sid);
+            annotation.set({ presenterSids: sids });
+        }
+    }
+
+    _recordAnnotationRef(sid, annotation) {
+        let refs = this._annotationRefs[sid] || [];
+        refs.push(annotation);
+        this._annotationRefs[sid] = refs;
+    }
+
+    _bindAnnotations() {
+        const update = this._recordAnnotationRef.bind(this);
+        this.annotations.canvas.forEachObject(o => (o.presenterSids || []).forEach(sid => update(sid, o)));
+    }
+
+    _handleInitIO() {
+        this._handleInitAnnotationsModule();
+        let step = this.snapshots.currentStep;
+        if (step) {
+            const _this = this;
+            this.snapshots._steps.forEach(s => _this._addUIStepFrom(s, false));
+            this._highlight(step, this.snapshots.currentStepIndex);
+        }
+    }
+
+    _handleInitAnnotationsModule() {
+        if (window.OSDAnnotations && !this.annotations) {
+            this.annotations = OSDAnnotations.instance();
+            this.annotations.forceExportsProp = "presenterSids";
+            this.annotations?.bindIO(); //enable IO export so we can work with annotations if any
+            this._bindAnnotations();
+        }
+    }
+
+    async _importAnnotations(content) {
+        try {
+            const _this = this;
+            //todo imports annotations twice if exported together with the annotations plugin -> made invisible, still show in the list, they get exported in the module etc...
+            let data = typeof content === "string" ? JSON.parse(content) : content;
+            for (let sid in data) {
+                let step = data[sid];
+                if (step[0]?.presenterSids) break; //no need for manual re-attaching, already present in the data
+                
+                //note what if annotations were already there? probably not an issue - the user initiated the load himself
+                step.forEach(o => {
+                    let sids = o.presenterSids || [];
+                    if (!sids.includes(sid)) {
+                        sids.push(sid);
+                    }
+                    o.presenterSids = sids;
+                });
+            }
+            this.annotations.loadObjects({objects: Object.values(data).flat(1)})
+                .then(() => _this._bindAnnotations());
+            Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
+        } catch(e) {
+            Dialogs.show("Load finished. Failed to setup annotations: these will be unavailable.", 3000, Dialogs.MSG_WARN);
+        }
+    }
+
+    _initEvents() {
+        const _this = this;
         this.snapshots.addHandler('play', function () {
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
@@ -108,7 +305,7 @@ ${UIComponents.Elements.checkBox({
             $("#playback-timeline").append('<span id="playback-timeline-measure" data-offset="0"></span>');
             _this._measureNode = document.getElementById('playback-timeline-measure');
 
-            const engine = window.OSDAnnotations?.instance();
+            const engine = _this.annotations;
             if (engine) engine.enableAnnotations(false);
         });
 
@@ -121,7 +318,7 @@ ${UIComponents.Elements.checkBox({
             }
             $("#playback-timeline-measure").remove();
 
-            const engine = window.OSDAnnotations?.instance();
+            const engine = _this.annotations;
             if (engine) engine.enableAnnotations(true);
         });
 
@@ -184,149 +381,22 @@ ${UIComponents.Elements.checkBox({
             _this._addUIStepFrom(e.step);
         });
 
-        //todo create event fired during instantiation possibly --> now hotfix add them here
-        for (let step of this.snapshots._steps) {
-            _this._addUIStepFrom(step, false);
-        }
+        VIEWER.addHandler('module-loaded', e => {
+            if (e.id === "annotations") {
+                _this._handleInitAnnotationsModule();
+            }
+        });
 
-        VIEWER.addHandler('key-down', function(e) {
+        VIEWER.addHandler('key-down', (e) => {
             if (!e.focusCanvas) return;
             //if (e.ctrlKey) {
             if (e.code === "KeyN") {
-                _this.snapshots.goToIndex(_this.snapshots.currentStep + 1);
+                _this.snapshots.goToIndex(_this.snapshots.currentStepIndex + 1);
             } else if (e.code === "KeyS") {
                 _this.snapshots.goToIndex(0);
             }
             //}
         });
-
-        if (Number.isInteger(this.playOnEnter) && this.playOnEnter >= 0) {
-            setTimeout(function() {
-                _this.snapshots.playFromIndex(0);
-            }, this.playOnEnter);
-        }
-    }
-
-    captureAnnotation() {
-        const engine = window.OSDAnnotations?.instance();
-        if (!engine) {
-            Dialogs.show('Annotations are not available.', 3000, Dialogs.MSG_WARN);
-        } else {
-            const annotation = engine.canvas.getActiveObject();
-            if (annotation) {
-                let step = this.snapshots.currentStep,
-                    refs = this._annotationRefs[step.id] || [];
-                annotation.set({
-                    presenterSid: step.id
-                });
-                refs.push(annotation);
-
-                this._annotationRefs[step.id] = refs;
-            } else {
-                Dialogs.show('Select an annotation to animate.', 3000, Dialogs.MSG_WARN);
-            }
-        }
-    }
-
-    addRecord() {
-        this.snapshots.create(
-            parseFloat($("#point-delay").val()),
-            parseFloat($("#point-duration").val()),
-            parseFloat($("#point-spring").val())
-        );
-    }
-
-    selectPoint(node) {
-        let index = Array.prototype.indexOf.call(node.parentNode.children, node);
-        this.snapshots.goToIndex(index);
-    }
-
-    setValue(key, value) {
-        if (this.snapshots.snapshotCount < 1) return;
-
-        let index = this.snapshots.currentStepIndex;
-
-        let node = $("#playback-timeline").children()[index];
-        if (node) {
-            this.snapshots.currentStep[key] = value;
-            node.style[this._getStyleFor(key)] = this._convertValue(key, value);
-        }
-    }
-
-    removeHighlightedRecord() {
-        let index = this.snapshots.currentStepIndex;
-        let child = $("#playback-timeline").children()[index];
-        if (child) {
-            this.snapshots.remove(index);
-            $(child).remove();
-        }
-    }
-
-    export() {
-        UTILITIES.downloadAsFile("visualisation-recording.json", this.snapshots.exportJSON());
-    }
-
-    import(event) {
-        let file = event.target.files[0];
-        if (!file) return;
-        let fileReader = new FileReader();
-        const _this = this;
-        fileReader.onload = e => _this.snapshots.importJSON(JSON.parse(e.target.result));
-        fileReader.readAsText(file);
-    }
-
-    _highlight(step, index) {
-        if (this._oldHighlight) {
-            this._oldHighlight.removeClass("selected");
-        }
-        this._oldHighlight = $($("#playback-timeline").children()[index]); //todo just keep no-jquery node?
-        this._oldHighlight.addClass("selected");
-        $("#point-delay").val(step.delay);
-        $("#point-duration").val(step.duration);
-        $("#point-spring").val(step.transition);
-    }
-
-    _addUIStepFrom(step, withNav=true) {
-        let color = "#000";
-        if (this.snapshots.stepCapturesVisualization(step)) {
-            color = this.snapshots.stepCapturesViewport(step) ? "#ff8800" : "#9dff00";
-        } else if (this.snapshots.stepCapturesViewport(step)) {
-            color = "#00d0ff";
-        }
-
-        let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
-            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
-
-        $("#playback-timeline").append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
-background: ${color};
-border-color: ${color};
-border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
-width: ${this._convertValue('duration', step.duration)}; 
-height: ${height}px; 
-margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
-        if (withNav) this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
-    }
-
-    _convertValue(key, value) {
-        return `${this._getValueFor(key, value)}px`;
-    }
-
-    _getValueFor(key, value) {
-        switch (key) {
-            case 'delay': return value * 2;
-            case 'duration': return value * 4 + 6;
-            case 'transition':
-            default: return value;
-        }
-    }
-
-    _getStyleFor(key) {
-        switch (key) {
-            case 'delay': return "margin-left";
-            case 'duration': return "width";
-            case 'transition': return "border-bottom-left-radius";
-            default: return value;
-        }
     }
 }
 

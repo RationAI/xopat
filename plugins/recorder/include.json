@@ -6,6 +6,6 @@
     "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
     "icon": "",
     "includes" : ["presenter.js"],
-    "modules": ["snapshots", "annotations"],
+    "modules": ["snapshots"],
     "permaLoad": false
 }

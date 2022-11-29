@@ -66,6 +66,28 @@ Modules (and possibly plugins) can have their own event system - in that case, t
 should be provided. These events should be invoked on the parent instance of the 'module' and
 use the OpenSeadragon Event System.
 
+## IO Handling
+Your module should provide IO import and export (if applicable) by itself. That means subscribing to the
+``export-data`` event and reading from the `APPLICATION_CONTEXT` available data at initialization.
+``````javascript
+const _this = this;
+VIEWER.addHandler('export-data', e => e.setSerializedData(<ID>, <string>));
+
+let data = APPLICATION_CONTEXT.getData(<ID>);
+if (data) {
+    //... import it
+}
+``````
+Additionaly, you can (like annotations module) perform this action after it has been requested, e.g. by exposing
+this as a ``bindIO()`` method that sets the IO if desired. Doing so will enable smooth exporting and data integration
+within the **context-free** viewer. Other plugins will not re-insert the same data multiple times if they work
+together over the same module. You should also provide some API so that plugins or other modules can export their
+own content with your data if applicable.
+
+> Example: annotations support force props exporting that makes the module allways export certain properties
+> if set. Other components can rely on their presence this way.
+
+
 ## Translation
 Can be done using ``loadModuleLocale: function(id, locale, data)`` which behaves almost like plugin's `localize` function
 (i.e. both ``locale`` and `data` can be undefined),

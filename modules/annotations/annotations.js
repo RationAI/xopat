@@ -201,6 +201,14 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Force the module to export additional properties used by external systems
+	 * @param {string} value new property to always export
+	 */
+	set forceExportsProp(value) {
+		this._extraProps.push(value);
+	}
+
+	/**
 	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
 	 * for exporting presets, see this.presets.export(...)
 	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones, string counts as one of withProperties
@@ -216,6 +224,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			props.push(withAllProps);
 		}
 		props.push(...withProperties);
+		props.push(...this._extraProps);
 		return this.canvas.toObject(props);
 	}
 
@@ -826,7 +835,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		//restore objects if any
 		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation-list", JSON.stringify(this.toObject())));
+			e.setSerializedData("annotation-list",
+				JSON.stringify(this.trimExportJSON(this.toObject(), ...this._extraProps))));
 		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
 		if (imageJson) {
 			this.loadObjects(JSON.parse(imageJson)).catch(e => {
@@ -869,6 +879,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.disabledInteraction = false;
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
+		this._extraProps = [];
 		this.cursor = {
 			mouseTime: 0, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
