@@ -7,36 +7,74 @@ class Presenter {
         //todo document option, get via getOption instead
         this.playOnEnter = params.playEnterDelay ?? -1;
         this._delay = true;
-
-        //todo better for exports also
-        this._annotationRefs = {};
+        this._annotationRefs = {}; //consider WeakMap
     }
 
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
+        const _this = this;
+
+        this.annotations = OSDAnnotations.instance();
+        this.annotations.bindIO(); //enable IO so we can work with annotations if any
+
+        VIEWER.addHandler('export-data', e => {
+            const module = OSDAnnotations.instance();
+            let result = {};
+            for (let sid in _this._annotationRefs) {
+                let data = _this._annotationRefs[sid].map(o => o.toObject('presenterSid'));
+                //todo does not work with groups --> exported prop names differ!!!
+                result[sid] = module.trimExportJSON(data, 'presenterSid');
+            }
+
+            // let objects = module.toObject(false, 'presenterSid').objects?.filter(x => x.presenterSid !== undefined);
+            // let result = module.trimExportJSON(objects, 'presenterSid');
+            e.setSerializedData("presented-annotations", JSON.stringify(result));
+        });
+        let data = APPLICATION_CONTEXT.getData("presented-annotations");
+        if (data) {
+            try {
+                data = JSON.parse(data);
+                for (let sid in data) {
+                    let step = data[sid];
+                    this._annotationRefs[sid] = [];
+
+                    //hide them and set our ID
+                    step.forEach(o => {
+                        o.visible = false;
+                    });
+                }
+                this.annotations.loadObjects({objects: Object.values(data).flat(1)}).then(() => {
+                    this.annotations.canvas.forEachObject(o => {
+                        if (o.presenterSid !== undefined) {
+                            _this._annotationRefs[o.presenterSid].push(o);
+                        }
+                    })
+                });
+            } catch(e) {
+                Dialogs.show("Failed to load annotations for stories: these will be unavailable.", 3000, Dialogs.MSG_WARN);
+            }
+        }
 
         USER_INTERFACE.MainMenu.append("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-    <span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.import(event);" />
+    <!--todo implement using common API--><span onclick="this.nextSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span><input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.import(event);" />
     <span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
 ${UIComponents.Elements.checkBox({
-            label: "Capture visualization",
+            label: "Capture visuals",
             onchange: this.PLUGIN + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesVisualization
         })}&emsp;
 ${UIComponents.Elements.checkBox({
-            label: "Capture Viewport",
+            label: "Capture viewport",
             onchange: this.PLUGIN + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesViewport
         })}
-<span class="btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Annotation</span>
-<br><br>
+<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Animate</button>
+<br>
 <button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
 <button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
 <button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button><br>
-
-<br><br>`,"auto-recorder", this.id);
+<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button>`,"auto-recorder", this.id);
 
         USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
             `<div class="d-flex">
@@ -54,7 +92,6 @@ ${UIComponents.Elements.checkBox({
 
 </div>`, 'play_circle_outline');
 
-        const _this = this;
         this.snapshots.addHandler('play', function () {
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
@@ -108,12 +145,16 @@ ${UIComponents.Elements.checkBox({
                     }, 200);
                 }
 
+                //todo forced updates not working
+                let updates = false;
                 if (e.prevStep) {
                     let annotations = _this._annotationRefs[e.prevStep.id];
                     if (annotations) {
                         annotations.forEach(a => {
                             a.visible = false;
+                            a.dirty = true;
                         });
+                        updates = true;
                     }
                 }
 
@@ -121,8 +162,11 @@ ${UIComponents.Elements.checkBox({
                 if (annotations) {
                     annotations.forEach(a => {
                         a.visible = true;
+                        a.dirty = true;
                     });
+                    updates = true;
                 }
+                if (updates) _this.annotations.canvas.renderAll();
 
                 let container = $("#playback-timeline");
                 _this._delay = false;
@@ -170,11 +214,13 @@ ${UIComponents.Elements.checkBox({
         } else {
             const annotation = engine.canvas.getActiveObject();
             if (annotation) {
-                //todo how to capture to also export? clone? probably...
-                console.log(this.snapshots.currentStep.id)
                 let step = this.snapshots.currentStep,
                     refs = this._annotationRefs[step.id] || [];
+                annotation.set({
+                    presenterSid: step.id
+                });
                 refs.push(annotation);
+
                 this._annotationRefs[step.id] = refs;
             } else {
                 Dialogs.show('Select an annotation to animate.', 3000, Dialogs.MSG_WARN);

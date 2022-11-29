@@ -144,8 +144,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
 
             let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
-            let modeChange = fixed ? "display: none;" : 'display: block;';
             const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
+            let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
             modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
 id="${dataId}-mode-toggle"
  style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
@@ -183,7 +183,7 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="ID: ${dataId}">${title}</span>
               <div class="d-inline-block label-render-type pointer" style="float: right;">
                   <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
@@ -216,23 +216,34 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             item.ondragend = handleDrop;
 
             const id = item.dataset.id;
-            window.DropDown.bind(item, () => [{
-                title: $.t('main.shaders.defaultBlending'),
-            }, {
-                title: $.t('main.shaders.maskEnable'),
-                action: (selected) => UTILITIES.shaderPartCustomBlendEnable(!selected, id),
-                selected: document.getElementById(`${id}-mode-toggle`)?.style.display !== 'none'
-            }, {
-                title: $.t('main.shaders.clipMask'),
-                icon: "payments",
-                action: (selected) => {
-                    const node = document.getElementById(`${id}-mode-toggle`);
-                    const newMode = selected ? "mask" : "mask_clip";
-                    node.dataset.mode = newMode;
-                    UTILITIES.changeModeOfLayer(id, newMode, false);
-                },
-                selected: document.getElementById(`${id}-mode-toggle`)?.dataset.mode === "mask_clip"
-            }]);
+            window.DropDown.bind(item, () => {
+                const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
+                const clipSelected = currentMask === "mask_clip";
+                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+
+                return [{
+                    title: $.t('main.shaders.defaultBlending'),
+                }, {
+                    title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
+                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                    selected: maskEnabled
+                }, {
+                    title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
+                    icon: "payments",
+                    styles: "padding-right: 5px;",
+                    action: (selected) => {
+                        const node = document.getElementById(`${id}-mode-toggle`);
+                        const newMode = selected ? "mask" : "mask_clip";
+                        node.dataset.mode = newMode;
+                        if (!maskEnabled) {
+                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                        } else {
+                            UTILITIES.changeModeOfLayer(id, newMode, false);
+                        }
+                    },
+                    selected: clipSelected
+                }];
+            });
         }
 
         function startDrag(event) {
@@ -385,11 +396,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 seaGL.reorder(null);
             };
 
-            UTILITIES.shaderPartCustomBlendEnable = function(enable, layerId) {
-                //todo also change mode to show if masking...
-                document.getElementById(`${layerId}-mode-toggle`).style.display = enable ? "block" : "none";
-            };
-
             UTILITIES.changeVisualisationLayer = function(self, layerId) {
                 let _this = $(self),
                     type = _this.val();
@@ -419,27 +425,44 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             };
 
             /**
+             * Enable or disable UI for modes, with the given mode applied (no need to call changeModeOfLayer)
+             */
+            UTILITIES.shaderPartSetBlendModeUIEnabled = function(layerId, enabled) {
+                const maskNode = document.getElementById(`${layerId}-mode-toggle`);
+                const mode = enabled ? maskNode.dataset.mode : "show";
+                if (!mode || !UTILITIES.changeModeOfLayer(layerId, mode, false)) {
+                    Dialogs.show($.t('messages.failedToSetMask'), 2500, Dialogs.MSG_WARN);
+                }
+            };
+
+            /**
              * Change rendering mode of a shader by toggle between "show" and "otherMode"
+             * without
              * @param layerId layer id in the visualization target
              * @param otherMode other toggle mode, default "mask"
              * @param toggle if false, just update the current mode
+             * @return true if successfully performed
              */
             UTILITIES.changeModeOfLayer = function(layerId, otherMode="mask", toggle=true) {
                 let viz = seaGL.visualization();
                 if (viz.shaders.hasOwnProperty(layerId)) {
-                    const layer = viz.shaders[layerId];
-                    let didRenderAsMask = layer.params.use_mode && layer.params.use_mode !== "show";
+                    const layer = viz.shaders[layerId],
+                        mode = layer.params.use_mode;
+
+                    let didRenderAsMask = typeof mode === "string" && mode !== "show";
                     if (toggle) {
                         layer.params.use_mode = didRenderAsMask ? "show" : otherMode;
                     } else {
-                        if (!didRenderAsMask) return; //no need to re-render, "show" is already on
+                        //if no need for change, return
+                        if ((!didRenderAsMask && otherMode === "show") || otherMode === mode) return true;
                         layer.params.use_mode = otherMode; //re-render, there are multiple modes to choose from
                     }
                     layer.error = "force_rebuild"; //error will force reset
                     seaGL.reorder(null);
-                } else {
-                    console.error(`UTILITIES::changeModeOfLayer Invalid layer id '${layerId}': bad initialization?`);
+                    return true;
                 }
+                console.error(`UTILITIES::changeModeOfLayer Invalid layer id '${layerId}': bad initialization?`);
+                return false;
             };
 
             /**

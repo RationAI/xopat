@@ -307,15 +307,18 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Export presets
-     * @returns {[object]} JSON-friendly representation
+     * todo rename to asJSON(...)
+     * @param serialized whether to return serialized string or not
+     * @returns {string|[object]} JSON-friendly representation
      */
-    toObject() {
+    toObject(serialized=false) {
         let exported = [];
         for (let preset in this._presets) {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
             exported.push(preset.toJSONFriendlyObject());
         }
+        if (serialized) return JSON.stringify(exported);
         return exported;
     }
 

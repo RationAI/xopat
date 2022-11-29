@@ -106,11 +106,12 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	/**
 	 * Creates a copy of exported list of objects with necessary values only
 	 * @param {[]|{}} objectList array of annotations or object with 'objects' array (as comes from this.toObject())
+	 * @param {string} keeps additional properties to keep
 	 * @return {[]|{}} clone array with trimmed values or modified object where 'objects' prop refers to the trimmed data
 	 */
-	trimExportJSON(objectList) {
+	trimExportJSON(objectList, ...keeps) {
 		let array = objectList;
-		if (typeof array === "object") {
+		if (!Array.isArray(array)) {
 			array = objectList.objects;
 		}
 		const _this = this;
@@ -119,7 +120,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
 			if (!factory) return undefined; //todo error? or skips?
 			return factory.iterate(x, (x, isRoot, isGroup, f) => {
-				let res = isRoot ? f.copyNecessaryProperties(x) : f.copyInnerProperties(x);
+				let res = isRoot ? f.copyNecessaryProperties(x, ...keeps) : f.copyInnerProperties(x);
 				if (isGroup) { //groups need BB so that it renders correctly
 					res.left = x.left;
 					res.top = x.top;
@@ -129,7 +130,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 				return res;
 			});
 		});
-		if (typeof objectList === "object") {
+		if (!Array.isArray(objectList)) {
 			objectList.objects = array;
 			return objectList;
 		}
@@ -215,7 +216,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			props.push(withAllProps);
 		}
 		props.push(...withProperties);
-		//todo test actually exported props
 		return this.canvas.toObject(props);
 	}
 
@@ -803,12 +803,63 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 	}
 
+	/**
+	 * Binds IO to the export events, must be requested manually.
+	 */
+	bindIO() {
+		if (this._handledIO) return;
+		const presets = this.presets;
+		//restore presents if any
+		VIEWER.addHandler('export-data', e => e.setSerializedData(
+			"annotation_presets", presets.toObject(true)));
+		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
+		let preset;
+		if (presetData !== undefined) {
+			try {
+				preset = presets.import(presetData);
+			} catch (e) {
+				preset = presets.addPreset();
+			}
+		}
+		else preset = presets.addPreset();
+		if (preset) this.setPreset(preset);
+
+		//restore objects if any
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation-list", JSON.stringify(this.toObject())));
+		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
+		if (imageJson) {
+			this.loadObjects(JSON.parse(imageJson)).catch(e => {
+				console.warn(e);
+				//todo error event instead
+				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
+			});
+		}
+		this._handledIO = true;
+	}
+
 	/********************* PRIVATE **********************/
 
 	_init() {
 		//Consider http://fabricjs.com/custom-control-render
 		// can maybe attach 'edit' button controls to object...
 		// note the board would have to reflect the UI state when opening
+
+		/**
+		 * Attach factory getter to each object
+		 */
+		fabric.Object.prototype._factory = function () {
+			const factory = _this.getAnnotationObjectFactory(this.factoryID || this.factoryId); //todo fallback factoryId remove in future
+			if (factory) this._factory = () => factory;
+			else if (this.factoryID) {
+				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
+				//maybe provide general implementation that can do nearly nothing
+			}
+			return factory;
+		}
+		fabric.Object.prototype.zooming = function(zoom) {
+			this._factory()?.onZoom(this, zoom);
+		}
 
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
@@ -843,6 +894,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		 * @member {OSDAnnotations.History}
 		 */
 		this.history = new OSDAnnotations.History("history", this, this.presets);
+		this.history.size = 50;
 		/**
 		 * FreeFormTool reference
 		 * @member {OSDAnnotations.FreeFormTool}
@@ -856,6 +908,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
 			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
 
+		this._handledIO = false;
 		const _this = this;
 
 		//after properties initialized
@@ -870,22 +923,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
-
-		/**
-		 * Attach factory getter to each object
-		 */
-		fabric.Object.prototype._factory = function () {
-			const factory = _this.getAnnotationObjectFactory(this.factoryID || this.factoryId); //todo fallback factoryId remove in future
-			if (factory) this._factory = () => factory;
-			else if (this.factoryID) {
-				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
-				//maybe provide general implementation that can do nearly nothing
-			}
-			return factory;
-		}
-		fabric.Object.prototype.zooming = function(zoom) {
-			this._factory()?.onZoom(this, zoom);
-		}
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -905,42 +942,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		this._layers = {};
-
-		//restore presents if any
-		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation_presets", JSON.stringify(_this.presets.toObject())));
-		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		let preset;
-		if (presetData !== undefined) {
-			try {
-				preset = this.presets.import(presetData);
-			} catch (e) {
-				preset = this.presets.addPreset();
-			}
-		}
-		else preset = this.presets.addPreset();
-		if (preset) this.setPreset(preset);
-
-		//restore objects if any
-		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation-list", JSON.stringify(_this.toObject())));
-		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
-		if (imageJson) {
-			try {
-				this.loadObjects(JSON.parse(imageJson)).then(_ => {
-					_this.history.size = 50;
-				});
-			} catch (e) {
-				console.warn(e);
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
-				_this.history.size = 50;
-			}
-		} else {
-			_this.history.size = 50;
-		}
-
 		if (Object.keys(this._layers).length < 1) this.createLayer();
-
 		this.setMouseOSDInteractive(true, false);
 	}
 
@@ -1226,6 +1228,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		return new Promise((resolve, reject) => {
+			//todo try re-implement with fabric.util.enlivenObjects(...)? not private api
 			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
 				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
 					return reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
@@ -1238,7 +1241,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 						self.checkPreset(obj);
 
 						obj.on('selected', self._objectClicked.bind(self));
-						//todo annotation creation event?
+						//todo consider annotation creation event?
 						_this.insertAt(obj, index);
 					});
 					delete input.objects;
@@ -1252,7 +1255,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 					return resolve();
 				});
 			}, reviver);
-		}).then(reset).catch(reset);
+		}).then(reset).catch(reset); //todo rethrow? rewrite as async call with try finally
 	}
 
 	static __self = undefined;

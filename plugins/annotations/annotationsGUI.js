@@ -20,12 +20,15 @@ class AnnotationsGUI {
 	}
 
 	init() {
+		const _this = this;
+
 		//Register used annotation object factories
 		this.context = OSDAnnotations.instance();
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
+		this.context.bindIO();
 
 		//by default no preset is active, make one
 		this.context.setPreset();
@@ -41,10 +44,7 @@ class AnnotationsGUI {
 		};
 
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
-
 		this.setupFromParams();
-
-		const _this = this;
 
 		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
 		this.setupActiveTissue(bgImage); // if (!...) return...

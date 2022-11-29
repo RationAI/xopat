@@ -111,7 +111,7 @@ if ($layerVisible) {
             $visualisationTarget->name = "Custom Visualisation";
         }
         if (!isset($visualisationTarget->shaders)) {
-            $visSummary = print_r($visualisationTarget, true);
+            $visSummary = htmlentities(print_r($visualisationTarget, true));
             $errors_print .= "console.warn('Visualisation #$index removed: missing shaders definition. The layer: <code>$visSummary</code>');";
             unset($parsedParams->visualizations[$index]);
         }
@@ -391,7 +391,7 @@ foreach ($MODULES as $_ => $mod) {
     self.addClass('pressed');
  }
 "> push_pin </span>
-            <div id="tissue-title-header"></div>
+            <div id="tissue-title-header" class="one-liner" style="max-height: 255px;"></div>
         </div>
 
         <div id="panel-images" class="inner-panel mt-2"></div>
@@ -977,9 +977,11 @@ EOF;
 
         const title = $("#tissue-title-header").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-            title.html(imageData.name || UTILITIES.fileNameFromPath(
+            const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
-            ));
+            );
+            title.html(name);
+            title.attr('title', name);
         } else if (!tiledImage || tiledImage.source instanceof EmptyTileSource) {
             title.addClass('error-container').html('Faulty (background) image');
         }
@@ -1071,7 +1073,10 @@ EOF;
          */
         loadModules: function(onload=_=>{}, ...ids) {
             LOADING_PLUGIN = false;
-            chainLoadModules(ids, 0, onload);
+            chainLoadModules(ids, 0, () => {
+                ids.forEach(id => VIEWER.raiseEvent('module-loaded', {id: id}));
+                onload && onload();
+            });
         },
 
         /**
@@ -1115,6 +1120,8 @@ EOF;
                     }
                     APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
                 }
+
+                VIEWER.raiseEvent('plugin-loaded', {id: id});
                 onload();
             };
             LOADING_PLUGIN = true;

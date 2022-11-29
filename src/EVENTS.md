@@ -55,6 +55,12 @@ a different notification is being shown). Parameters should be strictly kept:
 #### `error-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 Same as above, an error event. 
 
+#### `plugin-loaded` | e: `{id: string}
+Fired when plugin is loaded within a system (at runtime).
+
+#### `module-loaded` | e: `{id: string}
+Fired when module is loaded within a system (at runtime).
+
 #### `warn-system` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 System warning: it gives the opportunity to react upon, 
 unlike `console.warn`. Parameters same as above. The core does not handle this event anyhow.
@@ -111,4 +117,3 @@ Native OpenSeadragon event called when the canvas gets reloaded.
 
 
 
-		
