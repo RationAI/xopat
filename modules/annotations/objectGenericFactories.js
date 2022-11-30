@@ -959,10 +959,11 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 stroke: 'white',
                 fill: 'black',
                 paintFirst: 'stroke',
-                strokeWidth: 2,
+                strokeWidth: 4 / options.zoomAtCreation,
                 fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
                 scaleX: 1/options.zoomAtCreation,
-                scaleY: 1/options.zoomAtCreation
+                scaleY: 1/options.zoomAtCreation,
+                fontWeight: 'bold',
             });
         } else {
             $.extend(object, options, {
@@ -975,10 +976,11 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 stroke: 'white',
                 fill: 'black',
                 paintFirst: 'stroke',
-                strokeWidth: 2,
+                strokeWidth: 4 / options.zoomAtCreation,
                 fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
                 scaleX: 1,
                 scaleY: 1,
+                fontWeight: 'bold'
             });
         }
         return object;
@@ -1034,8 +1036,11 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     copy(ofObject, parameters) {
         parameters = parameters || {text: ofObject.text, left: ofObject.left, top: ofObject.top};
-        return new fabric.Text(parameters.text, this.copyProperties(ofObject,
-            "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale"));
+        let props = this.copyProperties(ofObject,
+            "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
+        $.extend(props, parameters);
+        props.paintFirst = 'stroke';
+        return new fabric.Text(parameters.text, props);
     }
 
     edit(theObject) {

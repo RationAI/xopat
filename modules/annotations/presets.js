@@ -274,7 +274,7 @@ OSDAnnotations.PresetManager = class {
             name: name,
             value: value
         };
-        this._context.raiseEvent('preset-meta-add', {preset: preset});
+        this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
         return key;
     }
 
@@ -290,7 +290,7 @@ OSDAnnotations.PresetManager = class {
             delete preset.meta[key];
             return true;
         }
-        this._context.raiseEvent('preset-meta-remove', {preset: preset});
+        this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
         return false;
     }
 

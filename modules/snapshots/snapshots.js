@@ -28,6 +28,8 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             id: Date.now(),
             zoomLevel: this._captureViewport ? view.getZoom() : undefined,
             point: this._captureViewport ? view.getCenter() : undefined,
+            bounds: this._captureViewport ? view.getBounds() : undefined,
+            preferSameZoom: true, //possible param?
             delay: delay,
             duration: duration,
             transition: transition,
@@ -196,8 +198,8 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      * Serialize current state
      * @return {string}
      */
-    exportJSON() {
-        return JSON.stringify(this._steps);
+    exportJSON(serialize=true) {
+        return serialize ? JSON.stringify(this._steps) : [...this._steps];
     }
 
     /**
@@ -279,7 +281,6 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     _init() {
         const _this = this;
-        //todo export only on demand, i.e. within a plugin
         VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
 
         let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");

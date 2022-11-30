@@ -53,7 +53,7 @@
             this._body.removeClass("popUpHide");
             this._body.addClass("popUpEnter");
 
-            if (delayMS > 1000) {
+            if (delayMS >= 1000) {
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
             }
         },
