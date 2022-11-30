@@ -234,8 +234,8 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         selected: clipSelected
                     }];
                 });
-            }, undefined, item => {
-                const listItems = item.target.parentNode.children;
+            }, undefined, e => {
+                const listItems = e.target.parentNode.children;
                 seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
             })
         }

@@ -55,6 +55,17 @@ ${UIComponents.Elements.checkBox({
 
 </div>`, 'play_circle_outline');
 
+        const _this = this;
+        this.setDraggable = UIComponents.Actions.draggable("playback-timeline",
+            undefined,
+            e => !_this.isPlaying,
+            e => {
+                const listItems = e.target.parentNode.children;
+                _this.snapshots.sortWithIdList(Array.prototype.map.call(listItems, child => child.dataset.id));
+                _this.selectPoint(e.target);
+            }
+        );
+
         this._handleInitIO();
         this._initEvents();
 
@@ -76,7 +87,7 @@ ${UIComponents.Elements.checkBox({
                 let sid = this.snapshots.currentStep.id;
                 //todo listener remove prevent removal of binded annotations? or remove them...
 
-                this._recordAnnotationRef(sid, annotation); //note which annotations
+                this._recordAnnotationRef(annotation, sid); //note which annotations
                 this._recordAnnotationSid(annotation, sid); //keep record on annotations too
                 Dialogs.show('Animated with step ' + sid, 1000, Dialogs.MSG_INFO);
             } else {
@@ -94,7 +105,7 @@ ${UIComponents.Elements.checkBox({
             if (annotation) {
                 let sid = this.snapshots.currentStep.id;
 
-                if (this._removeAnnotationRef(sid, annotation)) {
+                if (this._removeAnnotationRef(annotation, sid)) {
                     this._arrRemove(annotation.presenterSids, sid);
                     Dialogs.show('Removed from step ' + sid, 1000, Dialogs.MSG_INFO);
                 } else {
@@ -110,7 +121,8 @@ ${UIComponents.Elements.checkBox({
         this.snapshots.create(
             parseFloat($("#point-delay").val()),
             parseFloat($("#point-duration").val()),
-            parseFloat($("#point-spring").val())
+            parseFloat($("#point-spring").val()),
+            this.snapshots.currentStepIndex+1
         );
     }
 
@@ -205,7 +217,7 @@ ${UIComponents.Elements.checkBox({
         $("#point-spring").val(step.transition);
     }
 
-    _addUIStepFrom(step, withNav=true) {
+    _addUIStepFrom(step, withNav=true, atIndex=undefined) {
         let color = "#000";
         if (this.snapshots.stepCapturesVisualization(step)) {
             color = this.snapshots.stepCapturesViewport(step) ? "#ffd500" : "#9dff00";
@@ -213,17 +225,23 @@ ${UIComponents.Elements.checkBox({
             color = "#00d0ff";
         }
 
-        let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
-            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
-
-        $("#playback-timeline").append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
-background: ${color};
-border-color: ${color};
+        const height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
+                Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14),
+            parent = $("#playback-timeline"),
+            html = `<span id="step-timeline-${step.id}" data-id="${step.id}"
+onclick="${this.PLUGIN}.selectPoint(this);" style="background: ${color}; border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
-width: ${this._convertValue('duration', step.duration)}; 
-height: ${height}px; 
-margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
-        if (withNav) this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
+width: ${this._convertValue('duration', step.duration)}; height: ${height}px; 
+margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
+
+        if (parent[0].childElementCount > atIndex) {
+            parent.children().eq(atIndex).before(html);
+        } else {
+            //appends as last
+            parent.append(html);
+        }
+        if (withNav) this.snapshots.goToIndex(atIndex);
+        this.setDraggable(document.getElementById(`step-timeline-${step.id}`));
     }
 
     _convertValue(key, value) {
@@ -256,16 +274,16 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
         }
     }
 
-    _recordAnnotationRef(sid, annotation) {
+    _recordAnnotationRef(annotation, sid) {
         let refs = this._annotationRefs[sid] || [];
         refs.push(annotation);
         this._annotationRefs[sid] = refs;
     }
 
-    _removeAnnotationRef(sid, annotation) {
+    _removeAnnotationRef(annotation, sid=undefined) {
         if (annotation.presenterSids) {
-            for (let sid of annotation.presenterSids) {
-                this._arrRemove(this._annotationRefs[sid], annotation);
+            for (let id of (sid ? [sid] : annotation.presenterSids)) {
+                this._arrRemove(this._annotationRefs[id], annotation);
             }
             return true;
         }
@@ -274,7 +292,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
 
     _bindAnnotations() {
         const update = this._recordAnnotationRef.bind(this);
-        this.annotations.canvas.forEachObject(o => (o.presenterSids || []).forEach(sid => update(sid, o)));
+        this.annotations.canvas.forEachObject(o => (o.presenterSids || []).forEach(sid => update(o, sid)));
     }
 
     _handleInitIO() {
@@ -306,7 +324,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
 
             const addSidRecord = (o) => {
                 if (o.presenterSids) {
-                    o.presenterSids.forEach(sid => _this._recordAnnotationRef(sid, o));
+                    o.presenterSids.forEach(sid => _this._recordAnnotationRef(o, sid));
                 }
             }
 
@@ -328,7 +346,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
             for (let sid in data) {
                 let step = data[sid];
                 if (step[0]?.presenterSids) break; //no need for manual re-attaching, already present in the data
-                
+
                 //note what if annotations were already there? probably not an issue - the user initiated the load himself
                 step.forEach(o => {
                     let sids = o.presenterSids || [];
@@ -366,9 +384,11 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
 
             const engine = _this.annotations;
             if (engine) engine.enableAnnotations(false);
+            _this.isPlaying = true;
         });
 
         this.snapshots.addHandler('stop', function () {
+            _this.isPlaying = false;
             $("#presenter-play-icon span").removeClass("timeline-play");
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
@@ -433,14 +453,12 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
             }
         });
 
-        this.snapshots.addHandler('create', function (e) {
+        this.snapshots.addHandler('create', e => {
             USER_INTERFACE.Tools.notify(_this._toolsMenuId);
-
-            //todo create WRT current position
-            _this._addUIStepFrom(e.step);
+            _this._addUIStepFrom(e.step, true, e.index);
         });
 
-        this.snapshots.addHandler('remove', function (e) {
+        this.snapshots.addHandler('remove', e => {
             const sid = e.step.id,
                 refs = _this._annotationRefs[sid];
             if (refs) {

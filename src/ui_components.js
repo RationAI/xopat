@@ -145,17 +145,22 @@ UIComponents.Actions = {
      * (at least one between the dragged item and the child in hierarchy)
      * @param parentContainerId parent ID that keeps elements for which dragging will be enabled
      * @param onEnabled called for each child upon initialization, the element node is passed as argument
-     * @param onStartDrag called when the user starts dragging the element, the param is the event
-     * @param onEndDrag called when the element is dropped at some position, the param is the dropped child node
+     * @param onStartDrag called before the dragging starts, the param is the event of the drag,
+     *    returns true if the dragging should really start, false if not
+     * @param onEndDrag called when the element is dropped at some position, the param is the event of the drag
+     *    the dom node that triggered the change: event.target
      * @return function to call for any other elements manually, note! these should be also direct children of
      *    parentContainerId (i.e. adding more dynamically later).
      *  note: use 'non-draggable' on inner content to prevent it from triggering the dragging
      *  note: dragged item is always assigned 'drag-sort-active' class
+     *  note: events are attached to DOM tree, not the structure
+     *        - content changes in DOM involving your nodes destroys events;
      *  hint: use node.dataset.<> API to store and retrieve values within items
      */
     draggable: (parentContainerId, onEnabled=undefined, onStartDrag=undefined, onEndDrag=undefined) => {
-        const sortableList = document.getElementById(parentContainerId);
-        Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
+        const children = document.getElementById(parentContainerId)?.children;
+        if (!children) throw "Actions::draggable needs valid parent ID to access an element in DOM!";
+        Array.prototype.forEach.call(children, (item) => {enableDragItem(item)});
 
         function enableDragItem(item) {
             const isPrevented = (element, cls) => {
@@ -175,8 +180,9 @@ UIComponents.Actions = {
             };
             item.setAttribute('draggable', true);
             item.ondragstart = typeof onStartDrag === "function" ? e => {
-                if (isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) e.preventDefault();
-                onStartDrag(e);
+                if (!onStartDrag(e) || isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) {
+                    e.preventDefault();
+                }
             } : e => {
                 if (isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) e.preventDefault();
             };
@@ -201,8 +207,8 @@ UIComponents.Actions = {
                 item.target.classList.remove('drag-sort-active');
             };
             typeof onEnabled === "function" && onEnabled(item);
-            return enableDragItem;
         }
+        return enableDragItem;
     }
 };
 
@@ -416,8 +422,8 @@ UIComponents.Containers = {
             if (this.elements.length < 1) {
                 this._createLayout(pluginId, id, title, icon, html);
             } else {
-                this.head.innerHTML += this._getHeader(pluginId, id, title, icon);
-                this.body.innerHTML += this._getBody(pluginId, id, html);
+                $(this.head).append(this._getHeader(pluginId, id, title, icon));
+                $(this.body).append(this._getBody(pluginId, id, html));
                 this.head.style.display = "flex";
             }
             this.elements.push(id);

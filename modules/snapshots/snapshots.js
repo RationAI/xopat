@@ -1,6 +1,8 @@
 window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
+     * TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
+     *
      * Singleton getter.
      * @return {OpenSeadragon.Snapshots}
      */
@@ -25,7 +27,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         }
         let view = this.viewer.viewport;
         this._add({
-            id: Date.now(),
+            id: `${Date.now()}`,
             zoomLevel: this._captureViewport ? view.getZoom() : undefined,
             point: this._captureViewport ? view.getCenter() : undefined,
             bounds: this._captureViewport ? view.getBounds() : undefined,
@@ -236,6 +238,21 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      */
     stepCapturesViewport(step) {
         return step.point && step.zoomLevel;
+    }
+
+    /**
+     * Sorts the steps by given array of step IDs
+     * @param {[string]} ids
+     * @param {boolean} removeMissing
+     */
+    sortWithIdList(ids, removeMissing=false) {
+        if (removeMissing) this._steps = this._steps.filter(s => ids.includes(s.id));
+        this._steps.sort((a, b) => {
+            let i = ids.indexOf(a.id), j = ids.indexOf(b.id); //n^2, could extract to make O(n)
+            if (i < 0) return 1; //a not in list, push to end
+            if (j < 0) return -1; //b not in list, push to end
+            return i - j;
+        });
     }
 
     _playStep(index) {
