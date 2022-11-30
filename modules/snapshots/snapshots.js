@@ -17,8 +17,9 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      * @param {number} delay delay before the current snapshot is run when played, in seconds
      * @param {number} duration transition duration, in seconds
      * @param {number} transition transition style, 1 - linear; >1 - ease-out default 1.6
+     * @param {number} atIndex index where to put the step, default undefined places at the end
      */
-    create(delay=0, duration=0.5, transition=1.6) {
+    create(delay=0, duration=0.5, transition=1.6, atIndex=undefined) {
         if (this._playing) {
             return;
         }
@@ -33,7 +34,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             visualization: this._getVisualizationSnapshot(),
             screenShot: this._captureScreen ?
                 this._utils.screenshot(true, {width: 120, height: 120}) : undefined
-        });
+        }, atIndex);
     }
 
     /**
@@ -308,9 +309,13 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         };
     }
 
-    _add(step) {
-        let index = this._steps.length;
-        this._steps.push(step);
+    _add(step, index=undefined) {
+        if (typeof index === "number" && index >= 0 && index < this._steps.length) {
+            this._steps.splice(index, 0, step);
+        } else {
+            index = this._steps.length;
+            this._steps.push(step);
+        }
         this.raiseEvent("create", {
             index: index,
             step: step

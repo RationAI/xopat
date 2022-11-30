@@ -181,7 +181,7 @@ ${UIComponents.Elements.checkBox({
             USER_INTERFACE.Tools.notify(_this._toolsMenuId);
 
             //todo create WRT current position
-            _this._addUIStepFrom(e.step);
+            _this._addUIStepFrom(e.step, true, e.index);
         });
 
         //todo create event fired during instantiation possibly --> now hotfix add them here
@@ -232,7 +232,8 @@ ${UIComponents.Elements.checkBox({
         this.snapshots.create(
             parseFloat($("#point-delay").val()),
             parseFloat($("#point-duration").val()),
-            parseFloat($("#point-spring").val())
+            parseFloat($("#point-spring").val()),
+            this.snapshots.currentStepIndex + 1
         );
     }
 
@@ -286,7 +287,7 @@ ${UIComponents.Elements.checkBox({
         $("#point-spring").val(step.transition);
     }
 
-    _addUIStepFrom(step, withNav=true) {
+    _addUIStepFrom(step, withNav=true, atIndex=undefined) {
         let color = "#000";
         if (this.snapshots.stepCapturesVisualization(step)) {
             color = this.snapshots.stepCapturesViewport(step) ? "#ff8800" : "#9dff00";
@@ -294,17 +295,24 @@ ${UIComponents.Elements.checkBox({
             color = "#00d0ff";
         }
 
-        let height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
-            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14);
-
-        $("#playback-timeline").append(`<span onclick="${this.PLUGIN}.selectPoint(this);" style="
+        const height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
+            Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14),
+            parent = $("#playback-timeline"),
+            html = `<span onclick="${this.PLUGIN}.selectPoint(this);" style="
 background: ${color};
 border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; 
 height: ${height}px; 
-margin-left: ${this._convertValue('delay', step.delay)};"></span>`);
-        if (withNav) this.snapshots.goToIndex(this.snapshots.snapshotCount-1);
+margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
+
+        if (parent[0].childElementCount > atIndex) {
+            parent.children().eq(atIndex).after(html);
+        } else {
+            //appends as last
+            parent.append(html);
+        }
+        if (withNav) this.snapshots.goToIndex(atIndex);
     }
 
     _convertValue(key, value) {

@@ -196,7 +196,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             </div>`;
         }
 
-
         /**
          * Made with love by @fitri
          * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
@@ -205,100 +204,41 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
          * Modified by Jiří
          */
         function enableDragSort(listId) {
-            const sortableList = document.getElementById(listId);
-            Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
+            UIComponents.Actions.draggable(listId, item => {
+                const id = item.dataset.id;
+                window.DropDown.bind(item, () => {
+                    const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
+                    const clipSelected = currentMask === "mask_clip";
+                    const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+
+                    return [{
+                        title: $.t('main.shaders.defaultBlending'),
+                    }, {
+                        title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
+                        action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                        selected: maskEnabled
+                    }, {
+                        title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
+                        icon: "payments",
+                        styles: "padding-right: 5px;",
+                        action: (selected) => {
+                            const node = document.getElementById(`${id}-mode-toggle`);
+                            const newMode = selected ? "mask" : "mask_clip";
+                            node.dataset.mode = newMode;
+                            if (!maskEnabled) {
+                                UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                            } else {
+                                UTILITIES.changeModeOfLayer(id, newMode, false);
+                            }
+                        },
+                        selected: clipSelected
+                    }];
+                });
+            }, undefined, item => {
+                const listItems = item.target.parentNode.children;
+                seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
+            })
         }
-
-        function enableDragItem(item) {
-            item.setAttribute('draggable', true);
-            item.ondragstart = startDrag;
-            item.ondrag = handleDrag;
-            item.ondragend = handleDrop;
-
-            const id = item.dataset.id;
-            window.DropDown.bind(item, () => {
-                const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
-                const clipSelected = currentMask === "mask_clip";
-                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
-
-                return [{
-                    title: $.t('main.shaders.defaultBlending'),
-                }, {
-                    title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
-                    selected: maskEnabled
-                }, {
-                    title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                    icon: "payments",
-                    styles: "padding-right: 5px;",
-                    action: (selected) => {
-                        const node = document.getElementById(`${id}-mode-toggle`);
-                        const newMode = selected ? "mask" : "mask_clip";
-                        node.dataset.mode = newMode;
-                        if (!maskEnabled) {
-                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
-                        } else {
-                            UTILITIES.changeModeOfLayer(id, newMode, false);
-                        }
-                    },
-                    selected: clipSelected
-                }];
-            });
-        }
-
-        function startDrag(event) {
-            //const currentTarget = event.target;
-            let clicked = document.elementFromPoint(event.x, event.y);
-            if (isPrevented(clicked, 'non-draggable')) {
-                event.preventDefault();
-            }
-        }
-
-        //modified from https://codepen.io/akorzun/pen/aYwXoR
-        const isPrevented = (element, cls) => {
-            let currentElem = element;
-            let isParent = false;
-
-            while (currentElem) {
-                const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
-                if (hasClass) {
-                    isParent = true;
-                    currentElem = undefined;
-                } else {
-                    currentElem = currentElem.parentElement;
-                }
-            }
-            return isParent;
-        };
-
-        function handleDrag(item) {
-            const selectedItem = item.target,
-                list = selectedItem.parentNode,
-                x = event.clientX,
-                y = event.clientY;
-
-            selectedItem.classList.add('drag-sort-active');
-            let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
-
-            if (list === swapItem.parentNode) {
-                swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
-                list.insertBefore(selectedItem, swapItem);
-            }
-        }
-
-        function handleDrop(item) {
-            item.target.classList.remove('drag-sort-active');
-            const listItems = item.target.parentNode.children;
-
-            var order = [];
-            Array.prototype.forEach.call(listItems, function(child) {
-                order.push(child.dataset.id);
-            });
-
-            seaGL.reorder(order);
-        }
-
-
 
         if (firstTimeSetup) {
             VIEWER.addHandler('open-failed', function (e) {

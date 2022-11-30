@@ -290,6 +290,13 @@ So for example, an authentication can look like follows:
        - builtin API always uses this method
    - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``
 
+### UI
+For easier UI renderings, ``ui_components.js`` define simple basic building blocks for
+basic elements, actions and containers (e.g. menus). ``user_interface.js`` creates
+a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
+> We recommend re-using and extending these instead of pulling new dependencies.
+> Please, make yourself familiar with the UI API before making new features. 
+
 ### Localization
 Is possible through ``i18next`` library and also server-side with `i18n` class (with limited capabilities).
 To access the api, use ``$.t(...)`` method to translate. The `i18n` instance is stored in `$.i18n`.

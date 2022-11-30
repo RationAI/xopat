@@ -134,6 +134,79 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
 };
 
 /**
+ * UI Actions
+ *
+ * functions that enable more complex UI interaction
+ */
+UIComponents.Actions = {
+    /**
+     * Makes children in a parent draggable. These children might contain other elements you want to
+     * prevent the dragging on: such children need 'non-draggable' class
+     * (at least one between the dragged item and the child in hierarchy)
+     * @param parentContainerId parent ID that keeps elements for which dragging will be enabled
+     * @param onEnabled called for each child upon initialization, the element node is passed as argument
+     * @param onStartDrag called when the user starts dragging the element, the param is the event
+     * @param onEndDrag called when the element is dropped at some position, the param is the dropped child node
+     * @return function to call for any other elements manually, note! these should be also direct children of
+     *    parentContainerId (i.e. adding more dynamically later).
+     *  note: use 'non-draggable' on inner content to prevent it from triggering the dragging
+     *  note: dragged item is always assigned 'drag-sort-active' class
+     *  hint: use node.dataset.<> API to store and retrieve values within items
+     */
+    draggable: (parentContainerId, onEnabled=undefined, onStartDrag=undefined, onEndDrag=undefined) => {
+        const sortableList = document.getElementById(parentContainerId);
+        Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
+
+        function enableDragItem(item) {
+            const isPrevented = (element, cls) => {
+                let currentElem = element;
+                let isParent = false;
+
+                while (currentElem) {
+                    const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
+                    if (hasClass) {
+                        isParent = true;
+                        currentElem = undefined;
+                    } else {
+                        currentElem = currentElem.parentElement;
+                    }
+                }
+                return isParent;
+            };
+            item.setAttribute('draggable', true);
+            item.ondragstart = typeof onStartDrag === "function" ? e => {
+                if (isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) e.preventDefault();
+                onStartDrag(e);
+            } : e => {
+                if (isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) e.preventDefault();
+            };
+            item.ondrag = (item) => {
+                const selectedItem = item.target,
+                    list = selectedItem.parentNode,
+                    x = event.clientX,
+                    y = event.clientY;
+
+                selectedItem.classList.add('drag-sort-active');
+                let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
+
+                if (list === swapItem.parentNode) {
+                    swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
+                    list.insertBefore(selectedItem, swapItem);
+                }
+            };
+            item.ondragend = typeof onEndDrag === "function" ? item => {
+                item.target.classList.remove('drag-sort-active');
+                onEndDrag(item);
+            } : item => {
+                item.target.classList.remove('drag-sort-active');
+            };
+            typeof onEnabled === "function" && onEnabled(item);
+            return enableDragItem;
+        }
+    }
+};
+
+/**
  * Single UI Components for re-use, styled and prepared
  * note they are not very flexible, but usefull if you need generic, simple UI
  *
