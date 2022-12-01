@@ -215,7 +215,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param withAdditional
      * @return {{}}
      */
-    copyProperties(ofObject, withAdditional) {
+    copyProperties(ofObject, withAdditional=[]) {
         const result = {};
         this.__copyProps(ofObject, result, this.constructor.copiedProperties, withAdditional);
         this.__copyInnerProps(ofObject, result);
@@ -228,7 +228,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param withAdditional
      * @return {{}}
      */
-    copyNecessaryProperties(ofObject, ...withAdditional) {
+    copyNecessaryProperties(ofObject, withAdditional=[]) {
         const result = {};
         this.__copyProps(ofObject, result, this.constructor.necessaryProperties, withAdditional);
         this.__copyInnerProps(ofObject, result);

@@ -1281,156 +1281,161 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 }
 
-// OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
-//
-//     constructor(context, autoCreationStrategy, presetManager) {
-//         super(context, autoCreationStrategy, presetManager, "group", "group");
-//     }
-//
-//     getIcon() {
-//         return "shape_line";
-//     }
-//
-//     fabricStructure() {
-//         //todo the nesting needs to be estimated from the given object
-//         return "group";
-//     }
-//
-//     getDescription(ofObject) {
-//         return `[${this._eachChildAndFactory(ofObject, (o, f) => f.title()).join(", ")}]`;
-//     }
-//
-//     getCurrentObject() {
-//         return (this._current);
-//     }
-//
-//     /**
-//      * @param {Array} parameters array of objects with {x, y} properties (points)
-//      * @param {Object} options see parent class
-//      */
-//     create(parameters, options) {
-//         //todo copy properties of inner objects such as meta?
-//         return new fabric.Group(parameters, $.extend({
-//             type: this.type,
-//             factoryID: this.factoryID
-//         }, options));
-//     }
-//
-//     _eachChildAndFactory(ofObject, executor, method="map") {
-//         const self = this;
-//         return ofObject._objects[method](o => {
-//             const factory = self._context.getAnnotationObjectFactory(o.factoryID);
-//             if (!factory) {
-//                 console.warn("Group annotation foreach routine error: ", o.factoryID, "unknown factory.");
-//                 return undefined;
-//             }
-//             return executor(o, factory);
-//         });
-//     }
-//
-//     /**
-//      * @param {Object} ofObject fabricjs.Polygon object that is being copied
-//      * @param {Array} parameters array of points: {x, y} objects
-//      */
-//     copy(ofObject, parameters) {
-//         const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
-//         return new fabric.Group(from, {
-//             hasRotatingPoint: ofObject.hasRotatingPoint,
-//             isLeftClick: ofObject.isLeftClick,
-//             opacity: ofObject.opacity,
-//             type: ofObject.type,
-//             scaleX: ofObject.scaleX,
-//             color: ofObject.color,
-//             scaleY: ofObject.scaleY,
-//             zoomAtCreation: ofObject.zoomAtCreation,
-//             originalStrokeWidth: ofObject.originalStrokeWidth,
-//             factoryID: ofObject.factoryID,
-//             selectable: ofObject.selectable,
-//             borderColor: ofObject.borderColor,
-//             cornerColor: ofObject.cornerColor,
-//             borderScaleFactor: ofObject.borderScaleFactor,
-//             meta: ofObject.meta,
-//             hasControls: ofObject.hasControls,
-//             lockMovementX: ofObject.lockMovementX,
-//             lockMovementY: ofObject.lockMovementY,
-//             presetID: ofObject.presetID,
-//             layerID: ofObject.layerID
-//         });
-//     }
-//
-//     edit(theObject) {
-//         //todo
-//     }
-//
-//     recalculate(theObject) {
-//        //todo
-//        //  let rx = theObject.rx * theObject.scaleX,
-//        //      ry = theObject.ry * theObject.scaleY,
-//        //      left = theObject.left,
-//        //      top = theObject.top;
-//        //  theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-//        //      hasControls: false, lockMovementX: true, lockMovementY: true});
-//        //  let newObject = this.copy(theObject, {
-//        //      left: left, top: top, rx: rx, ry: ry
-//        //  });
-//        //  theObject.calcACoords();
-//        //  this._context.replaceAnnotation(theObject, newObject, true);
-//     }
-//
-//     instantCreate(screenPoint, isLeftClick = true) {
-//         return false;
-//     }
-//
-//     getCreationRequiredMouseDragDurationMS() {
-//         return Infinity; //never allow
-//     }
-//
-//     initCreate(x, y, isLeftClick = true) {
-//         let active = this._context.canvas.getActiveObject();
-//         console.log(active)
-//         active = active ? [active] : [];
-//         this._current = this.create(active, {});
-//     }
-//
-//     updateCreate(x, y) {
-//         if (!this._current) return;
-//
-//         let active = this._context.canvas.getActiveObject();
-//         console.log(active)
-//
-//         if (!this._current._objects.includes(active)) {
-//             this._current.add(active);
-//         }
-//     }
-//
-//     isImplicit() {
-//         return false;
-//     }
-//
-//     finishIndirect() {
-//         if (!this._current) return;
-//         this._context.addAnnotation(this._current);
-//         this._current = null;
-//     }
-//
-//     /**
-//      * Create array of points - approximation of the object shape
-//      * @param {Object} obj fabricjs.Polygon object that is being approximated
-//      * @param {function} converter take two elements and convert and return item
-//      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-//      * @return {Array} array of items returned by the converter - points
-//      */
-//     toPointArray(obj, converter, quality=1) {
-//         return undefined;
-//         // let result = this._eachChildAndFactory(
-//         //     obj,
-//         //     (o, f) => f.toPointArray(o, converter, quality)
-//         // );
-//         // if (result.some(r => Array.isArray(r))) return undefined;
-//         // return result;
-//     }
-//
-//     title() {
-//         return "Complex Annotation";
-//     }
-// };
+OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "group", "group");
+    }
+
+    getIcon() {
+        return "shape_line";
+    }
+
+    fabricStructure() {
+        //todo the nesting needs to be estimated from the given object
+        return "group";
+    }
+
+    getDescription(ofObject) {
+        return `[${this._eachChildAndFactory(ofObject, (o, f) => f.title()).join(", ")}]`;
+    }
+
+    getCurrentObject() {
+        return (this._current);
+    }
+
+    /**
+     * @param {Array} parameters array of objects
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        return this.configure(new fabric.Group(parameters), options);
+    }
+
+    _eachChildAndFactory(ofObject, executor, method="map") {
+        const self = this;
+        return ofObject._objects[method](o => {
+            const factory = self._context.getAnnotationObjectFactory(o.factoryID);
+            if (!factory) {
+                console.warn("Group annotation foreach routine error: ", o.factoryID, "unknown factory.");
+                return undefined;
+            }
+            return executor(o, factory);
+        });
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Polygon object that is being copied
+     * @param {Array} parameters array of points: {x, y} objects
+     */
+    copy(ofObject, parameters) {
+        const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
+        const props = this.copyProperties(ofObject);
+        return new fabric.Group(from, props);
+
+        // const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
+        // return new fabric.Group(from, {
+        //     hasRotatingPoint: ofObject.hasRotatingPoint,
+        //     isLeftClick: ofObject.isLeftClick,
+        //     opacity: ofObject.opacity,
+        //     type: ofObject.type,
+        //     scaleX: ofObject.scaleX,
+        //     color: ofObject.color,
+        //     scaleY: ofObject.scaleY,
+        //     zoomAtCreation: ofObject.zoomAtCreation,
+        //     originalStrokeWidth: ofObject.originalStrokeWidth,
+        //     factoryID: ofObject.factoryID,
+        //     selectable: ofObject.selectable,
+        //     borderColor: ofObject.borderColor,
+        //     cornerColor: ofObject.cornerColor,
+        //     borderScaleFactor: ofObject.borderScaleFactor,
+        //     meta: ofObject.meta,
+        //     hasControls: ofObject.hasControls,
+        //     lockMovementX: ofObject.lockMovementX,
+        //     lockMovementY: ofObject.lockMovementY,
+        //     presetID: ofObject.presetID,
+        //     layerID: ofObject.layerID
+        // });
+    }
+
+    isEditable() {
+        return false;
+    }
+
+    // edit(theObject) {
+    //     //todo
+    // }
+    //
+    // recalculate(theObject) {
+    //    //todo
+    //    //  let rx = theObject.rx * theObject.scaleX,
+    //    //      ry = theObject.ry * theObject.scaleY,
+    //    //      left = theObject.left,
+    //    //      top = theObject.top;
+    //    //  theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+    //    //      hasControls: false, lockMovementX: true, lockMovementY: true});
+    //    //  let newObject = this.copy(theObject, {
+    //    //      left: left, top: top, rx: rx, ry: ry
+    //    //  });
+    //    //  theObject.calcACoords();
+    //    //  this._context.replaceAnnotation(theObject, newObject, true);
+    // }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        return false;
+    }
+
+    getCreationRequiredMouseDragDurationMS() {
+        return Infinity; //never allow
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        // let active = this._context.canvas.getActiveObject();
+        // console.log(active)
+        // active = active ? [active] : [];
+        // this._current = this.create(active, {});
+        return undefined;
+    }
+
+    updateCreate(x, y) {
+        // if (!this._current) return;
+        //
+        // let active = this._context.canvas.getActiveObject();
+        // console.log(active)
+        //
+        // if (!this._current._objects.includes(active)) {
+        //     this._current.add(active);
+        // }
+    }
+
+    isImplicit() {
+        return false;
+    }
+
+    finishIndirect() {
+        // if (!this._current) return;
+        // this._context.addAnnotation(this._current);
+        // this._current = null;
+    }
+
+    /**
+     * Create array of points - approximation of the object shape
+     * @param {Object} obj fabricjs.Polygon object that is being approximated
+     * @param {function} converter take two elements and convert and return item
+     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @return {Array} array of items returned by the converter - points
+     */
+    toPointArray(obj, converter, quality=1) {
+        return undefined;
+        // let result = this._eachChildAndFactory(
+        //     obj,
+        //     (o, f) => f.toPointArray(o, converter, quality)
+        // );
+        // if (result.some(r => Array.isArray(r))) return undefined;
+        // return result;
+    }
+
+    title() {
+        return "Complex Annotation";
+    }
+};

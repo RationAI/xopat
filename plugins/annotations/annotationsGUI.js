@@ -524,7 +524,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
 		}).catch(e => {
 			console.log(e);
-			Dialogs.show("Failed to load the file. Is the selected format correct?", 2500, Dialogs.MSG_ERR);
+			Dialogs.show("Failed to load the file. Is the selected file format correct and the file valid?", 5000, Dialogs.MSG_ERR);
 		});
 	}
 

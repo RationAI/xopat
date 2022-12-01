@@ -120,7 +120,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
 			if (!factory) return undefined; //todo error? or skips?
 			return factory.iterate(x, (x, isRoot, isGroup, f) => {
-				let res = isRoot ? f.copyNecessaryProperties(x, ...keeps) : f.copyInnerProperties(x);
+				let res = isRoot ? f.copyNecessaryProperties(x, keeps) : f.copyInnerProperties(x);
 				if (isGroup) { //groups need BB so that it renders correctly
 					res.left = x.left;
 					res.top = x.top;
@@ -925,8 +925,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this._handledIO = false;
 		const _this = this;
 
-		//after properties initialized
-		// OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
+		//after properties initialize
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polyline, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
@@ -1269,7 +1269,10 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 					return resolve();
 				});
 			}, reviver);
-		}).then(reset).catch(reset); //todo rethrow? rewrite as async call with try finally
+		}).then(reset).catch(e => {
+			reset();
+			throw e;
+		}); //todo rethrow? rewrite as async call with try finally
 	}
 
 	static __self = undefined;

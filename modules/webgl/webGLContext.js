@@ -67,7 +67,7 @@ WebGLModule.GlContextFactory = class {
                 return;
             }
         }
-        throw "No context available for GlContextFactory to init.";
+        throw "No context available for GlContextFactory to init. Make sure your browser supports WebGL. The engine might also be busy being used by some other application.";
     }
 
     static _makerInit(canvas, maker, wrapper) {

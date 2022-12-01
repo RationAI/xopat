@@ -64,10 +64,12 @@ Return data exported with the viewer if available. Exporting the data is done th
 ## Events
 Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description
 should be provided. These events should be invoked on the parent instance of the 'module' and
-use the OpenSeadragon Event System.
+use the OpenSeadragon Event System. Such event system should be included for any global-level module.
 
-## IO Handling
-Your module should provide IO import and export (if applicable) by itself. That means subscribing to the
+## IO Handling with global modules
+In case your module instance is used only by the one who instantiated it, delegate this responsibility
+to the user and provide only IO methods. On the other hand, if your module lives as one global instance (e.g. annotation core), 
+it should perform IO import and export by itself. That means subscribing to the
 ``export-data`` event and reading from the `APPLICATION_CONTEXT` available data at initialization.
 ``````javascript
 const _this = this;

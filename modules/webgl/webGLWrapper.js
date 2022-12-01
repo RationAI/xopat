@@ -96,6 +96,8 @@ window.WebGLModule = class {
         ///////////// Internals /////////////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
 
+        this.reset();
+
         try {
             //WebGLModule.GlContextFactory.init(this,  "1.0");
             WebGLModule.GlContextFactory.init(this, this.webGlPreferredVersion, "2.0", "1.0");
@@ -113,8 +115,6 @@ window.WebGLModule = class {
         this.gl_drawing = function (gl, program, vis, bounds) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
         };
-
-        this.reset();
     }
 
     /**
