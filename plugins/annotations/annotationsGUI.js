@@ -64,7 +64,19 @@ class AnnotationsGUI {
 			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
 
-		this.loadAnnotationsList();
+		this.loadAnnotationsList(() => {
+			const ids = _this.getOption('serverAutoLoadIds', undefined);
+			if (Array.isArray(ids)) {
+				ids.forEach(id => _this._loadAnnotation(id, e => {
+					console.warn('AutoLoad annotations failed', e);
+					Dialogs.show(`Attempt to auto load annotations set <b>${id}</b> failed. 
+You can <a class="pointer" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">
+load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
+					//todo remoce such id from the option
+				}));
+			}
+			//todo possibly delete the option so that it does not pollute what is loaded and what not?
+		});
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
@@ -236,10 +248,10 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				}, {
 					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 				},{
-					"click #annotations-tool-bar-input-header + label": "Click here to open the annotations toolbar.<br> If it's opened, click anyway :)"
-				},{
 					"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
-				}]
+				}], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -257,7 +269,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -271,7 +285,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -289,7 +305,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				},{
 					"next #viewer-container": "Now you can try it out.<br>Note that key shortcuts do not work<br>when the mode is selected manually."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -309,7 +327,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				{
 					"next #gui_annotations": "Apart from file exports/imports, you can also use shared annotations if available."
 				},
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 	}
 
@@ -737,13 +757,16 @@ class="btn m-2">Set for left click </button>
 
 	/*** HTTP API **/
 
-	loadAnnotationsList() {
+	loadAnnotationsList(onSuccessLoad=()=>{}) {
 		this.annotationsMenuBuilder.clear();
 		this._serverAnnotationList = null;
 		const _this = this;
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0;
-			this._serverAnnotationList = json;
+
+			//todo unify behaviour, two servers send different response :/
+			this._serverAnnotationList = Array.isArray(json) ? json : json.annotations;
+
 			for (let available of this._serverAnnotationList) {
 				available.metadata = new MetaStore(available.metadata);
 				let id = available.id, meta = available.metadata;
@@ -770,6 +793,7 @@ class="btn m-2">Set for left click </button>
 					contentAction:""
 				});
 			}
+			onSuccessLoad(json);
 		}, error => {
 			console.error(_this.dataLoader.getErrorResponseMessage(error))
 			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu("Could not load annotations list."));
@@ -778,31 +802,29 @@ class="btn m-2">Set for left click </button>
 
 	loadAnnotation(id, force=false) {
 		const _this = this;
+		this._loadAnnotation(id, e => {
+			console.error("Import failed!", e);
+			Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
+				`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
+				20000, Dialogs.MSG_ERR);
+		}, force);
+	}
+
+	_loadAnnotation(id, onError, force=false) {
 		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
-
+		const _this = this;
 		this.dataLoader.loadAnnotation(this._server, id, json => {
-				$('#preset-modify-dialog').remove();
+			$('#preset-modify-dialog').remove();
 
-				//todo test IO for different formats
-				const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
-				_this.context.import(json.data, format).then(()=>{
-					_this.updatePresetsHTML();
-					$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
-					Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
-				}).catch(e => {
-					console.error("Import failed!", e);
-					Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
-						`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
-						20000, Dialogs.MSG_ERR);
-				});
-			},
-			e => {
-				console.error("Import request failed!", _this.dataLoader.getErrorResponseMessage(e));
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
-					`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
-					20000, Dialogs.MSG_ERR);
-			}
-		);
+			//todo test IO for different formats
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
+			_this.context.import(json.data, format).then(()=>{
+				_this.updatePresetsHTML();
+				_this._recordId(id);
+				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
+				Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
+			}).catch(onError);
+		}, onError);
 	}
 
 	updateAnnotation(id) {
@@ -844,14 +866,18 @@ class="btn m-2">Set for left click </button>
 
 	uploadAnnotation() {
 		const _this = this;
-		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
-
 		//server IO only supports default format
 		this.context.export(this._defaultFormat).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();
+
+					if (json.id) {
+						_this._recordId(json.id);
+					} else {
+						//todo err
+					}
 				},
 				e => {
 					Dialogs.show(`Failed to upload annotations. You can 
@@ -861,7 +887,13 @@ class="btn m-2">Set for left click </button>
 				}
 			);
 		});
+	}
 
+	_recordId(id) {
+		let ids = this.getOption('serverAutoLoadIds', undefined);
+		if (!Array.isArray(ids)) ids = [];
+		ids.push(id);
+		this.setOption('serverAutoLoadIds', ids, false);
 	}
 }
 

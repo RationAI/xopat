@@ -383,6 +383,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * If the object supports free form tool transformation
+     * @return {boolean}
+     */
+    supportsBrush() {
+        return true;
+    }
+
+    /**
      * Update object rendering based on rendering mode
      * @param {boolean} isTransparentFill
      * @param {object} ofObject
@@ -406,7 +414,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Create array of points - approximation of the object shape
+     * Create array of points - approximation of the object shape. This method should be overridden.
+     * For groups, it should return the best possible approximation via single array of points.
+     *  - if difficult, you can return undefined, in that case some features will not work.
+     *
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint

@@ -38,7 +38,8 @@ OSDAnnotations.FreeFormTool = class {
                 let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
                 this._setupPolygon(newPolygon, object);
             } else {
-                let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
+                let points = objectFactory.supportsBrush() ?
+                objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined;
                 if (points) {
                     this._createPolygonAndSetupFrom(points, object);
                 } else {

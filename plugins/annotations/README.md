@@ -30,6 +30,7 @@ The plugin supports optional parameters:
  - ``focusWithZoom`` whether to zoom automatically on annotation with focus action, default true
  - ``factories`` a list of enabled annotation factory IDs
  - ``format`` default format IO works in, the format used to store on the server
+ - ``serverAutoLoadIds`` array of server annotation-stored IDs to load if possible
 
 ## HTTP API
 The xOpat Annotations use by default a simple API that you either

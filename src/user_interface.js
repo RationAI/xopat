@@ -842,7 +842,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         window.addEventListener("resize", enjoyhintInstance.reRender, false);
                         window.addEventListener("click", enjoyhintInstance.rePaint, false);
 
-                        if (prereq) prereq();
+                        if (typeof prereq === "function") prereq();
                     },
                     onEnd : function () {
                         window.removeEventListener("resize", enjoyhintInstance.reRender, false);

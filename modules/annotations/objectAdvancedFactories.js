@@ -184,6 +184,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return "Ruler";
     }
 
+    supportsBrush() {
+        return false;
+    }
+
     _getWithUnit(value, unitSuffix) {
         if (value < 0.000001) {
             return value * 1000000000 + " n" + unitSuffix;
