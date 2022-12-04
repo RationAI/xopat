@@ -549,12 +549,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         //do nothing
     }
 
-    toPointArray(obj, converter, quality=1) {
-        return undefined;
-    }
-
     title() {
         return "Text";
+    }
+
+    toPointArray(obj, converter, quality=1) {
+        return [converter(obj.left, obj.top)];
     }
 };
 

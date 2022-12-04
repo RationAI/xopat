@@ -119,16 +119,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			//we define factories for types as default implementations too
 			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
 			if (!factory) return undefined; //todo error? or skips?
-			return factory.iterate(x, (x, isRoot, isGroup, f) => {
-				let res = isRoot ? f.copyNecessaryProperties(x, keeps) : f.copyInnerProperties(x);
-				if (isGroup) { //groups need BB so that it renders correctly
-					res.left = x.left;
-					res.top = x.top;
-					res.width = x.width;
-					res.height = x.height;
-				}
-				return res;
-			});
+			return factory.copyProperties(x, keeps, true);
 		});
 		if (!Array.isArray(objectList)) {
 			objectList.objects = array;

@@ -213,9 +213,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Copy all module-recognized properties of object
      * @param ofObject
      * @param withAdditional
+     * @param nested export inner properties of nested objects if true
      * @return {{}}
      */
-    copyProperties(ofObject, withAdditional=[]) {
+    copyProperties(ofObject, withAdditional=[], nested=false) {
+        if (nested) {
+            return this.iterate(ofObject, (x, isRoot, isGroup, f) => {
+                let res = isRoot ? f.copyProperties(x, withAdditional, false) : f.copyInnerProperties(x);
+                if (isGroup) { //groups need BB so that it renders correctly
+                    res.left = x.left;
+                    res.top = x.top;
+                    res.width = x.width;
+                    res.height = x.height;
+                }
+                return res;
+            });
+        }
+
         const result = {};
         this.__copyProps(ofObject, result, this.constructor.copiedProperties, withAdditional);
         this.__copyInnerProps(ofObject, result);
@@ -226,9 +240,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Copy only necessary properties of object (subset of copyProperties)
      * @param ofObject
      * @param withAdditional
+     * @param nested export inner properties of nested objects if true
      * @return {{}}
      */
-    copyNecessaryProperties(ofObject, withAdditional=[]) {
+    copyNecessaryProperties(ofObject, withAdditional=[], nested=false) {
+        if (nested) {
+            return this.iterate(ofObject, (x, isRoot, isGroup, f) => {
+                let res = isRoot ? f.copyNecessaryProperties(x, withAdditional, false) : f.copyInnerProperties(x);
+                if (isGroup) { //groups need BB so that it renders correctly
+                    res.left = x.left;
+                    res.top = x.top;
+                    res.width = x.width;
+                    res.height = x.height;
+                }
+                return res;
+            });
+        }
+
         const result = {};
         this.__copyProps(ofObject, result, this.constructor.necessaryProperties, withAdditional);
         this.__copyInnerProps(ofObject, result);

@@ -62,11 +62,17 @@ OSDAnnotations.Convertor.GeoJSON = class {
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "text": this.encoders.point,
+        "text": (object) => {
+            object = this._asGEOJsonFeature(object, "Point");
+            object.geometry.coordinates = object.geometry.coordinates[0] || [];
+            return object;
+        },
         "ruler": (object) => {
             const factory = this.context.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
-            const line = object[0];
+            const line = object.objects[0];
+            //todo bounding box should be exported as well so that coords are not negative without sense
+            //todo reimport is imprecise
 
             return {
                 geometry: {
@@ -76,7 +82,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
                         converter(line.x2, line.y2),
                     ]
                 },
-                properties: factory.copyNecessaryProperties(object)
+                properties: factory.copyNecessaryProperties(object, [], true)
             };
         },
     };
@@ -96,7 +102,12 @@ OSDAnnotations.Convertor.GeoJSON = class {
             object.top = geometry[1];
             return object;
         }),
-        "text": this.nativeDecoders.point,
+        "text": (object) => this._getAsNativeObject(object, (object, geometry) => {
+            //todo not necessary? left/top are already probably present in props
+            object.left = geometry[0];
+            object.top = geometry[1];
+            return object;
+        }),
         "ruler": (object) => this._getAsNativeObject(object),
     };
 

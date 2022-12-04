@@ -556,7 +556,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
-			Dialogs.show("Could not export annotations in the selected format.");
+			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});
 	}
