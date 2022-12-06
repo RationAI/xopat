@@ -17,6 +17,7 @@ OSDAnnotations.Preset = class {
             name: 'Category',
             value: category
         };
+        this._used = false;
     }
 
     /**
@@ -38,6 +39,7 @@ OSDAnnotations.Preset = class {
         if (parsedObject.meta) {
             preset.meta = parsedObject.meta;
         }
+        preset._used = true; //keep imported
         return preset;
     }
 
@@ -158,11 +160,24 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
+     * Check whether preset has been modified or whether it is a default-valued item
+     * so that it can be e.g. removed automatically
+     * @param {OSDAnnotations.Preset} p
+     * @return {boolean}
+     */
+    isUnusedPreset(p) {
+        return !p._used && p.objectFactory == this._context.polygonFactory
+            && p.meta.category?.value === ""
+            && Object.keys(p.meta).length === 1;
+    }
+
+    /**
      * Alias for static _commonProperty
      * @param {OSDAnnotations.Preset} withPreset
      */
     getCommonProperties(withPreset=undefined) {
         if (withPreset) {
+            withPreset._used = true;
             return this._withDynamicOptions(this._populateObjectOptions(withPreset));
         }
         return this._withDynamicOptions(this.constructor._commonProperty);
@@ -213,7 +228,7 @@ OSDAnnotations.PresetManager = class {
      * @event preset-update
      * @param {string} id preset id
      * @param {object} properties to update in the preset (keys must match)
-     * @return updated preset in case any value changed, false otherwise
+     * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
         let preset = this._presets[id],
@@ -235,8 +250,11 @@ OSDAnnotations.PresetManager = class {
                 }
             }
         }
-        if (needsRefresh) this._context.raiseEvent('preset-update', {preset: preset});
-        return needsRefresh ? preset : undefined;
+        if (needsRefresh) {
+            this._context.raiseEvent('preset-update', {preset: preset});
+            return preset;
+        }
+        return undefined;
     }
 
     /**
@@ -333,9 +351,16 @@ OSDAnnotations.PresetManager = class {
         const _this = this;
 
         if (clear) {
-            Object.values(this._presets).forEach(p => _this.raiseEvent('preset-delete', {preset: p}));
-
+            Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
             this._presets = {};
+        } else {
+            for (let pid in this._presets) {
+                const preset = this._presets[pid];
+                if (this.isUnusedPreset(preset)) {
+                    this._context.raiseEvent('preset-delete', {preset});
+                    delete this._presets[pid];
+                }
+            }
         }
         let first = undefined;
 
@@ -357,6 +382,11 @@ OSDAnnotations.PresetManager = class {
         } else {
             throw "Invalid presets data provided as an input for import.";
         }
+
+        if (presets.length > 0) {
+            this.selectPreset(undefined, false);
+            this.selectPreset(first?.presetID, true);
+        }
         return first;
     }
 
@@ -373,6 +403,7 @@ OSDAnnotations.PresetManager = class {
         }
         if (isLeftClick) this.left = preset;
         else this.right = preset;
+        this._context.raiseEvent('preset-select', {preset, isLeftClick});
     }
 
     _withDynamicOptions(options) {

@@ -43,7 +43,7 @@ describe('Annotations - User Controls', withBrowser, () => {
 
         cy.get("#advanced-menu-close-button").click();
 
-        cy.canvas().matchImage({title: "IO1 - Import all files."});
+        cy.canvas().matchImage({title: "IO Test - should be all same images."});
 
         cy.get("#annotations-right-click").click();
 
@@ -62,6 +62,8 @@ describe('Annotations - User Controls', withBrowser, () => {
 
         helpers.presetUi(2).click();
         helpers.presetUiSelectRight().click();
+
+        helpers.presetUiLeft().should('contain.html', 'SOme');
     }
 
     it ('Test Import All - native format', () => {
@@ -73,9 +75,9 @@ describe('Annotations - User Controls', withBrowser, () => {
         cy.get("#gui-annotations-io-flags").select("everything");
 
         cy.get("#importAnnotation").next("input").selectFile(
-            "test/fixtures/plugins/annotations/export.all.json", {force: true});
+            "test/fixtures/plugins/annotations/native.all.json", {force: true});
 
-        testSameContent();
+        testSameContent("native");
     });
 
     it ('Test Import Separate Import - native format', () => {
@@ -84,14 +86,41 @@ describe('Annotations - User Controls', withBrowser, () => {
         cy.get("#gui-annotations-io-format").select("native");
         cy.get("#gui-annotations-io-flags").select("presets");
 
-        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/export.presets.json", {force: true});
+        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/native.presets.json", {force: true});
 
         cy.get("#gui-annotations-io-flags").select("annotations");
 
-        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/export.objects.json", {force: true});
+        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/native.objects.json", {force: true});
 
-        testSameContent();
+        testSameContent("native");
     });
 
+    it ('Test Import All - GeoJSON', () => {
+        //images not tested yet  - export and import does not work
 
+        cy.get("#annotations-cloud").click();
+
+        cy.get("#gui-annotations-io-format").select("geo-json");
+        cy.get("#gui-annotations-io-flags").select("everything");
+
+        cy.get("#importAnnotation").next("input").selectFile(
+            "test/fixtures/plugins/annotations/geojson.all.json", {force: true});
+
+        testSameContent("geo-json");
+    });
+
+    it ('Test Import Separate Import - GeoJSON', () => {
+        cy.get("#annotations-cloud").click();
+
+        cy.get("#gui-annotations-io-format").select("geo-json");
+        cy.get("#gui-annotations-io-flags").select("presets");
+cy.pause()
+        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/geojson.presets.json", {force: true});
+
+        cy.get("#gui-annotations-io-flags").select("annotations");
+
+        cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/geojson.objects.json", {force: true});
+
+        testSameContent("geo-json");
+    });
 });

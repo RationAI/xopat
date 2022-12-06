@@ -14,6 +14,8 @@ export default {
         cy.get("#preset-no-" + presetIndex).children().last().find("span"),
     presetUiSelectLeft: () => cy.get("#select-annotation-preset-left"),
     presetUiSelectRight: () => cy.get("#select-annotation-preset-right"),
+    presetUiLeft: () => cy.get("#annotations-left-click"),
+    presetUiRight: () => cy.get("#annotations-right-click"),
 
     ALTdown: () => cy.keyDown("Alt", {altKey: true, focusCanvas: true}),
     ALTup: () => cy.keyUp("Alt", {altKey: true, focusCanvas: true}),

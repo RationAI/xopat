@@ -203,7 +203,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 return transformer(x, isRoot, false, factory);
             }
             let result = transformer(x, isRoot, true, factory);
-            result.objects = o.objects?.map(y => it(y, false, factory));
+            result.objects = x.objects?.map(y => it(y, false, factory));
             return result;
         };
         return it(o, true, this);

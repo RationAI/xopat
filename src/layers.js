@@ -26,14 +26,11 @@
                 webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 ready: function() {
-                    var i = 0;
-                    const activeBackgroundSetup = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
-                        defaultIndex = activeBackgroundSetup?.dataGroupIndex;
-
-                    let select = $("#shaders"),
-                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", Number.isInteger(defaultIndex) ? defaultIndex : 0);
+                    let i = 0;
+                    const select = $("#shaders"),
+                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
                     seaGL.foreachVisualisation(function (vis) {
-                        let selected = i === activeIndex ? "selected" : "";
+                        let selected = i == activeIndex ? "selected" : "";
                         if (vis.error) {
                             select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
                         } else {
@@ -178,12 +175,13 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                     }
                 }
             }
+            const fullTitle = title.startsWith("...") ? dataId : title;
 
             return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="ID: ${dataId}">${title}</span>
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${fullTitle}">${title}</span>
               <div class="d-inline-block label-render-type pointer" style="float: right;">
                   <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
@@ -311,17 +309,18 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             });
 
             VIEWER.addHandler('background-image-swap', function (e) {
-                e.prevBackgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+                const oldIndex = webglProcessing.currentVisualisationIndex();
+                e.prevBackgroundSetup.goalIndex = oldIndex;
 
-                if (Number.isInteger(e.backgroundSetup.dataGroupIndex)) {
+                const newIndex = Number.parseInt(e.backgroundSetup.goalIndex);
+                if (Number.isInteger(newIndex)) {
                     const selectNode = $("#shaders");
-                    let active = Number.parseInt(selectNode.val());
-                    if (active !== e.backgroundSetup.dataGroupIndex) {
-                        selectNode.val(String(e.backgroundSetup.dataGroupIndex));
-                        setNewDataGroup(e.backgroundSetup.dataGroupIndex);
+                    if (oldIndex !== newIndex) {
+                        selectNode.val(String(newIndex));
+                        setNewDataGroup(newIndex);
                     }
                 } else {
-                    e.backgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+                    e.backgroundSetup.goalIndex = oldIndex;
                 }
             });
 
@@ -452,7 +451,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                             && (errorMessage = errorMessage.error)) {
 
                             let node = $(`#${key}-shader-part`);
-                            node.prepend(`<div class="p2 error-container rounded-2">Possibly faulty layer.<code>${errorMessage}</code></div>`);
+                            node.prepend(`<div class="p2 error-container rounded-2">${$.t('main.shaders.faulty')}<code>${errorMessage}</code></div>`);
                             break;
                         }
                     }

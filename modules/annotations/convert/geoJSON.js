@@ -42,7 +42,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
 
     _getAsNativeObject(imported, geometryConvertor=()=>{}) {
         const result = imported.properties;
-        geometryConvertor(result, imported.geometry);
+        geometryConvertor(result, imported.geometry.coordinates);
         return result;
     }
 

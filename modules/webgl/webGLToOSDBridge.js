@@ -184,7 +184,10 @@ window.OpenSeadragon.BridgeGL = class {
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */
     loadShaders(activeVisualizationIdx=0, onPrepared=function(){}) {
-        if (this.webGLEngine.isPrepared) return;
+        if (this.webGLEngine.isPrepared) {
+            onPrepared();
+            return;
+        }
         this.webGLEngine.prepare(this.imageData, onPrepared, activeVisualizationIdx);
     }
 
@@ -283,9 +286,10 @@ window.OpenSeadragon.BridgeGL = class {
      * - awaits the OSD opening
      *
      * @param {function} layerLoaded callback on load
+     * @param {number} withActiveIndex index of the visualisation to load as first, default 0
      * @return {OpenSeadragon.BridgeGL}
      */
-    initBeforeOpen(layerLoaded=()=>{}) {
+    initBeforeOpen(layerLoaded=()=>{}, withActiveIndex=0) {
         if (this.webGLEngine.isInitialized) return this;
         this._initSelf();
 
@@ -296,9 +300,7 @@ window.OpenSeadragon.BridgeGL = class {
                 layerLoaded();
                 _this.openSD.removeHandler('open', handler);
             }
-
-            if (!_this.webGLEngine.isPrepared) _this.loadShaders(init);
-            else init();
+            _this.loadShaders(withActiveIndex, init);
         };
 
         this.openSD.addHandler('open', handler);
@@ -306,19 +308,16 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Initialize the bridge between OSD and WebGL immediately
+     * Initialize the bridge between OSD and WebGL immediately, loadShaders(...) must be called manually in this case.
      * like the WebGL's init() must be called once WebGL.prepare() finished
      */
     initAfterOpen() {
         if (this.webGLEngine.isInitialized) return this;
-
-        const _this = this;
-        function init() {
-            _this._initSelf();
-            _this.webGLEngine.init();
+        if (!this.webGLEngine.isPrepared) {
+            throw "BridgeGL::loadShaders() must be called before using initAfterOpen!";
         }
-        if (!this.webGLEngine.isPrepared) this.loadShaders(init);
-        else init();
+        this._initSelf();
+        this.webGLEngine.init();
         return this;
     }
 
@@ -348,9 +347,9 @@ window.OpenSeadragon.BridgeGL = class {
             }
         }
 
-        if (this._shadersLoaded) return;
-        this.loadShaders();
-        this._shadersLoaded = true;
+        if (this._initBounded) return;
+        this.loadShaders(); //just to be safe, should be already loaded at this time, consider throwing instead
+        this._initBounded = true;
 
         //This can be performed only once for now, mode of execution cannot be changed after init(...)
 

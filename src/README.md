@@ -116,7 +116,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
     - [O]`statusBar` - whether to show user action and system status hints, default `true`
     - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`
-    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`
+    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
     - [O]`viewport` - where to focus on load, default `undefined`
         - [R]`point` - center of the focus
@@ -136,7 +136,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`microns` - real world units to pixels mapping, default `undefined`,
     - [O]`name` - custom tissue name, default the tissue path
     - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
-    - [O]`dataGroupIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`
+    - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation
     - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value

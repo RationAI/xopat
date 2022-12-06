@@ -983,7 +983,7 @@ EOF;
             title.html(name);
             title.attr('title', name);
         } else if (!tiledImage || tiledImage.source instanceof EmptyTileSource) {
-            title.addClass('error-container').html('Faulty (background) image');
+            title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
         }
 
         if (imageData && APPLICATION_CONTEXT.getOption("scaleBar")) {
@@ -1029,6 +1029,8 @@ EOF;
             throw "Invalid translation for item " + id;
         }
     }
+
+    let preventedSwap = false;
 
     window.UTILITIES = {
 
@@ -1150,7 +1152,12 @@ EOF;
                 console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
                 return;
             }
-            const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            if (preventedSwap) {
+                Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
+                return;
+            }
+            let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
             if (activeBackground === bgIndex) return;
             const image = APPLICATION_CONTEXT.config.background[bgIndex],
                 imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
@@ -1159,12 +1166,14 @@ EOF;
 
             let prevImage = VIEWER.world.getItemAt(0);
             let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+            preventedSwap = true;
             VIEWER.addTiledImage({
                 tileSource: url,
                 index: 0,
                 opacity: 1,
                 replace: true,
                 success: function (e) {
+                    preventedSwap = false;
                     APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
                     e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
                     updateBackgroundChanged(0);
@@ -1179,6 +1188,14 @@ EOF;
                     let container = document.getElementById('tissue-preview-container');
                     container.children[activeBackground].classList.remove('selected');
                     container.children[bgIndex].classList.add('selected');
+                },
+                error: function (e) {
+                    preventedSwap = false;
+                    console.error("Swap Images Failure", e);
+                    let container = document.getElementById('tissue-preview-container');
+                    Dialogs.show($.t('messages.swapImagesFail'), 5000, Dialogs.MSG_ERR);
+                    container.children[bgIndex].classList.remove('selected');
+                    container.children[activeBackground].classList.add('selected');
                 }
             });
         }
@@ -1257,7 +1274,7 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
-class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
+class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
                     previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
                 }') center; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
             }
@@ -1272,12 +1289,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style
             const image = confBackground[activeIndex],
                 worldItem = VIEWER.world.getItemAt(0);
 
-            // if (!worldItem) {
-            //     USER_INTERFACE.Errors.show("Unable to open the image.", 'The requested data is corrupted or not available.', true);
-            //     handleSyntheticEventFinish({error: "Invalid data: no image opened."});
-            //     return false;
-            // }
-
             const referencedImage = worldItem?.getBackgroundConfig();
 
             if (image != referencedImage) {
@@ -1286,7 +1297,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style
                     tileSource : new EmptyTileSource({
                         height: dimensions?.y || 20000,
                         width: dimensions?.x || 20000,
-                        tileSize: 512 //todo from the source?
+                        tileSize: 512 //can be arbitrary, 512 works well...
                     }),
                     index: 0,
                     opacity: $("#global-opacity input").val(),
@@ -1445,19 +1456,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style
         }
 
         const toOpen = [];
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            //reverse order: last opened IMAGE is the first visible
-            for (let i = background.length-1; i >= 0; i--) {
-                const bg = background[i];
-                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
-            }
-        } else if (background.length > 0) {
-            let selectedImage = background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
-        }
-
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
         const handleFinishOpenImageEvent = () => {
@@ -1466,35 +1464,86 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative" style
                 handleSyntheticOpenEvent();
             }
         };
-        const openImage = (lastIndex, source, index) => {
-            openedSources++;
-            const dataIndex = lastIndex - index; //reverse order in toOpen
-            window.VIEWER.addTiledImage({
-                tileSource: source,
-                opacity: opacity,
-                success: (event) => {
-                    event.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[dataIndex];
-                    handleFinishOpenImageEvent();
-                },
-                error: () => {
-                    handleFinishOpenImageEvent();
-                }
-            });
+        let imageOpenerCreator = (success, userArg=undefined) => {
+            return (toOpenLastBgIndex, source, toOpenIndex) => {
+                openedSources++;
+                window.VIEWER.addTiledImage({
+                    tileSource: source,
+                    opacity: opacity,
+                    success: (event) => {
+                        success({userArg, toOpenLastBgIndex, toOpenIndex, event});
+                        handleFinishOpenImageEvent();
+                    },
+                    error: () => {
+                        handleFinishOpenImageEvent();
+                    }
+                });
+            }
         };
+
+        let imageOpener; //has to set-up correct getBackgroundConfig function
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            //reverse order: last opened IMAGE is the first visible
+            for (let i = background.length-1; i >= 0; i--) {
+                const bg = background[i];
+                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
+            }
+
+            imageOpener = imageOpenerCreator(e => {
+                const index = e.toOpenLastBgIndex - e.toOpenIndex; //reverse order in toOpen
+                e.event.item.getBackgroundConfig = () => {
+                    return APPLICATION_CONTEXT.config.background[index];
+                };
+            });
+        } else if (background.length > 0) {
+            const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            let selectedImage = background[selectedIndex];
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
+
+            imageOpener = imageOpenerCreator(e => {
+                const index = e.userArg;
+                e.event.item.getBackgroundConfig = () => {
+                    return APPLICATION_CONTEXT.config.background[index];
+                };
+            }, selectedIndex);
+        }
+
+        const openAll = (numOfVisLayersAtTheEnd) => {
+            let i = 0;
+            let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
+            for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
+
+            const visOpener = imageOpenerCreator(()=>{});
+            for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
+        }
 
         if (renderingWithWebGL) {
             APPLICATION_CONTEXT.prepareRendering();
+
+            let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
+            if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
+                // binding background config overrides active visualisation, only if not in stacked mode
+                const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+                    defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
+
+                if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
+                    activeVisIndex = defaultIndex;
+                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeVisIndex);
+                }
+            }
+
             VIEWER.bridge.loadShaders(
-                APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
+                activeVisIndex,
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
-
-                    toOpen.map(openImage.bind(this, toOpen.length - 2)); //index to bg, we pushed one non-bg
+                    openAll(1);
                 }
             );
         } else {
-            toOpen.map(openImage.bind(this, toOpen.length - 1));
+            openAll(0);
         }
     }
 

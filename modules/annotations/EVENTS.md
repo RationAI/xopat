@@ -26,6 +26,8 @@
 
 ##### preset-update | ``{preset: OSDAnnotations.Preset}``
 
+##### preset-select | ``{preset: OSDAnnotations.Preset, isLeftClick:boolean}``
+
 ##### preset-meta-remove | ``{preset: OSDAnnotations.Preset, key: string}``
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``

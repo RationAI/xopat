@@ -30,8 +30,6 @@ class AnnotationsGUI {
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.bindIO();
 
-		//by default no preset is active, make one
-		this.context.setPreset();
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
 			format: this._defaultFormat,
@@ -53,9 +51,11 @@ class AnnotationsGUI {
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
-		//after HTML added
-		this.updatePresetsHTML();
 		this.setupTutorials();
+
+		//after html initialized, request preset assignment,
+		// by default no preset is active, true -> make one if not existing
+		this.context.setPreset(true, true);
 
 		let opacityControl = $("#annotations-opacity");
 		opacityControl.val(this.context.getOpacity());
@@ -171,15 +171,27 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
-		this.context.addHandler('import', e => {
-			if (e.data.presets?.length > 0) {
-				_this.updatePresetsHTML();
+		// this.context.addHandler('import', e => {
+		// 	if (e.data.presets?.length > 0) {
+		// 		_this.updatePresetsHTML();
+		// 	}
+		// });
+		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('preset-update', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('preset-delete', e => {
+			if (e.preset === this.context.getPreset(false)) {
+				$("#annotations-right-click").html(this.getMissingPresetHTML(false));
+			}
+			if (e.preset === this.context.getPreset(true)) {
+				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
 		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		function showContextMenu(e) {
-			const _this = this, actions = [{
+			if (_this.context.presets.right) return;
+
+			const actions = [{
 				title: `Select preset for left click.`
 			}];
 			this.context.presets.foreach(preset => {
@@ -198,7 +210,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		}
-		this.context.addHandler('canvas-nonprimary-release', showContextMenu.bind(this));
+		this.context.addHandler('canvas-nonprimary-release', showContextMenu);
 
 
 		// this.context.forEachLayerSorted(l => {
@@ -367,7 +379,7 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 			Dialogs.show(`The <a class='pointer' onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">chosen layer</a> is not visible: auto outline method will not work.`, 5000, Dialogs.MSG_WARN, false);
 			return false;
 		}
-};
+	};
 
 	_toggleEnabled(node) {
 		let self = $(node);
@@ -503,7 +515,7 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
 
 			if (factory.factoryID !== preset.objectFactory.factoryID) {
-				changeHtml += `<div onclick="${this.PLUGIN}.updatePreset(${preset.presetID}, 
+				changeHtml += `<div onclick="${this.PLUGIN}.context.updatePreset(${preset.presetID}, 
 {objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
@@ -512,7 +524,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 
 		return `<div class="position-relative p-1" onclick="${this.PLUGIN}.showPresets(${isLeftClick});">
 <span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
- onclick="event.stopPropagation(); ${this.PLUGIN}.selectPreset(${isLeftClick}, null);">close</span>
+ onclick="event.stopPropagation(); ${this.PLUGIN}.context.setPreset(undefined, ${isLeftClick});">close</span>
 <span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
 <span class="one-liner d-inline-block v-align-middle" style="width: 115px;">${category}</span>
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
@@ -576,14 +588,16 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 	 */
 	updatePresetsHTML() {
 		let leftPreset = this.context.getPreset(true),
-			rightPreset = this.context.getPreset(false);
+			rightPreset = this.context.getPreset(false),
+			left = $("#annotations-left-click"),
+			right = $("#annotations-right-click");
 
 		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryID === t)) {
-			$("#annotations-left-click").html(this.getPresetControlHTML(leftPreset, true));
-		} else $("#annotations-left-click").html(this.getMissingPresetHTML(true));
-
-		if (rightPreset && this._allowedFactories.find(t => rightPreset.objectFactory.factoryID === t)) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
-		else $("#annotations-right-click").html(this.getMissingPresetHTML(false));
+			left.html(this.getPresetControlHTML(leftPreset, true));
+		} else left.html(this.getMissingPresetHTML(true));
+		if (rightPreset && this._allowedFactories.find(t => rightPreset.objectFactory.factoryID === t)) {
+			right.html(this.getPresetControlHTML(rightPreset, false));
+		} else right.html(this.getMissingPresetHTML(false));
 	}
 
 	/**
@@ -625,10 +639,10 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.PLUGIN}._presetSelection = ${preset.presetID}"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
 onclick="${this.PLUGIN}.removePreset(this, ${preset.presetID});">delete</span>
 <span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
-${this.PLUGIN}.updatePreset(${preset.presetID}, {objectFactory: 
+${this.PLUGIN}.context.updatePreset(${preset.presetID}, {objectFactory: 
 ${this.PLUGIN}.context.getAnnotationObjectFactory(this.value)});">${select}</select></span>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
-onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
+onchange="${this.PLUGIN}.context.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
 <br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
 <span class="material-icons btn-pointer" onclick="${this.PLUGIN}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
 	}
@@ -637,12 +651,6 @@ onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});"
 		let removed = this.context.presets.removePreset(presetId);
 		if (removed) {
 			$(buttonNode).parent().remove();
-			if (removed === this.context.getPreset(false)) {
-				$("#annotations-right-click").html(this.getMissingPresetHTML(false));
-			}
-			if (removed === this.context.getPreset(true)) {
-				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
-			}
 		}
 	}
 
@@ -672,20 +680,13 @@ onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});"
 		Dialogs.show("Failed to delete meta field.", 2500, Dialogs.MSG_ERR);
 	}
 
-	updatePreset(presetId, properties) {
-		let updated = this.context.presets.updatePreset(presetId, properties);
-		if (updated) {
-			this.updatePresetsHTML();
-		}
-	}
-
 	_metaFieldHtml(presetId, key, metaObject, allowDelete=true) {
 		let delButton = allowDelete ? `<span 
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.PLUGIN}.deletePresetMeta(this, ${presetId}, '${key}')">delete</span>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
-${this.PLUGIN}.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
+${this.PLUGIN}.context.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
 	}
 
 	/**
@@ -732,7 +733,7 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		setTimeout(function() {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.selectPreset(isLeft);
+			_this.context.setPreset(_this._presetSelection, isLeft);
 		}, 150);
 		return false;
 	}
@@ -741,11 +742,6 @@ class="btn m-2">Set for left click </button>
 		let id = this.context.presets.addPreset().presetID,
 			node = $(buttonNode);
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
-	}
-
-	selectPreset(isLeftClick, selection = this._presetSelection) {
-		this.context.presets.selectPreset(selection, isLeftClick);
-		this.updatePresetsHTML();
 	}
 
 	getAnnotationsHeadMenu(error="") {

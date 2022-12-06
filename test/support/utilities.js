@@ -30,7 +30,7 @@ export default {
 
         // ... && window is a trick to return that value on success
         return cy.waitUntil(() =>  conf.initialized
-                && conf.window.VIEWER.imageLoader.jobsInProgress === 0
+                && conf.window.VIEWER.imageLoader.jobsInProgress < 2 //we allow 1 unfinished element
                 && conf.window, {
             description: "Waiting for the images to load.",
             timeout: 30000,

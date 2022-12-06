@@ -119,7 +119,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			//we define factories for types as default implementations too
 			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
 			if (!factory) return undefined; //todo error? or skips?
-			return factory.copyProperties(x, keeps, true);
+			return factory.copyNecessaryProperties(x, keeps, true);
 		});
 		if (!Array.isArray(objectList)) {
 			objectList.objects = array;
@@ -150,7 +150,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
-	 * Import annotations and presets
+	 * Import annotations and presets. Imported presets automatically remove unused presets
+	 *   (no change in meta or no object created with).
 	 * @param {string} data serialized data of the given format
 	 * 	- either object with 'presets' and/or 'objects' data content - arrays
 	 * 	- or a plain array, treated as objects
@@ -457,28 +458,26 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Set active preset for mouse button
-	 * @param {OSDAnnotations.Preset|undefined} preset  object that defines properties annotation is labeled with,
-	 * 		omit if the preset should be deducted automatically (first one / create new)
+	 * @param {OSDAnnotations.Preset|undefined|boolean|number} preset
+	 *      either a boolean to control selection (true will try to set any preset
+	 *      and create one if not present, false will unset); or
+	 *      object OSDAnnotations.Preset to set, or preset ID to set;
+	 * 		undefined behaves as if false was sent
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
 	 */
 	setPreset(preset=undefined, left=true) {
-		if (!preset) {
+		if (typeof preset === "boolean" && preset) {
 			for (let key in this.presets._presets) {
 				if (this.presets.exists(key)) {
 					preset = this.presets.get(key);
 					break;
 				}
 			}
-			if (!preset) preset = this.presets.addPreset();
+			if (typeof preset === "boolean") preset = this.presets.addPreset();
 		}
-		if (left) {
-			let original = this.presets.left;
-			this.presets.left = preset;
-			return original;
-		}
-		let original = this.presets.right;
-		this.presets.right = preset;
+		let original = this.presets.getActivePreset(left);
+		this.presets.selectPreset(preset?.presetID || preset, left);
 		return original;
 	}
 
@@ -510,6 +509,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			}
 		}
 		factory.configure(object, props);
+		object.zooming(this.canvas.getZoom());
 	}
 
 	/************************ Layers *******************************/
@@ -816,16 +816,15 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		VIEWER.addHandler('export-data', e => e.setSerializedData(
 			"annotation_presets", presets.toObject(true)));
 		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		let preset;
 		if (presetData !== undefined) {
 			try {
-				preset = presets.import(presetData);
+				presets.import(presetData);
 			} catch (e) {
-				preset = presets.addPreset();
+				//todo error event instead
+				console.error(e);
+				Dialogs.show("Could not load presets. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
 			}
 		}
-		else preset = presets.addPreset();
-		if (preset) this.setPreset(preset);
 
 		//restore objects if any
 		VIEWER.addHandler('export-data', e =>
