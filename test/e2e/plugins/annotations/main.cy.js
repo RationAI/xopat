@@ -81,7 +81,6 @@ describe('Annotations - User Controls', withBrowser, () => {
     it ("Preset #1", function () {
         helpers.ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
-
         helpers.ALTup();
 
         cy.canvas().matchImage({title: "S1 - polygon finished"});
@@ -103,20 +102,21 @@ describe('Annotations - User Controls', withBrowser, () => {
             .then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
         cy.wait(150)
 
-        cy.canvas().matchImage({title: "S3 - undo"});
+        cy.canvas().matchImage({title: "S3 - undo"}); //ellipse should be gone
 
         cy.keyDown("Shift", {ctrlKey: true, shiftKey: true})
         cy.key("Z", {ctrlKey: true, shiftKey: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
 
         cy.wait(300)
-        cy.canvas().matchImage({title: "S4 - redo"});
+        cy.canvas().matchImage({title: "S4 - redo"}); //ellipse should be back
 
+        //lift ctrl, no actions will now make history work
         cy.keyUp("Ctrl", {shiftKey: true})
         cy.key("Z", {shiftKey: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
 
         cy.keyUp("Shift")
         cy.key("z").then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
             .then(() => ANNOTATIONS.canvas._objects.length).should('eq', 2);
-        cy.canvas().matchImage({title:  "S4 - redo"});
+        cy.canvas().matchImage({title:  "S4 - redo"}); //ellipse should be still here
     })
 });

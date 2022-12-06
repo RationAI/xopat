@@ -114,7 +114,7 @@ describe('Annotations - User Controls', withBrowser, () => {
 
         cy.get("#gui-annotations-io-format").select("geo-json");
         cy.get("#gui-annotations-io-flags").select("presets");
-cy.pause()
+
         cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/geojson.presets.json", {force: true});
 
         cy.get("#gui-annotations-io-flags").select("annotations");

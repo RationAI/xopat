@@ -515,7 +515,7 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
 
 			if (factory.factoryID !== preset.objectFactory.factoryID) {
-				changeHtml += `<div onclick="${this.PLUGIN}.context.updatePreset(${preset.presetID}, 
+				changeHtml += `<div onclick="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, 
 {objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
@@ -639,10 +639,10 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.PLUGIN}._presetSelection = ${preset.presetID}"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
 onclick="${this.PLUGIN}.removePreset(this, ${preset.presetID});">delete</span>
 <span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
-${this.PLUGIN}.context.updatePreset(${preset.presetID}, {objectFactory: 
+${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, {objectFactory: 
 ${this.PLUGIN}.context.getAnnotationObjectFactory(this.value)});">${select}</select></span>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
-onchange="${this.PLUGIN}.context.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
+onchange="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
 <br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
 <span class="material-icons btn-pointer" onclick="${this.PLUGIN}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
 	}
@@ -686,7 +686,7 @@ class="material-icons btn-pointer position-absolute right-0" style="font-size: 1
 onclick="${this.PLUGIN}.deletePresetMeta(this, ${presetId}, '${key}')">delete</span>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
-${this.PLUGIN}.context.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
+${this.PLUGIN}.context.presets.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
 	}
 
 	/**
