@@ -90,8 +90,8 @@ own content with your data if applicable.
 > if set. Other components can rely on their presence this way.
 
 
-## Translation
-Can be done using ``loadModuleLocale: function(id, locale, data)`` which behaves almost like plugin's `localize` function
+## Localization
+Can be done using ``UTILITIES.loadModuleLocale(id, locale, data)`` which behaves almost like plugin's `localize` function
 (i.e. both ``locale`` and `data` can be undefined),
 except that you have to specify the module id manually. Also, to load a file instead of a translation data you
 have to pass the translation data relative path yourself: i.e. 

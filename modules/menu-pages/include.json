@@ -1,0 +1,8 @@
+{
+    "id": "menu-pages",
+    "name": "Page builder for Advanced Menu",
+    "includes" : [
+        "menu.js"
+    ],
+    "requires": []
+}

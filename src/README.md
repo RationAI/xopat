@@ -157,14 +157,7 @@ it is an inherited configuration interface of the WebGL module extended by optio
     - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
-- [O]`dataPage` - an unique page ID to object mapping, each object consists of
-    - [O]`title` - the page menu button title
-    - [O]`page` - a list of nodes of UI building blocks to generate data reports, where each node:
-        - [R]`type` - a node type, can be either "columns", "vega" or one of keys of `UIComponents.Elements` interface; based on the node type other
-        parameters are supported (interface nodes are described at the definition)
-        - [O]`classes` - a space separated list of classes to add to the generated HTML
-        - [R type=columns]`children` - a list of nodes to place in columns
-        - [R type=vega]`specs` - a VEGA visualization grammar configuration for a particular GRAPH
+
    
 <details>
  <summary>Advanced features:</summary>

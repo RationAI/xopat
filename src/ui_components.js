@@ -411,19 +411,19 @@ UIComponents.Containers = {
         }
 
         //todo get rid of plugin ID? assign just to the parent container outside!
-        set(pluginId, id, title, html, icon="") {
+        set(pluginId, id, title, html, icon="", bodyId=id) {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
-                $(`#${existing}-header`).replaceWith(this._getHeader(pluginId, id, title, icon));
-                $(`#${existing}`).replaceWith(this._getBody(pluginId, id, title, icon));
+                $(`#${existing}-menu-header`).replaceWith(this._getHeader(pluginId, id, title, icon, false, bodyId));
+                $(`#${existing}`).replaceWith(this._getBody(pluginId, id, html, false, bodyId));
                 return;
             }
 
             if (this.elements.length < 1) {
-                this._createLayout(pluginId, id, title, icon, html);
+                this._createLayout(pluginId, id, title, icon, html, bodyId);
             } else {
-                $(this.head).append(this._getHeader(pluginId, id, title, icon));
-                $(this.body).append(this._getBody(pluginId, id, html));
+                $(this.head).append(this._getHeader(pluginId, id, title, icon, false, bodyId));
+                $(this.body).append(this._getBody(pluginId, id, html, false, bodyId));
                 this.head.style.display = "flex";
             }
             this.elements.push(id);
@@ -449,10 +449,10 @@ UIComponents.Containers = {
             delete this.elements;
         }
 
-        _createLayout(pluginId, id, firstTitle, icon, html) {
+        _createLayout(pluginId, id, firstTitle, icon, html, bodyId) {
             let head = `<div id="${this.uid}-head" class="flex-items-start ${this.horizontal ? "windth-full px-3 flex-row" : "height-full py-3 flex-column"}"
 style="${this.menuShow ? 'display:flex;' : 'display:none;'} ${this.horizontal ? "height: 32px;" : "width: 120px; min-width: 120px; text-align: right;"} background: var(--color-bg-tertiary); z-index: 2">
-${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
+${this._getHeader(pluginId, id, firstTitle, icon, true, bodyId)}</div>`;
             let flexD;
             if (this.horizontal) flexD = this.menuReversed ? "flex-column-reverse panel-horizontal" : "flex-column panel-horizontal";
             else flexD = "flex-row panel-vertical";
@@ -461,27 +461,29 @@ ${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
             else sizeD = this.horizontal ? "width-full" : "height-full";
             let overflow = this.horizontal ? "overflow-x:auto;overflow-y:hidden;" : "overflow-y:auto;overflow-x:hidden;";
 
-            let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">${this._getBody(pluginId, id, html, true)}</div>`;
+            let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">
+${this._getBody(pluginId, id, html, true, bodyId)}</div>`;
             this.context.innerHTML = `<div class="panel-menu d-flex ${sizeD} ${flexD}">${head + body}</div>`;
             this.head = this.context.children[0].children[0];
             this.body = this.context.children[0].children[1];
         }
 
-        _getHeader(pluginId, id, title, icon, isFirst=false) {
+        _getHeader(pluginId, id, title, icon, isFirst, bodyId) {
             pluginId = pluginId ? pluginId + "-plugin-root" : "";
             icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
-            return `<input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
+            return `<span id="${id}-menu-header" class="width-full" style="flex-basis: min-content">
+<input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
 class="panel-menu-input ${pluginId}" onclick="
-for (let ch of document.getElementById('${this.uid}-body').childNodes) {ch.style.display = 'none'}
-document.getElementById('${id}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
+for (let ch of document.getElementById('${this.uid}-body').children) {ch.style.display = 'none'}
+document.getElementById('${bodyId}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
 head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${pluginId} ${this.borderClass}
-panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
+panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
         }
 
-        _getBody(pluginId, id, html, isFirst=false) {
+        _getBody(pluginId, id, html, isFirst, bodyId) {
             pluginId = pluginId ? pluginId + "-plugin-root" : "";
             let size = this.horizontal ? "width-full" : "height-full";
-            return `<section id="${id}" class="${pluginId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
+            return `<section id="${bodyId}" class="${pluginId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
         }
     },
 

@@ -71,7 +71,6 @@ ensureDefined($parsedParams, "data", array());
 ensureDefined($parsedParams, "background", array());
 ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
-ensureDefined($parsedParams, "dataPage", (object)array());
 
 $is_debug = isBoolFlagInObject($parsedParams->params, "debugMode");
 if ($is_debug) {
@@ -525,9 +524,6 @@ EOF;
             get plugins () {
                 return setup.plugins || {};
             },
-            get dataPage () {
-                return setup.dataPage || {};
-            },
         },
         //here are all parameters supported by the core visualization
         get defaultConfig() {
@@ -562,7 +558,6 @@ EOF;
         },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
-        get metaMenuId() { return "app-meta-data"; },
         layersAvailable: false, //default todo getter instead
         getOption(name, defaultValue=undefined) {
             let cookie = this._getCookie(name);

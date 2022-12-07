@@ -560,7 +560,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     pluginsToolsBuilder.context.classList.add("bg-opacity");
                     USER_INTERFACE.MainMenu._sync();
                 }
-                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
+                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
                 if (pluginsToolsBuilder.isVisible) {
                     USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
                 }
@@ -691,11 +691,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @return {boolean} true if the submenu was opened by this call
              */
             openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
+                this._openSubmenu(atPluginId, atSubId, toggle);
+            },
+            /**
+             * Can be used to open submenu with custom builder prop name, if this._buildMenu was used manually.
+             * @private
+             */
+            _openSubmenu(atPluginId, atSubId=undefined, toggle=true, builderId='__selfMenu') {
                 const didOpenParent = this.openMenu(atPluginId, false);
 
                 let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(atPluginId);
                 if (!plugin) return false;
-                let builder = plugin.__selfMenu;
+                let builder = plugin[builderId];
                 if (builder) {
                     if (toggle && !didOpenParent && builder.isOpened(atSubId)) {
                         this.close();
@@ -703,6 +710,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                     builder.show(atSubId);
                     return true;
+                } else {
+                    console.warn("Cannot open submenu: it was created with custom builder not stored as '"+builderId+"' prop.");
                 }
                 return false;
             },
@@ -716,17 +725,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     USER_INTERFACE.MainMenu.open();
                 }
             },
+            addSeparator() {
+                $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
+            },
             _build() {
                 this.selfContext.isHorizontal = false;
                 this.selfContext.menuWith1Element = true;
                 this.selfContext.isFullSize = true;
 
-                buildMetaDataMenu(this);
                 buildPluginsMenu(this);
                 buildSettingsMenu(this);
 
                 $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" id="advanced-menu-close-button" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
-                $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
+                this.addSeparator();
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,
                        title, html, icon, withSubmenu, container) {
@@ -735,22 +746,25 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 if (!withSubmenu && builder) {
                     builder.remove();
-                    delete context.__selfMenu;
+                    delete context[builderId];
                     builder = undefined;
                 }
-                html = container ? `<div class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>` : html;
+                html = container ?
+                    `<div class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>`
+                    : html;
+
                 if (!builder) {
                     if (withSubmenu) {
                         this.selfContext.set(ownerPluginId, parentMenuId, parentMenuTitle,
-                            `<div id='advanced-menu-${ownerPluginId}'></div>`);
+                            `<div id='advanced-menu-${ownerPluginId}'></div>`, "",`${parentMenuId}-section-panel`);
                         builder = new UIComponents.Containers.PanelMenu(`advanced-menu-${ownerPluginId}`);
-                        context.__selfMenu = builder;
+                        context[builderId] = builder;
                     } else {
-                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon);
+                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-section-panel`);
                         return;
                     }
                 }
-                builder.set(null, toolsMenuId, title, html, icon);
+                builder.set(null, toolsMenuId, title, html, icon, `${toolsMenuId}-section-panel`);
             }
         },
 
@@ -995,73 +1009,4 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
         APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie);
         UTILITIES.refreshPage(formData.join(""), plugins);
     };
-
-    let metaContext = {};
-    let vegaInit = {};
-
-    /**
-     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
-     * Columns
-     * todo some sanitization of raw fields, e.g. 'classes'
-     * @type {{}}
-     */
-    function buildElements(root) {
-        let html = [];
-        root.classes = root.classes || "m-2 px-1";
-        try {
-            switch (root.type) {
-                case 'vega':
-                    let uid = `vega-${Date.now()}`;
-                    html.push(`<div class="${root.classes}" id="${uid}"></div>`);
-                    vegaInit[uid] = root;
-                    break;
-                case 'columns':
-                    html.push(`<div class="d-flex ${root.classes}">`);
-                    for (let col of root.children) {
-                        col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
-                        html.push(...buildElements(col));
-                    }
-                    html.push('</div>');
-                    break;
-                default:
-                    html.push(UIComponents.Elements[root.type](root));
-                    break;
-            }
-        } catch (e) {
-            console.warn("Failed to generate HTML.", root, e);
-            return [`<div class=\"error-container\">${$.t('messages.elementsBuilderErr')}</div>`];
-        }
-        return html;
-    }
-    function loadVega(initialized=false) {
-        for (let id in vegaInit) {
-            let object = vegaInit[id];
-            if (object.view) continue;
-            if (!window.vega || !window.vega.View) {
-                if (initialized) throw "Could not load vega: ignoring vega components.";
-
-                UTILITIES.loadModules(function() {
-                    loadVega(true);
-                }, 'vega');
-                return;
-            }
-
-            object.view = new vega.View(vega.parse(object.specs), {renderer: 'canvas', container: `#${id}`, hover: true});
-            object.view.runAsync();
-        }
-    }
-    function buildMetaDataMenu(ctx) {
-        for (let key in APPLICATION_CONTEXT.config.dataPage) {
-            let data = APPLICATION_CONTEXT.config.dataPage[key];
-            let html = [];
-
-            for (let element of (data.page || [])) {
-                html.push(...buildElements(element));
-            }
-
-            ctx._buildMenu(metaContext, "__selfMenu", "__meta", "Data", APPLICATION_CONTEXT.metaMenuId,
-                key + "-menu-data-page", data.title || key,  html.join(""), '', true, true);
-        }
-        loadVega();
-    }
 })(window);

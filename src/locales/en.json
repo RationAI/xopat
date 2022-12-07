@@ -62,7 +62,6 @@
       "urlCopied": "The URL was copied to your clipboard.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"UTILITIES.export();\" class='btn-pointer'>export</a> your setup first. <a onclick=\"APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();\" class='btn-pointer'>Reload now.</a>",
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"Dialogs._showCustomModalImpl('{{id}}', '{{title}}', null, '{{size}}'); Dialogs.hide();\" class='pointer'>Click here to open.</a>",
-      "elementsBuilderErr": "Unable to show this field: invalid configuration.",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
       "stillLoadingSwap": "Another image is still being loaded - please wait."
