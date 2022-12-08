@@ -41,6 +41,7 @@ class AnnotationsGUI {
 			}
 		};
 
+		this.isModalHistory = this.getOption('modalHistoryWindow', this.staticData("modalHistoryWindow"));
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 		this.setupFromParams();
 
@@ -109,7 +110,7 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 			`
 <span class="material-icons btn-pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
 <span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">cloud_upload</span>
-<span class="material-icons btn-pointer" id="show-annotation-board" title="${this.t('showBoard')}" style="float: right;" data-ref="on" onclick="${this.PLUGIN}.context.history.openHistoryWindow();">assignment</span>
+<span class="material-icons btn-pointer" id="show-annotation-board" title="${this.t('showBoard')}" style="float: right;" data-ref="on" onclick="${this.PLUGIN}.openHistoryWindow();">assignment</span>
 <span class="material-icons btn-pointer" id="enable-disable-annotations" title="${this.t('onOff')}" style="float: right;" data-ref="on" onclick="${this.PLUGIN}._toggleEnabled(this)"> visibility</span>`,
 			this.presetControls(),
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
@@ -142,6 +143,8 @@ ${UIComponents.Elements.checkBox({
 vertical-align: middle; opacity: 0.3;" class="d-inline-block mx-1"></span>&nbsp;<div id="mode-custom-items" 
 class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
+		if (!this.isModalHistory) this._createHistoryInAdvancedMenu();
+
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
  <span class="show-hint" data-hint="Format"><select class="form-control select-sm" id="gui-annotations-io-format" onchange="${this.PLUGIN}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join("")}</select></span>
@@ -157,6 +160,28 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 <br>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
+	}
+
+	openHistoryWindow() {
+		if (this.isModalHistory) {
+			this.context.history.openHistoryWindow();
+
+			if (this._openedHistoryMenu) {
+				//needs to re-open the menu - update in DOM invalidates the container
+				document.getElementById('annotations-board-in-advanced-menu').innerHTML =
+					`<button class="btn m-4" onclick="${this.PLUGIN}._createHistoryInAdvancedMenu(true);">Opened in modal window. Re-open here.</button>`;
+			}
+		} else {
+			if (!this._openedHistoryMenu) this._createHistoryInAdvancedMenu();
+			USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+		}
+	}
+
+	_createHistoryInAdvancedMenu(focus=false) {
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+		this._openedHistoryMenu = true;
+		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
 
 	initHandlers() {

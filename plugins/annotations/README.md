@@ -9,7 +9,10 @@ must be present in the configuration:
 
 ````json
   "server": "/iipsrv.fcgi",
-  "factories": ["polygon", "rect", "ellipse", "ruler"]
+  "factories": ["polygon", "rect", "ellipse", "ruler"],
+  "serverAutoLoadIds": true,
+  "focusWithZoom": true,
+  "modalHistoryWindow": true
 ````
 
 Server defines URL (relative means on this server) to the annotations cloud service.

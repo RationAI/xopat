@@ -415,7 +415,7 @@ UIComponents.Containers = {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
                 $(`#${existing}-menu-header`).replaceWith(this._getHeader(pluginId, id, title, icon, false, bodyId));
-                $(`#${existing}`).replaceWith(this._getBody(pluginId, id, html, false, bodyId));
+                $(`#${bodyId}`).replaceWith(this._getBody(pluginId, id, html, false, bodyId));
                 return;
             }
 

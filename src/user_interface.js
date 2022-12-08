@@ -646,7 +646,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} ownerPluginId context ID: the ID of plugin the menu belongs to
              *  e.g. should be called once if withSubmenu=false, the last call is the only menu shown under this ID
              *  e.g. can be called many times if withSubmenu=true, then all menus are treated as submenus
-             * @param {string} toolsMenuId menu ID: should be unique across menus
+             * @param {string} toolsMenuId menu ID: should be unique ID in the DOM context
              * @param {string} title menu title as shown in the menu tab
              * @param {string} html menu content
              * @param {string} icon google icon tag
@@ -749,22 +749,27 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     delete context[builderId];
                     builder = undefined;
                 }
-                html = container ?
-                    `<div class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>`
-                    : html;
+
+                let bodyId = toolsMenuId;
+                if (container) {
+                    html = `<div id="${toolsMenuId}" class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>`;
+                    bodyId = toolsMenuId + "-parent-container";
+                }
+
 
                 if (!builder) {
                     if (withSubmenu) {
+                        //body ID here different from child, we create a container!
                         this.selfContext.set(ownerPluginId, parentMenuId, parentMenuTitle,
-                            `<div id='advanced-menu-${ownerPluginId}'></div>`, "",`${parentMenuId}-section-panel`);
+                            `<div id='advanced-menu-${ownerPluginId}'></div>`, "",`${parentMenuId}-section-container`);
                         builder = new UIComponents.Containers.PanelMenu(`advanced-menu-${ownerPluginId}`);
                         context[builderId] = builder;
                     } else {
-                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-section-panel`);
+                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon, bodyId);
                         return;
                     }
                 }
-                builder.set(null, toolsMenuId, title, html, icon, `${toolsMenuId}-section-panel`);
+                builder.set(null, toolsMenuId, title, html, icon, bodyId);
             }
         },
 

@@ -10,5 +10,6 @@
   "permaLoad": false,
   "server": "/iipsrv.fcgi",
   "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
-  "ioFormat": "native"
+  "ioFormat": "native",
+  "modalHistoryWindow": true
 }
