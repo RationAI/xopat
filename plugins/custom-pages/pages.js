@@ -7,10 +7,11 @@ addPlugin("custom-pages", class {
     }
 
     pluginReady() {
+        let sanitization = this.getOption('sanitizeConfig', this.staticData('sanitizeConfig'));
         if (Array.isArray(this.data[0])) {
-            for (let x of this.data) this.builder.buildMetaDataMenu(x);
+            for (let x of this.data) this.builder.buildMetaDataMenu(x, sanitization);
         } else {
-            this.builder.buildMetaDataMenu(this.data);
+            this.builder.buildMetaDataMenu(this.data, sanitization);
         }
     }
 });

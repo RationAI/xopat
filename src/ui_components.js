@@ -410,26 +410,37 @@ UIComponents.Containers = {
             }
         }
 
-        //todo get rid of plugin ID? assign just to the parent container outside!
-        set(pluginId, id, title, html, icon="", bodyId=id) {
+        /**
+         * Set another tab to the panel
+         * @param entityId id of the entity owning this element, in the case of error,
+         *  all classes with 'entityId' are removed for consistency by the CORE (i.e. use plugin ID)
+         * @param id of the panel, does not have to be unique in DOM (but recommended to avoid problems);
+         *  entityId and id pair uniquely determines the tab
+         * @param title the tab button title
+         * @param html the tab content
+         * @param icon the icon name for button, default ""
+         * @param bodyId unique container ID in the DOM context (can be the same as id if unique) ->
+         *   this id can be accessed to further modify this container contents
+         */
+        set(entityId, id, title, html, icon="", bodyId=id) {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
-                $(`#${existing}-menu-header`).replaceWith(this._getHeader(pluginId, id, title, icon, false, bodyId));
-                $(`#${bodyId}`).replaceWith(this._getBody(pluginId, id, html, false, bodyId));
+                $(`#${existing}-menu-header`).replaceWith(this._getHeader(entityId, id, title, icon, false, bodyId));
+                $(`#${bodyId}`).replaceWith(this._getBody(entityId, id, html, false, bodyId));
                 return;
             }
 
             if (this.elements.length < 1) {
-                this._createLayout(pluginId, id, title, icon, html, bodyId);
+                this._createLayout(entityId, id, title, icon, html, bodyId);
             } else {
-                $(this.head).append(this._getHeader(pluginId, id, title, icon, false, bodyId));
-                $(this.body).append(this._getBody(pluginId, id, html, false, bodyId));
+                $(this.head).append(this._getHeader(entityId, id, title, icon, false, bodyId));
+                $(this.body).append(this._getBody(entityId, id, html, false, bodyId));
                 this.head.style.display = "flex";
             }
             this.elements.push(id);
         }
 
-        removePart(pluginId, id) {
+        removePart(entityId, id) {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
                 this.elements.splice(existing, 1);
@@ -449,10 +460,10 @@ UIComponents.Containers = {
             delete this.elements;
         }
 
-        _createLayout(pluginId, id, firstTitle, icon, html, bodyId) {
+        _createLayout(entityId, id, firstTitle, icon, html, bodyId) {
             let head = `<div id="${this.uid}-head" class="flex-items-start ${this.horizontal ? "windth-full px-3 flex-row" : "height-full py-3 flex-column"}"
 style="${this.menuShow ? 'display:flex;' : 'display:none;'} ${this.horizontal ? "height: 32px;" : "width: 120px; min-width: 120px; text-align: right;"} background: var(--color-bg-tertiary); z-index: 2">
-${this._getHeader(pluginId, id, firstTitle, icon, true, bodyId)}</div>`;
+${this._getHeader(entityId, id, firstTitle, icon, true, bodyId)}</div>`;
             let flexD;
             if (this.horizontal) flexD = this.menuReversed ? "flex-column-reverse panel-horizontal" : "flex-column panel-horizontal";
             else flexD = "flex-row panel-vertical";
@@ -462,28 +473,28 @@ ${this._getHeader(pluginId, id, firstTitle, icon, true, bodyId)}</div>`;
             let overflow = this.horizontal ? "overflow-x:auto;overflow-y:hidden;" : "overflow-y:auto;overflow-x:hidden;";
 
             let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">
-${this._getBody(pluginId, id, html, true, bodyId)}</div>`;
+${this._getBody(entityId, id, html, true, bodyId)}</div>`;
             this.context.innerHTML = `<div class="panel-menu d-flex ${sizeD} ${flexD}">${head + body}</div>`;
             this.head = this.context.children[0].children[0];
             this.body = this.context.children[0].children[1];
         }
 
-        _getHeader(pluginId, id, title, icon, isFirst, bodyId) {
-            pluginId = pluginId ? pluginId + "-plugin-root" : "";
+        _getHeader(entityId, id, title, icon, isFirst, bodyId) {
+            entityId = entityId ? entityId + "-plugin-root" : "";
             icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
             return `<span id="${id}-menu-header" class="width-full" style="flex-basis: min-content">
 <input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
-class="panel-menu-input ${pluginId}" onclick="
+class="panel-menu-input ${entityId}" onclick="
 for (let ch of document.getElementById('${this.uid}-body').children) {ch.style.display = 'none'}
 document.getElementById('${bodyId}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
-head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${pluginId} ${this.borderClass}
+head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${entityId} ${this.borderClass}
 panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
         }
 
-        _getBody(pluginId, id, html, isFirst, bodyId) {
-            pluginId = pluginId ? pluginId + "-plugin-root" : "";
+        _getBody(entityId, id, html, isFirst, bodyId) {
+            entityId = entityId ? entityId + "-plugin-root" : "";
             let size = this.horizontal ? "width-full" : "height-full";
-            return `<section id="${bodyId}" class="${pluginId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
+            return `<section id="${bodyId}" class="${entityId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
         }
     },
 

@@ -4,6 +4,9 @@ See the API of ``menu-pages`` module, this plugin only forwards its configuratio
 Supports ``data`` property - the configuration sent to the module. It can be either an array of
 configurations or a single configuration (also an array).
 
+Sanitization is enabled via ``sanitizeConfig`` param (either in configuration or in `include.json`).
+This param accepts ``true`` , `false`, `{....}` or object configuration (see the menu-pages module docs).
+
 
 Example configurations (contents of ``data`` property):
 

@@ -14,36 +14,51 @@ window.AdvancedMenuPages = class {
     /**
      * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
      * Columns
-     * todo some sanitization of raw fields, e.g. 'classes'
+     * @param {array} output array to put the output strings to
+     * @param {object} root configuration node with 'type' property
+     * @param {function|false} sanitizer to sanitize strings, or false to not to sanitize
      * @type {{}}
      */
-    buildElements(root) {
-        let html = [];
+    buildElements(output, root, sanitizer) {
         root.classes = root.classes || "m-2 px-1";
+        let classes;
         try {
             switch (root.type) {
                 case 'vega':
+                    classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
                     let uid = `vega-${Date.now()}`;
-                    html.push(`<div class="${root.classes}" id="${uid}"></div>`);
+                    output.push(`<div class="${classes}" id="${uid}"></div>`);
                     this.vegaInit[uid] = root;
                     break;
                 case 'columns':
-                    html.push(`<div class="d-flex ${root.classes}">`);
+                    classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
+                    output.push(`<div class="d-flex ${classes}">`);
                     for (let col of root.children) {
                         col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
-                        html.push(...this.buildElements(col));
+                        this.buildElements(output, col, sanitizer);
                     }
-                    html.push('</div>');
+                    output.push('</div>');
                     break;
                 default:
-                    html.push(UIComponents.Elements[root.type](root));
+                    function sanitizeDeep(node) {
+                        const t = typeof node;
+                        if (t === "string") return sanitizer(node);
+                        if (Array.isArray(node)) return node.map(sanitizeDeep);
+                        if (t === "object") {
+                            const result = {};
+                            for (let p in node) result[p] = sanitizeDeep(node[p]);
+                            return result;
+                        }
+                        throw "Sanitization failed: possibly malicious or invalid object " + typeof node;
+                    }
+                    const result = UIComponents.Elements[root.type]?.(sanitizeDeep(root));
+                    result && output.push(result);
                     break;
             }
         } catch (e) {
-            console.warn("Failed to generate HTML.", root, e);
-            return [`<div class="error-container">${$.t('elementsBuilderErr')}</div>`];
+            console.warn("AdvancedMenuPages: Failed to generate HTML.", root, e);
+            output.push(`<div class="error-container">${$.t('elementsBuilderErr')}</div>`);
         }
-        return html;
     }
 
     loadVega(initialized=false) {
@@ -66,7 +81,7 @@ window.AdvancedMenuPages = class {
         }
     }
 
-    buildMetaDataMenu(config) {
+    _build(config, sanitizer) {
         let parent, parentUnique;
 
         for (let data of config) {
@@ -78,7 +93,7 @@ window.AdvancedMenuPages = class {
             }
 
             for (let element of (data.page || [])) {
-                html.push(...this.buildElements(element));
+                this.buildElements(html, element, sanitizer);
             }
 
             if (!parent || data.main) {
@@ -87,19 +102,41 @@ window.AdvancedMenuPages = class {
             }
 
             let unique = this.uid + "-" + (++this._count) + "-module-data-page";
-
-            console.log(parentUnique, unique)
-
             USER_INTERFACE.AdvancedMenu._buildMenu(this, parent,
                 'pages-menu' + parentUnique,
                 data.title,
                 unique,
                 unique,
-                data.subtitle || data.title,  html.join(""),
+                data.subtitle || data.title,
+                html.join(""),
                 data.icon || "",
                 true,
                 true);
         }
         this.loadVega();
+    }
+
+    /**
+     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
+     * Columns
+     * @param {object} config array of objects - page specs
+     * @param {boolean|object} sanitizeConfig configuration (see https://github.com/apostrophecms/sanitize-html)
+     *   or simple on/off flag for default behaviour
+     * @type {{}}
+     */
+    buildMetaDataMenu(config, sanitizeConfig=false) {
+        if (typeof sanitizeConfig === "object") {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                _this._build(config, str => SanitizeHtml(str, sanitizeConfig));
+            }, 'sanitize-html');
+        } else if (sanitizeConfig) {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                _this._build(config, str => SanitizeHtml(str));
+            }, 'sanitize-html');
+        } else {
+            this._build(config, false);
+        }
     }
 };

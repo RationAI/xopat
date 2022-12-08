@@ -7,5 +7,6 @@
     "icon": "",
     "includes" : ["pages.js"],
     "modules": ["menu-pages"],
-    "permaLoad": false
+    "permaLoad": false,
+    "sanitizeConfig": false
 }

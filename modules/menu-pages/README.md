@@ -16,8 +16,30 @@ array of objects, each object contains:
     - [R type=vega]`specs` - a VEGA visualization grammar configuration for a particular GRAPH
     - ... other props as specified by the function of the given type
 
+You can create your own HTML rendering by specifying the type as well as parameters like so:
+````js
+UIComponents.Elements.myHtmlElement = function(options) {
+  //I should support at least classes (defined above)
+  //I can define new props to support, I should not use 'type', 'columns', 'classes' and 'specs'
+  return `<div class="${options.classes || ''}">${options.myField || "Hello"}</div>`;
+}
 
-Note that this might not be the newest docs: it is just a copy of the javadoc:
+new AdvancedMenuPages('myPluginId').buildElements([{
+    title: "Custom",
+    page: [
+            {
+          type: 'myHtmlElement',
+          myField: 'こんばんは。' //good evening
+       }           
+    ]
+}]);
+````
+
+The module is optionally dependent on ``vega`` and `sanitize-html` (if features used).
+
+### Available Elements (types)
+
+Note that this might not be the newest docs or miss ad-hoc appended functions: it is just a copy of the javadoc:
 
     /**
      * Render TEXT input
