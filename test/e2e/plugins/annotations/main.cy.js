@@ -60,7 +60,7 @@ describe('Annotations - User Controls', withBrowser, () => {
         helpers.presetUiNewMetaButton(0).click();
         helpers.presetUiNthMeta(0, 1).type("The AWESOME Value");
 
-        helpers.presetUISelect(1).select(1);
+        helpers.presetUISelect(1).select(2);
         helpers.presetUiNthMeta(1, 0).type("Ctverecek");
 
         cy.pause();
@@ -69,7 +69,7 @@ describe('Annotations - User Controls', withBrowser, () => {
         helpers.presetUiNewMetaButton(2).click();
         helpers.presetUiNewMetaName(2).type("Another Empty");
         helpers.presetUiNewMetaButton(2).click();
-        helpers.presetUISelect(2).select(2);
+        helpers.presetUISelect(2).select(1);
 
         helpers.presetUISelect(3).select(3);
 

@@ -536,11 +536,12 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 		let icon = preset.objectFactory.getIcon();
 
 		let changeHtml = "";
-		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
 
-			if (factory.factoryID !== preset.objectFactory.factoryID) {
-				changeHtml += `<div onclick="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, 
+		const _this = this;
+		this._allowedFactories.forEach(fId => {
+			let factory = _this.context.getAnnotationObjectFactory(fId);
+			if (factory && factory.factoryID !== preset.objectFactory.factoryID) {
+					changeHtml += `<div onclick="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, 
 {objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
@@ -636,13 +637,15 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 		let select = "",
 			currentPreset = this.context.getPreset(isLeftClick);
 
-		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryID === t)) return;
-
-			if (factory.factoryID === preset.objectFactory.factoryID) {
-				select += `<option value="${factory.factoryID}" selected>${factory.title()}</option>`;
-			} else {
-				select += `<option value="${factory.factoryID}">${factory.title()}</option>`;
+		const _this = this;
+		this._allowedFactories.forEach(fId => {
+			let factory = _this.context.getAnnotationObjectFactory(fId);
+			if (factory) {
+				if (factory.factoryID === preset.objectFactory.factoryID) {
+					select += `<option value="${factory.factoryID}" selected>${factory.title()}</option>`;
+				} else {
+					select += `<option value="${factory.factoryID}">${factory.title()}</option>`;
+				}
 			}
 		});
 
