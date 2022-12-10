@@ -51,6 +51,9 @@ The name of the argument is **`visualization`**, a JSON structure that sets up e
 > _unless_ the post data is sent in `GET`. Note that this is not recommended as the size of the JSON configuration
 > can be enormous.
 
+Note that language setting is an parameter that behaves a bit differently: you can either specify ``locale`` parameter
+or override any specification by sending ``lang=[code]`` as a GET parameter - for simple localization overrides.
+
 Example configuration:
 ````JSON
 {    
@@ -107,11 +110,13 @@ Example configuration:
 We will use [R] for required and [O] for optional parameters.
 - [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
 - [O]`params` - an object, visualisation parameters, supported:
+    - [O]`locale` - language locale, default `en`
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
+    - [O]`statusBar` - whether to show user action and system status hints, default `true`
     - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`
-    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`
+    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
     - [O]`viewport` - where to focus on load, default `undefined`
         - [R]`point` - center of the focus
@@ -131,7 +136,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`microns` - real world units to pixels mapping, default `undefined`,
     - [O]`name` - custom tissue name, default the tissue path
     - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
-    - [O]`dataGroupIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`
+    - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation
     - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
@@ -152,15 +157,8 @@ it is an inherited configuration interface of the WebGL module extended by optio
     - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
-- [O]`dataPage` - an unique page ID to object mapping, each object consists of
-    - [O]`title` - the page menu button title
-    - [O]`page` - a list of nodes of UI building blocks to generate data reports, where each node:
-        - [R]`type` - a node type, can be either "columns", "vega" or one of keys of `UIComponents.Elements` interface; based on the node type other
-        parameters are supported (interface nodes are described at the definition)
-        - [O]`classes` - a space separated list of classes to add to the generated HTML
-        - [R type=columns]`children` - a list of nodes to place in columns
-        - [R type=vega]`specs` - a VEGA visualization grammar configuration for a particular GRAPH
-    
+
+   
 <details>
  <summary>Advanced features:</summary>
 
@@ -254,4 +252,48 @@ Outside, ``../index.php`` file takes care of the main UI layout and basic functi
 handling, plugin and module loading and the viewport and events management.
 
 Many features are available through ``modules`` that implement additional important functionality.
- 
+
+### Metadata in the Viewer
+It is important to keep the viewer context free: this is done by sending all 
+necessary data through the configuration in the POST. You probably noticed already
+that everything is handled here using JSON.
+However, you might
+need to send and integrate these further in the viewer. To do so, you are
+encouraged to employ the global metadata API:
+
+ - metadata can be set and read using the global ``APPLICATION_CONTEXT.config.meta``
+   - a ``MetaStore`` object you can configure the behaviour of in `config_meta.js`
+   - this class can be re-used for internal metadata parsing as well
+ - this metadata is sent within all JSON POST requests automatically, unless set
+   - prefer using ``UTILITIES.fetchJSON``
+   - to avoid sending the config metadata, do 
+     - not use POST or
+     - define ``metadata`` in the POST object, e.g. your own metadata object
+   - use the last parameter of the function
+     - ``false`` to disable the sending of metadata
+     - ``["array", "of", "keys"]`` to specify what meta to send
+     
+So for example, an authentication can look like follows:
+ - send your data in the viewer configuration (`meta` property)
+ - possibly adjust the ``MetaStore`` implementation 
+   - do not modify existing API - functions
+ - use the metadata
+   - read the user data through ``APPLICATION_CONTEXT.config.meta`` as `MetaStore` instance anywhere in the viewer
+   - read the user data in the POST requests as ``metadata`` field made from viewer via ``UTILITIES.fetchJSON``
+       - builtin API always uses this method
+   - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``
+
+### UI
+For easier UI renderings, ``ui_components.js`` define simple basic building blocks for
+basic elements, actions and containers (e.g. menus). ``user_interface.js`` creates
+a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
+> We recommend re-using and extending these instead of pulling new dependencies.
+> Please, make yourself familiar with the UI API before making new features. 
+
+### Localization
+Is possible through ``i18next`` library and also server-side with `i18n` class (with limited capabilities).
+To access the api, use ``$.t(...)`` method to translate. The `i18n` instance is stored in `$.i18n`.
+You can use also the (other) API of ``jquery i18next``.
+In spawned child window, the translation is available also through ``$`` symbol, but ``jquery i18next`` is not available.
+
+For plugins localization, see the plugins README.

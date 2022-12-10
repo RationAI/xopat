@@ -62,7 +62,7 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
 }
 ````
 - [O]`name` - visualisation goal name 
-- [o]`lossless` - default `true` if the data should be sent from the server as 'png' or 'jpg'
+- [O]`lossless` - default `true` if the data should be sent from the server as 'png' or 'jpg'
 - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - [0]`name` - name of the layer: displayed to the user
@@ -75,7 +75,7 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
     - [O]`params` - special parameters for defined shader type (see corresponding shader), shader should define fault vaules values that are used if not set
         - no keys in `params` field should be required
         - some parameters are global, see more detailed description in `shaders/README.md`
-        
+- [O]`order` - array of shader ID's - preferred order of rendering, if defined, id's of shader definitions that are ommited _do not get rendered and interacted with_        
 #### Data settings
 Data must be loaded in compliance with indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
 - the module will automatically extract an ordered subset of the given data in the order in which it expects the data to arrive

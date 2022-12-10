@@ -32,13 +32,14 @@ OSDAnnotations.FreeFormTool = class {
      */
     init(object, created=false) {
 
-        let objectFactory = this._context.getAnnotationObjectFactory(object.factoryId);
+        let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         if (objectFactory !== undefined) {
             if (!objectFactory.isImplicit()) {  //object can be used immedietaly
                 let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
                 this._setupPolygon(newPolygon, object);
             } else {
-                let points = objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1);
+                let points = objectFactory.supportsBrush() ?
+                objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined;
                 if (points) {
                     this._createPolygonAndSetupFrom(points, object);
                 } else {
@@ -289,7 +290,7 @@ OSDAnnotations.FreeFormTool = class {
     //create polygon from points and initialize so that it is ready to be modified
     _createPolygonAndSetupFrom(points, object) {
         let polygon = this._context.polygonFactory.copy(object, points);
-        polygon.factoryId = this._context.polygonFactory.factoryId;
+        polygon.factoryID = this._context.polygonFactory.factoryID;
         //preventive update in case we modified a different-visual-like object
         this._context.polygonFactory.updateRendering(this._context.presets.modeOutline, polygon,
             polygon.color, OSDAnnotations.PresetManager._commonProperty.stroke);

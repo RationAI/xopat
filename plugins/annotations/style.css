@@ -87,3 +87,11 @@
   color: inherit;
   pointer-events: none;
 }
+#discard-annotation-p-selection {
+  border-radius: 50%;
+  top: -6px;
+  right: -6px;
+  font-size: 15px;
+  width: 17px;
+  height: 17px;
+}

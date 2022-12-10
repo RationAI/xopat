@@ -1,30 +1,38 @@
 # Events in OSD Annotations
-### `factory-registered` | e: `{factory: OSDAnnotations.AnnotationObjectFactory}`
 
-opacity-changed
+##### factory-registered | e: `{factory: OSDAnnotations.AnnotationObjectFactory}`
 
-osd-interactivity-toggle
+##### opacity-changed | ``{opacity: float}``
 
-enabled
+##### osd-interactivity-toggle
 
-layer-added
+##### enabled | ``{isEnabled: boolean}``
 
-layer-removed
+##### layer-added 
 
-annotation-create
+##### layer-removed
 
-annotation-delete
+##### annotation-create | ``{object: fabric.Object}``
 
-preset-delete
+##### annotation-delete | ``{object: fabric.Object}``
 
-preset-create
+##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
 
-preset-update
+##### annotation-edit | ``{object: fabric.Object}``
 
-preset-meta-remove
+##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
-preset-meta-add
+##### preset-create | ``{preset: OSDAnnotations.Preset}``
 
-import
+##### preset-update | ``{preset: OSDAnnotations.Preset}``
 
-error
+##### preset-select | ``{preset: OSDAnnotations.Preset, isLeftClick:boolean}``
+
+##### preset-meta-remove | ``{preset: OSDAnnotations.Preset, key: string}``
+
+##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
+
+##### import | ``{format: string, clear: boolean, data: object}``
+
+
+Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

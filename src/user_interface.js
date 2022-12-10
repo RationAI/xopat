@@ -53,7 +53,7 @@
             this._body.removeClass("popUpHide");
             this._body.addClass("popUpEnter");
 
-            if (delayMS > 1000) {
+            if (delayMS >= 1000) {
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
             }
         },
@@ -132,7 +132,6 @@
 require.config({
   paths: { vs: "${APPLICATION_CONTEXT.rootPath}/src/external/monaco" }
 });
-
 const DEFAULT_EDITOR_OPTIONS = {
   value: \`${inputText}\`,
   lineNumbers: "on",
@@ -160,7 +159,7 @@ const save = () => {
     try {
          Diag._modals['${parentId}'].callback(editor.getValue());
     } catch(e) {
-         Diag.warn("Could not save the code.", 3500, Diag.MSG_ERR);
+         Diag.warn($.t('monaco.saveError'), 3500, Diag.MSG_ERR);
     }
 };
 
@@ -243,9 +242,7 @@ window.addEventListener("beforeunload", (e) => {
             this._cachedCall = customCall;
             let result = this._openModalWindow(id, title, html, size);
             if (!result.context) {
-                this.show(`An application modal window '${title}' was blocked by your browser. <a onclick="
-Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide();" class='pointer'>Click here to open.</a>`,
-                    15000, this.MSG_WARN);
+                this.show($.t('messages.modalWindowBlocked', {id, title, size}), 15000, this.MSG_WARN);
             } else {
                 result.callback = this._cachedCall;
                 this._modals[id] = result;
@@ -264,13 +261,16 @@ Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/external/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-        <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script>
+        <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script><!--todo integrity tags-->
         <script type="text/javascript">
             //route to the parent context
             window.confirm = function(message) {
                 window.opener.focus();
                 window.opener.confirm(message);
             };
+            $.t = window.opener.$.t;
+            $.i18n = window.opener.$.i18n;
+            $.prototype.localize = () => {console.error("localize() not supported in child window!")};
         <\/script>
     </head>
     <body style="overflow: hidden; height: 100vh;">
@@ -334,13 +334,124 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     }; // end of namespace Dialogs
     Dialogs.init();
 
+
+    window.DropDown = {
+
+        _calls: [],
+
+        init: function() {
+            document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
+            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
+
+            this._body = $("#drop-down-menu");
+        },
+
+        open: function (mouseEvent, optionsGetter) {
+             this._toggle(mouseEvent, optionsGetter);
+             mouseEvent.preventDefault();
+        },
+
+        /**
+         *
+         * @param context a string or html node element, where to bind the click event
+         * @param optionsGetter callback that generates array of config options
+         *   config object:
+         *   config.title {string} title, required
+         *   config.action {function} callback, argument given is 'selected' current value from config.icon
+         *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
+         *      - you can also pass custom HTML and override the default styles and content, handler system etc...
+         *   config.styles {object} custom css styles, optional
+         *   config.selected {boolean} whether to mark the option as selected, optional
+         *   config.icon {string} custom option icon name, optional
+         *   config.iconCss {string} css for icon
+         */
+        bind: function(context, optionsGetter) {
+            if (typeof context === "string") {
+                context = document.getElementById(context);
+            }
+            if (! context?.nodeType) {
+                console.error("Registered dropdown for non-existing or invalid element", context);
+                return;
+            }
+            const _this = this;
+            context.addEventListener("contextmenu", (e) => {
+                _this._toggle(e, optionsGetter);
+                e.preventDefault();
+            });
+        },
+
+        _toggle: function(mouseEvent, optionsGetter) {
+            const opened = this._calls.length > 0;
+
+            if (mouseEvent === undefined || opened) {
+                if (opened) {
+                    this._calls = [];
+                    this._body.html("");
+                    this._body.css({
+                        display: "none",
+                        top: 99999,
+                        left: 99999,
+                    });
+                }
+            } else {
+                ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
+                this._body.css({
+                    display: "block",
+                    top: mouseEvent.pageY + 5,
+                    left: mouseEvent.pageX - 15
+                });
+            }
+        },
+
+        _with(opts, i) {
+            const clbck = opts.action;
+            if (clbck) {
+                opts.selected = opts.selected || false;
+                this._calls.push(() => {
+                    clbck(opts.selected);
+                    window.DropDown._toggle(undefined, undefined);
+                });
+                const icon = opts.icon ? `<span class="material-icons pl-0" 
+style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon}</span>`
+                    : "<span class='d-inline-block' style='width: 20px'></span>";
+                const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
+
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
+            } else {
+                this._calls.push(null);
+                this._body.append(`<li class="px-2" style="font-size: 10px;
+    border-bottom: 1px solid var(--color-border-primary);">${opts.title}</li>`);
+            }
+        }
+    };
+    DropDown.init();
+
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {
-        highlight(id, timeout=2000, animated=true) {
+        highlightElementId(id, timeout=2000, animated=true) {
             let cls = animated ? "ui-highlight-animated" : "ui-highlight";
             $(`#${id}`).addClass(cls);
             setTimeout( () => $(`#${id}`).removeClass(cls), timeout);
+        },
+
+        highlight(menuName, menuId, id, timeout=2000, animated=true) {
+            switch (menuName) {
+                case "MainMenu":
+                    this.MainMenu.open();
+                    $("#main-panel-content").scrollTo("#" + id);
+                    break;
+                case "Tools":
+                    this.Tools.open(menuId);
+                    break;
+                case "AdvancedMenu":
+                    this.AdvancedMenu.openMenu(menuId);
+                    break;
+                default:
+                    console.warn("Invalid menu name for USER_INTERFACE::highlight!");
+            }
+            this.highlightElementId(id, timeout, animated);
         },
 
         /**
@@ -357,6 +468,11 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          * Dialog System
          */
         Dialogs: Dialogs,
+
+        /**
+         * DropDown Handler
+         */
+        DropDown: DropDown,
 
         /**
          * Full screen Errors
@@ -427,6 +543,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
                 if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
+
+                let status = USER_INTERFACE.Status.context;
+                if (status) status.style.right = this.opened ? "408px" : "8px";
             }
         },
 
@@ -441,7 +560,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     pluginsToolsBuilder.context.classList.add("bg-opacity");
                     USER_INTERFACE.MainMenu._sync();
                 }
-                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
+                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
                 if (pluginsToolsBuilder.isVisible) {
                     USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
                 }
@@ -475,46 +594,44 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         },
 
         /**
-         * Tools menu by default invisible (top)
+         * Status bar
          */
-        TissueList: {
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
-                if (!tissueMenuBuilder) {
-                    tissueMenuBuilder = new UIComponents.Containers.PanelMenu("tissue-list-menu");
-                    tissueMenuBuilder.isMenuBelow = true;
-                    tissueMenuBuilder.context.classList.add("bg-opacity");
+        Status: {
+            context: null,
+            closed: false,
+            show(message) {
+                if (this.closed) return;
+                if (!this.context)  {
+                    this._init();
                     USER_INTERFACE.MainMenu._sync();
                 }
-                tissueMenuBuilder.set(ownerPluginId, toolsMenuId, title, html, icon);
-                if (tissueMenuBuilder.isVisible) {
-                    USER_INTERFACE.Margins.bottom = tissueMenuBuilder.height;
-                }
-            },
-            /**
-             * Show desired toolBar menu. Also opens the toolbar if closed.
-             * @param {string|undefined} toolsId menu id to open at
-             */
-            open(toolsId=undefined) {
-                if (tissueMenuBuilder) {
-                    USER_INTERFACE.Margins.top = tissueMenuBuilder.height;
-                    tissueMenuBuilder.show(toolsId);
-                }
-            },
-            /**
-             * Notify menu. The menu tab will receive a counter that notifies the user something has happened.
-             * @param {string} menuId menu id to open at
-             * @param {string} symbol a html symbol (that can be set as data- attribute) to show, shows increasing
-             *  counter if undefined (e.g. 3 if called 3 times)
-             */
-            notify(menuId, symbol=undefined) {
-                if (tissueMenuBuilder) tissueMenuBuilder.setNotify(menuId, symbol);
+                // this.context.classList.remove("hover-dim"); not working: does not trigger animation
+                this.context.firstElementChild.innerHTML = message;
+                // this.context.classList.add("hover-dim");
             },
             /**
              * Close the menu, so that it is not visible at all.
              */
-            close() {
-                USER_INTERFACE.Margins.top = 0;
-                if (tissueMenuBuilder) tissueMenuBuilder.hide();
+            setClosed(closed) {
+                if (closed && this.context) {
+                    document.body.removeChild(this.context);
+                    delete this.context;
+                }
+                this.closed = closed;
+            },
+            _init() {
+                let node = document.createElement("div");
+                node.setAttribute("id", "viewer-status-bar");
+                node.setAttribute("class", "position-fixed fixed-bg-opacity bg-opacity px-2 py-1 rounded-2 overflow-hidden");
+                node.style.color = "var(--color-text-primary)";
+                node.style.pointerEvents = 'none';
+                node.style.maxWidth = 'calc(100vw - 750px)';
+                node.style.bottom = '10px';
+                let content = document.createElement("span");
+                content.setAttribute("class","one-liner");
+                node.appendChild(content);
+                document.body.appendChild(node);
+                this.context = node;
             }
         },
 
@@ -529,7 +646,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
              * @param {string} ownerPluginId context ID: the ID of plugin the menu belongs to
              *  e.g. should be called once if withSubmenu=false, the last call is the only menu shown under this ID
              *  e.g. can be called many times if withSubmenu=true, then all menus are treated as submenus
-             * @param {string} toolsMenuId menu ID: should be unique across menus
+             * @param {string} toolsMenuId menu ID: should be unique ID in the DOM context
              * @param {string} title menu title as shown in the menu tab
              * @param {string} html menu content
              * @param {string} icon google icon tag
@@ -574,11 +691,18 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
              * @return {boolean} true if the submenu was opened by this call
              */
             openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
+                this._openSubmenu(atPluginId, atSubId, toggle);
+            },
+            /**
+             * Can be used to open submenu with custom builder prop name, if this._buildMenu was used manually.
+             * @private
+             */
+            _openSubmenu(atPluginId, atSubId=undefined, toggle=true, builderId='__selfMenu') {
                 const didOpenParent = this.openMenu(atPluginId, false);
 
                 let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(atPluginId);
                 if (!plugin) return false;
-                let builder = plugin.__selfMenu;
+                let builder = plugin[builderId];
                 if (builder) {
                     if (toggle && !didOpenParent && builder.isOpened(atSubId)) {
                         this.close();
@@ -586,6 +710,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     }
                     builder.show(atSubId);
                     return true;
+                } else {
+                    console.warn("Cannot open submenu: it was created with custom builder not stored as '"+builderId+"' prop.");
                 }
                 return false;
             },
@@ -599,18 +725,19 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     USER_INTERFACE.MainMenu.open();
                 }
             },
+            addSeparator() {
+                $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
+            },
             _build() {
-                USER_INTERFACE.MainMenu._sync();
                 this.selfContext.isHorizontal = false;
                 this.selfContext.menuWith1Element = true;
                 this.selfContext.isFullSize = true;
 
-                buildMetaDataMenu(this);
                 buildPluginsMenu(this);
                 buildSettingsMenu(this);
 
                 $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" id="advanced-menu-close-button" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
-                $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
+                this.addSeparator();
             },
             _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId,
                        title, html, icon, withSubmenu, container) {
@@ -619,22 +746,30 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 
                 if (!withSubmenu && builder) {
                     builder.remove();
-                    delete context.__selfMenu;
+                    delete context[builderId];
                     builder = undefined;
                 }
-                html = container ? `<div class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>` : html;
+
+                let bodyId = toolsMenuId;
+                if (container) {
+                    html = `<div id="${toolsMenuId}" class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;">${html}</div>`;
+                    bodyId = toolsMenuId + "-parent-container";
+                }
+
+
                 if (!builder) {
                     if (withSubmenu) {
+                        //body ID here different from child, we create a container!
                         this.selfContext.set(ownerPluginId, parentMenuId, parentMenuTitle,
-                            `<div id='advanced-menu-${ownerPluginId}'></div>`);
+                            `<div id='advanced-menu-${ownerPluginId}'></div>`, "",`${parentMenuId}-section-container`);
                         builder = new UIComponents.Containers.PanelMenu(`advanced-menu-${ownerPluginId}`);
-                        context.__selfMenu = builder;
+                        context[builderId] = builder;
                     } else {
-                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon);
+                        this.selfContext.set(ownerPluginId, toolsMenuId, title, html, icon, bodyId);
                         return;
                     }
                 }
-                builder.set(null, toolsMenuId, title, html, icon);
+                builder.set(null, toolsMenuId, title, html, icon, bodyId);
             }
         },
 
@@ -646,8 +781,11 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             steps: [],
             prerequisites: [],
 
-            show: function(title="Select a tutorial", description="The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated.") {
+            show: function(title=undefined, description=undefined) {
                 if (USER_INTERFACE.Errors.active || this.running) return;
+
+                if (!title) title = $.t('tutorials.menu.title');
+                if (!description) description = $.t('tutorials.menu.description')
 
                 $("#tutorials-container").removeClass("d-none");
                 $("#viewer-container").addClass("disabled");
@@ -674,6 +812,16 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 APPLICATION_CONTEXT._setCookie('_shadersPin', 'false');
             },
 
+            /**
+             * Add tutorial to options
+             * @param plugidId
+             * @param name
+             * @param description
+             * @param icon
+             * @param steps the tutorials object array, keys are "rule selector" strings
+             *  rules are 'next', 'click', selectors define what element to highlight
+             * @param prerequisites a function to execute at the beginning, default undefined
+             */
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
                 if (!icon) icon = "school";
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
@@ -684,9 +832,21 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 this.prerequisites.push(prerequisites);
             },
 
-            run: function(index) {
-                if (index >= this.steps.length || index < 0) return;
-                USER_INTERFACE.MainMenu.open();
+            /**
+             * Run tutorial
+             * @param {number|[]} ctx index to the attached tutorials list (internal use) or tutorials data
+             *  see add(..) steps parameter
+             */
+            run: function(ctx) {
+                let prereq, data;
+
+                if (Number.isInteger(ctx)) {
+                    if (ctx >= this.steps.length || ctx < 0) return;
+                    prereq = this.prerequisites[ctx];
+                    data = this.steps[ctx];
+                } else {
+                    data = ctx;
+                }
 
                 //reset plugins visibility
                 $(".plugins-pin").each(function() {
@@ -696,13 +856,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     container.removeClass('force-visible');
                 });
 
-                let prereq = this.prerequisites[index];
                 let enjoyhintInstance = new EnjoyHint({
                     onStart: function () {
                         window.addEventListener("resize", enjoyhintInstance.reRender, false);
                         window.addEventListener("click", enjoyhintInstance.rePaint, false);
 
-                        if (prereq) prereq();
+                        if (typeof prereq === "function") prereq();
                     },
                     onEnd : function () {
                         window.removeEventListener("resize", enjoyhintInstance.reRender, false);
@@ -713,7 +872,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                enjoyhintInstance.set(this.steps[index]);
+                USER_INTERFACE.MainMenu.open();
+                enjoyhintInstance.set(data);
                 this.hide();
                 enjoyhintInstance.run();
                 this.running = false;
@@ -754,8 +914,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
         let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
         let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
-        let standardBoolInput = (id, title) => inputs.checkBox({
-            label: title, onchange: updateBool(id) + notifyNeedRefresh, default: APPLICATION_CONTEXT.getOption(id)
+        let standardBoolInput = (id, title, onChange=notifyNeedRefresh) => inputs.checkBox({
+            label: title, onchange: updateBool(id) + onChange, default: APPLICATION_CONTEXT.getOption(id)
         });
 
         ctx._buildMenu(ctx, "__sMenu", "", "", APPLICATION_CONTEXT.settingsMenuId,
@@ -785,27 +945,28 @@ Theme &emsp; ${inputs.select({
                 classes: "select-sm",
                 onchange: `${updateOption("theme", true)} UTILITIES.updateTheme();`,
                 default: APPLICATION_CONTEXT.getOption("theme"),
-                options: {auto: "Automatic", light: "Light Theme", dark_dimmed: "Dimmed Theme", dark: "Dark Theme"}
+                options: {auto: $.t('settings.theme.auto'), light: $.t('settings.theme.light'), dark_dimmed: $.t('settings.theme.dimmed'), dark: $.t('settings.theme.dark')}
 })}
 <br> ${inputs.checkBox({
-                label: "Show ToolBar",
+                label: $.t('settings.toolBar'),
                 onchange: "$('#plugin-tools-menu').toggleClass('d-none')",
                 default: true
 })}
-<br> ${standardBoolInput("scaleBar", "Show ScaleBar")}
-<br><br><span class="f3-light header-sep">Behaviour</span><br>
-${standardBoolInput("bypassCookies", "Disable Cookies")}
-<br><br><span class="f3-light header-sep">Other</span><br>
-<br>${standardBoolInput("debugMode", "Debug Mode")}
-<br>${standardBoolInput("webglDebugMode", "Debug Rendering")}
+<br>${standardBoolInput("scaleBar", $.t('settings.scaleBar'))}
+<br>${standardBoolInput("statusBar", $.t('settings.statusBar'), `USER_INTERFACE.Status.setClosed(!this.checked);`)}
+<br><br><span class="f3-light header-sep">Behaviour</span>
+<br>${standardBoolInput("bypassCookies", $.t('settings.cookies'))}
+<br><br><span class="f3-light header-sep">Other</span>
+<br>${standardBoolInput("debugMode", $.t('settings.debugMode'))}
+<br>${standardBoolInput("webglDebugMode", $.t('settings.debugRender'))}
 `, 'settings', false, true);
     }
 
     let pluginsMenuBuilder;
     function buildPluginsMenu(ctx) {
         ctx._buildMenu(ctx, "__pMenu", "", "", APPLICATION_CONTEXT.pluginsMenuId,
-            APPLICATION_CONTEXT.pluginsMenuId, "Plugins",  `<div class="d-flex flex-column-reverse">
-<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">Load with selected</button>
+            APPLICATION_CONTEXT.pluginsMenuId, $.t('plugins.title'),  `<div class="d-flex flex-column-reverse">
+<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">${$.t('plugins.loadBtn')}</button>
 </div><hr>
 <div id='plug-list-content-inner'></div>
 `, 'extension', false, true);
@@ -825,7 +986,10 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
-            let actionPart = `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">Load</button></div>`;
+
+
+            let actionPart = errMessage ? "" : `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');
+this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span class=\\'AnimatedEllipsis\\'></span>';return false;" class="btn">${$.t('common.Load')}</button></div>`;
             pluginsMenuBuilder.addRow({
                 title: plugin.name,
                 author: plugin.author,
@@ -850,73 +1014,4 @@ ${standardBoolInput("bypassCookies", "Disable Cookies")}
         APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie);
         UTILITIES.refreshPage(formData.join(""), plugins);
     };
-
-    let metaContext = {};
-    let vegaInit = {};
-
-    /**
-     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
-     * Columns
-     * todo some sanitization of raw fields, e.g. 'classes'
-     * @type {{}}
-     */
-    function buildElements(root) {
-        let html = [];
-        root.classes = root.classes || "m-2 px-1";
-        try {
-            switch (root.type) {
-                case 'vega':
-                    let uid = `vega-${Date.now()}`;
-                    html.push(`<div class="${root.classes}" id="${uid}"></div>`);
-                    vegaInit[uid] = root;
-                    break;
-                case 'columns':
-                    html.push(`<div class="d-flex ${root.classes}">`);
-                    for (let col of root.children) {
-                        col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
-                        html.push(...buildElements(col));
-                    }
-                    html.push('</div>');
-                    break;
-                default:
-                    html.push(UIComponents.Elements[root.type](root));
-                    break;
-            }
-        } catch (e) {
-            console.warn("Failed to generate HTML.", root, e);
-            return ["<div class=\"error-container\">Unable to show this field: invalid configuration.</div>"];
-        }
-        return html;
-    }
-    function loadVega(initialized=false) {
-        for (let id in vegaInit) {
-            let object = vegaInit[id];
-            if (object.view) continue;
-            if (!window.vega || !window.vega.View) {
-                if (initialized) throw "Could not load vega: ignoring vega components.";
-
-                UTILITIES.loadModules(function() {
-                    loadVega(true);
-                }, 'vega');
-                return;
-            }
-
-            object.view = new vega.View(vega.parse(object.specs), {renderer: 'canvas', container: `#${id}`, hover: true});
-            object.view.runAsync();
-        }
-    }
-    function buildMetaDataMenu(ctx) {
-        for (let key in APPLICATION_CONTEXT.config.dataPage) {
-            let data = APPLICATION_CONTEXT.config.dataPage[key];
-            let html = [];
-
-            for (let element of (data.page || [])) {
-                html.push(...buildElements(element));
-            }
-
-            ctx._buildMenu(metaContext, "__selfMenu", "__meta", "Data", APPLICATION_CONTEXT.metaMenuId,
-                key + "-menu-data-page", data.title || key,  html.join(""), '', true, true);
-        }
-        loadVega();
-    }
 })(window);

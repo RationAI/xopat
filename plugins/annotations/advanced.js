@@ -24,8 +24,8 @@ This feature is not yet polished, the loading process will:
 <br>
 <b>Supported attribute keys (some)</b>:
 <p>
-"fill", "isLeftClick", "opacity", "strokeWidth", "stroke", "scaleX", "scaleY", "type", "factoryId", "hasRotatingPoint", 
-"borderColor", "cornerColor", "borderScaleFactor", "hasControls", "lockMovementX", "lockMovementY", "meta", "presetID", "layerId"
+"fill", "isLeftClick", "opacity", "strokeWidth", "stroke", "scaleX", "scaleY", "type", "factoryID", "hasRotatingPoint", 
+"borderColor", "cornerColor", "borderScaleFactor", "hasControls", "lockMovementX", "lockMovementY", "meta", "presetID", "layerID"
 </p>
 <b>type="polygon"</b>: "points"<br>
 <b>type="rect"</b>: "left", "top", "width", "height"<br>

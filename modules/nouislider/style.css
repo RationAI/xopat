@@ -164,6 +164,7 @@
   position: absolute;
   white-space: nowrap;
   text-align: center;
+  cursor: pointer;
 }
 .noUi-value-sub {
   color: var(--color-text-tertiary);

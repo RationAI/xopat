@@ -1,0 +1,34 @@
+{
+  "translation": {
+    "error": {
+      "title": "Chyba",
+      "doExport": " [ pro sdílení chyby prosíme přiložte exportovaný soubor vizualizace ] ",
+      "detailsBtn": "detaily",
+      "unknown": "Neznámá chyba"
+    },
+    "main": {
+      "global": {
+        "tissue": "Scan",
+        "layerOpacity": "Průhlednost",
+        "clone": "Klonovat prohlížeč a synchronizovat"
+      },
+      "shaders": {
+        "saveCookies": "Zapamatovat nastavení"
+      },
+      "bar": {
+        "exportUrl": "URL",
+        "explainExportUrl": "Získejte link; neobsahuje data pluginů",
+        "exportFile": "Stáhnout",
+        "explainExportFile": "Uložte jako soubor s daty pluginů",
+        "plugins": "Pluginy",
+        "explainPlugins": "Přidat nebo odebrat komponenty a aplikace",
+        "tutorials": "Tutoriály",
+        "explainTutorials": "Zobraz seznam tutoriálů",
+        "settings": "Nastavení"
+      }
+    },
+    "common": {
+      "exit": "Zavřít"
+    }
+  }
+}

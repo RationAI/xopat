@@ -18,7 +18,7 @@ AnnotationsGUI.Previewer = class {
 //         //todo let the user chose? or render both?
 //         let tiledImage = VIEWER.bridge.getTiledImage();
 //         for (let object of this.context.context.canvas.getObjects()) {
-//             let factory = this.context.context.getAnnotationObjectFactory(object.factoryId);
+//             let factory = this.context.context.getAnnotationObjectFactory(object.factoryID);
 //             if (factory) {
 //                 container.append(`
 // <div onclick="${this.self}.context.context.focusObjectOrArea(${factory.getObjectFocusZone(object)});" style="" class="d-inline-block">Click me</div>
@@ -31,7 +31,7 @@ AnnotationsGUI.Previewer = class {
         let tiledImage = VIEWER.bridge.getTiledImage(),
             counter = 0;
         for (let object of this.context.context.canvas.getObjects()) {
-            let factory = this.context.context.getAnnotationObjectFactory(object.factoryId);
+            let factory = this.context.context.getAnnotationObjectFactory(object.factoryID);
             if (factory) {
                 let name = this.context.context.getAnnotationDescription(object);
                 let bbox = factory.getObjectFocusZone(object);

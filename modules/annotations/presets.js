@@ -17,6 +17,7 @@ OSDAnnotations.Preset = class {
             name: 'Category',
             value: category
         };
+        this._used = false;
     }
 
     /**
@@ -38,6 +39,7 @@ OSDAnnotations.Preset = class {
         if (parsedObject.meta) {
             preset.meta = parsedObject.meta;
         }
+        preset._used = true; //keep imported
         return preset;
     }
 
@@ -48,7 +50,7 @@ OSDAnnotations.Preset = class {
     toJSONFriendlyObject() {
         return {
             color: this.color,
-            factoryID: this.objectFactory.factoryId,
+            factoryID: this.objectFactory.factoryID,
             presetID: this.presetID,
             meta: this.meta
         };
@@ -97,14 +99,6 @@ OSDAnnotations.PresetManager = class {
     };
 
     /**
-     * Properties that get exported from annotations by default
-     */
-    static exportableProperties = [
-        'meta', 'borderColor', 'cornerColor', 'borderScaleFactor', 'color', 'presetID',
-        'hasControls', 'factoryId', 'sessionId', 'layerId'
-    ];
-
-    /**
      * Create Preset Manager
      * @param {string} selfName name of the property 'self' in parent
      * @param {OSDAnnotations} context parent context
@@ -134,7 +128,7 @@ OSDAnnotations.PresetManager = class {
         let preset = this.getActivePreset(isLeftClick),
             result = this._populateObjectOptions(preset);
         result.isLeftClick = isLeftClick;
-        return result;
+        return this._withDynamicOptions(result);
     }
 
     /**
@@ -166,19 +160,32 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
+     * Check whether preset has been modified or whether it is a default-valued item
+     * so that it can be e.g. removed automatically
+     * @param {OSDAnnotations.Preset} p
+     * @return {boolean}
+     */
+    isUnusedPreset(p) {
+        return !p._used && p.objectFactory == this._context.polygonFactory
+            && p.meta.category?.value === ""
+            && Object.keys(p.meta).length === 1;
+    }
+
+    /**
      * Alias for static _commonProperty
      * @param {OSDAnnotations.Preset} withPreset
      */
-    getCommonProperties(withPreset) {
+    getCommonProperties(withPreset=undefined) {
         if (withPreset) {
-            return this._populateObjectOptions(withPreset);
+            withPreset._used = true;
+            return this._withDynamicOptions(this._populateObjectOptions(withPreset));
         }
-        return this.constructor._commonProperty;
+        return this._withDynamicOptions(this.constructor._commonProperty);
     }
 
     /**
      * Check if preset exists
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns true if exists
      */
     exists(id) {
@@ -187,7 +194,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Presets getter
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id) {
@@ -197,7 +204,7 @@ OSDAnnotations.PresetManager = class {
     /**
      * Safely remove preset
      * @event preset-delete
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @returns deleted preset or false if deletion failed
      */
     removePreset(id) {
@@ -219,9 +226,9 @@ OSDAnnotations.PresetManager = class {
     /**
      * Update preset properties
      * @event preset-update
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @param {object} properties to update in the preset (keys must match)
-     * @return updated preset in case any value changed, false otherwise
+     * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
         let preset = this._presets[id],
@@ -243,8 +250,11 @@ OSDAnnotations.PresetManager = class {
                 }
             }
         }
-        if (needsRefresh) this._context.raiseEvent('preset-update', {preset: preset});
-        return needsRefresh ? preset : undefined;
+        if (needsRefresh) {
+            this._context.raiseEvent('preset-update', {preset: preset});
+            return preset;
+        }
+        return undefined;
     }
 
     /**
@@ -253,7 +263,7 @@ OSDAnnotations.PresetManager = class {
      * @param withPreset preset that obect belongs to
      */
     updateObjectVisuals(object, withPreset) {
-        const factory = this._context.getAnnotationObjectFactory(object.factoryId);
+        const factory = this._context.getAnnotationObjectFactory(object.factoryID);
         factory.updateRendering(this.modeOutline, object, withPreset.color, this.constructor._commonProperty.stroke);
     }
 
@@ -282,7 +292,7 @@ OSDAnnotations.PresetManager = class {
             name: name,
             value: value
         };
-        this._context.raiseEvent('preset-meta-add', {preset: preset});
+        this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
         return key;
     }
 
@@ -298,7 +308,7 @@ OSDAnnotations.PresetManager = class {
             delete preset.meta[key];
             return true;
         }
-        this._context.raiseEvent('preset-meta-remove', {preset: preset});
+        this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
         return false;
     }
 
@@ -315,15 +325,18 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Export presets
-     * @returns {[object]} JSON-friendly representation
+     * todo rename to asJSON(...)
+     * @param serialized whether to return serialized string or not
+     * @returns {string|[object]} JSON-friendly representation
      */
-    toObject() {
+    toObject(serialized=false) {
         let exported = [];
         for (let preset in this._presets) {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
             exported.push(preset.toJSONFriendlyObject());
         }
+        if (serialized) return JSON.stringify(exported);
         return exported;
     }
 
@@ -338,9 +351,16 @@ OSDAnnotations.PresetManager = class {
         const _this = this;
 
         if (clear) {
-            Object.values(this._presets).forEach(p => _this.raiseEvent('preset-delete', {preset: p}));
-
+            Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
             this._presets = {};
+        } else {
+            for (let pid in this._presets) {
+                const preset = this._presets[pid];
+                if (this.isUnusedPreset(preset)) {
+                    this._context.raiseEvent('preset-delete', {preset});
+                    delete this._presets[pid];
+                }
+            }
         }
         let first = undefined;
 
@@ -355,39 +375,55 @@ OSDAnnotations.PresetManager = class {
                 if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
+                    _this._colorStep++; //generate new colors
                     if (!first) first = p;
                 }
             });
         } else {
             throw "Invalid presets data provided as an input for import.";
         }
+
+        if (presets.length > 0) {
+            this.selectPreset(undefined, false);
+            this.selectPreset(first?.presetID, true);
+        }
         return first;
     }
 
     /**
      * Select preset as active.
-     * @param {number} id preset id
+     * @param {string} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
     selectPreset(id, isLeftClick) {
-        if (!this._presets[id]) return;
-        if (isLeftClick) this.left = this._presets[id];
-        else this.right = this._presets[id];
+        let preset = undefined;
+        if (id) {
+            if (!this._presets[id]) return;
+            preset = this._presets[id];
+        }
+        if (isLeftClick) this.left = preset;
+        else this.right = preset;
+        this._context.raiseEvent('preset-select', {preset, isLeftClick});
+    }
+
+    _withDynamicOptions(options) {
+        let zoom = this._context.canvas.getZoom();
+        return $.extend(options, {
+            layerID: this._context.getLayer().id,
+            opacity: this._context.getOpacity(),
+            zoomAtCreation: zoom,
+            strokeWidth: 3 / zoom
+        });
     }
 
     _populateObjectOptions(withPreset) {
-        let zoom = this._context.canvas.getZoom();
         if (this.modeOutline) {
             return $.extend({fill: ""},
                 OSDAnnotations.PresetManager._commonProperty,
                 {
                     presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
                     stroke: withPreset.color,
                     color: withPreset.color,
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
                 }
             );
         } else {
@@ -396,11 +432,7 @@ OSDAnnotations.PresetManager = class {
                 OSDAnnotations.PresetManager._commonProperty,
                 {
                     presetID: withPreset.presetID,
-                    layerId: this._context.getLayer().id,
-                    opacity: this._context.getOpacity(),
                     color: withPreset.color,
-                    zoomAtCreation: zoom,
-                    strokeWidth: 3 / zoom
                 }
             );
         }
@@ -466,7 +498,7 @@ OSDAnnotations.Layer = class {
     iterate(callback) {
         const _this = this;
         this._context.canvas.getObjects().forEach(o => {
-            if (o.layerId === _this.id) callback(_this, o);
+            if (o.layerID === _this.id) callback(_this, o);
         });
     }
 };

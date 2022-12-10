@@ -41,6 +41,8 @@ OpenSeadragon.Tools = class {
      * @param params.animationTime | params.duration (optional)
      * @param params.springStiffness | params.transition (optional)
      * @param params.immediately focus immediately if true (optional)
+     * @param params.preferSameZoom optional, default: keep the user's viewport as close as possible if false,
+     *   or keep the same zoom level if true; note this value is ignored if appropriate data not present
      */
     focus(params) {
         this.constructor.focus(this.viewer, params);
@@ -67,11 +69,13 @@ OpenSeadragon.Tools = class {
                         transition;
         }
 
-        if (params.hasOwnProperty("bounds")) {
-            view.fitBoundsWithConstraints(params.bounds, params.immediately);
-        } else {
+        if ((params.point && params.zoomLevel) && (params.preferSameZoom || !params.bounds)) {
             view.panTo(params.point, params.immediately);
             view.zoomTo(params.zoomLevel, params.immediately);
+        } else if (params.bounds) {
+            view.fitBoundsWithConstraints(params.bounds, params.immediately);
+        } else {
+            throw "No valid focus data provided!";
         }
         view.applyConstraints();
 

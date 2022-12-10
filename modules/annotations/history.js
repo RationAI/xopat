@@ -7,7 +7,11 @@ OSDAnnotations.History = class {
      * @param {OSDAnnotations.PresetManager} presetManager
      */
     constructor(selfName, context, presetManager) {
-        this._globalSelf = `${context.id}['${selfName}']`;
+        //js code strings to execute on html node events
+        this.__self = `${context.id}['${selfName}']`;
+        this._globalSelf = this.__self;
+        this._canvasFocus = '';
+
         this._buffer = [];
         this._buffidx = 0;
         this.BUFFER_LENGTH = null;
@@ -16,8 +20,9 @@ OSDAnnotations.History = class {
         this._boardSelected = null;
         this._context = context;
         this._presets = presetManager;
-        this.containerId = "bord-for-annotations";
+        this.containerId = "history-board-for-annotations";
         this._focusWithScreen = true;
+        this._lastOpenedInDetachedWindow = false;
     }
 
     /**
@@ -35,66 +40,110 @@ OSDAnnotations.History = class {
     /**
      * Open external menu window with the history toolbox
      * focuses window if already opened.
+     * @param target target for the content to render to, a DOM node or undefined to open in detached window
      */
-    openHistoryWindow() {
-        let ctx = this.winContext();
-        if (ctx) {
-            ctx.window.focus();
-            return;
-        }
+    openHistoryWindow(target=undefined) {
 
-        let undoCss = this._context.canvas.getObjects().length > 0 ?
-            "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
+        if (target) {
+            //preventive
+            this.destroyHistoryWindow();
+            this._lastOpenedInDetachedWindow = false;
+            this._globalSelf = this.__self;
+            this._canvasFocus = '';
+            target.innerHTML = `
+<div id="${this.containerId}" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative py-2">
+<div>${this._getHistoryWindowHeadHtml()}</div>
+<div>${this._getHistoryWindowBodyHtml()}</div>
+</div>`;
+            this._syncLoad();
+        } else {
+            let ctx = this._getDetachedWindow();
+            if (ctx) {
+                ctx.window.focus();
+                return;
+            }
 
-        Dialogs.showCustomModal(this.containerId, "Annotations Board",
-            `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
-<span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" 
-onclick="opener.${this._globalSelf}.back()" id="history-undo">undo</span>
-<span id="history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-tertiary);" 
-onclick="opener.${this._globalSelf}.redo()" id="history-redo">redo</span>
-<span id="history-refresh" class="material-icons btn-pointer" onclick="opener.${this._globalSelf}.refresh()" 
-id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
-onclick="if (opener.${this._context.id}.disabledInteraction) return; window.opener.focus(); opener.${this._context.id}.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`,
-            `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
-<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>
+            this.destroyHistoryWindow();
+            this._lastOpenedInDetachedWindow = true;
+            this._globalSelf = `opener.${this.__self}`;
+            this._canvasFocus = 'window.opener.focus();';
+
+            Dialogs.showCustomModal(this.containerId, "Annotations Board", this._getHistoryWindowHeadHtml(),
+                `${this._getHistoryWindowBodyHtml()}
 <script>
-
 window.addEventListener('load', (e) => {
-    opener.${this._globalSelf}._syncLoad();
+    ${this._globalSelf}._syncLoad();
 });
 
 document.addEventListener('keydown', (e) => {
     const parentContext = opener.${this._context.id};  
     opener.focus();
+    e.focusCanvas = true; //fake focus
     parentContext._keyDownHandler(e);
 });
 
 document.addEventListener('keyup', (e) => {
-    const parentContext = opener.${this._context.id};   
+    const parentContext = opener.${this._context.id};  
+    e.focusCanvas = true; //fake focus
     parentContext._keyUpHandler(e);
 });
 
 //refresh/close: reset mode
 window.addEventListener("beforeunload", (e) => {
-    const parentContext = opener.${this._globalSelf}; 
+    const parentContext = ${this._globalSelf}; 
     if (parentContext._editSelection) {
         parentContext._boardItemSave();
     }
 }, false);
-
 </script>`);
+        }
 
         let active = this._context.canvas.getActiveObject();
         if (active) this.highlight(active);
     }
 
     /**
-     * Get current window context reference
+     * Programmatically close the board window
+     */
+    destroyHistoryWindow() {
+        if (this._lastOpenedInDetachedWindow) {
+            Dialogs.closeWindow(this.containerId);
+        } else {
+            let node = document.getElementById(this.containerId);
+            if (node) {
+                if (this._editSelection) this._boardItemSave();
+                node.remove();
+            }
+        }
+    }
+
+    _getHistoryWindowBodyHtml() {
+        return `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
+<div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`;
+    }
+
+    _getHistoryWindowHeadHtml() {
+        let undoCss = this._context.canvas.getObjects().length > 0 ?
+            "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
+
+        return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
+<span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" 
+onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
+<span id="history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-tertiary);" 
+onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
+<span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
+id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
+<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
+onclick="if (${this._globalSelf}._context.disabledInteraction) return; ${this._canvasFocus} 
+${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`;
+    }
+
+    /**
+     * Get current board window context reference
      * @return {window || undefined || null} current window if opened, or undefined/null otherwise
      */
     winContext() {
-        return Dialogs.getModalContext(this.containerId);
+        return this._lastOpenedInDetachedWindow ? this._getDetachedWindow() : window;
     }
 
     /**
@@ -168,17 +217,15 @@ window.addEventListener("beforeunload", (e) => {
 
     /**
      * Add new event to the history, at least one object should be specified
-     * @param {object || null} newObject, if undefined it is deletion (no new object)
-     * @param {object || null} previous, if undefined it is creation (no old object)
+     * @param {object || undefined} newObject, if undefined it is deletion (no new object)
+     * @param {object || undefined} previous, if undefined it is creation (no old object)
      */
-    push(newObject, previous = null) {
+    push(newObject, previous = undefined) {
         UTILITIES.setDirty();
         if (newObject) {
-            this._addToBoard(newObject);
+            this._addToBoard(newObject, previous);
             this.highlight(newObject);
-        }
-
-        if (previous) {
+        } else if (previous) {
             this._removeFromBoard(previous);
         }
 
@@ -254,6 +301,14 @@ window.addEventListener("beforeunload", (e) => {
         }
     }
 
+    /**
+     * Get modal window context reference
+     * @return {window || undefined || null} current window if opened, or undefined/null otherwise
+     */
+    _getDetachedWindow() {
+        return Dialogs.getModalContext(this.containerId);
+    }
+
     _performAtJQNode(id, callback) {
         let ctx = this.winContext();
         if (ctx) {
@@ -275,8 +330,9 @@ window.addEventListener("beforeunload", (e) => {
 
     _syncLoad() {
         let _this = this;
+        //todo sort by incrementId?
         this._context.canvas.getObjects().some(o => {
-            if (o.presetID) {
+            if (o.presetID && o.factoryID) {
                 if (!o.incrementId || isNaN(o.incrementId)) {
                     o.incrementId = _this._autoIncrement++;
                 }
@@ -359,9 +415,9 @@ window.addEventListener("beforeunload", (e) => {
         }
     }
 
-    _addToBoard(object) {
+    _addToBoard(object, replaced=undefined) {
         let desc, inputs = [];
-        let factory = this._context.getAnnotationObjectFactory(object.factoryId);
+        let factory = this._context.getAnnotationObjectFactory(object.factoryID);
         let icon = factory ? factory.getIcon() : "question_mark";
 
         if (!object.hasOwnProperty("incrementId")) {
@@ -404,15 +460,27 @@ window.addEventListener("beforeunload", (e) => {
         const focusBox = this._getFocusBBoxAsString(object, factory);
         const editIcon = factory.isEditable() ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
 title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
-opener.${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
-else { opener.${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
-        this._performAtJQNode("annotation-logs", node => node.prepend(`
+${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
+else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
+        const html = `
 <div id="log-object-${object.incrementId}" class="rounded-2"
-onclick="opener.${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
+onclick="${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
-</div>`));
+</div>`;
+
+        if (typeof replaced === "object" && replaced?.incrementId) {
+            this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
+                if (node.length) {
+                    node.replaceWith(html);
+                } else {
+                    _this._performAtJQNode("annotation-logs", node => node.prepend(html));
+                }
+            });
+        } else {
+            this._performAtJQNode("annotation-logs", node => node.prepend(html));
+        }
     }
 
     _boardItemEdit(self, focusBBox, object) {
@@ -422,6 +490,7 @@ ${editIcon}
         } else {
             updateUI = true;
         }
+        this._focusWithScreen = false;
 
         let objectId;
         if (typeof object !== "object") {
@@ -432,14 +501,14 @@ ${editIcon}
         }
 
         if (object) {
-            let factory = this._context.getAnnotationObjectFactory(object.factoryId);
+            let factory = this._context.getAnnotationObjectFactory(object.factoryID);
 
             if (factory && factory.isEditable()) {
                 factory.edit(object);
                 if (updateUI) this._disableForEdit();
 
                 self.parent().find("input").each((e, t) => {
-                    $(t).attr('readonly', "false");
+                    $(t).removeAttr('readonly');
                 });
                 self.html('save');
 
@@ -448,14 +517,21 @@ ${editIcon}
                     self: self,
                     target: object
                 };
+
+                this._context.raiseEvent('annotation-edit', {object});
+
             } else {
                 //if no update needed we are in blocked state, unblock since no edit
                 if (!updateUI) this._enableAfterEdit();
             }
 
         } else {
-            this._context.raiseEvent('error', {code: 'NO_OBJECT_ON_EDIT'});
-            console.warn("Object edit: no active object.");
+            VIEWER.raiseEvent('warn-system', {
+                originType: "module",
+                originId: "annotations",
+                code: "E_NO_OBJECT_ON_EDIT",
+                message: "Attempt to edit undefined object.",
+            });
         }
     }
 
@@ -475,11 +551,11 @@ ${editIcon}
                     if (!metadata[t.name] || metadata[t.name].value != t.value) {
                         obj.meta[t.name] = t.value;
                     }
-                    $(t).attr('readonly', true);
+                    $(t).attr('readonly', "true");
                 });
 
                 //if target was set, object could have been edited, update
-                let factory = this._context.getAnnotationObjectFactory(obj.factoryId);
+                let factory = this._context.getAnnotationObjectFactory(obj.factoryID);
                 factory.recalculate(obj);
             } else {
                 console.warn("Failed to update object: could not find object with id "
@@ -492,6 +568,7 @@ ${editIcon}
         } catch (e) {
             console.warn(e);
         }
+        this._focusWithScreen = true;
         this._editSelection = undefined;
     }
 
@@ -512,24 +589,27 @@ ${editIcon}
             this._focus(this._getFocusBBox(toAdd));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
-            this._addToBoard(toAdd);
+            this._addToBoard(toAdd, toRemove);
+            this._context.raiseEvent('annotation-create', {object: toAdd});
 
-            if (toRemove) {
-                canvas.remove(toRemove);
-                this._removeFromBoard(toRemove);
-            }
+            //todo why commented out?
+            // if (toRemove) {
+            //     canvas.remove(toRemove);
+            //     this._removeFromBoard(toRemove);
+            // }
             this._context.canvas.setActiveObject(toAdd);
         } else if (toRemove) {
             this._focus(this._getFocusBBox(toRemove));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
+            this._context.raiseEvent('annotation-delete', {object: toAdd});
         }
         canvas.renderAll();
     }
 
     _getFocusBBox(of, factory) {
-        factory = factory || this._context.getAnnotationObjectFactory(of.factoryId);
+        factory = factory || this._context.getAnnotationObjectFactory(of.factoryID);
         let bbox;
         if (factory) {
             bbox = factory.getObjectFocusZone(of);

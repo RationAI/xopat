@@ -36,9 +36,9 @@ WebGLModule.DataLoader = {
         constructor(gl) {
             this._units = [];
             this.canvas = document.createElement('canvas');
-            this.canvasReader = this.canvas.getContext('2d');
+            this.canvasReader = this.canvas.getContext('2d', {willReadFrequently: true});
             this.canvasConverter = document.createElement('canvas');
-            this.canvasConverterReader = this.canvasConverter.getContext('2d');
+            this.canvasConverterReader = this.canvasConverter.getContext('2d', {willReadFrequently: true});
         }
 
         /**

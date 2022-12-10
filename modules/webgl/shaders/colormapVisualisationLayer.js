@@ -38,7 +38,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         color: {
             default: {
                 steps: 3, //number of categories
-                default: "Parula",
+                default: "Viridis",
                 mode: "sequential",
                 title: "Colormap",
                 continuous: false,

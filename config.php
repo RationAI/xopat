@@ -1,5 +1,8 @@
 <?php
 
+//TODO descriptions
+//Also check config_meta.js
+
 $production = false;
 
 //relative path system in the application
@@ -7,6 +10,7 @@ define('PROJECT_ROOT', 'src');
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
 define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
 define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
+define('LOCALES_ROOT', PROJECT_ROOT . '/locales');
 
 //todo two versions - dev and production
 define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
@@ -34,6 +38,7 @@ if ($production) {
     define('JS_COOKIE_SAME_SITE', ""); //default
     define('JS_COOKIE_SECURE', ""); //default
 
+    //note: you probably want to set up a reverse proxy for localhost rather than changing this (CORS)
     define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
 }

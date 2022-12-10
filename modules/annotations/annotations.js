@@ -104,6 +104,31 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Creates a copy of exported list of objects with necessary values only
+	 * @param {[]|{}} objectList array of annotations or object with 'objects' array (as comes from this.toObject())
+	 * @param {string} keeps additional properties to keep
+	 * @return {[]|{}} clone array with trimmed values or modified object where 'objects' prop refers to the trimmed data
+	 */
+	trimExportJSON(objectList, ...keeps) {
+		let array = objectList;
+		if (!Array.isArray(array)) {
+			array = objectList.objects;
+		}
+		const _this = this;
+		array = array.map(x => {
+			//we define factories for types as default implementations too
+			const factory = _this.getAnnotationObjectFactory(x.factoryID || x.type);
+			if (!factory) return undefined; //todo error? or skips?
+			return factory.copyNecessaryProperties(x, keeps, true);
+		});
+		if (!Array.isArray(objectList)) {
+			objectList.objects = array;
+			return objectList;
+		}
+		return array;
+	}
+
+	/**
 	 * Export annotations and presets
 	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
 	 *     use "native" or undefined for native export
@@ -113,7 +138,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 */
 	async export(format=undefined, withAnnotations=true, withPresets=true) {
 		if (!format || format === "native") {
-			const result = withAnnotations ? this.toObject() : {};
+			const _this = this,
+				result = withAnnotations ? this.toObject(false) : {};
+			if (result.objects) {
+				this.trimExportJSON(result);
+			}
 			if (withPresets) result.presets = this.presets.toObject();
 			return JSON.stringify(result);
 		}
@@ -121,8 +150,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
-	 * Import annotations and presets
+	 * Import annotations and presets. Imported presets automatically remove unused presets
+	 *   (no change in meta or no object created with).
 	 * @param {string} data serialized data of the given format
+	 * 	- either object with 'presets' and/or 'objects' data content - arrays
+	 * 	- or a plain array, treated as objects
 	 * @param {string} format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {boolean} clear erase state upon import
 	 * @return Promise(string)
@@ -141,12 +173,16 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		// loads so that integrity is kept -> this is not probably a big issue since the only
 		// 'parsing' is done within preset import and it fails safely with exception in case of error
 
-		if (toImport.presets) {
-			this.presets.import(toImport.presets, clear);
-		}
-
-		if (Array.isArray(toImport.objects)) {
-			await this._loadObjects(toImport, clear);
+		if (Array.isArray(toImport)) {
+			//if no presets, maybe we are importing object array
+			await this._loadObjects({objects: toImport}, clear);
+		} else {
+			if (Array.isArray(toImport.presets)) {
+				this.presets.import(toImport.presets, clear);
+			}
+			if (Array.isArray(toImport.objects)) {
+				await this._loadObjects(toImport, clear);
+			}
 		}
 
 		this.raiseEvent('import', {
@@ -157,21 +193,52 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
+	 * Force the module to export additional properties used by external systems
+	 * @param {string} value new property to always export
+	 */
+	set forceExportsProp(value) {
+		this._extraProps.push(value);
+	}
+
+	/**
 	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
 	 * for exporting presets, see this.presets.export(...)
+	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones, string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
-	 * @return {object} exported canvas content {objects:[object]}
+	 * @return {object} exported canvas content in {objects:[object]} format
 	 */
-	toObject(...withProperties) {
-		const props = [];
+	toObject(withAllProps=false, ...withProperties) {
+		let props;
+		if (typeof withAllProps === "boolean") {
+			props = this.exportedPropertiesGlobal(withAllProps);
+		} else if (typeof withAllProps === "string") {
+			props = this.exportedPropertiesGlobal(true);
+			props.push(withAllProps);
+		}
+		props.push(...withProperties);
+		props.push(...this._extraProps);
+		return this.canvas.toObject(props);
+	}
+
+	/**
+	 * Compute properties registered for export
+	 * @return {*[]}
+	 */
+	exportedPropertiesGlobal(all=true) {
+		const props = new Set(
+			all ? OSDAnnotations.AnnotationObjectFactory.copiedProperties :
+				OSDAnnotations.AnnotationObjectFactory.necessaryProperties
+		);
 		for (let fid in this.objectFactories) {
 			const factory = this.objectFactories[fid];
 			const newProps = factory.exports();
-			if (Array.isArray(newProps)) props.push(...newProps);
+			if (Array.isArray(newProps)) {
+				for (let p of newProps) {
+					props.add(p);
+				}
+			}
 		}
-		props.push(...OSDAnnotations.PresetManager.exportableProperties);
-		props.push(...withProperties);
-		return this.canvas.toObject(props);
+		return Array.from(props);
 	}
 
 	/**
@@ -261,8 +328,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
-	 * Get object factory for given object type (stored in object.factoryId)
-	 * @param {string} objectType the type is stored as a factoryId property
+	 * Get object factory for given object type (stored in object.factoryID)
+	 * @param {string} objectType the type is stored as a factoryID property
 	 * @return {OSDAnnotations.AnnotationObjectFactory | undefined}
 	 */
 	getAnnotationObjectFactory(objectType) {
@@ -391,28 +458,26 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	/**
 	 * Set active preset for mouse button
-	 * @param {OSDAnnotations.Preset|undefined} preset  object that defines properties annotation is labeled with,
-	 * 		omit if the preset should be deducted automatically (first one / create new)
+	 * @param {OSDAnnotations.Preset|undefined|boolean|number} preset
+	 *      either a boolean to control selection (true will try to set any preset
+	 *      and create one if not present, false will unset); or
+	 *      object OSDAnnotations.Preset to set, or preset ID to set;
+	 * 		undefined behaves as if false was sent
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
 	 */
 	setPreset(preset=undefined, left=true) {
-		if (!preset) {
+		if (typeof preset === "boolean" && preset) {
 			for (let key in this.presets._presets) {
 				if (this.presets.exists(key)) {
 					preset = this.presets.get(key);
 					break;
 				}
 			}
-			if (!preset) preset = this.presets.addPreset();
+			if (typeof preset === "boolean") preset = this.presets.addPreset();
 		}
-		if (left) {
-			let original = this.presets.left;
-			this.presets.left = preset;
-			return original;
-		}
-		let original = this.presets.right;
-		this.presets.right = preset;
+		let original = this.presets.getActivePreset(left);
+		this.presets.selectPreset(preset?.presetID || preset, left);
 		return original;
 	}
 
@@ -431,7 +496,20 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			object.presetID = preset.presetID;
 		}
 
-		const factory = object._factory()?.configure(object, this.presets.getCommonProperties(preset));
+		const props = this.presets.getCommonProperties(preset);
+		if (!isNaN(object.zoomAtCreation)) props.zoomAtCreation = object.zoomAtCreation;
+
+		let factory = object._factory();
+		if (!factory) {
+			factory = this.getAnnotationObjectFactory(object.type);
+			if (!factory) {
+				throw "TODO: solve factory deduction - accepts method on factory?";
+			} else {
+				object.factoryID = factory.factoryID;
+			}
+		}
+		factory.configure(object, props);
+		object.zooming(this.canvas.getZoom());
 	}
 
 	/************************ Layers *******************************/
@@ -442,11 +520,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @return {OSDAnnotations.Layer} layer it belongs to
 	 */
 	checkLayer(ofObject) {
-		if (!ofObject.hasOwnProperty("layerId")) {
-			if (this._layer) ofObject.layerId = this._layer.id;
-		} else if (!this._layers.hasOwnProperty(ofObject.layerId)) {
+		if (!ofObject.hasOwnProperty("layerID")) {
+			if (this._layer) ofObject.layerID = this._layer.id;
+		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
 			//todo mode?
-			return this.createLayer(ofObject.layerId);
+			return this.createLayer(ofObject.layerID);
 		}
 	}
 
@@ -498,7 +576,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 		const _this = this;
 		this.canvas.forEachObject(function (obj) {
-			if (obj.layerId === layer.id) _this.deleteObject(obj, false);
+			if (obj.layerID === layer.id) _this.deleteObject(obj, false);
 		});
 		this.raiseEvent('layer-removed', {layer: layer});
 		this.canvas.renderAll();
@@ -522,8 +600,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	sortObjects() {
 		let _this = this;
 		this.canvas._objects.sort((x, y) => {
-			if (!x.hasOwnProperty('layerId') || !y.hasOwnProperty('layerId')) return 0;
-			return _this._layers[x.layerId].position - _this._layers[y.layerId].position;
+			if (!x.hasOwnProperty('layerID') || !y.hasOwnProperty('layerID')) return 0;
+			return _this._layers[x.layerID].position - _this._layers[y.layerID].position;
 		});
 		this.canvas.renderAll();
 	}
@@ -546,7 +624,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
-		annotation.sessionId = this.session;
+		annotation.sessionID = this.session;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -638,15 +716,18 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 * @param {fabric.Object} previous
 	 * @param {fabric.Object} next
 	 * @param {boolean} updateHistory false to ignore the history change, creates artifacts if used incorrectly
-	 * 	e.g. redo/undo buttons duplicate objects
+	 *    e.g. redo/undo buttons duplicate objects
+	 * @param _raise invoke event if true (default)
 	 */
-	replaceAnnotation(previous, next, updateHistory=false) {
+	replaceAnnotation(previous, next, updateHistory=false, _raise=true) {
 		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
 		if (updateHistory) this.history.push(next, previous);
+
+		if (_raise) this.raiseEvent('annotation-replace', {previous, next});
 	}
 
 	/**
@@ -725,12 +806,63 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 	}
 
+	/**
+	 * Binds IO to the export events, must be requested manually.
+	 */
+	bindIO() {
+		if (this._handledIO) return;
+		const presets = this.presets;
+		//restore presents if any
+		VIEWER.addHandler('export-data', e => e.setSerializedData(
+			"annotation_presets", presets.toObject(true)));
+		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
+		if (presetData !== undefined) {
+			try {
+				presets.import(presetData);
+			} catch (e) {
+				//todo error event instead
+				console.error(e);
+				Dialogs.show("Could not load presets. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
+			}
+		}
+
+		//restore objects if any
+		VIEWER.addHandler('export-data', e =>
+			e.setSerializedData("annotation-list",
+				JSON.stringify(this.trimExportJSON(this.toObject(), ...this._extraProps))));
+		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
+		if (imageJson) {
+			this.loadObjects(JSON.parse(imageJson)).catch(e => {
+				console.warn(e);
+				//todo error event instead
+				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
+			});
+		}
+		this._handledIO = true;
+	}
+
 	/********************* PRIVATE **********************/
 
 	_init() {
 		//Consider http://fabricjs.com/custom-control-render
 		// can maybe attach 'edit' button controls to object...
 		// note the board would have to reflect the UI state when opening
+
+		/**
+		 * Attach factory getter to each object
+		 */
+		fabric.Object.prototype._factory = function () {
+			const factory = _this.getAnnotationObjectFactory(this.factoryID || this.factoryId); //todo fallback factoryId remove in future
+			if (factory) this._factory = () => factory;
+			else if (this.factoryID) {
+				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
+				//maybe provide general implementation that can do nearly nothing
+			}
+			return factory;
+		}
+		fabric.Object.prototype.zooming = function(zoom) {
+			this._factory()?.onZoom(this, zoom);
+		}
 
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
@@ -740,6 +872,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.disabledInteraction = false;
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
+		this._extraProps = [];
 		this.cursor = {
 			mouseTime: 0, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -765,6 +898,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		 * @member {OSDAnnotations.History}
 		 */
 		this.history = new OSDAnnotations.History("history", this, this.presets);
+		this.history.size = 50;
 		/**
 		 * FreeFormTool reference
 		 * @member {OSDAnnotations.FreeFormTool}
@@ -778,10 +912,11 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
 			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
 
+		this._handledIO = false;
 		const _this = this;
 
-		//after properties initialized
-		// OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
+		//after properties initialize
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polyline, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
@@ -792,22 +927,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
-
-		/**
-		 * Attach factory getter to each object
-		 */
-		fabric.Object.prototype._factory = function () {
-			const factory = _this.getAnnotationObjectFactory(this.factoryId);
-			if (factory) this._factory = () => factory;
-			else if (this.factoryId) {
-				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryId);
-				//maybe provide general implementation that can do nearly nothing
-			}
-			return factory;
-		}
-		fabric.Object.prototype.zooming = function(zoom) {
-			this._factory()?.onZoom(this, zoom);
-		}
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -827,42 +946,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		this._layers = {};
-
-		//restore presents if any
-		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation_presets", JSON.stringify(_this.presets.toObject())));
-		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		let preset;
-		if (presetData !== undefined) {
-			try {
-				preset = this.presets.import(presetData);
-			} catch (e) {
-				preset = this.presets.addPreset();
-			}
-		}
-		else preset = this.presets.addPreset();
-		if (preset) this.setPreset(preset);
-
-		//restore objects if any
-		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation-list", JSON.stringify(_this.toObject())));
-		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
-		if (imageJson) {
-			try {
-				this.loadObjects(JSON.parse(imageJson)).then(_ => {
-					_this.history.size = 50;
-				});
-			} catch (e) {
-				console.warn(e);
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
-				_this.history.size = 50;
-			}
-		} else {
-			_this.history.size = 50;
-		}
-
 		if (Object.keys(this._layers).length < 1) this.createLayer();
-
 		this.setMouseOSDInteractive(true, false);
 	}
 
@@ -911,12 +995,29 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 		}.bind(this);
 
+		//prevents event bubling if the up event was handled by annotations
 		function handleRightClickUp(event) {
-			if (!_this.cursor.isDown || _this.disabledInteraction) return;
+			if (_this.disabledInteraction) return;
+			if (!_this.cursor.isDown) {
+				if (_this.cursor.mouseTime === 0) {
+					_this.raiseEvent('canvas-nonprimary-release', {
+						originalEvent: event
+					});
+				}
+				_this.cursor.mouseTime = -1;
+				return;
+			}
 
 			let factory = _this.presets.right ? _this.presets.right.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
-			_this.mode.handleClickUp(event, point, false, factory);
+			if (_this.mode.handleClickUp(event, point, false, factory)) {
+				event.preventDefault();
+			} else /*if (!_this.isModeAuto())*/ {
+				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
+				_this.raiseEvent('canvas-nonprimary-release', {
+					originalEvent: event
+				});
+			}
 
 			_this.cursor.isDown = false;
 		}
@@ -933,17 +1034,33 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		}
 
 		function handleLeftClickUp(event) {
-			if (!_this.cursor.isDown || _this.disabledInteraction) return;
+			if (_this.disabledInteraction) return;
+			if (!_this.cursor.isDown) {
+				if (_this.cursor.mouseTime === 0) {
+					_this.raiseEvent('canvas-release', {
+						originalEvent: event
+					});
+				}
+				_this.cursor.mouseTime = -1;
+				return;
+			}
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
 			let point = screenToPixelCoords(event.x, event.y);
-			_this.mode.handleClickUp(event, point, true, factory);
+			if (_this.mode.handleClickUp(event, point, true, factory)) {
+				event.preventDefault();
+			} else /*if (!_this.isModeAuto())*/ {
+				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
+				_this.raiseEvent('canvas-release', {
+					originalEvent: event
+				});
+			}
 
 			_this.cursor.isDown = false;
 		}
 
 		function handleLeftClickDown(event) {
-			if (_this.cursor.isDown || !_this.presets.left || _this.disabledInteraction) return;
+			if (_this.cursor.isDown || _this.disabledInteraction) return;
 
 			_this.cursor.mouseTime = Date.now();
 			_this.cursor.isDown = true;
@@ -1011,10 +1128,10 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.__self;
 		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
-		if (_this.objectFactories.hasOwnProperty(factory.factoryId)) {
-			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryId}`;
+		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
+			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
-		_this.objectFactories[factory.factoryId] = factory;
+		_this.objectFactories[factory.factoryID] = factory;
 		if (atRuntime) _this.raiseEvent('factory-registered', {factory: factory});
 	}
 
@@ -1051,7 +1168,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 
 	_keyDownHandler(e) {
 		// switching mode only when no mode AUTO and mouse is up
-		if (this.cursor.isDown || this.disabledInteraction) return;
+		if (this.cursor.isDown || this.disabledInteraction || !e.focusCanvas) return;
 
 		let modeFromCode = this._getModeByKeyEvent(e);
 		if (modeFromCode) {
@@ -1063,20 +1180,20 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	_keyUpHandler(e) {
 		if (this.disabledInteraction) return;
 
-		console.log(e)
-
-		if (!e.ctrlKey && !e.altKey) {
-			if (e.key === "Delete") return this.removeActiveObject();
-			if (e.key === "Escape") {
-				this.history._boardItemSave();
-				this.setMode(this.Modes.AUTO);
-				return;
+		if (e.focusCanvas) {
+			if (!e.ctrlKey && !e.altKey) {
+				if (e.key === "Delete") return this.removeActiveObject();
+				if (e.key === "Escape") {
+					this.history._boardItemSave();
+					this.setMode(this.Modes.AUTO);
+					return;
+				}
 			}
-		}
 
-		if (e.ctrlKey) {
-			if (e.key === "z") return this.history.back();
-			if (e.key === "Z") return this.history.redo();
+			if (e.ctrlKey) {
+				if (e.key === "z") return this.history.back();
+				if (e.key === "Z") return this.history.redo();
+			}
 		}
 
 		if (this.mode.rejects(e)) {
@@ -1097,15 +1214,25 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 				});
 			}
 		} else {
-			let factory = this.getAnnotationObjectFactory(object.factoryId);
+			let factory = this.getAnnotationObjectFactory(object.factoryID);
 			if (factory) factory.selected(object);
 		}
 	}
 
 	_loadObjects(input, clear, reviver) {
+		const originalToObject = fabric.Object.prototype.toObject;
+		const inclusionProps = this.exportedPropertiesGlobal();
+
+		//we ignore incoming props as we later reset the override
+		fabric.Object.prototype.toObject = function (_) {
+			return originalToObject.call(this, inclusionProps);
+		}
+		const reset = () => fabric.Object.prototype.toObject = originalToObject;
+
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		return new Promise((resolve, reject) => {
+			//todo try re-implement with fabric.util.enlivenObjects(...)? not private api
 			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
 				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
 					return reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
@@ -1118,7 +1245,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 						self.checkPreset(obj);
 
 						obj.on('selected', self._objectClicked.bind(self));
-						//todo annotation creation event?
+						//todo consider annotation creation event?
 						_this.insertAt(obj, index);
 					});
 					delete input.objects;
@@ -1132,7 +1259,10 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 					return resolve();
 				});
 			}, reviver);
-		});
+		}).then(reset).catch(e => {
+			reset();
+			throw e;
+		}); //todo rethrow? rewrite as async call with try finally
 	}
 
 	static __self = undefined;
@@ -1179,9 +1309,10 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
+	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		//do nothing
+		return false;
 	}
 
 	/**
@@ -1252,10 +1383,21 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * For internal use, abort handleClickDown
 	 * so that handleClickUp is not called
+	 * @param isLeftClick true if primary button pressed
+	 * @param noPresetError raise error event 'W_NO_PRESET'
 	 */
-	abortClick() {
+	abortClick(isLeftClick, noPresetError=false) {
 		this.context.cursor.mouseTime = 0;
 		this.context.cursor.isDown = false;
+		if (noPresetError) {
+			VIEWER.raiseEvent('warn-user', {
+				originType: "module",
+				originId: "annotations",
+				code: "W_NO_PRESET",
+				message: "Annotation creation requires active preset selection!",
+				isLeftClick: isLeftClick
+			});
+		}
 	}
 
 	/**
@@ -1321,16 +1463,14 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) return;
-		this._finish(o, isLeftClick, objectFactory);
+		return this._finish(o, isLeftClick, objectFactory);
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) this.abortClick();
-		this._init(o);
+		this._init(o, objectFactory);
 	}
 
-	_init(event) {
+	_init(event, factory) {
 		//if clicked on object, highlight it
 		let active = this.context.canvas.findTarget(event);
 		if (active) {
@@ -1347,15 +1487,25 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		this.clickInBetweenDelta = clickTime;
 
 		// just navigate if click longer than 100ms or other conds not met, fire if double click
-		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return;
+		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return false;
+
+		if (!updater) {
+			this.abortClick(isLeftClick, true);
+			return false;
+		}
 
 		//instant create wants screen pixels as we approximate based on zoom level
 		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
 		if (created === false) {
-			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
-onclick="USER_INTERFACE.highlight('sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
-coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
+			VIEWER.raiseEvent('warn-user', {
+				originType: "module",
+				originId: "annotations",
+				code: "W_AUTO_CREATION_FAIL",
+				message: "Automatic annotation creation failed!",
+				isLeftClick: isLeftClick
+			});
 		}
+		return true;
 	}
 
 	customHtml() {
@@ -1370,27 +1520,28 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		this._finish();
+		return true;
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, point, isLeftClick);
+		this._init(o, point, isLeftClick, objectFactory);
 	}
 
 	handleMouseMove(point) {
 		this.context.freeFormTool.update(point);
 	}
 
-	_init(o, point, isLeftClick) {
+	_init(o, point, isLeftClick, objectFactory) {
 		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
 		if (!currentObject) {
 			if (!this.context.freeFormTool.modeAdd) {
 				//subtract needs active object
-				this.abortClick();
+				this.abortClick(isLeftClick);
 				return;
 			}
-			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick);
+			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick, objectFactory);
 			created = true;
 		} else {
 			let	factory = currentObject._factory(),
@@ -1417,25 +1568,31 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!willModify) {
 				if (!this.context.freeFormTool.modeAdd) {
 					//subtract needs active object
-					this.abortClick();
+					this.abortClick(isLeftClick);
 					return;
 				}
 				currentObject = this._initFromPoints(
-					newPolygonPoints || this._geCirclePoints(point), isLeftClick
+					newPolygonPoints || this._geCirclePoints(point), isLeftClick, objectFactory
 				);
 				created = true;
 			}
 		}
 
-		this.context.freeFormTool.init(currentObject, created);
-		this.context.freeFormTool.update(point);
+		if (currentObject) {
+			this.context.freeFormTool.init(currentObject, created);
+			this.context.freeFormTool.update(point);
+		}
 	}
 
 	_geCirclePoints(point) {
 		return this.context.freeFormTool.getCircleShape(point);
 	}
 
-	_initFromPoints(points, isLeftClick) {
+	_initFromPoints(points, isLeftClick, objectFactory) {
+		if (!objectFactory) {
+			this.abortClick(isLeftClick, true);
+			return undefined;
+		}
 		return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(isLeftClick));
 	}
 
@@ -1523,12 +1680,16 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) return;
+		if (!objectFactory) return false;
 		this._finish(objectFactory);
+		return true;
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) this.abortClick();
+		if (!objectFactory) {
+			this.abortClick(isLeftClick,true);
+			return;
+		}
 		this._init(point, isLeftClick, objectFactory);
 	}
 

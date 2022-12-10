@@ -312,7 +312,7 @@ class Playground  {
     _handleErrorResponse(details, error) {
         this.strategy.clear();
         if (error instanceof HTTPError) {
-            switch (error.code) {
+            switch (error.response.code) {
                 case 503:
                     details = "No response: is the server running? <br>URL:&nbsp;<code>\" + this.setup.server + \"</code>\"";
                     Dialogs.show("Playground: " + details, 5000, Dialogs.MSG_ERR);
@@ -346,13 +346,13 @@ Note that for this plugin to work, you need to run a python playground server by
     }
 
     //todo remove?
-    changeRendering(self, layerId) {
+    changeRendering(self, layerID) {
         let _this = $(self),
             type = _this.val();
         let factoryClass = WebGLModule.ShaderMediator.getClass(type);
         if (factoryClass !== undefined) {
             //todo valid? really each visualization...?
-            this.webglEngine.foreachVisualisation(vis => vis.shaders[layerId].type = type);
+            this.webglEngine.foreachVisualisation(vis => vis.shaders[layerID].type = type);
             this.webglEngine.rebuildVisualisation(null);
             VIEWER.world.draw();
             VIEWER.navigator.world.draw();

@@ -1,0 +1,8 @@
+{
+    "id": "sanitize-html",
+    "name": "Html Sanitization",
+    "includes" : [
+        "sanitize.min.js"
+    ],
+    "requires": []
+}

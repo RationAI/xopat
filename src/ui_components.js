@@ -134,6 +134,85 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
 };
 
 /**
+ * UI Actions
+ *
+ * functions that enable more complex UI interaction
+ */
+UIComponents.Actions = {
+    /**
+     * Makes children in a parent draggable. These children might contain other elements you want to
+     * prevent the dragging on: such children need 'non-draggable' class
+     * (at least one between the dragged item and the child in hierarchy)
+     * @param parentContainerId parent ID that keeps elements for which dragging will be enabled
+     * @param onEnabled called for each child upon initialization, the element node is passed as argument
+     * @param onStartDrag called before the dragging starts, the param is the event of the drag,
+     *    returns true if the dragging should really start, false if not
+     * @param onEndDrag called when the element is dropped at some position, the param is the event of the drag
+     *    the dom node that triggered the change: event.target
+     * @return function to call for any other elements manually, note! these should be also direct children of
+     *    parentContainerId (i.e. adding more dynamically later).
+     *  note: use 'non-draggable' on inner content to prevent it from triggering the dragging
+     *  note: dragged item is always assigned 'drag-sort-active' class
+     *  note: events are attached to DOM tree, not the structure
+     *        - content changes in DOM involving your nodes destroys events;
+     *  hint: use node.dataset.<> API to store and retrieve values within items
+     */
+    draggable: (parentContainerId, onEnabled=undefined, onStartDrag=undefined, onEndDrag=undefined) => {
+        const children = document.getElementById(parentContainerId)?.children;
+        if (!children) throw "Actions::draggable needs valid parent ID to access an element in DOM!";
+        Array.prototype.forEach.call(children, (item) => {enableDragItem(item)});
+
+        function enableDragItem(item) {
+            const isPrevented = (element, cls) => {
+                let currentElem = element;
+                let isParent = false;
+
+                while (currentElem) {
+                    const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
+                    if (hasClass) {
+                        isParent = true;
+                        currentElem = undefined;
+                    } else {
+                        currentElem = currentElem.parentElement;
+                    }
+                }
+                return isParent;
+            };
+            item.setAttribute('draggable', true);
+            item.ondragstart = typeof onStartDrag === "function" ? e => {
+                if (!onStartDrag(e) || isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) {
+                    e.preventDefault();
+                }
+            } : e => {
+                if (isPrevented(document.elementFromPoint(e.x, e.y), 'non-draggable')) e.preventDefault();
+            };
+            item.ondrag = (item) => {
+                const selectedItem = item.target,
+                    list = selectedItem.parentNode,
+                    x = event.clientX,
+                    y = event.clientY;
+
+                selectedItem.classList.add('drag-sort-active');
+                let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
+
+                if (list === swapItem.parentNode) {
+                    swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
+                    list.insertBefore(selectedItem, swapItem);
+                }
+            };
+            item.ondragend = typeof onEndDrag === "function" ? item => {
+                item.target.classList.remove('drag-sort-active');
+                onEndDrag(item);
+            } : item => {
+                item.target.classList.remove('drag-sort-active');
+            };
+            typeof onEnabled === "function" && onEnabled(item);
+        }
+        return enableDragItem;
+    }
+};
+
+/**
  * Single UI Components for re-use, styled and prepared
  * note they are not very flexible, but usefull if you need generic, simple UI
  *
@@ -233,12 +312,12 @@ ${contentAction}
             container.classList.add("d-flex", "flex-row-reverse");
             let btn = document.createElement("button");
             btn.onclick = this.selectAll.bind(this);
-            btn.innerHTML = "Select All";
+            btn.innerHTML = $.t('common.selectAll');
             btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
             container.append(btn);
             btn = document.createElement("button");
             btn.onclick = this.deselectAll.bind(this);
-            btn.innerHTML = "Deselect All";
+            btn.innerHTML = $.t('common.deselectAll');
             btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
             container.append(btn);
             document.getElementById(this.contextId).prepend(container);
@@ -331,26 +410,37 @@ UIComponents.Containers = {
             }
         }
 
-        //todo get rid of plugin ID? assign just to the parent container outside!
-        set(pluginId, id, title, html, icon="") {
+        /**
+         * Set another tab to the panel
+         * @param entityId id of the entity owning this element, in the case of error,
+         *  all classes with 'entityId' are removed for consistency by the CORE (i.e. use plugin ID)
+         * @param id of the panel, does not have to be unique in DOM (but recommended to avoid problems);
+         *  entityId and id pair uniquely determines the tab
+         * @param title the tab button title
+         * @param html the tab content
+         * @param icon the icon name for button, default ""
+         * @param bodyId unique container ID in the DOM context (can be the same as id if unique) ->
+         *   this id can be accessed to further modify this container contents
+         */
+        set(entityId, id, title, html, icon="", bodyId=id) {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
-                $(`#${existing}-header`).replaceWith(this._getHeader(pluginId, id, title, icon));
-                $(`#${existing}`).replaceWith(this._getBody(pluginId, id, title, icon));
+                $(`#${existing}-menu-header`).replaceWith(this._getHeader(entityId, id, title, icon, false, bodyId));
+                $(`#${bodyId}`).replaceWith(this._getBody(entityId, id, html, false, bodyId));
                 return;
             }
 
             if (this.elements.length < 1) {
-                this._createLayout(pluginId, id, title, icon, html);
+                this._createLayout(entityId, id, title, icon, html, bodyId);
             } else {
-                this.head.innerHTML += this._getHeader(pluginId, id, title, icon);
-                this.body.innerHTML += this._getBody(pluginId, id, html);
+                $(this.head).append(this._getHeader(entityId, id, title, icon, false, bodyId));
+                $(this.body).append(this._getBody(entityId, id, html, false, bodyId));
                 this.head.style.display = "flex";
             }
             this.elements.push(id);
         }
 
-        removePart(pluginId, id) {
+        removePart(entityId, id) {
             let existing = this.elements.find(x => x === id);
             if (existing !== undefined) {
                 this.elements.splice(existing, 1);
@@ -370,10 +460,10 @@ UIComponents.Containers = {
             delete this.elements;
         }
 
-        _createLayout(pluginId, id, firstTitle, icon, html) {
+        _createLayout(entityId, id, firstTitle, icon, html, bodyId) {
             let head = `<div id="${this.uid}-head" class="flex-items-start ${this.horizontal ? "windth-full px-3 flex-row" : "height-full py-3 flex-column"}"
 style="${this.menuShow ? 'display:flex;' : 'display:none;'} ${this.horizontal ? "height: 32px;" : "width: 120px; min-width: 120px; text-align: right;"} background: var(--color-bg-tertiary); z-index: 2">
-${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
+${this._getHeader(entityId, id, firstTitle, icon, true, bodyId)}</div>`;
             let flexD;
             if (this.horizontal) flexD = this.menuReversed ? "flex-column-reverse panel-horizontal" : "flex-column panel-horizontal";
             else flexD = "flex-row panel-vertical";
@@ -382,27 +472,29 @@ ${this._getHeader(pluginId, id, firstTitle, icon, true)}</div>`;
             else sizeD = this.horizontal ? "width-full" : "height-full";
             let overflow = this.horizontal ? "overflow-x:auto;overflow-y:hidden;" : "overflow-y:auto;overflow-x:hidden;";
 
-            let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">${this._getBody(pluginId, id, html, true)}</div>`;
+            let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">
+${this._getBody(entityId, id, html, true, bodyId)}</div>`;
             this.context.innerHTML = `<div class="panel-menu d-flex ${sizeD} ${flexD}">${head + body}</div>`;
             this.head = this.context.children[0].children[0];
             this.body = this.context.children[0].children[1];
         }
 
-        _getHeader(pluginId, id, title, icon, isFirst=false) {
-            pluginId = pluginId ? pluginId + "-plugin-root" : "";
+        _getHeader(entityId, id, title, icon, isFirst, bodyId) {
+            entityId = entityId ? entityId + "-plugin-root" : "";
             icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
-            return `<input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
-class="panel-menu-input ${pluginId}" onclick="
-for (let ch of document.getElementById('${this.uid}-body').childNodes) {ch.style.display = 'none'}
-document.getElementById('${id}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
-head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${pluginId} ${this.borderClass}
-panel-menu-label" data-animation="popIn">${icon}${title}</label>`;
+            return `<span id="${id}-menu-header" class="width-full" style="flex-basis: min-content">
+<input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
+class="panel-menu-input ${entityId}" onclick="
+for (let ch of document.getElementById('${this.uid}-body').children) {ch.style.display = 'none'}
+document.getElementById('${bodyId}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
+head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${entityId} ${this.borderClass}
+panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
         }
 
-        _getBody(pluginId, id, html, isFirst=false) {
-            pluginId = pluginId ? pluginId + "-plugin-root" : "";
+        _getBody(entityId, id, html, isFirst, bodyId) {
+            entityId = entityId ? entityId + "-plugin-root" : "";
             let size = this.horizontal ? "width-full" : "height-full";
-            return `<section id="${id}" class="${pluginId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
+            return `<section id="${bodyId}" class="${entityId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
         }
     },
 

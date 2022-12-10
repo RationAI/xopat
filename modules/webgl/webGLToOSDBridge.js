@@ -48,13 +48,11 @@ window.OpenSeadragon.BridgeGL = class {
             //enable on the source by overriding its member functions
             this._bindToTiledImage(idx);
         } else {
-            tiledImage._bridgeId = this.uid;
-        }
-        //else... the other approach is based on events, no need to enable on the element
-
-        tiledImage.__cached_hasTransparency = tiledImage.hasTransparency;
-        tiledImage.hasTransparency = function(context2D, url, ajaxHeaders, post) {
-            return true; //we always render transparent
+            tiledImage.source._bridgeId = this.uid;
+            tiledImage.source.__cached_hasTransparency = tiledImage.source.hasTransparency;
+            tiledImage.source.hasTransparency = function(context2D, url, ajaxHeaders, post) {
+                return true; //we always render transparent
+            }
         }
     }
 
@@ -65,11 +63,17 @@ window.OpenSeadragon.BridgeGL = class {
     removeLayer(idx) {
         if (!this.uid) {
             const source = this._unbindFromTiledSource(idx);
-            if (source) {
-                source.hasTransparency = source.__cached_hasTransparency || source.hasTransparency;
-                delete source.__cached_hasTransparency;
-            } else {
+            if (!source) {
                 console.warn("Could not properly remove bindings on TiledImage index", idx);
+            }
+        } else {
+            let source = this._rendering[idx];
+            if (!source) {
+                console.warn("Could not properly remove bindings on TiledImage index", idx);
+            } else {
+                delete tiledImage.source._bridgeId;
+                source.hasTransparency = source.__cached_hasTransparency;
+                delete source.__cached_hasTransparency;
             }
         }
         delete this._rendering[idx];
@@ -184,7 +188,10 @@ window.OpenSeadragon.BridgeGL = class {
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */
     loadShaders(activeVisualizationIdx=0, onPrepared=function(){}) {
-        if (this.webGLEngine.isPrepared) return;
+        if (this.webGLEngine.isPrepared) {
+            onPrepared();
+            return;
+        }
         this.webGLEngine.prepare(this.imageData, onPrepared, activeVisualizationIdx);
     }
 
@@ -231,6 +238,7 @@ window.OpenSeadragon.BridgeGL = class {
         // Raise tstamp to force redraw
         this._refreshTimeStamp = Date.now();
         this._randomDelay = Math.max(0, randomDelay);
+        this.draw();
     }
 
     /**
@@ -282,9 +290,10 @@ window.OpenSeadragon.BridgeGL = class {
      * - awaits the OSD opening
      *
      * @param {function} layerLoaded callback on load
+     * @param {number} withActiveIndex index of the visualisation to load as first, default 0
      * @return {OpenSeadragon.BridgeGL}
      */
-    initBeforeOpen(layerLoaded=()=>{}) {
+    initBeforeOpen(layerLoaded=()=>{}, withActiveIndex=0) {
         if (this.webGLEngine.isInitialized) return this;
         this._initSelf();
 
@@ -295,9 +304,7 @@ window.OpenSeadragon.BridgeGL = class {
                 layerLoaded();
                 _this.openSD.removeHandler('open', handler);
             }
-
-            if (!_this.webGLEngine.isPrepared) _this.loadShaders(init);
-            else init();
+            _this.loadShaders(withActiveIndex, init);
         };
 
         this.openSD.addHandler('open', handler);
@@ -305,19 +312,16 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Initialize the bridge between OSD and WebGL immediately
+     * Initialize the bridge between OSD and WebGL immediately, loadShaders(...) must be called manually in this case.
      * like the WebGL's init() must be called once WebGL.prepare() finished
      */
     initAfterOpen() {
         if (this.webGLEngine.isInitialized) return this;
-
-        const _this = this;
-        function init() {
-            _this._initSelf();
-            _this.webGLEngine.init();
+        if (!this.webGLEngine.isPrepared) {
+            throw "BridgeGL::loadShaders() must be called before using initAfterOpen!";
         }
-        if (!this.webGLEngine.isPrepared) this.loadShaders(init);
-        else init();
+        this._initSelf();
+        this.webGLEngine.init();
         return this;
     }
 
@@ -347,9 +351,9 @@ window.OpenSeadragon.BridgeGL = class {
             }
         }
 
-        if (this._shadersLoaded) return;
-        this.loadShaders();
-        this._shadersLoaded = true;
+        if (this._initBounded) return;
+        this.loadShaders(); //just to be safe, should be already loaded at this time, consider throwing instead
+        this._initBounded = true;
 
         //This can be performed only once for now, mode of execution cannot be changed after init(...)
 
@@ -400,15 +404,16 @@ window.OpenSeadragon.BridgeGL = class {
     /************** EVENT STRATEGY ******************/
 
     _tileLoaded(e) {
-        if (! e.image) return;
+        if (! e.data) return;
 
-        if (this.uid === e.tiledImage._bridgeId && !e.tile.webglId) {
+        if (this.uid === e.tiledImage.source._bridgeId && !e.tile.webglId) {
             e.tile.webglId = this.uid;
-            //todo necessary to set?!?! I thougth OSD does this automatically
-            e.tile.imageData = e.image;
-            e.tile.webglRefresh = 0; // -> will draw immediatelly
+            //will draw immediatelly
+            e.tile.webglRefresh = 0;
+            //we set context2D manually, the cache is NOT created
+            e.tile.__data = e.data;
             //necessary, the tile is re-drawn upon re-zooming, store the output
-            var canvas = document.createElement('canvas');
+            let canvas = document.createElement('canvas');
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height;
             e.tile.context2D = canvas.getContext('2d');
@@ -422,7 +427,7 @@ window.OpenSeadragon.BridgeGL = class {
             //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
-            let imageData = e.tile.imageData;
+            let imageData = e.tile.__data;
 
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,

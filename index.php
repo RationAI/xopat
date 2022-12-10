@@ -5,17 +5,39 @@ if (version_compare(phpversion(), '7.1', '<')) {
 }
 
 require_once("config.php");
-require_once(PROJECT_ROOT . "/plugins.php");
+
+global $version, $i18n;
 $version = VERSION;
+$errors_print = "";
+
+set_exception_handler(function (Throwable $exception) {
+    global $i18n;
+    if (!isset($i18n)) {
+        require_once PROJECT_ROOT . '/i18m.class.php';
+        $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
+    }
+    throwFatalErrorIf(true, "error.unknown", "", $exception->getMessage());
+});
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
 }
 
+function isBoolFlagInObject($object, $key) {
+    $v = $object->$key;
+    return isset($v) && ((gettype($v) === "string" && $v && $v !== "false") || $v);
+}
+
+function printJSConsole($message, $is_error=true) {
+    global $errors_print;
+    $fn = $is_error ? "error" : "warn";
+    $errors_print .= "console.$fn(`$message`);";
+}
+
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
         require_once(PROJECT_ROOT . "/error.php");
-        show_error($title, $description, $details);
+        show_error($title, $description, $details, $_GET["lang"] ?? 'en');
         exit;
     }
 }
@@ -29,10 +51,10 @@ function ensureDefined($object, $property, $default) {
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
  */
-//todo rename to something else sz ugly
+//todo visualisation -> visualization
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
-throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup data. See POST data:",
+throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
         print_r($_POST, true));
 
 /**
@@ -41,7 +63,7 @@ throwFatalErrorIf(!$visualisation, "Invalid link.", "The request has no setup da
 
 //params that come in might be associative arrays :/
 $parsedParams = json_decode(is_string($visualisation) ? $visualisation : json_encode($visualisation));
-throwFatalErrorIf(!is_object($parsedParams), "Invalid link.", "The visualisation setup is not parse-able.",
+throwFatalErrorIf(!is_object($parsedParams), "messages.urlInvalid", "messages.postDataSyntaxErr",
     "JSON Error: " . json_last_error() . "<br>" . $visualisation);
 
 ensureDefined($parsedParams, "params", (object)array());
@@ -49,26 +71,37 @@ ensureDefined($parsedParams, "data", array());
 ensureDefined($parsedParams, "background", array());
 ensureDefined($parsedParams, "shaderSources", array());
 ensureDefined($parsedParams, "plugins", (object)array());
-ensureDefined($parsedParams, "dataPage", (object)array());
 
-$bypassCookies = isset($parsedParams->params->bypassCookies) && $parsedParams->params->bypassCookies;
+$is_debug = isBoolFlagInObject($parsedParams->params, "debugMode");
+if ($is_debug) {
+    error_reporting(E_ERROR);
+    ini_set('display_errors', 1);
+}
+$bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
 $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
+$locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
+
+//now we can translate - translation known
+require_once PROJECT_ROOT . '/i18n.class.php';
+i18n::$debug = $is_debug;
+$i18n = i18n::default($locale, LOCALES_ROOT);
+
+//load modules and plugins after translation is ready
+require_once(PROJECT_ROOT . "/plugins.php");
 
 foreach ($parsedParams->background as $bg) {
-    throwFatalErrorIf(!isset($bg->dataReference), "No data available.",
-        "JSON parametrization of the visualiser requires <i>dataReference</i> for each background layer. This field is missing.",
+    throwFatalErrorIf(!isset($bg->dataReference), "messages.urlInvalid", "messages.bgReferenceMissing",
         print_r($parsedParams->background, true));
 
     throwFatalErrorIf(!is_numeric($bg->dataReference) || $bg->dataReference >= count($parsedParams->data),
-        "Invalid image.",
-        "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
+        "messages.urlInvalid", "messages.bgReferenceMissing",
         "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
 }
 
 $layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
-$errors_print = "";
+
 
 if ($layerVisible) {
     $layerVisible--;
@@ -77,28 +110,27 @@ if ($layerVisible) {
             $visualisationTarget->name = "Custom Visualisation";
         }
         if (!isset($visualisationTarget->shaders)) {
-            $visSummary = print_r($visualisationTarget, true);
+            $visSummary = htmlentities(print_r($visualisationTarget, true));
             $errors_print .= "console.warn('Visualisation #$index removed: missing shaders definition. The layer: <code>$visSummary</code>');";
             unset($parsedParams->visualizations[$index]);
         }
 
         $shader_count = 0;
+        $source = $i18n->t("common.Source");
         foreach ($visualisationTarget->shaders as $data=>$layer) {
             if (!isset($layer->name)) {
                 $temp = substr($data, max(0, strlen($data)-24), 24);
                 if (strlen($temp) != strlen($data)) $temp  = "...$temp";
-                $layer->name = "Source: $temp";
+                $layer->name = "$source: $temp";
             }
 
-            throwFatalErrorIf(!isset($layer->type), "No visualisation style defined for $layer->name.",
-                "You must specify <b>type</b> parameter.", print_r($layer, true));
+            throwFatalErrorIf(!isset($layer->type), "messages.urlInvalid",
+                "messages.shaderTypeMissing", print_r($layer, true));
 
             if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
                 //todo fixme cached setup -> notify user rendering has changed....
-
-                //todo fixme not working!!!
                 $layer->cache = $cookieCache->{$layer->name};
-            }
+            } //todo else if not cookies enabled notify user they have been disabled
             if (!isset($layer->params)) {
                 $layer->params = (object)array();
             }
@@ -124,7 +156,7 @@ $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(','
 
 foreach ($PLUGINS as $key => $plugin) {
     if (!$plugin->id) {
-        $errors_print .= "console.warn('Plugin ?? removed: probably include.json misconfiguration.');";
+        $errors_print .= "console.warn('Plugin ($key) removed: probably include.json misconfiguration.');";
         unset($PLUGINS[$key]);
     }
 
@@ -227,7 +259,7 @@ foreach ($MODULES as $_ => $mod) {
             };
             window.console.error = function () {
                 window.console.appTrace.push("ERROR ",
-                    (new Error().stack.split("at ")[1]).trim(), " ",
+                    // (new Error().stack.split("at ")[1]).trim(), " ",
                     timestamp(), ...arguments, "\n");
                 defaultError.apply(window.console, arguments);
             };
@@ -250,18 +282,24 @@ foreach ($MODULES as $_ => $mod) {
         integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
         crossorigin="anonymous"></script>
 
+    <script src="config_meta.js"></script>
+
+    <!-- basic utilities-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.jquery.min.js"></script>
+
     <!-- OSD -->
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
-    <!--Extensions/modifications-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=$version"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
+    <!--OSD extensions-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=<?php echo $version?>"></script>
 
     <!--Tutorials-->
+    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>/kinetic-v5.1.0.min.js"></script>
     <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.css">
     <script src="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.min.js"></script>
@@ -281,6 +319,8 @@ foreach ($MODULES as $_ => $mod) {
 
 </head>
 
+
+
 <body style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
@@ -289,10 +329,13 @@ foreach ($MODULES as $_ => $mod) {
 
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;Error</div>
+    <div id="system-message-warn" class="f00-light text-center">
+        <span class="material-icons f0-light mr-1" style="transform: translate(0px, -5px);">error_outline</span>
+        <span data-i18n="error.title">Error</span>
+    </div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
-    <div class="text-small text-center"> [ if you want to report a problem, please include exported file ] </div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button">details</button>
+    <div class="text-small text-center" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 </div>
 
@@ -303,7 +346,7 @@ foreach ($MODULES as $_ => $mod) {
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
     <div id="tutorials"></div>
-    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();">Exit</button>
+    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();" data-i18n="common.Exit">Exit</button>
 </div>
 
 <!-- Main Panel -->
@@ -316,19 +359,21 @@ foreach ($MODULES as $_ => $mod) {
 
             <span id="global-opacity">
                 <label>
-                    Layer Opacity &nbsp;<input type="range"  min="0" max="1" value="1" step="0.1" style="width: 100px;">
+                    <span data-i18n="main.global.layerOpacity">Layer Opacity</span>
+                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
                 </label>
                 &emsp;
             </span>
 
             <span id="global-tissue-visibility">
                 <label>
-                    Tissue &nbsp;<input type="checkbox" style="align-self: center;" checked class="form-control" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                    <span data-i18n="main.global.tissue">Tissue</span>
+                    <input type="checkbox" style="align-self: center;" checked class="form-control ml-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
                 </label>
                 &emsp;
             </span>
 
-            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" title="Clone and synchronize">repeat_on</span>
+            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone">repeat_on</span>
         </div><!--end of general controls-->
 
         <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
@@ -345,7 +390,7 @@ foreach ($MODULES as $_ => $mod) {
     self.addClass('pressed');
  }
 "> push_pin </span>
-            <div id="tissue-title-header"></div>
+            <div id="tissue-title-header" class="one-liner" style="max-height: 255px;"></div>
         </div>
 
         <div id="panel-images" class="inner-panel mt-2"></div>
@@ -365,7 +410,7 @@ foreach ($MODULES as $_ => $mod) {
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" title="Remember settings" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
+                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" data-i18n="[title]main.shaders.saveCookies" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
                     </div>
 
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
@@ -381,17 +426,28 @@ EOF;
         </div>
 
         <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
-            <span id="copy-url" class="pl-1 btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" title="Get the visualisation link"><span class="material-icons pr-1" style="font-size: 22px;">link</span>URL</span>&emsp;
-            <span id="global-export" class="pl-1 btn-pointer" onclick="UTILITIES.export();" title="Export visualisation together with plugins data"><span class="material-icons pr-1" style="font-size: 22px;">download</span>Export</span>&emsp;
-            <span id="add-plugins" class="pl-1 btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" title="Add plugins to the visualisation"><span class="material-icons pr-1" style="font-size: 22px;">extension</span>Plugins</span>&emsp;
-            <span id="global-help" class="pl-1 btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" title="Show tutorials"><span class="material-icons pr-1 pointer" style="font-size: 22px;">school</span>Tutorial</span>&emsp;
-            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" title="Settings">settings</span>
+            <span id="copy-url" class="btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
+                <span class="material-icons pr-0" style="font-size: 22px;">link</span>
+                <span data-i18n="main.bar.exportUrl">URL</span>
+            </span>&emsp;
+            <span id="global-export" class="btn-pointer" onclick="UTILITIES.export();" data-i18n="[title]main.bar.explainExportFile">
+                <span class="material-icons pr-0" style="font-size: 22px;">download</span>
+                <span data-i18n="main.bar.exportFile">Export</span>
+            </span>&emsp;
+            <span id="add-plugins" class="btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+                <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
+                <span data-i18n="main.bar.plugins">Plugins</span>
+            </span>&emsp;
+            <span id="global-help" class="btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+                <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
+                <span data-i18n="main.bar.tutorials">Tutorial</span>
+            </span>&emsp;
+            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
     </div>
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
     <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
-    <div id="tissue-list-menu" class="position-absolute bottom-0 right-0 left-0 noselect"></div>
 
     <!-- Values Initialization -->
     <script type="text/javascript">
@@ -408,10 +464,12 @@ EOF;
     const setup = <?php echo $visualisation ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = {
+        locale: "en",
         customBlending: false,
         debugMode: false,
         webglDebugMode: false,
         scaleBar: true,
+        statusBar: true,
         viewport: undefined,
         activeBackgroundIndex: 0,
         activeVisualizationIndex: 0,
@@ -423,6 +481,7 @@ EOF;
         theme: "auto",
         stackedBackground: false,
         maxImageCacheCount: 1200,
+        webGlPreferredVersion: "2.0",
     };
 
     const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
@@ -440,13 +499,15 @@ EOF;
     //optimization allways present
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
+    const metaStore = new MetaStore(setup.meta || {});
+
     window.APPLICATION_CONTEXT = {
         config: {
-            get params () {
+            get params () { // getOption should be preferred over params access
                 return setup.params || {};
             },
             get meta () {
-                return setup.meta || {};
+                return metaStore;
             },
             get data () {
                 return setup.data || [];
@@ -462,9 +523,6 @@ EOF;
             },
             get plugins () {
                 return setup.plugins || {};
-            },
-            get dataPage () {
-                return setup.dataPage || {};
             },
         },
         //here are all parameters supported by the core visualization
@@ -500,7 +558,6 @@ EOF;
         },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
-        get metaMenuId() { return "app-meta-data"; },
         layersAvailable: false, //default todo getter instead
         getOption(name, defaultValue=undefined) {
             let cookie = this._getCookie(name);
@@ -573,15 +630,21 @@ EOF;
         }
     };
 
+    /**
+     * Common Error thrown in JSON requests with failures (via fetchJSON(...)
+     * The content is not guaranteed to be translated.
+     * @type {Window.HTTPError}
+     */
     window.HTTPError = class extends Error {
-        constructor(message, response) {
+        constructor(message, response, textData) {
             super();
             this.message = message;
-            this.code = response;
+            this.response = response;
+            this.textData = textData;
         }
     };
 
-    //preventive error message, that will be discarded after the full initialization
+    //preventive error message, that will be discarded after the full initialization, no translation
     window.onerror = function (message, file, line, col, error) {
         let ErrUI = USER_INTERFACE.Errors;
         if (ErrUI.active) return false;
@@ -589,6 +652,32 @@ EOF;
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
         return false;
     };
+
+    i18next.init({
+        debug: APPLICATION_CONTEXT.getOption("debugMode"),
+        resources: {
+            '<?php echo $i18n->getAppliedLang() ?>' : <?php echo $i18n->getRawData() ?>
+        },
+        lng: '<?php echo $i18n->getAppliedLang() ?>',
+        fallbackLng: 'en',
+    }, (err, t) => {
+        if (err) throw err;
+
+        jqueryI18next.init(i18next, $, {
+            tName: 't', // $.t = i18next.t
+            i18nName: 'i18n', // $.i18n = i18next
+            handleName: 'localize', // $(selector).localize(opts);
+            selectorAttr: 'data-i18n', // data-() attribute
+            targetAttr: 'i18n-target', // data-() attribute
+            optionsAttr: 'i18n-options', // data-() attribute
+            useOptionsAttr: false, // see optionsAttr
+            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
+        });
+        //clean up
+        delete window.jqueryI18next;
+        delete window.i18next;
+        $('body').localize();
+    });
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -621,16 +710,16 @@ EOF;
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
 
-    VIEWER.addHandler('warn-user', e => {
-        //todo time deduction from the message length
-        //todo make this as a last handler
-        Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
-    });
-    VIEWER.addHandler('error-user', e => {
-        //todo time deduction from the message length
-        //todo make this as a last handler
-        Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
-    });
+    // VIEWER.addHandler('warn-user', e => {
+    //     //todo time deduction from the message length
+    //     //todo make this as a last handler
+    //     Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
+    // });
+    // VIEWER.addHandler('error-user', e => {
+    //     //todo time deduction from the message length
+    //     //todo make this as a last handler
+    //     Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
+    // });
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
@@ -645,11 +734,9 @@ EOF;
             $(`#load-plugin-${id}`).html("");
             return;
         }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">This plugin has been automatically
-removed: there was an error. <br><code>[${e}]</code></div>`);
-        $(`#load-plugin-${id}`).html(`<button disabled class="btn">Failed</button>`);
-        Dialogs.show(`Plugin <b>${PLUGINS[id].name}<b> has been removed: there was an error.`,
-            4000, Dialogs.MSG_ERR);
+        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
+        $(`#load-plugin-${id}`).html(`<button disabled class="btn">${$.t('common.Failed')}</button>`);
+        Dialogs.show($.t('messages.pluginRemovedNamed', {plugin: PLUGINS[id].name}), 4000, Dialogs.MSG_ERR);
     }
 
     function cleanUpScripts(id) {
@@ -657,7 +744,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         LOADING_PLUGIN = false;
     }
 
-    function cleanUpPlugin(id, e="Unknown error") {
+    function cleanUpPlugin(id, e=$.t('error.unknown')) {
         delete PLUGINS[id].instance;
         PLUGINS[id].loaded = false;
         PLUGINS[id].error = e;
@@ -688,6 +775,16 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 if (metaKey === "instance") return undefined;
                 return PLUGINS[id]?.[metaKey];
             };
+            PluginClass.prototype.getLocaleFile = function(locale) {
+                return `locales/${locale}.json`;
+            };
+            PluginClass.prototype.localize = function (locale=undefined, data=undefined) {
+                return UTILITIES.loadPluginLocale(id, locale, data || this.getLocaleFile(locale || $.i18n.language));
+            };
+            PluginClass.prototype.t = function (key, options={}) {
+                options.ns = id;
+                return $.t(key, options);
+            };
 
             plugin = new PluginClass(id, parameters);
         } catch (e) {
@@ -701,7 +798,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         let possiblyExisting = PLUGINS[id].instance;
         if (possiblyExisting) {
             console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
-            Dialogs.show(`Plugin ${plugin.name} could not be loaded: please, contact administrator.`, 7000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}), 7000, Dialogs.MSG_WARN);
             cleanUpPlugin(plugin.id);
             return;
         }
@@ -710,7 +807,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         plugin.setOption = function(key, value, cookies=true) {
             if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
             APPLICATION_CONTEXT.config.plugins[id][key] = value;
-        }
+        };
         plugin.getOption = function(key, defaultValue=undefined) {
             let cookie = APPLICATION_CONTEXT._getCookie(key);
             if (cookie !== undefined) return cookie;
@@ -718,7 +815,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
             if (value === "false") value = false; //true will eval to true anyway
             return value;
-        }
+        };
 
         showPluginError(id, null);
         return plugin;
@@ -757,7 +854,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         };
 
         if (!properties.hasOwnProperty('src')) {
-            errHandler("Script property must contain 'src' attribute!");
+            errHandler($.t('messages.pluginScriptSrcMissing'));
             return;
         }
 
@@ -802,7 +899,7 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         if (!plugin) return;
 
         if (registeredPlugins !== undefined) {
-            if (plugin && OpenSeadragon.isFunction(plugin["pluginReady"])) {
+            if (plugin && typeof plugin["pluginReady"] === "function") {
                 registeredPlugins.push(plugin);
             }
         } //else do not initialize plugin, wait untill all files loaded dynamically
@@ -875,11 +972,13 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         const title = $("#tissue-title-header").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-            title.html(imageData.name || UTILITIES.fileNameFromPath(
+            const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
-            ));
+            );
+            title.html(name);
+            title.attr('title', name);
         } else if (!tiledImage || tiledImage.source instanceof EmptyTileSource) {
-            title.addClass('error-container').html('Faulty (background) image');
+            title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
         }
 
         if (imageData && APPLICATION_CONTEXT.getOption("scaleBar")) {
@@ -907,7 +1006,48 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
         }
     }
 
+    async function _getLocale(id, path, directory, data, locale) {
+        if (!locale) locale = $.i18n.language;
+
+        if (typeof data === "string" && directory) {
+            await fetch(`${path}/${directory}/${data}`).then(response => {
+                    if (!response.ok) {
+                        throw new HTTPError("HTTP error " + response.status, response, '');
+                    }
+                    return response.json();
+                }).then(json => {
+                    $.i18n.addResourceBundle(locale, id, json);
+                });
+        } else if (data) {
+            $.i18n.addResourceBundle(locale, id, data);
+        } else {
+            throw "Invalid translation for item " + id;
+        }
+    }
+
+    let preventedSwap = false;
+
     window.UTILITIES = {
+
+        /**
+         * Load localization data for plugin
+         *  @param id
+         *  @param locale the current locale if undefined
+         *  @param data string to a file name relative to the plugin folder or a data containing the translation
+         */
+        loadPluginLocale: function(id, locale=undefined, data=undefined) {
+            return _getLocale(id, '<?php echo PLUGINS_FOLDER ?>', PLUGINS[id]?.directory, data, locale);
+        },
+
+        /**
+         * Load localization data for module
+         *  @param id
+         *  @param locale the current locale if undefined
+         *  @param data string to a file name relative to the module folder or a data containing the translation
+         */
+        loadModuleLocale: function(id, locale=undefined, data=undefined) {
+            return _getLocale(id, '<?php echo MODULES_FOLDER ?>', MODULES[id]?.directory, data, locale)
+        },
 
         /**
          * @param imageFilePath image path
@@ -930,7 +1070,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
          */
         loadModules: function(onload=_=>{}, ...ids) {
             LOADING_PLUGIN = false;
-            chainLoadModules(ids, 0, onload);
+            chainLoadModules(ids, 0, () => {
+                ids.forEach(id => VIEWER.raiseEvent('module-loaded', {id: id}));
+                onload && onload();
+            });
         },
 
         /**
@@ -943,11 +1086,13 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
             if (window.hasOwnProperty(id)) {
-                Dialogs.show("Could not load the plugin.", 5000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
+                console.warn("Plugin id collision on global scope", id);
                 return;
             }
             if (!Array.isArray(meta.includes)) {
-                Dialogs.show("The selected plugin is corrupted.", 5000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
+                console.warn("Plugin include invalid.");
                 return;
             }
 
@@ -956,10 +1101,10 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
                 //loaded after page load
                 if (!initializePlugin(PLUGINS[id].instance)) {
-                    Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> could not be loaded.`, 2500, Dialogs.MSG_WARN);
+                    Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_WARN);
                     return;
                 }
-                Dialogs.show(`Plugin <b>${PLUGINS[id].name}</b> has been loaded.`, 2500, Dialogs.MSG_INFO);
+                Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_INFO);
 
                 if (meta.styleSheet) {  //load css if necessary
                     $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
@@ -972,6 +1117,8 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                     }
                     APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
                 }
+
+                VIEWER.raiseEvent('plugin-loaded', {id: id});
                 onload();
             };
             LOADING_PLUGIN = true;
@@ -1000,7 +1147,12 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                 console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
                 return;
             }
-            const activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            if (preventedSwap) {
+                Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
+                return;
+            }
+            let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
             if (activeBackground === bgIndex) return;
             const image = APPLICATION_CONTEXT.config.background[bgIndex],
                 imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
@@ -1009,12 +1161,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
             let prevImage = VIEWER.world.getItemAt(0);
             let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+            preventedSwap = true;
             VIEWER.addTiledImage({
                 tileSource: url,
                 index: 0,
                 opacity: 1,
                 replace: true,
                 success: function (e) {
+                    preventedSwap = false;
                     APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
                     e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
                     updateBackgroundChanged(0);
@@ -1029,6 +1183,14 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                     let container = document.getElementById('tissue-preview-container');
                     container.children[activeBackground].classList.remove('selected');
                     container.children[bgIndex].classList.add('selected');
+                },
+                error: function (e) {
+                    preventedSwap = false;
+                    console.error("Swap Images Failure", e);
+                    let container = document.getElementById('tissue-preview-container');
+                    Dialogs.show($.t('messages.swapImagesFail'), 5000, Dialogs.MSG_ERR);
+                    container.children[bgIndex].classList.remove('selected');
+                    container.children[activeBackground].classList.add('selected');
                 }
             });
         }
@@ -1044,12 +1206,12 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
 
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             let i = 0, selectedImageLayer = 0;
-            const imageOpts = [];
+            let imageOpts = [];
             let largestWidth = 0,
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
-                for (let idx = 0; idx < confBackground.length; idx++ ) {
+                for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
                     const image = confBackground[idx],
                         worldItem =  VIEWER.world.getItemAt(i),
                         referencedImage = worldItem?.getBackgroundConfig();
@@ -1064,30 +1226,29 @@ removed: there was an error. <br><code>[${e}]</code></div>`);
                             largestWidth = width;
                             selectedImageLayer = i;
                         }
-                        imageOpts.unshift(`
+                        imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
 onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
-<span class="pr-1" style="color: var(--color-text-tertiary)">Image</span>
+<span class="pr-1" style="color: var(--color-text-tertiary)">${$.t('common.Image')}</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
-                        imageOpts.unshift(`
+                        imageOpts.push(`
 <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
-<span class="pr-1" style="color: var(--color-text-danger)">Faulty</span>
+<span class="pr-1" style="color: var(--color-text-danger)">${$.t('common.Faulty')}</span>
 ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
 max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
-
                 }
             }
-            imageOpts.unshift(`
-    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+            imageOpts.push(`<div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div>
              <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
              <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
         </div>
         <div id="image-layer-options" class="inner-panel-hidden">`);
+            imageOpts = imageOpts.reverse();
             imageOpts.push("</div></div>");
             $("#panel-images").html(imageOpts.join("")).css('display', 'block');
 
@@ -1108,15 +1269,13 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
-class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img src="${
+class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
                     previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
-                }" onerror="this.src='<?php echo ASSETS_ROOT ?>/unknown-preview.jpg';"/></div>
-                `;
+                }') center; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
             }
 
             //use switching panel
-            USER_INTERFACE.TissueList.setMenu('__viewer', '__tisue_list', "Tissues", `
-<div id="tissue-preview-container">${html}</div>`);
+            USER_INTERFACE.Tools.setMenu('__viewer', '__tisue_list', $.t('common.Tissues'), `<div id="tissue-preview-container">${html}</div>`);
         }
 
         if (confBackground.length > 0) {
@@ -1124,12 +1283,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
 
             const image = confBackground[activeIndex],
                 worldItem = VIEWER.world.getItemAt(0);
-
-            // if (!worldItem) {
-            //     USER_INTERFACE.Errors.show("Unable to open the image.", 'The requested data is corrupted or not available.', true);
-            //     handleSyntheticEventFinish({error: "Invalid data: no image opened."});
-            //     return false;
-            // }
 
             const referencedImage = worldItem?.getBackgroundConfig();
 
@@ -1139,7 +1292,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                     tileSource : new EmptyTileSource({
                         height: dimensions?.y || 20000,
                         width: dimensions?.x || 20000,
-                        tileSize: 512 //todo from the source?
+                        tileSize: 512 //can be arbitrary, 512 works well...
                     }),
                     index: 0,
                     opacity: $("#global-opacity input").val(),
@@ -1190,13 +1343,13 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
-                Dialogs.show(`Failed to load overlays (Visualization <i>${activeVis.name}</i>) - it has been disabled.`, 20000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.visualisationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
                 $("#global-opacity").css('display', 'none');
 
                 APPLICATION_CONTEXT.disableRendering();
-                eventOpts.error = "Overlays not enabled!";
+                eventOpts.error = $.t('messages.overlaysDisabled');
             }
         } else {
             $("#global-opacity").css('display', 'none');
@@ -1243,8 +1396,8 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 <?php
                 if ($firstTimeVisited) {
                     echo "        setTimeout(function() {
-                    USER_INTERFACE.Tutorials.show('It looks like this is your first time here', 
-                        'Please, go through <b>Basic Functionality</b> tutorial to familiarize yourself with the environment.');
+                    USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'), 
+                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')});
                     }, 2000);";
                 }
                 ?>
@@ -1281,7 +1434,7 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
             if (!window.WebGLModule) {
                 console.error("Recursion prevented: webgl module failed to load!");
                 //allow to continue...
-                Dialogs.show(`Failed to load overlays - only the tissue will be visible.`, 8000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.overlaysLoadFail'), 8000, Dialogs.MSG_ERR);
                 renderingWithWebGL = false;
             }
         }
@@ -1298,19 +1451,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
         }
 
         const toOpen = [];
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            //reverse order: last opened IMAGE is the first visible
-            for (let i = background.length-1; i >= 0; i--) {
-                const bg = background[i];
-                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
-            }
-        } else if (background.length > 0) {
-            let selectedImage = background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
-        }
-
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
         const handleFinishOpenImageEvent = () => {
@@ -1319,35 +1459,86 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
                 handleSyntheticOpenEvent();
             }
         };
-        const openImage = (lastIndex, source, index) => {
-            openedSources++;
-            const dataIndex = lastIndex - index; //reverse order in toOpen
-            window.VIEWER.addTiledImage({
-                tileSource: source,
-                opacity: opacity,
-                success: (event) => {
-                    event.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[dataIndex];
-                    handleFinishOpenImageEvent();
-                },
-                error: () => {
-                    handleFinishOpenImageEvent();
-                }
-            });
+        let imageOpenerCreator = (success, userArg=undefined) => {
+            return (toOpenLastBgIndex, source, toOpenIndex) => {
+                openedSources++;
+                window.VIEWER.addTiledImage({
+                    tileSource: source,
+                    opacity: opacity,
+                    success: (event) => {
+                        success({userArg, toOpenLastBgIndex, toOpenIndex, event});
+                        handleFinishOpenImageEvent();
+                    },
+                    error: () => {
+                        handleFinishOpenImageEvent();
+                    }
+                });
+            }
         };
+
+        let imageOpener; //has to set-up correct getBackgroundConfig function
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            //reverse order: last opened IMAGE is the first visible
+            for (let i = background.length-1; i >= 0; i--) {
+                const bg = background[i];
+                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
+            }
+
+            imageOpener = imageOpenerCreator(e => {
+                const index = e.toOpenLastBgIndex - e.toOpenIndex; //reverse order in toOpen
+                e.event.item.getBackgroundConfig = () => {
+                    return APPLICATION_CONTEXT.config.background[index];
+                };
+            });
+        } else if (background.length > 0) {
+            const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            let selectedImage = background[selectedIndex];
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
+
+            imageOpener = imageOpenerCreator(e => {
+                const index = e.userArg;
+                e.event.item.getBackgroundConfig = () => {
+                    return APPLICATION_CONTEXT.config.background[index];
+                };
+            }, selectedIndex);
+        }
+
+        const openAll = (numOfVisLayersAtTheEnd) => {
+            let i = 0;
+            let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
+            for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
+
+            const visOpener = imageOpenerCreator(()=>{});
+            for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
+        }
 
         if (renderingWithWebGL) {
             APPLICATION_CONTEXT.prepareRendering();
+
+            let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
+            if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
+                // binding background config overrides active visualisation, only if not in stacked mode
+                const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+                    defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
+
+                if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
+                    activeVisIndex = defaultIndex;
+                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeVisIndex);
+                }
+            }
+
             VIEWER.bridge.loadShaders(
-                APPLICATION_CONTEXT.getOption("activeVisualizationIndex"),
+                activeVisIndex,
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
-
-                    toOpen.map(openImage.bind(this, toOpen.length - 2)); //index to bg, we pushed one non-bg
+                    openAll(1);
                 }
             );
         } else {
-            toOpen.map(openImage.bind(this, toOpen.length - 1));
+            openAll(0);
         }
     }
 
@@ -1356,9 +1547,6 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
 
     <!-- UI -->
     <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
-
-    <!-- Basic Tutorial -->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/tutorials.js"></script>
 
     <!--Event listeners, Utilities, Exporting...-->
     <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
@@ -1372,10 +1560,53 @@ class="${activeIndex === idx ? 'selected' : ''} pointer position-relative"><img 
 (function (window) {
 
     /*---------------------------------------------------------*/
+    /*------------ Basic Tutorial       -----------------------*/
+    /*---------------------------------------------------------*/
+
+    const withLayers = function() {
+        return APPLICATION_CONTEXT.layersAvailable;
+    };
+
+    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
+        {'next #viewer-container' : $.t('tutorials.basic.1')
+        }, {'next #main-panel' : $.t('tutorials.basic.2')
+        }, {'next #navigator-container' : $.t('tutorials.basic.3')
+        }, {'next #general-controls' : $.t('tutorials.basic.4'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
+        }, {'next #general-controls' : $.t('tutorials.basic.4a'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
+        }, {'next #general-controls' : $.t('tutorials.basic.5'), runIf: withLayers
+        }, {
+            'next #__tisue_list' : $.t('tutorials.basic.6'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {
+            'click #images-pin' : $.t('tutorials.basic.7'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-images' : $.t('tutorials.basic.8'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
+        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
+        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
+        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
+        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
+        }, {'next #copy-url' : $.t('tutorials.basic.14')
+        }, {'next #global-export' : $.t('tutorials.basic.15')
+        }, {'next #global-help' : $.t('tutorials.basic.16')}], function() {
+        if (withLayers()) {
+            //prerequisite - pin in default state
+            let pin = $("#shaders-pin");
+            let container = pin.parents().eq(1).children().eq(1);
+            pin.removeClass('pressed');
+            container.removeClass('force-visible');
+        }
+    });
+
+    /*---------------------------------------------------------*/
     /*------------ Initialization of UI -----------------------*/
     /*---------------------------------------------------------*/
 
     USER_INTERFACE.AdvancedMenu._build();
+    USER_INTERFACE.MainMenu._sync();
 })(window);
     </script>
 

@@ -1,24 +1,6 @@
 import {config, shaders, withBrowser} from "../../../fixtures/configurations"
-import {testBasic, testElements} from "./../../routines"
 import {default as utils} from "../../../support/utilities"
-
-const presetUi = (presetIndex) => cy.get("#preset-no-" + presetIndex);
-const presetUiColor = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(1).find("input");
-const presetUISelect = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(0).find("select");
-const presetUiNthMeta = (presetIndex, metaIndex) =>
-    cy.get("#preset-no-" + presetIndex).children('.show-hint').eq(metaIndex + 2).find("input");
-const presetUiNewMetaName = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children().last().find("input");
-const presetUiNewMetaButton = (presetIndex) =>
-    cy.get("#preset-no-" + presetIndex).children().last().find("span");
-const presetUiSelectLeft = () => cy.get("#select-annotation-preset-left");
-const presetUiSelectRight = () => cy.get("#select-annotation-preset-right");
-
-const ALTdown = () => cy.keyDown("Alt", {altKey: true})
-const ALTup = () => cy.keyUp("Alt", {altKey: true})
-
+import helpers from "./helpers";
 
 describe('Annotations - User Controls', withBrowser, () => {
 
@@ -41,8 +23,9 @@ describe('Annotations - User Controls', withBrowser, () => {
             )],
             plugins: {
                 gui_annotations: {
-                    factories: ["polygon", "rect", "ellipse", "ruler"], //will force to load with
-                    focusWithZoom: false                                //do not perform zooming since it might fail to compare visually
+                    factories: ["polygon", "rect", "ellipse", "ruler", "point", "polyline", "text"], //load force order
+                    focusWithZoom: false,  //do not perform zooming since it might fail to compare visually
+                    modalHistoryWindow: false, //attach board to the menu so that we can easily access it
                 }
             }
         }
@@ -57,8 +40,8 @@ describe('Annotations - User Controls', withBrowser, () => {
 
     it ('Test Hotkeys', () => {
         expect(ANNOTATIONS.mode, "Annotations are in Auto Mode").eq(ANNOTATIONS.Modes.AUTO);
-        ALTdown().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
-        ALTup().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+        helpers.ALTdown().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+        helpers.ALTup().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
     });
 
     it ('Setup Presets', () => {
@@ -73,40 +56,49 @@ describe('Annotations - User Controls', withBrowser, () => {
         cy.get("#preset-add-new").click();
         cy.get("#preset-add-new").click();
 
-        presetUiNewMetaName(0).type("My New Awesome Meta");
-        presetUiNewMetaButton(0).click();
-        presetUiNthMeta(0, 1).type("The AWESOME Value");
+        helpers.presetUiNewMetaName(0).type("My New Awesome Meta");
+        helpers.presetUiNewMetaButton(0).click();
+        helpers.presetUiNthMeta(0, 1).type("The AWESOME Value");
 
-        presetUISelect(1).select(1);
-        presetUiNthMeta(1, 0).type("Ctverecek");
+        helpers.presetUISelect(1).select(2);
+        helpers.presetUiNthMeta(1, 0).type("Ctverecek");
 
-        presetUiNewMetaName(2).type("Empty meta");
-        presetUiNewMetaButton(2).click();
-        presetUiNewMetaName(2).type("Another Empty");
-        presetUiNewMetaButton(2).click();
-        presetUISelect(2).select(2);
+        cy.pause();
 
-        presetUISelect(3).select(3);
+        helpers.presetUiNewMetaName(2).type("Empty meta");
+        helpers.presetUiNewMetaButton(2).click();
+        helpers.presetUiNewMetaName(2).type("Another Empty");
+        helpers.presetUiNewMetaButton(2).click();
+        helpers.presetUISelect(2).select(1);
 
-        presetUi(1).click();
-        presetUiSelectRight().click();
+        helpers.presetUISelect(3).select(3);
+
+        helpers.presetUi(1).click();
+        helpers.presetUiSelectRight().click();
 
         cy.get("#annotations-left-click").should('contain.text', 'Polygon');
         cy.get("#annotations-right-click").should('contain.text', 'Ctverecek');
     });
 
+    //preset index and factory index (factories array)
+    function selectPresetFactory(preset, factory) {
+        cy.get("#annotations-left-click").click();
+        helpers.presetUi(preset).click();
+        helpers.presetUISelect(preset).select(factory);
+        helpers.presetUiSelectLeft().click();
+    }
 
-    it ("Preset #1", function () {
-        ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+
+    it ("Preset RightClick#1", function () {
+        helpers.ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
-
-        ALTup()
+        helpers.ALTup();
 
         cy.canvas().matchImage({title: "S1 - polygon finished"});
         cy.wrap(ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
     })
 
-    it ("Preset #2", function () {
+    it ("Preset LeftClick#2", function () {
         cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
 
         cy.drawRight(cy.get('#osd'), {x: 200, y: 200}, {x: 20, y: 220},{x: 220, y: 240},{x: 220, y: 20});
@@ -121,20 +113,75 @@ describe('Annotations - User Controls', withBrowser, () => {
             .then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
         cy.wait(150)
 
-        cy.canvas().matchImage({title: "S3 - undo"});
+        cy.canvas().matchImage({title: "S3 - undo"}); //ellipse should be gone
 
         cy.keyDown("Shift", {ctrlKey: true, shiftKey: true})
         cy.key("Z", {ctrlKey: true, shiftKey: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
 
         cy.wait(300)
-        cy.canvas().matchImage({title: "S4 - redo"});
+        cy.canvas().matchImage({title: "S4 - redo"}); //ellipse should be back
 
+        //lift ctrl, no actions will now make history work
         cy.keyUp("Ctrl", {shiftKey: true})
         cy.key("Z", {shiftKey: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
 
         cy.keyUp("Shift")
         cy.key("z").then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)
             .then(() => ANNOTATIONS.canvas._objects.length).should('eq', 2);
-        cy.canvas().matchImage({title:  "S4 - redo"});
+        cy.canvas().matchImage({title:  "S4 - redo"}); //ellipse should be still here
     })
+
+    it ("Preset #3", function () {
+        selectPresetFactory(3, 3);
+        cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+
+        cy.drawRight(cy.get('#osd'), {x: 500, y: 500}, {x: 520, y: 550});
+
+        cy.canvas().matchImage({title: "S5 - ruler"});
+        cy.get("#annotations-tool-bar label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    })
+
+    it ("Preset Set ruler and draw", function () {
+        selectPresetFactory(3, 3);
+        cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+
+        cy.draw(cy.get('#osd'), {x: 500, y: 500}, {x: 520, y: 550});
+
+        cy.canvas().matchImage({title: "S5 - ruler"});
+        cy.get("#annotations-tool-bar label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    })
+
+    it ("Preset Set point and draw", function () {
+        selectPresetFactory(3, 4);
+        cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+
+        cy.draw(cy.get('#osd'), {x: 420, y: 180});
+
+        cy.canvas().matchImage({title: "S5 - ruler"});
+        cy.get("#annotations-tool-bar label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    })
+
+    it ("Preset Set polyline and draw", function () {
+        selectPresetFactory(1, 5);
+        cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+
+        cy.draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+
+        cy.canvas().matchImage({title: "S5 - ruler"});
+        cy.get("#annotations-tool-bar label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    })
+
+    it ("Preset Set text and draw", function () {
+        selectPresetFactory(1, 5);
+        cy.get("#annotations-tool-bar label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+
+        cy.draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+
+        cy.canvas().matchImage({title: "S5 - ruler"});
+        cy.get("#annotations-tool-bar label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+    })
+
+
+
+
 });

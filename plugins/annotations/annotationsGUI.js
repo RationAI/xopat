@@ -1,28 +1,38 @@
 class AnnotationsGUI {
-
+//todo test with multiple swap bgimages
 	constructor(id, params) {
 		this.id = id;
 
 		this._server = this.staticData("server");
+
+		//todo parse validity on OSDAnnotations.Convertor.formats ?
+		this._defaultFormat = this.staticData("ioFormat") || "native";
 		this.PLUGIN = `plugin('${id}')`;
 	}
 
 	/*
-	Initialize member variables
-	*/
-	pluginReady() {
+	 * Ready to fire
+	 */
+	async pluginReady() {
+		//load the localization, then initialize
+		await this.localize();
+		this.init();
+	}
+
+	init() {
+		const _this = this;
+
 		//Register used annotation object factories
 		this.context = OSDAnnotations.instance();
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
+		this.context.bindIO();
 
-		//by default no preset is active, make one
-		this.context.setPreset();
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
-			format: "native",
+			format: this._defaultFormat,
 			flags: [true, true],
 			availableFlags: {
 				"everything": [true, true],
@@ -31,27 +41,22 @@ class AnnotationsGUI {
 			}
 		};
 
+		this.isModalHistory = this.getOption('modalHistoryWindow', this.staticData("modalHistoryWindow"));
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
-
 		this.setupFromParams();
 
-		const _this = this;
+		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
+		this.setupActiveTissue(bgImage); // if (!...) return...
 
-		//todo cannot use more than one tissue at time, hardcoded :/
-		let bgImage = APPLICATION_CONTEXT.config.background[0];
-		if (!bgImage) {
-			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu("No image for annotations available."));
-			return;
-		}
-
-		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImage.dataReference];
-
+		//todo disable-able?
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
-		//after HTML added
-		this.updatePresetsHTML();
 		this.setupTutorials();
+
+		//after html initialized, request preset assignment,
+		// by default no preset is active, true -> make one if not existing
+		this.context.setPreset(true, true);
 
 		let opacityControl = $("#annotations-opacity");
 		opacityControl.val(this.context.getOpacity());
@@ -60,22 +65,44 @@ class AnnotationsGUI {
 			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
 
-		this.loadAnnotationsList();
+		this.loadAnnotationsList(() => {
+			const ids = _this.getOption('serverAutoLoadIds', undefined);
+			if (Array.isArray(ids)) {
+				ids.forEach(id => _this._loadAnnotation(id, e => {
+					console.warn('AutoLoad annotations failed', e);
+					Dialogs.show(`Attempt to auto load annotations set <b>${id}</b> failed. 
+You can <a class="pointer" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">
+load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
+					//todo remoce such id from the option
+				}));
+			}
+			//todo possibly delete the option so that it does not pollute what is loaded and what not?
+		});
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
-	} // end of initialize
+	}
 
 	setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.staticData("factories") || ["polygon"];
 		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
 	}
 
+	setupActiveTissue(bgImageConfigObject) {
+		if (!bgImageConfigObject) {
+			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
+			return false;
+		}
+
+		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
+		return true;
+	}
+
 	/****************************************************************************************************************
 
-									HTML MANIPULATION
+	 HTML MANIPULATION
 
-	*****************************************************************************************************************/
+	 *****************************************************************************************************************/
 
 	initHTML() {
 		USER_INTERFACE.MainMenu.appendExtended(
@@ -83,8 +110,8 @@ class AnnotationsGUI {
 			`
 <span class="material-icons btn-pointer" onclick="USER_INTERFACE.Tutorials.show()" title="Help" style="float: right;">help</span>
 <span class="material-icons btn-pointer" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');">cloud_upload</span>
-<span class="material-icons btn-pointer" id="show-annotation-board" title="Show board" style="float: right;" data-ref="on" onclick="${this.PLUGIN}.context.history.openHistoryWindow();">assignment</span>
-<span class="material-icons btn-pointer" id="enable-disable-annotations" title="Enable/disable annotations" style="float: right;" data-ref="on" onclick="${this.PLUGIN}._toggleEnabled(this)"> visibility</span>`,
+<span class="material-icons btn-pointer" id="show-annotation-board" title="${this.t('showBoard')}" style="float: right;" data-ref="on" onclick="${this.PLUGIN}.openHistoryWindow();">assignment</span>
+<span class="material-icons btn-pointer" id="enable-disable-annotations" title="${this.t('onOff')}" style="float: right;" data-ref="on" onclick="${this.PLUGIN}._toggleEnabled(this)"> visibility</span>`,
 			this.presetControls(),
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.PLUGIN}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
@@ -93,10 +120,10 @@ class AnnotationsGUI {
 <div class="p-2"><span>Opacity: &emsp;</span>
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br>
 ${UIComponents.Elements.checkBox({
-	label: " Show outline only.",
-	onchange: `${this.PLUGIN}.context.presets.setModeOutline(this.checked == true);`,
-	default: this.context.presets.getModeOutline()
-})}</div>`,
+				label: this.t('outlineOnly'),
+				onchange: `${this.PLUGIN}.context.presets.setModeOutline(this.checked == true);`,
+				default: this.context.presets.getModeOutline()
+			})}</div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -116,10 +143,12 @@ ${UIComponents.Elements.checkBox({
 vertical-align: middle; opacity: 0.3;" class="d-inline-block mx-1"></span>&nbsp;<div id="mode-custom-items" 
 class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 
+		if (!this.isModalHistory) this._createHistoryInAdvancedMenu();
+
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
- <span class="show-hint" data-hint="Format"><select class="form-control select-sm" onchange="${this.PLUGIN}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join("")}</select></span>
-&emsp; <span class="show-hint" data-hint="Content"><select class="form-control select-sm" onchange="${this.PLUGIN}.exportOptions.flags = ${this.PLUGIN}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join("")}</select></span>
+ <span class="show-hint" data-hint="Format"><select class="form-control select-sm" id="gui-annotations-io-format" onchange="${this.PLUGIN}.exportOptions.format = $(this).val();">${this.exportOptions.availableFormats.map(o => `<option value="${o}" ${o === this.exportOptions.format ? "selected" : ""}>${o}</option>`).join("")}</select></span>
+&emsp; <span class="show-hint" data-hint="Content"><select class="form-control select-sm" id="gui-annotations-io-flags" onchange="${this.PLUGIN}.exportOptions.flags = ${this.PLUGIN}.exportOptions.availableFlags[$(this).val()];">${Object.keys(this.exportOptions.availableFlags).map(o => `<option value="${o}">${o}</option>`).join("")}</select></span>
 <br><br>
 <h4 class="f3-light header-sep">Download / Upload</h4><br>
 <div id="annotations-local-export-panel">
@@ -133,17 +162,81 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 	}
 
+	openHistoryWindow() {
+		if (this.isModalHistory) {
+			this.context.history.openHistoryWindow();
+
+			if (this._openedHistoryMenu) {
+				//needs to re-open the menu - update in DOM invalidates the container
+				document.getElementById('annotations-board-in-advanced-menu').innerHTML =
+					`<button class="btn m-4" onclick="${this.PLUGIN}._createHistoryInAdvancedMenu(true);">Opened in modal window. Re-open here.</button>`;
+			}
+		} else {
+			if (!this._openedHistoryMenu) this._createHistoryInAdvancedMenu();
+			USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+		}
+	}
+
+	_createHistoryInAdvancedMenu(focus=false) {
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+		this._openedHistoryMenu = true;
+		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+	}
+
 	initHandlers() {
 		const _this = this;
 
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
+		VIEWER.addHandler('background-image-swap', e => {
+			_this.setupActiveTissue(e.backgroundSetup);
+			_this.loadAnnotationsList();
+		});
+		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
+
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
-		this.context.addHandler('import', e => {
-			if (e.data.presets?.length > 0) {
-				_this.updatePresetsHTML();
+		// this.context.addHandler('import', e => {
+		// 	if (e.data.presets?.length > 0) {
+		// 		_this.updatePresetsHTML();
+		// 	}
+		// });
+		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('preset-update', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('preset-delete', e => {
+			if (e.preset === this.context.getPreset(false)) {
+				$("#annotations-right-click").html(this.getMissingPresetHTML(false));
+			}
+			if (e.preset === this.context.getPreset(true)) {
+				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
 		});
+
+		//allways select primary button preset since context menu shows only on non-primary
+		function showContextMenu(e) {
+			if (_this.context.presets.right) return;
+
+			const actions = [{
+				title: `Select preset for left click.`
+			}];
+			_this.context.presets.foreach(preset => {
+				let category = preset.getMetaValue('category') || preset.objectFactory.title();
+				let icon = preset.objectFactory.getIcon();
+				actions.push({
+					icon: icon,
+					iconCss: `color: ${preset.color};`,
+					title: category,
+					action: () => {
+						_this._presetSelection = preset.presetID;
+						_this._clickPresetSelect(true);
+					},
+				});
+			});
+
+			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+		}
+		this.context.addHandler('canvas-nonprimary-release', showContextMenu);
+
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);
@@ -151,6 +244,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		// this.context.addHandler('layer-added', e => {
 		// 	_this.insertLayer(e.layer, e.layer.name);
 		// });
+
 
 		let strategy = this.context.automaticCreationStrategy;
 		if (strategy && this.context.autoSelectionEnabled) {
@@ -172,29 +266,29 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	setupTutorials() {
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Annotations Plugin Overview", "get familiar with the annotations plugin", "draw", [
-			{
-				"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
-			},{
-				"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
-			},{
-				"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by mouse hover."
-			},{
-				"click #annotations-right-click": "Click on one of these buttons<br>to open <b>Presets dialog window</b>."
-			},{
-				"next #preset-no-0": "This is an example of an annotation preset."
-			},{
-				"click #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New'."
-			},{
-				"next #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
-			},{
-				"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
-			}, {
-				"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
-			},{
-				"click #annotations-tool-bar-input-header + label": "Click here to open the annotations toolbar.<br> If it's opened, click anyway :)"
-			},{
-				"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
-			}]
+				{
+					"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
+				},{
+					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
+				},{
+					"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by mouse hover."
+				},{
+					"click #annotations-right-click": "Click on one of these buttons<br>to open <b>Presets dialog window</b>."
+				},{
+					"next #preset-no-0": "This is an example of an annotation preset."
+				},{
+					"click #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New'."
+				},{
+					"next #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
+				},{
+					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
+				}, {
+					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
+				},{
+					"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
+				}], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -212,7 +306,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -226,7 +322,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				}, {
 					"next #viewer-container": "Now you can try it out."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -244,7 +342,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				},{
 					"next #viewer-container": "Now you can try it out.<br>Note that key shortcuts do not work<br>when the mode is selected manually."
 				}
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 
 		USER_INTERFACE.Tutorials.add(
@@ -264,13 +364,16 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 				{
 					"next #gui_annotations": "Apart from file exports/imports, you can also use shared annotations if available."
 				},
-			]
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
 		);
 	}
 
 	annotationModeChanged(e) {
 		$("#mode-custom-items").html(e.mode.customHtml());
 		$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
+		USER_INTERFACE.Status.show(e.mode.getDescription()); //todo better description or another getter
 	}
 
 	annotationsEnabledHandler(e) {
@@ -282,6 +385,26 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			$("#annotations-opacity").attr("disabled", true);
 		}
 	}
+
+	//todo event handler prevent default / return false?
+	_errorHandlers = {
+		W_NO_PRESET: (e) => {
+			Dialogs.show(this.t('errors.noPresetAction', {selfId: this.id,
+					selectorId: e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}),
+				3000, Dialogs.MSG_WARN, false);
+			return false;
+		},
+		W_AUTO_CREATION_FAIL: (e) => {
+			Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' 
+onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">detecting in the correct layer</a> and selecting 
+coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
+			return false;
+		},
+		E_AUTO_OUTLINE_INVISIBLE_LAYER: (e) => {
+			Dialogs.show(`The <a class='pointer' onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">chosen layer</a> is not visible: auto outline method will not work.`, 5000, Dialogs.MSG_WARN, false);
+			return false;
+		}
+	};
 
 	_toggleEnabled(node) {
 		let self = $(node);
@@ -387,7 +510,7 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	setAutoTargetLayer(self) {
 		self = $(self);
 		let key = self.val(),
-		   layer = VIEWER.bridge.visualization().shaders[key];
+			layer = VIEWER.bridge.visualization().shaders[key];
 		this.context.automaticCreationStrategy.setLayer(layer.index, key);
 	}
 
@@ -398,8 +521,8 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	 * @returns {string} HTML
 	 */
 	getMissingPresetHTML(isLeftClick) {
-		return `<div class="border-md border-dashed p-1 mx-2 rounded-3" style="border-width:3px!important;" 
-onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons">add</span> Add</div>`;
+		return `<div class="p-1" onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
+<span class="one-liner d-inline-block v-align-middle">Add</span></div>`;
 	}
 
 	/**
@@ -413,21 +536,23 @@ onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icon
 		let icon = preset.objectFactory.getIcon();
 
 		let changeHtml = "";
-		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
 
-			if (factory.factoryId !== preset.objectFactory.factoryId) {
-				changeHtml += `<div onclick="${this.PLUGIN}.updatePreset(${preset.presetID}, 
-{objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryId}')}); 
+		const _this = this;
+		this._allowedFactories.forEach(fId => {
+			let factory = _this.context.getAnnotationObjectFactory(fId);
+			if (factory && factory.factoryID !== preset.objectFactory.factoryID) {
+					changeHtml += `<div onclick="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, 
+{objectFactory: ${this.PLUGIN}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
 			}
 		});
 
-		return `<div class="position-relative border-md p-1 mx-2 rounded-3 px-1" style="border-width:3px!important;"
-onclick="${this.PLUGIN}.showPresets(${isLeftClick});"><span class="material-icons pr-0" 
-style="color: ${preset.color};">${icon}</span>  <span class="one-liner d-inline-block v-align-middle" 
-style="width: 115px;">${category}</span>
+		return `<div class="position-relative p-1" onclick="${this.PLUGIN}.showPresets(${isLeftClick});">
+<span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
+ onclick="event.stopPropagation(); ${this.PLUGIN}.context.setPreset(undefined, ${isLeftClick});">close</span>
+<span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
+<span class="one-liner d-inline-block v-align-middle" style="width: 115px;">${category}</span>
 <div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div></div>`;
 	}
 
@@ -457,7 +582,7 @@ style="width: 115px;">${category}</span>
 			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
 		}).catch(e => {
 			console.log(e);
-			Dialogs.show("Failed to load the file. Is the selected format correct?", 2500, Dialogs.MSG_ERR);
+			Dialogs.show("Failed to load the file. Is the selected file format correct and the file valid?", 5000, Dialogs.MSG_ERR);
 		});
 	}
 
@@ -465,11 +590,11 @@ style="width: 115px;">${category}</span>
 	 * Export annotations and download them
 	 */
 	exportToFile() {
-		const toFormat = this.exportOptions.format || "native";
+		const toFormat = this.exportOptions.format || this._defaultFormat;
 		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
-			Dialogs.show("Could not export annotations in the selected format.");
+			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});
 	}
@@ -479,9 +604,9 @@ style="width: 115px;">${category}</span>
 	 * @returns {string} HTML
 	 */
 	presetControls() {
-		return `<span id="annotations-left-click" class="d-inline-block position-relative mt-1" 
-style="width: 180px; cursor:pointer;"></span><span id="annotations-right-click" 
-class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointer;"></span>`;
+		return `<span id="annotations-left-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3"
+style="width: 170px; cursor:pointer;border-width:3px!important;"></span><span id="annotations-right-click" 
+class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="width: 170px; cursor:pointer;border-width:3px!important;"></span>`;
 	}
 
 	/**
@@ -489,14 +614,16 @@ class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointe
 	 */
 	updatePresetsHTML() {
 		let leftPreset = this.context.getPreset(true),
-			rightPreset = this.context.getPreset(false);
+			rightPreset = this.context.getPreset(false),
+			left = $("#annotations-left-click"),
+			right = $("#annotations-right-click");
 
-		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) {
-			$("#annotations-left-click").html(this.getPresetControlHTML(leftPreset, true));
-		} else $("#annotations-left-click").html(this.getMissingPresetHTML(true));
-
-		if (rightPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryId === t)) $("#annotations-right-click").html(this.getPresetControlHTML(rightPreset, false));
-		else $("#annotations-right-click").html(this.getMissingPresetHTML(false));
+		if (leftPreset && this._allowedFactories.find(t => leftPreset.objectFactory.factoryID === t)) {
+			left.html(this.getPresetControlHTML(leftPreset, true));
+		} else left.html(this.getMissingPresetHTML(true));
+		if (rightPreset && this._allowedFactories.find(t => rightPreset.objectFactory.factoryID === t)) {
+			right.html(this.getPresetControlHTML(rightPreset, false));
+		} else right.html(this.getMissingPresetHTML(false));
 	}
 
 	/**
@@ -510,13 +637,15 @@ class="d-inline-block position-relative mt-1" style="width: 180px; cursor:pointe
 		let select = "",
 			currentPreset = this.context.getPreset(isLeftClick);
 
-		Object.values(this.context.objectFactories).forEach(factory => {
-			if (!this._allowedFactories.find(t => factory.factoryId === t)) return;
-
-			if (factory.factoryId === preset.objectFactory.factoryId) {
-				select += `<option value="${factory.factoryId}" selected>${factory.title()}</option>`;
-			} else {
-				select += `<option value="${factory.factoryId}">${factory.title()}</option>`;
+		const _this = this;
+		this._allowedFactories.forEach(fId => {
+			let factory = _this.context.getAnnotationObjectFactory(fId);
+			if (factory) {
+				if (factory.factoryID === preset.objectFactory.factoryID) {
+					select += `<option value="${factory.factoryID}" selected>${factory.title()}</option>`;
+				} else {
+					select += `<option value="${factory.factoryID}">${factory.title()}</option>`;
+				}
 			}
 		});
 
@@ -538,10 +667,10 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.PLUGIN}._presetSelection = ${preset.presetID}"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
 onclick="${this.PLUGIN}.removePreset(this, ${preset.presetID});">delete</span>
 <span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
-${this.PLUGIN}.updatePreset(${preset.presetID}, {objectFactory: 
+${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, {objectFactory: 
 ${this.PLUGIN}.context.getAnnotationObjectFactory(this.value)});">${select}</select></span>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
-onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
+onchange="${this.PLUGIN}.context.presets.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
 <br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
 <span class="material-icons btn-pointer" onclick="${this.PLUGIN}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
 	}
@@ -550,12 +679,6 @@ onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});"
 		let removed = this.context.presets.removePreset(presetId);
 		if (removed) {
 			$(buttonNode).parent().remove();
-			if (removed === this.context.getPreset(false)) {
-				$("#annotations-right-click").html(this.getMissingPresetHTML(false));
-			}
-			if (removed === this.context.getPreset(true)) {
-				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
-			}
 		}
 	}
 
@@ -585,20 +708,13 @@ onchange="${this.PLUGIN}.updatePreset(${preset.presetID}, {color: this.value});"
 		Dialogs.show("Failed to delete meta field.", 2500, Dialogs.MSG_ERR);
 	}
 
-	updatePreset(presetId, properties) {
-		let updated = this.context.presets.updatePreset(presetId, properties);
-		if (updated) {
-			this.updatePresetsHTML();
-		}
-	}
-
 	_metaFieldHtml(presetId, key, metaObject, allowDelete=true) {
 		let delButton = allowDelete ? `<span 
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.PLUGIN}.deletePresetMeta(this, ${presetId}, '${key}')">delete</span>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
-${this.PLUGIN}.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
+${this.PLUGIN}.context.presets.updatePreset(${presetId}, {${key}: this.value});" value="${metaObject.value}">${delButton}</div>`;
 	}
 
 	/**
@@ -645,7 +761,7 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		setTimeout(function() {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.selectPreset(isLeft);
+			_this.context.setPreset(_this._presetSelection, isLeft);
 		}, 150);
 		return false;
 	}
@@ -656,44 +772,37 @@ class="btn m-2">Set for left click </button>
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
 	}
 
-	selectPreset(isLeftClick) {
-		this.context.presets.selectPreset(this._presetSelection, isLeftClick);
-		this.updatePresetsHTML();
+	getAnnotationsHeadMenu(error="") {
+		let upload = error ? "" : `<button class="btn float-right" onclick="${this.PLUGIN}.uploadAnnotation()">Create: upload current state</button>`;
+		error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
+		return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}${upload}
+`;
 	}
 
-	/*** GETTERS **/
+	/*** HTTP API **/
 
-	getFullExportData(name) {
-		let now = Date.now();
-		return {
-			annotations: this.context.toObject(),
-			presets: this.context.presets.toObject(),
-			metadata: {
-				name: name || `a${now}`,
-				exported: new Date(now).toLocaleString(),
-				userAgent: UTILITIES.getUserMeta().userAgent
-				//todo other metadata?
-			}
-		};
-	}
-
-    loadAnnotationsList() {
+	loadAnnotationsList(onSuccessLoad=()=>{}) {
 		this.annotationsMenuBuilder.clear();
-
+		this._serverAnnotationList = null;
 		const _this = this;
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0;
-			//_this.availableAnnotations = json;
-			for (let available of json.annotations) {
-				let meta = available.metadata;
+
+			//todo unify behaviour, two servers send different response :/
+			this._serverAnnotationList = Array.isArray(json) ? json : json.annotations;
+
+			for (let available of this._serverAnnotationList) {
+				available.metadata = new MetaStore(available.metadata);
+				let id = available.id, meta = available.metadata;
+
 				let actionPart = `
-<span onclick="${this.PLUGIN}.loadAnnotation('${available.id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
-<span onclick="${this.PLUGIN}.updateAnnotation('${available.id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
-<span onclick="${this.PLUGIN}.removeAnnotation('${available.id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
+<span onclick="${this.PLUGIN}.loadAnnotation('${id}');return false;" title="Download" class="material-icons btn-pointer">download</span>&nbsp;
+<span onclick="${this.PLUGIN}.updateAnnotation('${id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
+<span onclick="${this.PLUGIN}.removeAnnotation('${id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
-					title: meta.name,
-					author: "Author",
-					details: `Uploaded ${new Date(meta.exported).toDateString()}. Client: ${meta.userAgent ? meta.userAgent.split(" ")[0] : "undefined"}`,
+					title: _this.dataLoader.getMetaName(meta),
+					author: _this.dataLoader.getMetaAuthor(meta),
+					details: _this.dataLoader.getMetaDescription(meta), //todo date?
 					contentAction:actionPart
 				});
 				count++;
@@ -708,86 +817,108 @@ class="btn m-2">Set for left click </button>
 					contentAction:""
 				});
 			}
+			onSuccessLoad(json);
 		}, error => {
+			console.error(_this.dataLoader.getErrorResponseMessage(error))
 			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu("Could not load annotations list."));
 		});
-    }
+	}
 
-    getAnnotationsHeadMenu(error="") {
-        let upload = error ? "" : `<button class="btn float-right" onclick="${this.PLUGIN}.uploadAnnotation()">Create: upload current state</button>`;
-        error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
-        return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}${upload}
-`;
-    }
+	loadAnnotation(id, force=false) {
+		const _this = this;
+		this._loadAnnotation(id, e => {
+			console.error("Import failed!", e);
+			Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
+				`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
+				20000, Dialogs.MSG_ERR);
+		}, force);
+	}
 
-    loadAnnotation(id, force=false) {
-        const _this = this;
-
-		//todo move the logics to the data loader
+	_loadAnnotation(id, onError, force=false) {
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
+		const _this = this;
 		this.dataLoader.loadAnnotation(this._server, id, json => {
-                $('#preset-modify-dialog').remove();
-                _this.context.presets.import(json.presets); //todo fixme
-                _this.updatePresetsHTML();
+			$('#preset-modify-dialog').remove();
 
-				//todo then, catch
-				_this.context.loadObjects(json.annotations);
-                $("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
-                Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
-            },
-			e => {
-                console.error(e);
-                Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
-                    `<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
-                    20000, Dialogs.MSG_ERR);
-            }
-        );
-    }
+			//todo test IO for different formats
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
+			_this.context.import(json.data, format).then(()=>{
+				_this.updatePresetsHTML();
+				_this._recordId(id);
+				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
+				Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
+			}).catch(onError);
+		}, onError);
+	}
 
-    updateAnnotation(id) {
-        const _this = this;
-        this.dataLoader.updateAnnotation(this._server, Number.parseInt(id), this.getFullExportData(),
-			json => {
-				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-				_this.loadAnnotationsList();
-			},
-			e => {
-				Dialogs.show(`Failed to upload annotations. You can 
+	updateAnnotation(id) {
+		const _this = this;
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
+
+		//server IO only supports default format
+		this.context.export(this._defaultFormat).then(data => {
+			_this.dataLoader.updateAnnotation(_this._server, id, data,
+				json => {
+					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
+					_this.loadAnnotationsList();
+				},
+				e => {
+					Dialogs.show(`Failed to upload annotations. You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
-					7000, Dialogs.MSG_ERR);
-				console.error("Failed to update annotation id " + id, e);
-			}
-		);
-    }
+						7000, Dialogs.MSG_ERR);
+					console.error("Failed to update annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
+				}
+			);
+		})
+	}
 
-    removeAnnotation(id) {
-        const _this = this;
-        this.dataLoader.removeAnnotation(this._server, id,
+	removeAnnotation(id) {
+		const _this = this;
+		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
+
+		this.dataLoader.removeAnnotation(this._server, id,
 			json => {
 				Dialogs.show(`Annotation id '${id}' removed.`, 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
 			},
 			e => {
 				Dialogs.show(`Failed to delete annotation id '${id}'.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to delete annotation id " + id, e);
+				console.error("Failed to delete annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
 			}
 		);
-    }
+	}
 
-    uploadAnnotation() {
-        const _this = this;
-        this.dataLoader.uploadAnnotation(this._server, this.activeTissue, this.getFullExportData(),
-			json => {
-				Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-				_this.loadAnnotationsList();
-			},
-			e => {
-				Dialogs.show(`Failed to upload annotations. You can 
+	uploadAnnotation() {
+		const _this = this;
+		//server IO only supports default format
+		this.context.export(this._defaultFormat).then(data => {
+			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
+				json => {
+					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
+					_this.loadAnnotationsList();
+
+					if (json.id) {
+						_this._recordId(json.id);
+					} else {
+						//todo err
+					}
+				},
+				e => {
+					Dialogs.show(`Failed to upload annotations. You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
-					7000, Dialogs.MSG_ERR);
-				console.error("Failed to upload annotations.", e);
-			}
-		);
-    }
+						7000, Dialogs.MSG_ERR);
+					console.error("Failed to upload annotations.", _this.dataLoader.getErrorResponseMessage(e));
+				}
+			);
+		});
+	}
+
+	_recordId(id) {
+		let ids = this.getOption('serverAutoLoadIds', undefined);
+		if (!Array.isArray(ids)) ids = [];
+		ids.push(id);
+		this.setOption('serverAutoLoadIds', ids, false);
+	}
 }
 
 /*------------ Initialization of OSD Annotations ------------*/

@@ -103,20 +103,48 @@ There is a deadlock (unless you break it somehow, e.g. by splitting the main cla
  - which invokes the Main class constructor that instantiate auxiliary classes
  - but Main class must have been included (and executed) first since auxiliary classes extend it's namespace
  
-#### \[EXISTS\] `YourPLuginClass::getOption(key, defaultValue=undefined)`
+Below, functions are attached to a plugin instance (`this.fn`, not available in the constructor) or the class prototype (`class::fn`).
+
+
+#### \[EXISTS\] `YourPLuginClass::localize(locale, data)`
+Load the locale data for your plugin translation. You can ommit all the arguments; ``locale`` defines
+what translation is being loaded (defaults to current active locale) and data can be the translation
+data (object). The translation initialization might look as follows:
+
+```javascript
+async pluginReady() {
+ 	await this.localize();
+ 	//proceed with initialization of the plugin
+} 
+```
+Which will try to load ``json`` locale file (defined by `this.getLocaleFile`). Passing data directly
+means the localization does not perform fetching and finishes faster. But, you might be forced to always load
+ all the locales. 
+ 	
+#### \[EXISTS\] `YourPLuginClass::getLocaleFile(locale)`
+Called internally to resolve the translation file name to load by fetching. By default, the file is searched for in the plugin
+directory in this manner: ``locales/[locale].json``.
+
+#### \[EXISTS\] `YourPLuginClass::t(key, options)`
+Simply call ``this.t(...)`` to translate. Instead, you can also use the global `$.t` api: your translations are in the plugin's
+id namespace: ``$.t(key, {ns: this.id})``.
+
+
+#### \[EXISTS\] `this.getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
 Available _after_ constructor.
 
-#### \[EXISTS\] `YourPLuginClass::setOption(key, value, cookies=true)`
+#### \[EXISTS\] `this.setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
 (constants are OK since they can be converted naturally). The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor. For cookie support, prefer this method.
 Available _after_ constructor.
 
-#### \[EXISTS\] `YourPLuginClass::staticData(key)`
+#### \[EXISTS\] `YourPLuginClass.staticData(key)`
 Return data from ``include.json`` together with other data such as the folder the plugin lives in. It is mainly
 meant to retrieve the JSON values. Available _before_ constructor.
+
 
 ### Global API
 Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
@@ -136,6 +164,8 @@ approaches - first, get familiar with:
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
     - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``
+    - builtin property with POST request is a ``metadata`` value that passes the viewer metadata to every request
+    - TODO describe this more prominently
   
 And also available modules. Each module provides it's own way of enriching the environment, 
 such as pre-defined color maps, webgl processing, fabricJS canvas, annotation logic or snapshots.   
@@ -166,6 +196,13 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+### Localization
+Of course you can make use of ``i18n``, but we recommend using
+``this.localize({...})`` for your plugin, where you put the data
+for current active localization. A language currently used can be
+accessed via ``$.i18n.language``.
+
+
 ### Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state

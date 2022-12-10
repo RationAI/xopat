@@ -1,5 +1,7 @@
 (function (window) {
 
+    $.extend($.scrollTo.defaults, {axis: 'y'});
+
     //https://github.com/mrdoob/stats.js
     if (APPLICATION_CONTEXT.getOption("debugMode")) {
         //todo hardcoded source path
@@ -35,6 +37,12 @@
         e.focusCanvas = focusOnViewer;
         VIEWER.raiseEvent('key-up', e);
     });
+    //consider global mouseup/down events. or maybe not - clicking is
+    // contextual and is enough to implement listeners on elements (unlike key hits)...
+    // document.addEventListener('mouseup', function (e) {
+    //     e.focusCanvas = focusOnViewer;
+    //     VIEWER.raiseEvent('mouse-up', e);
+    // });
 
     let failCount = new WeakMap();
     VIEWER.addHandler('tile-load-failed', function(e) {
@@ -221,15 +229,43 @@ form.submit();<\/script>`;
         return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
     };
 
-    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}) {
+    /**
+     * Safely evaluate boolean parameter from JSON config, e.g. undefined | "false" | "True" | 0 | 1 | false
+     * string values are treated as true except for 'false' literals and empty string
+     * @param {any} value to evaluate
+     * @param {boolean} defaultValue true or false
+     * @return {*|boolean}
+     */
+    window.UTILITIES.isJSONBoolean = function(value, defaultValue) {
+        return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
+    };
+
+    /**
+     * Send requests - both request and response format JSON
+     * with POST, the viewer meta is automatically included
+     *  - makes the viewer flexible for integration within existing APIs
+     * @param url
+     * @param postData
+     * @param headers
+     * @param metaKeys metadata key list to include
+     * @throws HTTPError
+     * @return {Promise<string|any>}
+     */
+    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}, metaKeys=true) {
         let method = postData ? "POST" : "GET";
-        $.extend(headers, {
+        headers = $.extend({
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*'
-        });
+        }, headers);
 
-        if (typeof postData === "object" && postData && postData?.meta) {
-            postData.meta = APPLICATION_CONTEXT.config.meta;
+        if (typeof postData === "object" && postData && metaKeys !== false) {
+            if (postData.metadata === undefined) {
+                if (Array.isArray(metaKeys)) {
+                    postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+                } else {
+                    postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+                }
+            }
         }
 
         const response = await fetch(url, {
@@ -243,10 +279,16 @@ form.submit();<\/script>`;
 
         if (response.status < 200 || response.status > 299) {
             return response.text().then(text => {
-                throw new HTTPError(`Server returned ${response.status}: ${text}`, response);
+                throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
             });
         }
-        return response.json();
+
+        const data = await response.text();
+        try {
+            return JSON.parse(data);
+        } catch (e) {
+            throw new HTTPError(`Server returned non-JSON data: ${data}`, response, data);
+        }
     };
 
     window.UTILITIES.updateTheme = function() {
@@ -299,7 +341,7 @@ form.submit();<\/script>`;
         $temp.val(baseUrl + encodeURIComponent(postData)).select();
         document.execCommand("copy");
         $temp.remove();
-        Dialogs.show("The URL was copied to your clipboard.", 4000, Dialogs.MSG_INFO);
+        Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
     window.UTILITIES.export = function () {
@@ -345,8 +387,7 @@ ${constructExportVisualisationForm()}
      */
     window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
-            Dialogs.show(`It seems you've made some work already. It might be wise to <a onclick="UTILITIES.export();" class='btn-pointer'>export</a> your setup first. <a onclick="APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();" class='btn-pointer'>Reload now.</a>.`,
-                15000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN);
             return;
         }
 
@@ -378,14 +419,14 @@ ${constructExportVisualisationForm()}
      * @param onUploaded function to handle the result
      * @param accept file types to accept, e.g. "image/png, image/jpeg"
      *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
-     * @param mode {"text"|"bytes"} in what mode to read the data; text results in string, bytes in array buffer
+     * @param mode {"text"|"bytes"|"url"} in what mode to read the data; text results in string, bytes in array buffer
      * @returns {Promise<void>}
      */
     window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
         const uploader = $("#file-upload-helper");
         uploader.attr('accept', accept);
         uploader.on('change', () => {
-            UTILITIES.readFileUploadEvent(event, mode).then(onUploaded)
+            UTILITIES.readFileUploadEvent(event, mode).then(onUploaded).catch(onUploaded);
             uploader.val('');
             uploader.off('change');
         });

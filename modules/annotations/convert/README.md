@@ -35,33 +35,52 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     hasControls     auto, disables fabricjs buildin controls, internally enabled if the system decides to
     lockMovementX   auto, disables the annotation movement in X
     lockMovementY   auto, disables the annotation movement in Y
-    sessionId       auto, technical id of the session
+    sessionID       auto, technical id of the session
 
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas
     type            fabricjs object type - drives which object will be internally created (rect -> fabricjs.Rect)
-    factoryId       xopat annotation type - drives which xopat annotation factory implementation will be taking 
+    factoryID       xopat annotation type - drives which xopat annotation factory implementation will be taking 
                         care of the annotation object; these define what object can or cannot do and how (convert to 
                         explicit/polygonize, modify with free form tool...), 'Unknown Annotation' means this property 
-                        has no registered factory active for the given factoryId 
+                        has no registered factory active for the given factoryID 
                         example: polygon -> PolygonFactory
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
-    layerId         a numerical layer id binding, experimental
+    layerID         a numerical layer id binding, experimental
 
-The geometric properties are directly dependent on `type` and `factoryId` used. The `factoryId` is HAS-A relationship
-to the `type` hierarchy. Each factory defines which fabricjs (hierarchical) type is supported. Mostly, it is 1-1 mapping.
+This does not list all the properties though.
+The geometric properties are directly dependent on `type` and `factoryID` used. The `factoryID` is HAS-A relationship
+to the `type` hierarchy. Each factory defines which fabricjs type is supported (top level only in case of hierarchies). 
+
+> In case of hierarchical annotations (based on _groups_), the top-level group should contain all _non-auto_ properties
+>  (see exporting in depth explanation)
+
+Mostly, it is 1-1 mapping.
 Multiple factories can use the same fabricjs type as they can have different purposes (a rect annotation and a tool selection
 with a rect shape that is removed upon completion and the obtained area coordinates are sent as a request for further processing...).
 
-Examples: 
-`[factoryId] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
-`[factoryId] rect` --> `[type] rect`: a rectangle annotation is simply an identity
-`[factoryId] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
+> Each factory defines ``exports()`` and `exportsGeometry()` to get custom props and geometry props keys respectively.
 
-#### Native objects: type-dependent properties
-Each `type` supports its own geometry-related properties. These are directly from favricjs documentation and only
-the basic ones are described also here:
+Examples: 
+`[factoryID] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
+`[factoryID] rect` --> `[type] rect`: a rectangle annotation is simply an identity
+`[factoryID] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
+
+##### Available exporting
+The module can export objects with all props or necessary props only (i.e. not an `auto` value). But fabric exports
+by default many other properties, the list above only lists _guaranteed_ properties. Convertor can specify 
+``static includeAllAnnotationProps = false;`` to not to force `auto` props inclusion, however, many will still be present.
+In order to extract necessary properties when exporting, call
+
+````
+const factory = module.getAnnotationObjectFactory(object.factoryID);
+object = factory.copyNecessaryProperties(object); //automatically incluses exports*() factory props
+````
+
+#### Native objects: geometry properties
+Each `type` supports its own geometry-related properties. These are defined in respective factory `exportsGeometry`
+method and only basic ones are listed here:
 
 ##### rect
     left        left-top corner X coord
@@ -96,12 +115,34 @@ factory instance to provide its features.
 
 ### Gotchas
 In general, `type` is the only general property an annotation object must provide when importing (but you should
-provide all **type-dependent properties**), other things
-will be set up for you automatically. However, doing so mean two subsequent imports of annotations are type-and-id-wise
-incompatible, although they look identically.
+provide all **geometry properties**), other things
+will be set up for you automatically. However, doing so mean two subsequent imports of the same annotations are 
+type-and-id-wise different, although they look identically.
 
-By default, a ``polygon`` factory is always available, so that you can set this value as a fallback. Other factories
-might not be available on the current session: for safety, check the presence with the OSDAnnotations API.
+By default, a ``polygon`` factory is always available, so that you can use polygon and its factory as a fallback. 
+Other factories might not be available on the current session: for safety, check their presence with the OSDAnnotations API.
 
+### Exporting in depth
+Raw exporting can be done via `toObject` method, this method simply
+exports all or necessary properties of each annotation objects. This
+**does not mean the export contains only these properties**, but
+it guarantees their presence. To trim down the properties, you can
+use an object own factory methods that correspond to the categories below:
 
+There are three levels of exports:
+ - **all** (``factory.copyProperties``) - creates a shallow copy that contains all properties defined by the
+static object describing module-recognized properties as well as below
+ - **necessary** (``factory.copyNecessaryProperties``) - creates a shallow copy that contains all properties defined by the
+static object describing necessary content for exporting as well as below
+ - **inner** (``factory.copyInnerProperties``) - creates a shallow copy that copies over only properties defined in the factory's 
+`exports()` and `exportsGeometry()` methods
+
+Furthermore, you can use ``module.trimExportJSON`` method to trim
+all properties automatically, **in depth**
+ - top-level objects (i.e. the parent group) are trimmed using ``factory.copyNecessaryProperties``
+   - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached
+ - all children are copied over only using ``factory.copyInnerProperties``
+
+Note that this function is implemented using factory's ``iterate`` method (that should work
+generically for any annotation but also offers the flexibility of overriding).
 

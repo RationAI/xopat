@@ -1,6 +1,8 @@
 window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
 
     /**
+     * TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
+     *
      * Singleton getter.
      * @return {OpenSeadragon.Snapshots}
      */
@@ -17,23 +19,26 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      * @param {number} delay delay before the current snapshot is run when played, in seconds
      * @param {number} duration transition duration, in seconds
      * @param {number} transition transition style, 1 - linear; >1 - ease-out default 1.6
+     * @param {number} atIndex index where to put the step, default undefined places at the end
      */
-    create(delay=0, duration=0.5, transition=1.6) {
+    create(delay=0, duration=0.5, transition=1.6, atIndex=undefined) {
         if (this._playing) {
             return;
         }
         let view = this.viewer.viewport;
         this._add({
-            id: Date.now(),
+            id: `${Date.now()}`,
             zoomLevel: this._captureViewport ? view.getZoom() : undefined,
             point: this._captureViewport ? view.getCenter() : undefined,
+            bounds: this._captureViewport ? view.getBounds() : undefined,
+            preferSameZoom: true, //possible param?
             delay: delay,
             duration: duration,
             transition: transition,
             visualization: this._getVisualizationSnapshot(),
             screenShot: this._captureScreen ?
                 this._utils.screenshot(true, {width: 120, height: 120}) : undefined
-        });
+        }, atIndex);
     }
 
     /**
@@ -195,8 +200,8 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      * Serialize current state
      * @return {string}
      */
-    exportJSON() {
-        return JSON.stringify(this._steps);
+    exportJSON(serialize=true) {
+        return serialize ? JSON.stringify(this._steps) : [...this._steps];
     }
 
     /**
@@ -233,6 +238,21 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
      */
     stepCapturesViewport(step) {
         return step.point && step.zoomLevel;
+    }
+
+    /**
+     * Sorts the steps by given array of step IDs
+     * @param {[string]} ids
+     * @param {boolean} removeMissing
+     */
+    sortWithIdList(ids, removeMissing=false) {
+        if (removeMissing) this._steps = this._steps.filter(s => ids.includes(s.id));
+        this._steps.sort((a, b) => {
+            let i = ids.indexOf(a.id), j = ids.indexOf(b.id); //n^2, could extract to make O(n)
+            if (i < 0) return 1; //a not in list, push to end
+            if (j < 0) return -1; //b not in list, push to end
+            return i - j;
+        });
     }
 
     _playStep(index) {
@@ -307,9 +327,13 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         };
     }
 
-    _add(step) {
-        let index = this._steps.length;
-        this._steps.push(step);
+    _add(step, index=undefined) {
+        if (typeof index === "number" && index >= 0 && index < this._steps.length) {
+            this._steps.splice(index, 0, step);
+        } else {
+            index = this._steps.length;
+            this._steps.push(step);
+        }
         this.raiseEvent("create", {
             index: index,
             step: step
@@ -345,7 +369,10 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         for (let key in curVis.shaders) {
             let shaderSetup = curVis.shaders[key];
             //we stored only cache of visible elements
-            shaderSetup.visible = from.cache.hasOwnProperty(key);
+            let isVisible = shaderSetup.visible;
+            let willBeVisible = from.cache.hasOwnProperty(key);
+            if (willBeVisible !== isVisible) needsRefresh = true;
+            shaderSetup.visible = willBeVisible;
             if (shaderSetup.visible) {
                 let cachedCache = from.cache[key];
                 if (!needsRefresh && !this._equalCache(shaderSetup.cache, cachedCache)) {

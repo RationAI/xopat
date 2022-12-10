@@ -23,16 +23,14 @@
             webglProcessing = new WebGLModule({
                 htmlControlsId: "data-layer-options",
                 htmlShaderPartHeader: createHTMLLayerControls,
+                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 ready: function() {
-                    var i = 0;
-                    const activeBackgroundSetup = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
-                        defaultIndex = activeBackgroundSetup?.dataGroupIndex;
-
-                    let select = $("#shaders"),
-                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", Number.isInteger(defaultIndex) ? defaultIndex : 0);
+                    let i = 0;
+                    const select = $("#shaders"),
+                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
                     seaGL.foreachVisualisation(function (vis) {
-                        let selected = i === activeIndex ? "selected" : "";
+                        let selected = i == activeIndex ? "selected" : "";
                         if (vis.error) {
                             select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
                         } else {
@@ -49,7 +47,7 @@
 display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
 <span class="blob-code"><span class="blob-code-inner">}</span></span>
 <button class="btn" onclick="VIEWER.bridge.webGLEngine.changeBlending($('#custom-blend-equation-code').val()); VIEWER.bridge.redraw();"
-style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> Set blending</button>`);
+style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
                     }
                 },
                 visualisationInUse: function(visualisation) {
@@ -139,13 +137,16 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         };
 
         function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
-            let fixed = !(layer.hasOwnProperty("fixed") && !layer.fixed);
+            let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
             //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
 
-            let style = isVisible ? '' : 'style="filter: brightness(0.5);"';
-            let modeChange = fixed ? "" : `<span class="material-icons btn-pointer"
-id="label-render-mode"  style="width: 10%; float: right;${layer.params.use_mode === "mask" ? "" : "color: var(--color-icon-tertiary);"}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (default: mask)">payments</span>`;
+            let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
+            const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
+            let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
+            modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
+id="${dataId}-mode-toggle"
+ style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
+onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
 
             let availableShaders = "";
             for (let available of WebGLModule.ShaderMediator.availableShaders()) {
@@ -174,14 +175,15 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}')" title="Toggle blending (defau
                     }
                 }
             }
+            const fullTitle = title.startsWith("...") ? dataId : title;
 
             return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
             <div class="h5 py-1 position-relative">
               <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
 ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner">${title}</span>
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${fullTitle}">${title}</span>
               <div class="d-inline-block label-render-type pointer" style="float: right;">
-                  <label for="change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
 onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
                 </div>
@@ -192,7 +194,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             </div>`;
         }
 
-
         /**
          * Made with love by @fitri
          * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
@@ -201,70 +202,41 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
          * Modified by Jiří
          */
         function enableDragSort(listId) {
-            const sortableList = document.getElementById(listId);
-            Array.prototype.forEach.call(sortableList.children, (item) => {enableDragItem(item)});
+            UIComponents.Actions.draggable(listId, item => {
+                const id = item.dataset.id;
+                window.DropDown.bind(item, () => {
+                    const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
+                    const clipSelected = currentMask === "mask_clip";
+                    const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+
+                    return [{
+                        title: $.t('main.shaders.defaultBlending'),
+                    }, {
+                        title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
+                        action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                        selected: maskEnabled
+                    }, {
+                        title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
+                        icon: "payments",
+                        styles: "padding-right: 5px;",
+                        action: (selected) => {
+                            const node = document.getElementById(`${id}-mode-toggle`);
+                            const newMode = selected ? "mask" : "mask_clip";
+                            node.dataset.mode = newMode;
+                            if (!maskEnabled) {
+                                UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                            } else {
+                                UTILITIES.changeModeOfLayer(id, newMode, false);
+                            }
+                        },
+                        selected: clipSelected
+                    }];
+                });
+            }, undefined, e => {
+                const listItems = e.target.parentNode.children;
+                seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
+            })
         }
-
-        function enableDragItem(item) {
-            item.setAttribute('draggable', true);
-            item.ondragstart = startDrag;
-            item.ondrag = handleDrag;
-            item.ondragend = handleDrop;
-        }
-
-        function startDrag(event) {
-            //const currentTarget = event.target;
-            let clicked = document.elementFromPoint(event.x, event.y);
-            if (isPrevented(clicked, 'non-draggable')) {
-                event.preventDefault();
-            }
-        }
-
-        //modified from https://codepen.io/akorzun/pen/aYwXoR
-        const isPrevented = (element, cls) => {
-            let currentElem = element;
-            let isParent = false;
-
-            while (currentElem) {
-                const hasClass = Array.from(currentElem.classList).some(elem => {return cls === elem;});
-                if (hasClass) {
-                    isParent = true;
-                    currentElem = undefined;
-                } else {
-                    currentElem = currentElem.parentElement;
-                }
-            }
-            return isParent;
-        };
-
-        function handleDrag(item) {
-            const selectedItem = item.target,
-                list = selectedItem.parentNode,
-                x = event.clientX,
-                y = event.clientY;
-
-            selectedItem.classList.add('drag-sort-active');
-            let swapItem = document.elementFromPoint(x, y) === null ? selectedItem : document.elementFromPoint(x, y);
-
-            if (list === swapItem.parentNode) {
-                swapItem = swapItem !== selectedItem.nextSibling ? swapItem : swapItem.nextSibling;
-                list.insertBefore(selectedItem, swapItem);
-            }
-        }
-
-        function handleDrop(item) {
-            item.target.classList.remove('drag-sort-active');
-            const listItems = item.target.parentNode.children;
-
-            var order = [];
-            Array.prototype.forEach.call(listItems, function(child) {
-                order.push(child.dataset.id);
-            });
-
-            seaGL.reorder(order);
-        }
-
-
 
         if (firstTimeSetup) {
             VIEWER.addHandler('open-failed', function (e) {
@@ -301,7 +273,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             window.UTILITIES.makeCacheSnapshot = function() {
                 if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    Dialogs.show("Cookies are disabled. You can change this option in 'Settings'.", 5000, Dialogs.MSG_WARN);
+                    Dialogs.show($.t('messages.cookiesDisabled'), 5000, Dialogs.MSG_WARN);
                     return;
                 }
 
@@ -314,7 +286,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     }
                 }
                 APPLICATION_CONTEXT._setCookie('_cache', JSON.stringify(shaderCache));
-                Dialogs.show("Modifications in parameters saved.", 5000, Dialogs.MSG_INFO);
+                Dialogs.show($.t('messages.cookieConfSaved'), 5000, Dialogs.MSG_INFO);
             };
 
             // load desired shader upon selection
@@ -337,17 +309,18 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             });
 
             VIEWER.addHandler('background-image-swap', function (e) {
-                e.prevBackgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+                const oldIndex = webglProcessing.currentVisualisationIndex();
+                e.prevBackgroundSetup.goalIndex = oldIndex;
 
-                if (Number.isInteger(e.backgroundSetup.dataGroupIndex)) {
+                const newIndex = Number.parseInt(e.backgroundSetup.goalIndex);
+                if (Number.isInteger(newIndex)) {
                     const selectNode = $("#shaders");
-                    let active = Number.parseInt(selectNode.val());
-                    if (active !== e.backgroundSetup.dataGroupIndex) {
-                        selectNode.val(String(e.backgroundSetup.dataGroupIndex));
-                        setNewDataGroup(e.backgroundSetup.dataGroupIndex);
+                    if (oldIndex !== newIndex) {
+                        selectNode.val(String(newIndex));
+                        setNewDataGroup(newIndex);
                     }
                 } else {
-                    e.backgroundSetup.dataGroupIndex = webglProcessing.currentVisualisationIndex();
+                    e.backgroundSetup.goalIndex = oldIndex;
                 }
             });
 
@@ -382,26 +355,61 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         viz.shaders[layerId].type = type;
                         seaGL.reorder(null); //force to re-build
                     } else {
-                        console.error("Invalid layer: bad initialization?");
+                        console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': bad initialization?`);
                     }
                 } else {
-                    console.error("Invalid shader: unknown type!");
+                    console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': unknown type!`);
                 }
                 _this.html("");
             };
 
-            UTILITIES.changeModeOfLayer = function(layerId) {
-                let viz = seaGL.visualization();
-                if (viz.shaders.hasOwnProperty(layerId)) {
-                    let useMask = viz.shaders[layerId].params.use_mode === "mask";
-                    viz.shaders[layerId].params.use_mode = useMask ? "show" : "mask";
-                    viz.shaders[layerId].error = "force_rebuild"; //error will force reset
-                    seaGL.reorder(null); //force to re-build
-                } else {
-                    console.error("Invalid layer: bad initialization?");
+            /**
+             * Enable or disable UI for modes, with the given mode applied (no need to call changeModeOfLayer)
+             */
+            UTILITIES.shaderPartSetBlendModeUIEnabled = function(layerId, enabled) {
+                const maskNode = document.getElementById(`${layerId}-mode-toggle`);
+                const mode = enabled ? maskNode.dataset.mode : "show";
+                if (!mode || !UTILITIES.changeModeOfLayer(layerId, mode, false)) {
+                    Dialogs.show($.t('messages.failedToSetMask'), 2500, Dialogs.MSG_WARN);
                 }
             };
 
+            /**
+             * Change rendering mode of a shader by toggle between "show" and "otherMode"
+             * without
+             * @param layerId layer id in the visualization target
+             * @param otherMode other toggle mode, default "mask"
+             * @param toggle if false, just update the current mode
+             * @return true if successfully performed
+             */
+            UTILITIES.changeModeOfLayer = function(layerId, otherMode="mask", toggle=true) {
+                let viz = seaGL.visualization();
+                if (viz.shaders.hasOwnProperty(layerId)) {
+                    const layer = viz.shaders[layerId],
+                        mode = layer.params.use_mode;
+
+                    let didRenderAsMask = typeof mode === "string" && mode !== "show";
+                    if (toggle) {
+                        layer.params.use_mode = didRenderAsMask ? "show" : otherMode;
+                    } else {
+                        //if no need for change, return
+                        if ((!didRenderAsMask && otherMode === "show") || otherMode === mode) return true;
+                        layer.params.use_mode = otherMode; //re-render, there are multiple modes to choose from
+                    }
+                    layer.error = "force_rebuild"; //error will force reset
+                    seaGL.reorder(null);
+                    return true;
+                }
+                console.error(`UTILITIES::changeModeOfLayer Invalid layer id '${layerId}': bad initialization?`);
+                return false;
+            };
+
+            /**
+             * Set filter for given layer id
+             * @param layerId
+             * @param filter filter to set, "use_*" style (gamma, exposure...)
+             * @param value filter parameter (scalar) value
+             */
             UTILITIES.setFilterOfLayer = function(layerId, filter, value) {
                 let viz = seaGL.visualization();
                 if (viz.shaders.hasOwnProperty(layerId)) {
@@ -443,7 +451,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                             && (errorMessage = errorMessage.error)) {
 
                             let node = $(`#${key}-shader-part`);
-                            node.prepend(`<div class="p2 error-container rounded-2">Possibly faulty layer.<code>${errorMessage}</code></div>`);
+                            node.prepend(`<div class="p2 error-container rounded-2">${$.t('main.shaders.faulty')}<code>${errorMessage}</code></div>`);
                             break;
                         }
                     }

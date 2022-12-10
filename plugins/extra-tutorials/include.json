@@ -1,0 +1,12 @@
+{
+    "id": "extra-tutorials",
+    "name": "Additional Tutorials",
+    "author": "Jirka Horák",
+    "version": "1.0.0",
+    "description": "Enables the inclusion of additional tutorials that are not part of any plugin or other component.",
+    "icon": "",
+    "includes" : ["tutorials.js"],
+    "modules": [],
+    "permaLoad": false,
+    "server": ""
+}

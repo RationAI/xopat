@@ -24,7 +24,8 @@
 window.WebGLModule = class {
     /**
      * @param {object} incomingOptions
-     * @param {function} incomingOptions.htmlControlsId: "data-layer-options",
+     * @param {function} incomingOptions.htmlControlsId: where to render html controls,
+     * @param {string} incomingOptions.webGlPreferredVersion prefered WebGL version, see WebGLModule.GlContextFactory for available
      * @param {function} incomingOptions.htmlShaderPartHeader function that generates particular layer HTML:
      *  signature: f({string} title,{string} html,{string} dataId,{boolean} isVisible,{Layer} layer, {boolean} wasErrorWhenLoading)
      * @param {boolean} incomingOptions.debug debug mode default false
@@ -43,6 +44,7 @@ window.WebGLModule = class {
         this.uniqueId = "";
         this.ready = function () { };
         this.htmlControlsId = null;
+        this.webGlPreferredVersion = "2.0";
         this.htmlShaderPartHeader = function (title, html, dataId, isVisible, layer, isControllable = true) {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         };
@@ -86,7 +88,7 @@ window.WebGLModule = class {
 
         /**
          * WebGL context
-         * @type {WebGLRenderingContext|WebGL2RenderingContext}
+         * @member {WebGLRenderingContext|WebGL2RenderingContext}
          */
         this.gl = null;
 
@@ -94,14 +96,17 @@ window.WebGLModule = class {
         ///////////// Internals /////////////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
 
+        this.reset();
+
         try {
             //WebGLModule.GlContextFactory.init(this,  "1.0");
-            WebGLModule.GlContextFactory.init(this, "2.0", "1.0");
+            WebGLModule.GlContextFactory.init(this, this.webGlPreferredVersion, "2.0", "1.0");
         } catch (e) {
             this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
             console.error(e);
             return;
         }
+        console.log("WebGL Rendering module with version " + this.webGLImplementation.getVersion());
 
         this.gl_loaded = function (gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
@@ -110,8 +115,6 @@ window.WebGLModule = class {
         this.gl_drawing = function (gl, program, vis, bounds) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
         };
-
-        this.reset();
     }
 
     /**

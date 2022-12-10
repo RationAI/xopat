@@ -31,5 +31,7 @@ For most of the behaviour, you can consult ``fabricjs`` documentation, however t
 
 
 #### The Factory
-todo describe lifecycle
-todo since we use create to instaniate and also fabricjs to instantiate, get rind of create method
+Factories govern how object behave - it is the module API over annotations. They provide handful
+set of methods to create, copy, iterate and process annotations easily.
+
+todo finish description

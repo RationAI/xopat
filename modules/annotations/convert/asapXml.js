@@ -6,6 +6,8 @@ OSDAnnotations.Convertor.AsapXml = class {
         return 'annotations_' + UTILITIES.todayISO() + '.xml';
     }
 
+    static includeAllAnnotationProps = true;
+
     encode(annotationsGetter, presetsGetter, annotationsModule) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
 
@@ -23,14 +25,14 @@ OSDAnnotations.Convertor.AsapXml = class {
         // for each object (annotation) create new annotation element with coresponding coordinates
         for (let i = 0; i < annotations.length; i++) {
             let obj = annotations[i];
-            if (!obj.factoryId || obj.factoryId.startsWith("_")) {
+            if (!obj.factoryID || obj.factoryID.startsWith("_")) {
                 continue;
             }
 
             const xml_annotation = doc.createElement("Annotation");
             let coordinates=[];
 
-            let factory = annotationsModule.getAnnotationObjectFactory(obj.factoryId);
+            let factory = annotationsModule.getAnnotationObjectFactory(obj.factoryID);
             if (factory) {
                 coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
                 if (!Array.isArray(coordinates)) {
@@ -169,7 +171,7 @@ OSDAnnotations.Convertor.AsapXml = class {
                 type: "polygon",
                 points: pointArray,
                 presetID: presetID,
-                factoryId: "polygon",
+                factoryID: "polygon",
                 color: elem.getAttribute("Color") || undefined
             });
         }

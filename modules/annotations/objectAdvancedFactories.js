@@ -1,4 +1,5 @@
 
+//todo implement as composition of line and text
 OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "ruler", "group");
@@ -40,8 +41,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(instance, options) {
-        this._configureParts(instance.item(0), instance.item(1), options);
-        this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+       if (instance.type === "group") {
+           this._configureParts(instance.item(0), instance.item(1), options);
+           this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+       }
     }
 
     /**
@@ -84,10 +87,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
             meta: ofObject.meta,
-            factoryId: ofObject.factoryId,
+            factoryID: ofObject.factoryID,
             isLeftClick: ofObject.isLeftClick,
             type: ofObject.type,
-            layerId: ofObject.layerId,
+            layerID: ofObject.layerID,
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: false,
@@ -120,6 +123,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     instantCreate(screenPoint, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(screenPoint, false);
         if (bounds) {
+            //todo bugged
             let opts = this._presets.getAnnotationOptions(isLeftClick);
             let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
             this._context.addAnnotation(object);
@@ -135,7 +139,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current = parts;
         this._context.addHelperAnnotation(this._current[0]);
         this._context.addHelperAnnotation(this._current[1]);
-
     }
 
     updateCreate(x, y) {
@@ -152,16 +155,37 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._context.deleteHelperAnnotation(obj[0]);
         this._context.deleteHelperAnnotation(obj[1]);
 
-        const pid = obj[0].presetID;
+        const line = obj[0],
+            text = obj[1],
+            pid = line.presetID;
 
-        obj = this._createWrap(obj, this._presets.getCommonProperties());
+        const props = this._presets.getCommonProperties();
+        // this._configureParts(obj[0], obj[1], props);
+        obj = this._createWrap(obj, props);
         obj.presetID = pid;
+
+        text.set({
+            scaleX: 1,
+            scaleY: 1,
+            top: line.top + line.height / 2,
+            left: line.left + line.width / 2
+        });
+        text.calcOCoords();
+
         this._context.addAnnotation(obj);
         this._current = undefined;
     }
 
+    finishIndirect() {
+        this.finishDirect();
+    }
+
     title() {
         return "Ruler";
+    }
+
+    supportsBrush() {
+        return false;
     }
 
     _getWithUnit(value, unitSuffix) {
@@ -212,23 +236,30 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["measure"];
     }
 
-    _configureParts(line, text, options) {
+    exportsGeometry() {
+        return ["x1", "x2", "y1", "y2", "text"]; //todo test
+    }
+
+    _configureLine(line, options) {
         options.stroke = options.color;
 
         $.extend(line, {
             scaleX: 1,
             scaleY: 1,
             selectable: false,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             hasControls: false,
         }, options);
+    }
+
+    _configureText(text, options) {
         $.extend(text, {
             fontSize: 16,
             selectable: false,
             hasControls: false,
             lockUniScaling: true,
             stroke: 'white',
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
             fill: 'black',
             paintFirst: 'stroke',
             strokeWidth: 2,
@@ -237,13 +268,20 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
+    _configureParts(line, text, options) {
+        this._configureText(text, options);
+        this._configureLine(line, options);
+    }
+
     _configureWrapper(wrapper, line, text, options) {
-        $.extend(wrapper, {
-            factoryId: this.factoryId,
+        $.extend(wrapper, options, {
+            factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
             measure: this._updateText(line, text),
-        }, options);
+            selectable: false,
+            hasBorders: false,
+        });
     }
 
     _createParts(parameters, options) {
@@ -345,10 +383,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             presetID: ofObject.presetID,
 //             measure: ofObject.measure,
 //             meta: ofObject.meta,
-//             factoryId: ofObject.factoryId,
+//             factoryID: ofObject.factoryID,
 //             isLeftClick: ofObject.isLeftClick,
 //             type: ofObject.type,
-//             layerId: ofObject.layerId,
+//             layerID: ofObject.layerID,
 //             color: ofObject.color,
 //             zoomAtCreation: ofObject.zoomAtCreation,
 //             selectable: false,
@@ -475,7 +513,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //     _createWrap(parts, options) {
 //         this._updateText(parts[0], parts[1]);
 //         return new fabric.Group(parts, $.extend({
-//             factoryId: this.factoryId,
+//             factoryID: this.factoryID,
 //             type: this.type,
 //             measure: 0,
 //         }, options));
@@ -528,7 +566,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
             strokeWidth: 1,
             originalStrokeWidth: 1,
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }
@@ -551,7 +589,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {[string]}
      */
     exports() {
-        return ["left", "top", "width", "height", "opacity", "scaleX", "scaleY"];
+        return ["scaleX", "scaleY"]; //"left", "top", "width", "height", "opacity",
     }
 
     edit(theObject) {
@@ -611,7 +649,6 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const self = this;
         UTILITIES.uploadFile(url => {
-            console.log(url)
             const image = document.createElement('img');
             image.onload = () => {
                 self._context.deleteHelperAnnotation(obj);
@@ -623,9 +660,19 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
                         img: image
                 }, this._presets.getAnnotationOptions(obj.isLeftClick)));
             };
+            image.onerror = () => {
+                self._context.deleteHelperAnnotation(obj);
+            };
+            image.onabort = () => {
+                self._context.deleteHelperAnnotation(obj);
+            }
             image.setAttribute('src', url);
         }, "image/*", "url");
         this._current = undefined;
+    }
+
+    finishIndirect() {
+        this.finishDirect();
     }
 
     title() {

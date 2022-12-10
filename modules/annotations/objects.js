@@ -18,39 +18,60 @@ OSDAnnotations.AnnotationObjectFactory = class {
         this._context = context;
         this._presets = presetManager;
         this._auto = autoCreationStrategy;
-        this.factoryId = identifier;
+        this.factoryID = identifier;
         this.type = objectType;
-        this._copiedProperties = [
-            "left",
-            "top",
-            "width",
-            "height",
-            "fill",
-            "isLeftClick",
-            "opacity",
-            "strokeWidth",
-            "stroke",
-            "scaleX",
-            "scaleY",
-            "color",
-            "zoomAtCreation",
-            "originalStrokeWidth",
-            "type",
-            "factoryId",
-            "scaleX,",
-            "scaleY,",
-            "hasRotatingPoint",
-            "borderColor",
-            "cornerColor",
-            "borderScaleFactor",
-            "hasControls",
-            "lockMovementX",
-            "lockMovementY",
-            "meta",
-            "presetID",
-            "layerId",
-        ];
     }
+
+    /**
+     * Properties copied with 'all' (+exports())
+     * @type {string[]}
+     */
+    static copiedProperties = [
+        "left",
+        "top",
+        "width",
+        "height",
+        "fill",
+        "isLeftClick",
+        "opacity",
+        "strokeWidth",
+        "stroke",
+        "scaleX",
+        "scaleY",
+        "color",
+        "zoomAtCreation",
+        "originalStrokeWidth",
+        "type",
+        "factoryID",
+        "scaleX,",
+        "scaleY,",
+        "hasRotatingPoint",
+        "borderColor",
+        "cornerColor",
+        "borderScaleFactor",
+        "hasControls",
+        "lockMovementX",
+        "lockMovementY",
+        "meta",
+        "sessionID",
+        "presetID",
+        "layerID",
+    ];
+
+    /**
+     * Properties copied with 'necessary' (+exports())
+     * @type {string[]}
+     */
+    static necessaryProperties = [
+        "factoryID",
+        "type",
+        "sessionID",
+        "zoomAtCreation",
+        "meta",
+        "presetID",
+        "layerID",
+        "color"
+    ];
 
     /**
      * Human-readable annotation title
@@ -135,32 +156,143 @@ OSDAnnotations.AnnotationObjectFactory = class {
     configure(object, options) {
         $.extend(object, options, {
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }
 
     /**
-     * A list of extra properties to export upon export event
+     * A list of extra custom properties to export upon export event
      * @return {[string]}
      */
     exports() {
         return [];
     }
 
-    copyProperties(ofObject, ...withAdditional) {
-        // const copy = {...ofObject};
-        // delete copy.incrementId;
-        // return copy;
+    /**
+     * A list of extra properties defining the object geometry required to be included
+     */
+    exportsGeometry() {
+        return [];
+    }
+
+    trimExportJSON(objectList) {
+        let array = objectList;
+        if (typeof array === "object") {
+            array = objectList.objects;
+        }
+        const _this = this;
+
+        return array;
+    }
+
+    /**
+     * Iterate hierarchy of objects and deep-transform them using transformer
+     * @param o object to iterate
+     * @param transformer transformer function, receives parameters -
+     *      the object x, current node in the hierarchy
+     *      the boolean isRoot,
+     *      the boolean isGroup, if this node can contain child nodes
+     *      the object factory, reference to the annotation factory
+     * @return {*}
+     */
+    iterate(o, transformer=x=>x) {
+        const it = (x, isRoot, factory) => {
+            //recursive clone of objects
+            if (x.type !== "group") {
+                return transformer(x, isRoot, false, factory);
+            }
+            let result = transformer(x, isRoot, true, factory);
+            result.objects = x.objects?.map(y => it(y, false, factory));
+            return result;
+        };
+        return it(o, true, this);
+    }
+
+    /**
+     * Copy all module-recognized properties of object
+     * @param ofObject
+     * @param withAdditional
+     * @param nested export inner properties of nested objects if true
+     * @return {{}}
+     */
+    copyProperties(ofObject, withAdditional=[], nested=false) {
+        if (nested) {
+            return this.iterate(ofObject, (x, isRoot, isGroup, f) => {
+                let res = isRoot ? f.copyProperties(x, withAdditional, false) : f.copyInnerProperties(x);
+                if (isGroup) { //groups need BB so that it renders correctly
+                    res.left = x.left;
+                    res.top = x.top;
+                    res.width = x.width;
+                    res.height = x.height;
+                }
+                return res;
+            });
+        }
 
         const result = {};
-        for (let prop of this._copiedProperties) {
-            result[prop] = ofObject[prop];
-        }
-        for (let prop of withAdditional) {
-            result[prop] = ofObject[prop];
-        }
+        this.__copyProps(ofObject, result, this.constructor.copiedProperties, withAdditional);
+        this.__copyInnerProps(ofObject, result);
         return result;
+    }
+
+    /**
+     * Copy only necessary properties of object (subset of copyProperties)
+     * @param ofObject
+     * @param withAdditional
+     * @param nested export inner properties of nested objects if true
+     * @return {{}}
+     */
+    copyNecessaryProperties(ofObject, withAdditional=[], nested=false) {
+        if (nested) {
+            return this.iterate(ofObject, (x, isRoot, isGroup, f) => {
+                let res = isRoot ? f.copyNecessaryProperties(x, withAdditional, false) : f.copyInnerProperties(x);
+                if (isGroup) { //groups need BB so that it renders correctly
+                    res.left = x.left;
+                    res.top = x.top;
+                    res.width = x.width;
+                    res.height = x.height;
+                }
+                return res;
+            });
+        }
+
+        const result = {};
+        this.__copyProps(ofObject, result, this.constructor.necessaryProperties, withAdditional);
+        this.__copyInnerProps(ofObject, result);
+        return result;
+    }
+
+    /**
+     * Copy only geometry and explicitly-defined properties (subset of copyNecessaryProperties)
+     * @param ofObject
+     */
+    copyInnerProperties(ofObject) {
+        const result = {};
+        this.__copyInnerProps(ofObject, result);
+        return result;
+    }
+
+    __copyProps(ofObject, toObject, defaultProps, additionalProps) {
+        for (let prop of defaultProps) {
+            toObject[prop] = ofObject[prop];
+        }
+        if (additionalProps?.length > 0) {
+            for (let prop of additionalProps) {
+                toObject[prop] = ofObject[prop];
+            }
+        }
+        this.__copyInnerProps(ofObject, toObject);
+    }
+
+    __copyInnerProps(ofObject, toObject) {
+        for (let prop of this.exports()) {
+            toObject[prop] = ofObject[prop];
+        }
+        for (let prop of this.exportsGeometry()) {
+            toObject[prop] = ofObject[prop];
+        }
+        toObject.type = ofObject.type; //always
     }
 
 
@@ -279,6 +411,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * If the object supports free form tool transformation
+     * @return {boolean}
+     */
+    supportsBrush() {
+        return true;
+    }
+
+    /**
      * Update object rendering based on rendering mode
      * @param {boolean} isTransparentFill
      * @param {object} ofObject
@@ -302,7 +442,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Create array of points - approximation of the object shape
+     * Create array of points - approximation of the object shape. This method should be overridden.
+     * For groups, it should return the best possible approximation via single array of points.
+     *  - if difficult, you can return undefined, in that case some features will not work.
+     *
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint
@@ -674,7 +817,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                             originType: "module",
                             originId: "annotations",
                             code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
-                            message: "The <a class='pointer' onclick=\"USER_INTERFACE.highlight('sensitivity-auto-outline')\">chosen layer</a> is not visible: auto outline method will not work.",
+                            message: "Creating annotation in an invisible layer.",
                         });
                         return false;
                     }
@@ -968,3 +1111,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 		return result;
 	}
 };
+
+OSDAnnotations.TiledImageMagicWand  = class extends OSDAnnotations.AutoObjectCreationStrategy {
+//todo implement magic wand
+}

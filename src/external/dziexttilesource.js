@@ -84,7 +84,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     supports: function( data, url ){
         var ns;
         if ( data.ImageArray ) {
-            ns = data.Image.xmlns;
+            ns = data.ImageArray.xmlns;
         } else if ( data.documentElement ) {
             if ("ImageArray" == data.documentElement.localName || "ImageArray" == data.documentElement.tagName) {
                 ns = data.documentElement.namespaceURI;

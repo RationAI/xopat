@@ -64,7 +64,51 @@ Return data exported with the viewer if available. Exporting the data is done th
 ## Events
 Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description
 should be provided. These events should be invoked on the parent instance of the 'module' and
-use the OpenSeadragon Event System.
+use the OpenSeadragon Event System. Such event system should be included for any global-level module.
+
+## IO Handling with global modules
+In case your module instance is used only by the one who instantiated it, delegate this responsibility
+to the user and provide only IO methods. On the other hand, if your module lives as one global instance (e.g. annotation core), 
+it should perform IO import and export by itself. That means subscribing to the
+``export-data`` event and reading from the `APPLICATION_CONTEXT` available data at initialization.
+``````javascript
+const _this = this;
+VIEWER.addHandler('export-data', e => e.setSerializedData(<ID>, <string>));
+
+let data = APPLICATION_CONTEXT.getData(<ID>);
+if (data) {
+    //... import it
+}
+``````
+Additionaly, you can (like annotations module) perform this action after it has been requested, e.g. by exposing
+this as a ``bindIO()`` method that sets the IO if desired. Doing so will enable smooth exporting and data integration
+within the **context-free** viewer. Other plugins will not re-insert the same data multiple times if they work
+together over the same module. You should also provide some API so that plugins or other modules can export their
+own content with your data if applicable.
+
+> Example: annotations support force props exporting that makes the module allways export certain properties
+> if set. Other components can rely on their presence this way.
+
+
+## Localization
+Can be done using ``UTILITIES.loadModuleLocale(id, locale, data)`` which behaves almost like plugin's `localize` function
+(i.e. both ``locale`` and `data` can be undefined),
+except that you have to specify the module id manually. Also, to load a file instead of a translation data you
+have to pass the translation data relative path yourself: i.e. 
+````javascript
+const locale = $.i18n.language;
+//load locale/en.json for english locale in the module directory
+loadModuleLocale: function(id, locale, `locales/${locale}.json`) 
+//load raw data for 'cs'
+loadModuleLocale: function(id, 'cs', {"x":"y"}) 
+````
+ 
+ The translation can be obtained in the module id namespace, i.e. ``$.t(key, {ns: id})``.
+
+> Modules must not wait with initialization after locales had been loaded: modules define dependency trees that
+>are not explicitly synchronized. For delayed translations, ``$.localize([selector])`` of `jqueryI18next` might be useful.
+>However, most modules should act only when needed: instantiate your module after it had been used, then you are
+>guaranteed your locales had been loaded if you did so at the module inclusion time.
 
 ## Caveats
 Modules should integrate into exporting/importing events, otherwise the user will have to re-create

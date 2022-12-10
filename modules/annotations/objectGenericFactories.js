@@ -44,7 +44,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     configure(object, options) {
         $.extend(object, {
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         }, options);
         return object;
     }
@@ -67,11 +67,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
+    exportsGeometry() {
         return ["left", "top", "width", "height"];
     }
 
@@ -214,16 +210,12 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         $.extend(object, {
             angle: 0,
             type: this.type,
-            factoryId: this.factoryId
+            factoryID: this.factoryID
         }, options);
         return object;
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
+    exportsGeometry() {
         return ["left", "top", "rx", "ry"];
     }
 
@@ -355,11 +347,354 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 };
 
 
+OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "text", "text");
+    }
+
+    getIcon() {
+        return "translate";
+    }
+
+    fabricStructure() {
+        return "text";
+    }
+
+    getDescription(ofObject) {
+        return ofObject.text;
+    }
+
+    getCurrentObject() {
+        return (this._current);
+    }
+
+    /**
+     * @param {object} parameters
+     * @param {string} parameters.text text to display
+     * @param {number} parameters.left
+     * @param {number} parameters.top
+     * @param {number} parameters.fontSize  optional
+     * @param {number} parameters.autoScale optional default false
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        const instance = new fabric.Text(parameters.text);
+        return this.configure(instance, $.extend(options, parameters));
+    }
+
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        options.autoScale = object.autoScale || options.autoScale || false;
+        if (options.autoScale) {
+            $.extend(object, options, {
+                fontSize: options.fontSize || 16,
+                type: this.type,
+                factoryID: this.factoryID,
+                selectable: false,
+                hasControls: false,
+                lockUniScaling: true,
+                stroke: 'white',
+                fill: 'black',
+                paintFirst: 'stroke',
+                strokeWidth: 4 / options.zoomAtCreation,
+                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
+                scaleX: 1/options.zoomAtCreation,
+                scaleY: 1/options.zoomAtCreation,
+                fontWeight: 'bold',
+            });
+        } else {
+            $.extend(object, options, {
+                fontSize: (options.fontSize || 16) / options.zoomAtCreation,
+                type: this.type,
+                factoryID: this.factoryID,
+                selectable: false,
+                hasControls: false,
+                lockUniScaling: true,
+                stroke: 'white',
+                fill: 'black',
+                paintFirst: 'stroke',
+                strokeWidth: 4 / options.zoomAtCreation,
+                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
+                scaleX: 1,
+                scaleY: 1,
+                fontWeight: 'bold'
+            });
+        }
+        return object;
+    }
+
+    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
+        //do nothing - a text has no area
+    }
+
+    onZoom(ofObject, zoom) {
+        if (ofObject.autoScale) {
+            ofObject.set({
+                scaleX: 1/zoom,
+                scaleY: 1/zoom
+            });
+        }
+        ofObject.isAtZoom = zoom;
+    }
+
+    // /**
+    //  * Force properties for correct rendering, ensure consitency on
+    //  * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+    //  *
+    //  * todo removal did not break stuff?
+    //  * @param object given object type for the factory type
+    //  */
+    // import(object, atZoom) {
+    //     object.lockUniScaling = true;
+    //     object.stroke = 'white';
+    //     object.fill = 'black';
+    //     object.paintFirst = 'stroke';
+    //     object.strokeWidth = 2;
+    //     object.fontFamily = 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS';
+    // }
+
+    /**
+     * A list of extra properties to export upon export event
+     * @return {[string]}
+     */
+    exports() {
+        return ["autoScale"]; //"text", "left", "top", "fontSize"
+    }
+
+    exportsGeometry() {
+        return ["text", "left", "top", "fontSize"];
+    }
+
+    supportsBrush() {
+        return false;
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Polygon object that is being copied
+     * @param {object} parameters
+     * @param {string} parameters.text text to display
+     * @param {number} parameters.left
+     * @param {number} parameters.top
+     * @param {number} parameters.fontSize  optional
+     */
+    copy(ofObject, parameters) {
+        parameters = parameters || {text: ofObject.text, left: ofObject.left, top: ofObject.top};
+        let props = this.copyProperties(ofObject,
+            "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
+        $.extend(props, parameters);
+        props.paintFirst = 'stroke';
+        return new fabric.Text(parameters.text, props);
+    }
+
+    edit(theObject) {
+        this._left = theObject.left;
+        this._top = theObject.top;
+        theObject.set({
+            lockMovementX: false,
+            lockMovementY: false
+        });
+    }
+
+    getCreationRequiredMouseDragDurationMS() {
+        return -1; //always allow
+    }
+
+    recalculate(theObject) {
+        let left = theObject.left,
+            top = theObject.top,
+            text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
+
+        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {left: left, top: top, text: text});
+        theObject.calcACoords();
+        this._context.replaceAnnotation(theObject, newObject, true);
+    }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        //todo initCreate?
+        return undefined;
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        this._origX = x;
+        this._origY = y;
+        const text = this._context.presets.getActivePreset(isLeftClick).meta?.category.value || 'Text';
+        this._current = this.create({
+            text: text,
+            top: y,
+            left: x,
+        }, this._presets.getAnnotationOptions(isLeftClick));
+        this._context.addAnnotation(this._current);
+        this._context.canvas.renderAll();
+    }
+
+    updateCreate(x, y) {
+        //do nothing
+    }
+
+    isImplicit() {
+        //text is implicitly drawn (using fonts)
+        return true;
+    }
+
+    finishIndirect() {
+        //do nothing
+    }
+
+    title() {
+        return "Text";
+    }
+
+    toPointArray(obj, converter, quality=1) {
+        return [converter(obj.left, obj.top)];
+    }
+};
+
+
+/**
+ * A point
+ * @type {OSDAnnotations.Point}
+ */
+OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager);
+        this.factoryID = "point";
+    }
+
+    getIcon() {
+        return "radio_button_checked";
+    }
+
+    getDescription(ofObject) {
+        return `Point [${Math.round(ofObject.top)}, ${Math.round(ofObject.left)}]`;
+    }
+
+    /**
+     * todo necessary? we use ellipse
+     * @param {object} parameters
+     * @param {number} parameters.x
+     * @param {number} parameters.y
+     * @param options see parent class
+     */
+    create(parameters, options) {
+        const instance = new fabric.Ellipse({left: parameters.x, top: parameters.y});
+        return this.configure(instance, options);
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Ellipse point object that is being copied
+     * @param {object} parameters
+     * @param {number} parameters.x
+     * @param {number} parameters.y
+     */
+    copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = ofObject;
+        const copy = this.copyProperties(ofObject);
+        copy.left = parameters.x;
+        copy.top = parameters.y;
+        return new fabric.Ellipse(copy);
+    }
+
+    /**
+     * Force properties for correct rendering, ensure consitency on
+     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
+     * @param object given object type for the factory type
+     * @param options
+     */
+    configure(object, options) {
+        $.extend(object, options, {
+            angle: 0,
+            rx: 10,
+            ry: 10,
+            strokeWidth: 1,
+            originalStrokeWidth: 1,
+            originX: 'center',
+            originY: 'center',
+            type: this.type,
+            factoryID: this.factoryID,
+            fill: options.color,
+        });
+        //todo not directly draggable some error there -> update force bounds
+        return object;
+    }
+
+    onZoom(ofObject, zoom) {
+        ofObject.scaleX = 1/zoom;
+        ofObject.scaleY = 1/zoom;
+    }
+
+    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
+        super.updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke);
+        ofObject.set({fill: ofObject.color});
+    }
+
+    edit(theObject) {
+        this._left = theObject.left;
+        this._top = theObject.top;
+        theObject.set({
+            lockMovementX: false,
+            lockMovementY: false
+        });
+    }
+
+    recalculate(theObject) {
+        let left = theObject.left,
+            top = theObject.top;
+        theObject.set({ left: this._left, top: this._top,
+            hasControls: false, lockMovementX: true, lockMovementY: true});
+        let newObject = this.copy(theObject, {x: left, y: top});
+        theObject.calcACoords();
+        this._context.replaceAnnotation(theObject, newObject, true);
+    }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        return undefined;
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        const instance = this.create({
+            x: x,
+            y: y
+        }, this._presets.getAnnotationOptions(isLeftClick));
+        instance.scaleX = 1/instance.zoomAtCreation;
+        instance.scaleY = 1/instance.zoomAtCreation;
+        this._context.addAnnotation(instance);
+        return true;
+    }
+
+    updateCreate(x, y) {
+        //do nothing
+    }
+
+    finishDirect() {
+        //do nothing
+    }
+
+    supportsBrush() {
+        return false;
+    }
+
+    toPointArray(obj, converter, quality=1) {
+        return [converter(obj.left, obj.top)];
+    }
+
+    title() {
+        return "Point";
+    }
+};
 
 OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager, factoryId, type, fabricClass, withHelperPoints=true) {
-        super(context, autoCreationStrategy, presetManager, factoryId, type);
+    constructor(context, autoCreationStrategy, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
+        super(context, autoCreationStrategy, presetManager, factoryID, type);
         this._initialize(false);
         this.Class = fabricClass;
         this.withHelperPoints = withHelperPoints;
@@ -378,11 +713,8 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
+
+    exportsGeometry() {
         return ["points"];
     }
 
@@ -392,7 +724,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      */
     copy(ofObject, parameters) {
         if (!parameters) parameters = [...ofObject.points];
-        return new this.Class(parameters, this.copyProperties(ofObject));
+        const props = this.copyProperties(ofObject);
+        delete props.points;
+        return new this.Class(parameters, props);
     }
 
     edit(theObject) {
@@ -672,16 +1006,12 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             fill: "",
             stroke: options.color,
             type: this.type,
-            factoryId: this.factoryId,
+            factoryID: this.factoryID,
         });
         return object;
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
+    exportsGeometry() {
         return ["x1", "x2", "y1", "y2"];
     }
 
@@ -690,8 +1020,8 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     /**
-     * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {Array} parameters array of points: {x, y} objects
+     * @param {fabric.Line} ofObject object that is being copied
+     * @param {{}} parameters array of 4 values, two point vertices x1 y1 x2 y1 //todo use array of objects instead?
      */
     copy(ofObject, parameters) {
         parameters = parameters || [ofObject.x1, ofObject.y1, ofObject.x2, ofObject.y2];
@@ -738,16 +1068,16 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line =  transform.target,
             coords = line.oCoords;
-            // ,
+        // ,
 
         const controls = [line.oCoords.p0, line.oCoords.p1].map(c => fabric.util.transformPoint(c, line.calcTransformMatrix())
         );
         //const controls = Object.values(line.aCoords);
         let
-        left = controls.reduce((a, b) => a < b.x ? a : b.x, Infinity),
-        top = controls.reduce((a, b) => a < b.y ? a : b.y, Infinity),
-        width = controls.reduce((a, b) => a > b.x ? a : b.x, -Infinity) - left,
-        height = controls.reduce((a, b) => a > b.y ? a : b.y, -Infinity) - top;
+            left = controls.reduce((a, b) => a < b.x ? a : b.x, Infinity),
+            top = controls.reduce((a, b) => a < b.y ? a : b.y, Infinity),
+            width = controls.reduce((a, b) => a > b.x ? a : b.x, -Infinity) - left,
+            height = controls.reduce((a, b) => a > b.y ? a : b.y, -Infinity) - top;
 
 
         // x = absolutePoint.x;
@@ -785,7 +1115,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
         if (!theObject.x1 != this._origPoints[0] || theObject.y1 != this._origPoints[1] ||
-                theObject.x2 != this._origPoints[2] || theObject.y2 != this._origPoints[3]) {
+            theObject.x2 != this._origPoints[2] || theObject.y2 != this._origPoints[3]) {
             let newObject = this.copy(theObject);
             theObject.x1 = this._origPoints[0];
             theObject.y1 = this._origPoints[1];
@@ -917,321 +1247,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 };
 
-
-OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
-
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "text", "text");
-    }
-
-    getIcon() {
-        return "translate";
-    }
-
-    fabricStructure() {
-        return "text";
-    }
-
-    getDescription(ofObject) {
-        return ofObject.text;
-    }
-
-    getCurrentObject() {
-        return (this._current);
-    }
-
-    /**
-     * @param {object} parameters
-     * @param {string} parameters.text text to display
-     * @param {number} parameters.left
-     * @param {number} parameters.top
-     * @param {number} parameters.fontSize  optional
-     * @param {number} parameters.autoScale optional default false
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        const instance = new fabric.Text(parameters.text);
-        return this.configure(instance, $.extend(options, parameters));
-    }
-
-
-    /**
-     * Force properties for correct rendering, ensure consitency on
-     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
-     * @param object given object type for the factory type
-     * @param options
-     */
-    configure(object, options) {
-        options.autoScale = options.autoScale || false;
-        if (options.autoScale) {
-            $.extend(object, options, {
-                fontSize: options.fontSize || 16,
-                type: this.type,
-                factoryId: this.factoryId,
-                selectable: false,
-                hasControls: false,
-                lockUniScaling: true,
-                stroke: 'white',
-                fill: 'black',
-                paintFirst: 'stroke',
-                strokeWidth: 2,
-                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
-                scaleX: 1/options.zoomAtCreation,
-                scaleY: 1/options.zoomAtCreation
-            });
-        } else {
-            $.extend(object, options, {
-                fontSize: (options.fontSize || 16) / options.zoomAtCreation,
-                type: this.type,
-                factoryId: this.factoryId,
-                selectable: false,
-                hasControls: false,
-                lockUniScaling: true,
-                stroke: 'white',
-                fill: 'black',
-                paintFirst: 'stroke',
-                strokeWidth: 2,
-                fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
-                scaleX: 1,
-                scaleY: 1,
-            });
-        }
-        return object;
-    }
-
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a text has no area
-    }
-
-    onZoom(ofObject, zoom) {
-        if (ofObject.autoScale) {
-            ofObject.set({
-                scaleX: 1/zoom,
-                scaleY: 1/zoom
-            });
-        }
-        ofObject.isAtZoom = zoom;
-    }
-
-    /**
-     * Force properties for correct rendering, ensure consitency on
-     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
-     * @param object given object type for the factory type
-     */
-    import(object, atZoom) {
-        object.lockUniScaling = true;
-        object.stroke = 'white';
-        object.fill = 'black';
-        object.paintFirst = 'stroke';
-        object.strokeWidth = 2;
-        object.fontFamily = 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS';
-    }
-
-    /**
-     * A list of extra properties to export upon export event
-     * @return {[string]}
-     */
-    exports() {
-        return ["autoScale", "text", "left", "top", "fontSize"];
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {object} parameters
-     * @param {string} parameters.text text to display
-     * @param {number} parameters.left
-     * @param {number} parameters.top
-     * @param {number} parameters.fontSize  optional
-     */
-    copy(ofObject, parameters) {
-        parameters = parameters || {text: ofObject.text, left: ofObject.left, top: ofObject.top};
-        return new fabric.Text(parameters.text, this.copyProperties(ofObject,
-            "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale"));
-    }
-
-    edit(theObject) {
-        this._left = theObject.left;
-        this._top = theObject.top;
-        theObject.set({
-            lockMovementX: false,
-            lockMovementY: false
-        });
-    }
-
-    getCreationRequiredMouseDragDurationMS() {
-        return -1; //always allow
-    }
-
-    recalculate(theObject) {
-        let left = theObject.left,
-            top = theObject.top,
-            text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
-
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {left: left, top: top, text: text});
-        theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        //todo initCreate?
-        return undefined;
-    }
-
-    initCreate(x, y, isLeftClick = true) {
-        this._origX = x;
-        this._origY = y;
-        const text = this._context.presets.getActivePreset(isLeftClick).meta?.category.value || 'Text';
-        this._current = this.create({
-            text: text,
-            top: y,
-            left: x,
-        }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addAnnotation(this._current);
-        this._context.canvas.renderAll();
-    }
-
-    updateCreate(x, y) {
-        //do nothing
-    }
-
-    isImplicit() {
-        //text is implicitly drawn (using fonts)
-        return true;
-    }
-
-    finishIndirect() {
-        //do nothing
-    }
-
-    toPointArray(obj, converter, quality=1) {
-        return undefined;
-    }
-
-    title() {
-        return "Text";
-    }
-};
-
-
-/**
- * A point
- * @type {OSDAnnotations.Point}
- */
-OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager);
-        this.factoryId = "point";
-    }
-
-
-    getIcon() {
-        return "radio_button_checked";
-    }
-
-    getDescription(ofObject) {
-        return `Point [${Math.round(ofObject.top)}, ${Math.round(ofObject.left)}]`;
-    }
-
-    /**
-     *
-     * @param {object} parameters
-     * @param {number} parameters.x
-     * @param {number} parameters.y
-     * @param options see parent class
-     */
-    create(parameters, options) {
-        const instance = new fabric.Ellipse({left: parameters.x, top: parameters.y});
-        return this.configure(instance, options);
-    }
-
-    /**
-     * Force properties for correct rendering, ensure consitency on
-     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
-     * @param object given object type for the factory type
-     * @param options
-     */
-    configure(object, options) {
-        $.extend(object, options, {
-            angle: 0,
-            rx: 10,
-            ry: 10,
-            strokeWidth: 1,
-            originalStrokeWidth: 1,
-            originX: 'center',
-            originY: 'center',
-            type: this.type,
-            factoryId: this.factoryId,
-            fill: options.color,
-        });
-        return object;
-    }
-
-    onZoom(ofObject, zoom) {
-        ofObject.scaleX = 1/zoom;
-        ofObject.scaleY = 1/zoom;
-    }
-
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        super.updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke);
-        ofObject.set({fill: ofObject.color});
-    }
-
-    edit(theObject) {
-        this._left = theObject.left;
-        this._top = theObject.top;
-        theObject.set({
-            lockMovementX: false,
-            lockMovementY: false
-        });
-    }
-
-    recalculate(theObject) {
-        let left = theObject.left,
-            top = theObject.top;
-        theObject.set({ left: this._left, top: this._top,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {x: left, y: top});
-        theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let global = VIEWER.tools.referencedTiledImage().windowToImageCoordinates(
-            new OpenSeadragon.Point(screenPoint.x, screenPoint.y)
-        );
-        return this.initCreate(global.x, global.y, isLeftClick);
-    }
-
-    initCreate(x, y, isLeftClick = true) {
-        const instance = this.create({
-            x: x,
-            y: y
-        }, this._presets.getAnnotationOptions(isLeftClick));
-        instance.scaleX = 1/instance.zoomAtCreation;
-        instance.scaleY = 1/instance.zoomAtCreation;
-        this._context.addAnnotation(instance);
-        return true;
-    }
-
-    updateCreate(x, y) {
-        //do nothing
-    }
-
-    finishDirect() {
-        //do nothing
-    }
-
-    toPointArray(obj, converter, quality=1) {
-        return [converter(obj.left, obj.top)];
-    }
-
-    title() {
-        return "Point";
-    }
-};
-
 OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon", "polygon", fabric.Polygon, true);
@@ -1287,156 +1302,161 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 }
 
-// OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
-//
-//     constructor(context, autoCreationStrategy, presetManager) {
-//         super(context, autoCreationStrategy, presetManager, "group", "group");
-//     }
-//
-//     getIcon() {
-//         return "shape_line";
-//     }
-//
-//     fabricStructure() {
-//         //todo the nesting needs to be estimated from the given object
-//         return "group";
-//     }
-//
-//     getDescription(ofObject) {
-//         return `[${this._eachChildAndFactory(ofObject, (o, f) => f.title()).join(", ")}]`;
-//     }
-//
-//     getCurrentObject() {
-//         return (this._current);
-//     }
-//
-//     /**
-//      * @param {Array} parameters array of objects with {x, y} properties (points)
-//      * @param {Object} options see parent class
-//      */
-//     create(parameters, options) {
-//         //todo copy properties of inner objects such as meta?
-//         return new fabric.Group(parameters, $.extend({
-//             type: this.type,
-//             factoryId: this.factoryId
-//         }, options));
-//     }
-//
-//     _eachChildAndFactory(ofObject, executor, method="map") {
-//         const self = this;
-//         return ofObject._objects[method](o => {
-//             const factory = self._context.getAnnotationObjectFactory(o.factoryId);
-//             if (!factory) {
-//                 console.warn("Group annotation foreach routine error: ", o.factoryId, "unknown factory.");
-//                 return undefined;
-//             }
-//             return executor(o, factory);
-//         });
-//     }
-//
-//     /**
-//      * @param {Object} ofObject fabricjs.Polygon object that is being copied
-//      * @param {Array} parameters array of points: {x, y} objects
-//      */
-//     copy(ofObject, parameters) {
-//         const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
-//         return new fabric.Group(from, {
-//             hasRotatingPoint: ofObject.hasRotatingPoint,
-//             isLeftClick: ofObject.isLeftClick,
-//             opacity: ofObject.opacity,
-//             type: ofObject.type,
-//             scaleX: ofObject.scaleX,
-//             color: ofObject.color,
-//             scaleY: ofObject.scaleY,
-//             zoomAtCreation: ofObject.zoomAtCreation,
-//             originalStrokeWidth: ofObject.originalStrokeWidth,
-//             factoryId: ofObject.factoryId,
-//             selectable: ofObject.selectable,
-//             borderColor: ofObject.borderColor,
-//             cornerColor: ofObject.cornerColor,
-//             borderScaleFactor: ofObject.borderScaleFactor,
-//             meta: ofObject.meta,
-//             hasControls: ofObject.hasControls,
-//             lockMovementX: ofObject.lockMovementX,
-//             lockMovementY: ofObject.lockMovementY,
-//             presetID: ofObject.presetID,
-//             layerId: ofObject.layerId
-//         });
-//     }
-//
-//     edit(theObject) {
-//         //todo
-//     }
-//
-//     recalculate(theObject) {
-//        //todo
-//        //  let rx = theObject.rx * theObject.scaleX,
-//        //      ry = theObject.ry * theObject.scaleY,
-//        //      left = theObject.left,
-//        //      top = theObject.top;
-//        //  theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-//        //      hasControls: false, lockMovementX: true, lockMovementY: true});
-//        //  let newObject = this.copy(theObject, {
-//        //      left: left, top: top, rx: rx, ry: ry
-//        //  });
-//        //  theObject.calcACoords();
-//        //  this._context.replaceAnnotation(theObject, newObject, true);
-//     }
-//
-//     instantCreate(screenPoint, isLeftClick = true) {
-//         return false;
-//     }
-//
-//     getCreationRequiredMouseDragDurationMS() {
-//         return Infinity; //never allow
-//     }
-//
-//     initCreate(x, y, isLeftClick = true) {
-//         let active = this._context.canvas.getActiveObject();
-//         console.log(active)
-//         active = active ? [active] : [];
-//         this._current = this.create(active, {});
-//     }
-//
-//     updateCreate(x, y) {
-//         if (!this._current) return;
-//
-//         let active = this._context.canvas.getActiveObject();
-//         console.log(active)
-//
-//         if (!this._current._objects.includes(active)) {
-//             this._current.add(active);
-//         }
-//     }
-//
-//     isImplicit() {
-//         return false;
-//     }
-//
-//     finishIndirect() {
-//         if (!this._current) return;
-//         this._context.addAnnotation(this._current);
-//         this._current = null;
-//     }
-//
-//     /**
-//      * Create array of points - approximation of the object shape
-//      * @param {Object} obj fabricjs.Polygon object that is being approximated
-//      * @param {function} converter take two elements and convert and return item
-//      * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-//      * @return {Array} array of items returned by the converter - points
-//      */
-//     toPointArray(obj, converter, quality=1) {
-//         return undefined;
-//         // let result = this._eachChildAndFactory(
-//         //     obj,
-//         //     (o, f) => f.toPointArray(o, converter, quality)
-//         // );
-//         // if (result.some(r => Array.isArray(r))) return undefined;
-//         // return result;
-//     }
-//
-//     title() {
-//         return "Complex Annotation";
-//     }
-// };
+OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "group", "group");
+    }
+
+    getIcon() {
+        return "shape_line";
+    }
+
+    fabricStructure() {
+        //todo the nesting needs to be estimated from the given object
+        return "group";
+    }
+
+    getDescription(ofObject) {
+        return `[${this._eachChildAndFactory(ofObject, (o, f) => f.title()).join(", ")}]`;
+    }
+
+    getCurrentObject() {
+        return (this._current);
+    }
+
+    /**
+     * @param {Array} parameters array of objects
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        return this.configure(new fabric.Group(parameters), options);
+    }
+
+    _eachChildAndFactory(ofObject, executor, method="map") {
+        const self = this;
+        return ofObject._objects[method](o => {
+            const factory = self._context.getAnnotationObjectFactory(o.factoryID);
+            if (!factory) {
+                console.warn("Group annotation foreach routine error: ", o.factoryID, "unknown factory.");
+                return undefined;
+            }
+            return executor(o, factory);
+        });
+    }
+
+    /**
+     * @param {Object} ofObject fabricjs.Polygon object that is being copied
+     * @param {Array} parameters array of points: {x, y} objects
+     */
+    copy(ofObject, parameters) {
+        const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
+        const props = this.copyProperties(ofObject);
+        return new fabric.Group(from, props);
+
+        // const from = Array.isArray(parameters) || this._eachChildAndFactory(ofObject, (o, f) => f.copy(o));
+        // return new fabric.Group(from, {
+        //     hasRotatingPoint: ofObject.hasRotatingPoint,
+        //     isLeftClick: ofObject.isLeftClick,
+        //     opacity: ofObject.opacity,
+        //     type: ofObject.type,
+        //     scaleX: ofObject.scaleX,
+        //     color: ofObject.color,
+        //     scaleY: ofObject.scaleY,
+        //     zoomAtCreation: ofObject.zoomAtCreation,
+        //     originalStrokeWidth: ofObject.originalStrokeWidth,
+        //     factoryID: ofObject.factoryID,
+        //     selectable: ofObject.selectable,
+        //     borderColor: ofObject.borderColor,
+        //     cornerColor: ofObject.cornerColor,
+        //     borderScaleFactor: ofObject.borderScaleFactor,
+        //     meta: ofObject.meta,
+        //     hasControls: ofObject.hasControls,
+        //     lockMovementX: ofObject.lockMovementX,
+        //     lockMovementY: ofObject.lockMovementY,
+        //     presetID: ofObject.presetID,
+        //     layerID: ofObject.layerID
+        // });
+    }
+
+    isEditable() {
+        return false;
+    }
+
+    // edit(theObject) {
+    //     //todo
+    // }
+    //
+    // recalculate(theObject) {
+    //    //todo
+    //    //  let rx = theObject.rx * theObject.scaleX,
+    //    //      ry = theObject.ry * theObject.scaleY,
+    //    //      left = theObject.left,
+    //    //      top = theObject.top;
+    //    //  theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+    //    //      hasControls: false, lockMovementX: true, lockMovementY: true});
+    //    //  let newObject = this.copy(theObject, {
+    //    //      left: left, top: top, rx: rx, ry: ry
+    //    //  });
+    //    //  theObject.calcACoords();
+    //    //  this._context.replaceAnnotation(theObject, newObject, true);
+    // }
+
+    instantCreate(screenPoint, isLeftClick = true) {
+        return false;
+    }
+
+    getCreationRequiredMouseDragDurationMS() {
+        return Infinity; //never allow
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        // let active = this._context.canvas.getActiveObject();
+        // console.log(active)
+        // active = active ? [active] : [];
+        // this._current = this.create(active, {});
+        return undefined;
+    }
+
+    updateCreate(x, y) {
+        // if (!this._current) return;
+        //
+        // let active = this._context.canvas.getActiveObject();
+        // console.log(active)
+        //
+        // if (!this._current._objects.includes(active)) {
+        //     this._current.add(active);
+        // }
+    }
+
+    isImplicit() {
+        return false;
+    }
+
+    finishIndirect() {
+        // if (!this._current) return;
+        // this._context.addAnnotation(this._current);
+        // this._current = null;
+    }
+
+    /**
+     * Create array of points - approximation of the object shape
+     * @param {Object} obj fabricjs.Polygon object that is being approximated
+     * @param {function} converter take two elements and convert and return item
+     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @return {Array} array of items returned by the converter - points
+     */
+    toPointArray(obj, converter, quality=1) {
+        return undefined;
+        // let result = this._eachChildAndFactory(
+        //     obj,
+        //     (o, f) => f.toPointArray(o, converter, quality)
+        // );
+        // if (result.some(r => Array.isArray(r))) return undefined;
+        // return result;
+    }
+
+    title() {
+        return "Complex Annotation";
+    }
+};
