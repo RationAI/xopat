@@ -48,13 +48,11 @@ window.OpenSeadragon.BridgeGL = class {
             //enable on the source by overriding its member functions
             this._bindToTiledImage(idx);
         } else {
-            tiledImage._bridgeId = this.uid;
-        }
-        //else... the other approach is based on events, no need to enable on the element
-
-        tiledImage.__cached_hasTransparency = tiledImage.hasTransparency;
-        tiledImage.hasTransparency = function(context2D, url, ajaxHeaders, post) {
-            return true; //we always render transparent
+            tiledImage.source._bridgeId = this.uid;
+            tiledImage.source.__cached_hasTransparency = tiledImage.source.hasTransparency;
+            tiledImage.source.hasTransparency = function(context2D, url, ajaxHeaders, post) {
+                return true; //we always render transparent
+            }
         }
     }
 
@@ -65,11 +63,17 @@ window.OpenSeadragon.BridgeGL = class {
     removeLayer(idx) {
         if (!this.uid) {
             const source = this._unbindFromTiledSource(idx);
-            if (source) {
-                source.hasTransparency = source.__cached_hasTransparency || source.hasTransparency;
-                delete source.__cached_hasTransparency;
-            } else {
+            if (!source) {
                 console.warn("Could not properly remove bindings on TiledImage index", idx);
+            }
+        } else {
+            let source = this._rendering[idx];
+            if (!source) {
+                console.warn("Could not properly remove bindings on TiledImage index", idx);
+            } else {
+                delete tiledImage.source._bridgeId;
+                source.hasTransparency = source.__cached_hasTransparency;
+                delete source.__cached_hasTransparency;
             }
         }
         delete this._rendering[idx];
@@ -400,15 +404,16 @@ window.OpenSeadragon.BridgeGL = class {
     /************** EVENT STRATEGY ******************/
 
     _tileLoaded(e) {
-        if (! e.image) return;
+        if (! e.data) return;
 
-        if (this.uid === e.tiledImage._bridgeId && !e.tile.webglId) {
+        if (this.uid === e.tiledImage.source._bridgeId && !e.tile.webglId) {
             e.tile.webglId = this.uid;
-            //todo necessary to set?!?! I thougth OSD does this automatically
-            e.tile.imageData = e.image;
-            e.tile.webglRefresh = 0; // -> will draw immediatelly
+            //will draw immediatelly
+            e.tile.webglRefresh = 0;
+            //we set context2D manually, the cache is NOT created
+            e.tile.__data = e.data;
             //necessary, the tile is re-drawn upon re-zooming, store the output
-            var canvas = document.createElement('canvas');
+            let canvas = document.createElement('canvas');
             canvas.width = e.tile.sourceBounds.width;
             canvas.height = e.tile.sourceBounds.height;
             e.tile.context2D = canvas.getContext('2d');
@@ -422,7 +427,7 @@ window.OpenSeadragon.BridgeGL = class {
             //todo make it such that it is called just once
             this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
 
-            let imageData = e.tile.imageData;
+            let imageData = e.tile.__data;
 
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,

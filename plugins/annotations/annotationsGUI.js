@@ -219,7 +219,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 			const actions = [{
 				title: `Select preset for left click.`
 			}];
-			this.context.presets.foreach(preset => {
+			_this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || preset.objectFactory.title();
 				let icon = preset.objectFactory.getIcon();
 				actions.push({
