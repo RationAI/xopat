@@ -42,10 +42,6 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
             default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
             accepts: (type, instance) => type === "float"
         },
-        opacity: {
-            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-            accepts: (type, instance) => type === "float"
-        },
         inverse: {
             default: {type: "bool", default: false, title: "Invert: "},
             accepts: (type, instance) => type === "bool"
@@ -54,18 +50,15 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
 
     getFragmentShaderExecution() {
         return `
-    float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    bool cond${this.uid} = data${this.uid} > 0.02 && data${this.uid} >= ${this.threshold.sample(`data${this.uid}`, 'float')};
+    float chan = ${this.sampleChannel('tile_texture_coords')};
+    bool shows = chan > 0.02 && chan >= ${this.threshold.sample('chan', 'float')};
     if (${this.inverse.sample()}) {
-        cond${this.uid} = !cond${this.uid};
-        data${this.uid} = 1.0 - data${this.uid};
+        shows = !shows;
+        chan = 1.0 - chan;
     }
     
-    if(cond${this.uid}){
-        ${this.render(`vec4(${this.color.sample()}, data${this.uid} * ${this.opacity.sample()})`)}
-    } else {
-        ${this.render(`vec4(.0)`)}
-    }
+    if (shows) return vec4(${this.color.sample()}, chan);
+    return vec4(.0);
 `;
     }
 };

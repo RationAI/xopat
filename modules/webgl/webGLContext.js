@@ -241,7 +241,7 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
     }
 
     generateVisualisation(order, visualisation, withHtml) {
-        var definition = "", execution = "", html = "",
+        let definition = "", execution = "", html = "",
             _this = this, usableShaders = 0, simultaneouslyVisible = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
@@ -258,9 +258,16 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
                 let visible = false;
                 usableShaders++;
 
-                if (layer.visible == 1 && simultaneouslyVisible < _this.max_textures && layer.hasOwnProperty("_renderContext") && layer.hasOwnProperty("index")) {
-                    definition += layer._renderContext.getFragmentShaderDefinition();
-                    execution += layer._renderContext.getFragmentShaderExecution();
+                if (layer.visible == 1 && simultaneouslyVisible < _this.max_textures && layer.hasOwnProperty("_renderContext") && layer.hasOwnProperty("_index")) {
+                    let renderCtx = layer._renderContext;
+                    definition += renderCtx.getFragmentShaderDefinition() + `
+vec4 lid_${layer._index}_xo() {
+    ${renderCtx.getFragmentShaderExecution()}
+}`;
+                    execution += `
+    vec4 l${layer._index}_out = lid_${layer._index}_xo();
+    l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
+    ${renderCtx.__mode}(l${layer._index}_out);`;
                     visible = true;
                     layer.rendering = true;
                     simultaneouslyVisible++;
@@ -301,17 +308,12 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         // }
         // this.texture.renderOrder = urls;
 
-        //since we download for now all data, we can just index the sources...
-        // this.texture.loadOrder = this.context.visualization();
-        // for (let i = 0; i < this.context._dataSourceMapping.length; i++) {
-        //     if (this.context._dataSourceMapping[i] === -1) continue;
-        //     samplers += `uniform sampler2D vis_data_sampler_${i};`;
-        // }
-
         return {
             vertex_shader: this.getVertexShader(),
             fragment_shader: this.getFragmentShader(definition, execution,
                 this.context._dataSourceMapping, globalScopeCode),
+            definition: definition,
+            execution: execution,
             html: html,
             usableShaders: usableShaders,
             dataUrls: this.context._dataSources
@@ -472,14 +474,21 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name, layer.error, dataId, false, layer, false) + html;
                 console.warn(layer.error, layer["desc"]);
 
-            } else if (layer._renderContext && layer.hasOwnProperty("index")) {
+            } else if (layer._renderContext && layer.hasOwnProperty("_index")) {
                 let visible = false;
                 usableShaders++;
 
                 //make visible textures if 'visible' flag set
                 if (layer.visible == 1) {
-                    definition += layer._renderContext.getFragmentShaderDefinition();
-                    execution += layer._renderContext.getFragmentShaderExecution();
+                    let renderCtx = layer._renderContext;
+                    definition += renderCtx.getFragmentShaderDefinition() + `
+vec4 lid_${layer._index}_xo() {
+    ${renderCtx.getFragmentShaderExecution()}
+}`;
+                    execution += `
+    vec4 l${layer._index}_out = lid_${layer._index}_xo();
+    l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
+    ${renderCtx.__mode}(l${layer._index}_out);`;
                     layer.rendering = true;
                     visible = true;
                     $.extend(globalScopeCode, _this.globalCodeRequiredByShaderType(layer.type))
@@ -515,11 +524,11 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         //         //to-do enable once we really DOWNLOAD only necessary stuff, otherwise this mapping is invalid
         //         // if (layer.rendering) {
         //         //     urls.push(key);
-        //         //     indicesMapping[layer.index] = urls.length-1;
+        //         //     indicesMapping[layer._index] = urls.length-1;
         //         // }
         //
         //         urls.push(key);
-        //         indicesMapping[layer.index] = urls.length-1;
+        //         indicesMapping[layer._index] = urls.length-1;
         //     }
         // }
 
@@ -658,7 +667,7 @@ void main() {
     }
 };
 
-/**Not a part of API, static functionality to process polygons**/
+/**Not yet a part of API, todo functionality to process polygons**/
 WebGLModule.RasterizerContext = class {
     constructor(context, gl) {
         this.context = context;

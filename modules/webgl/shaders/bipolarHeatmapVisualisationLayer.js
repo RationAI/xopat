@@ -42,27 +42,24 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
             default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
             accepts: (type, instance) => type === "float"
         },
-        opacity: {
-            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-            accepts: (type, instance) => type === "float"
-        }
     };
 
     getFragmentShaderExecution() {
-        let varname = `data_${this.uid}`;
         return `
-    float ${varname} = ${this.sampleChannel('tile_texture_coords', 0, true)};
-    if (!close(${varname}, .5)) {
-        if (${varname} < .5) { 
-            ${varname} = ${this.filter(`1.0 - ${varname} * 2.0`)};
-            if (${varname} > ${this.threshold.sample(varname, 'float')}) {
-                ${this.render(`vec4( ${this.colorLow.sample(varname, 'float')}, ${varname} * ${this.opacity.sample(varname, 'float')})`)}
-            } else ${this.render(`vec4(.0)`)}
+    float chan = ${this.sampleChannel('tile_texture_coords', 0, true)};
+    if (!close(chan, .5)) {
+        if (chan < .5) { 
+            chan = ${this.filter(`1.0 - chan * 2.0`)};
+            if (chan > ${this.threshold.sample('chan', 'float')}) {
+               return vec4(${this.colorLow.sample('chan', 'float')}, chan);
+            }
+            return vec4(.0);
         } else {  
-            ${varname} = ${this.filter(`(${varname} - 0.5) * 2.0`)};
-            if (${varname} > ${this.threshold.sample(varname, 'float')}) {
-                ${this.render(`vec4( ${this.colorHigh.sample(varname, 'float')}, ${varname} * ${this.opacity.sample(varname, 'float')})`)}
-            } else ${this.render(`vec4(.0)`)}
+            chan = ${this.filter(`(chan - 0.5) * 2.0`)};
+            if (chan > ${this.threshold.sample('chan', 'float')}) {
+                return vec4(${this.colorHigh.sample('chan', 'float')}, chan);
+            } 
+            return vec4(.0);
         }
     }  
 `;

@@ -46,9 +46,8 @@ vec4 render_${this.uid}() {` + this._getDefaultFSExecute() + `
     }
 
     getFragmentShaderExecution() {
-        return `
-    ${this.render(`render_${this.uid}()`)}
-        `;
+        //todo possibly remove this delegation, we can define execution here immediately
+        return `return render_${this.uid}();`;
     }
 
     static _getDefaultFSDefine() {

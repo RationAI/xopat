@@ -59,10 +59,6 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             accepts: (type, instance) => type === "float",
             required: {type: "advanced_slider"}
         },
-        opacity: {
-            default: {type: "range", default: 1, min: "0", max: 1, step: 0.1, title: "Opacity: "},
-            accepts: (type, instance) => type === "float"
-        },
         connect : {
             default: {type: "bool", interactive: true, title: "Connect breaks: ", default: false},
             accepts:  (type, instance) => type === "bool"
@@ -70,10 +66,9 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
     };
 
     getFragmentShaderExecution() {
-        let ratio = `data${this.uid}`;
         return `
-    float data${this.uid} = ${this.sampleChannel('tile_texture_coords')};
-    ${this.render(`vec4(${this.color.sample(ratio, 'float')}, step(0.05, ${this.threshold.sample(ratio, 'float')}) * ${this.opacity.sample(ratio, 'float')})`)}
+    float chan = ${this.sampleChannel('tile_texture_coords')};
+    return vec4(${this.color.sample('chan', 'float')}, step(0.05, ${this.threshold.sample('chan', 'float')}));
 `;
     }
 

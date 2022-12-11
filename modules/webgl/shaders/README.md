@@ -107,7 +107,7 @@ class IdentityVisualisationLayer extends VisualisationLayer {
     getFragmentShaderExecution() {
         //use 'tile_texture_coords' predefined GLSL variable
         return `
-    ${this.render(this.sample('tile_texture_coords'))}
+    return ${this.sample('tile_texture_coords')};
 `;
     }
 }
@@ -123,14 +123,14 @@ insertion is possible
     - or include your functions only once at global scope using `this.includeGlobalCode(id, code)`
 - COMPLY TO OUT ADJUSTMENTS
     - specify code to define in `getFragmentShaderDefinition`
-    - specify code to execute in `getFragmentShaderExecution` (possibly use stuff from the former)
-    - render your `vec4` output using code returned by `this.render(...)` function
+    - specify code to execute in `getFragmentShaderExecution` and return a `vec4` value in this code
 - RENDER OVER ALL PIXELS
-    - `this.render(...)` should be used in all scenarios, e.g. render a transparent color in case there should be no output,
-    this is important for blending purposes - further processes might use your call without your direct knowledge
+    - this is implicitly enforced with ``getFragmentShaderExecution`` - it is inserted in a function that returns `vec4` - 
+all exiting branches must return a value
 - WORK CAREFULLY WITH UI CONTROLS, preferably use existing ones
     - creating a bug-free UI controls is rather hard: keep the cache correct at all times, keep the UI updated,
     program the handlers correctly...
+    - include ``super.getFragmentShaderDefinition()`` output when overriding
 
 #### Writing the Layer Class
 You of course might want to do more such as passing user input into the shader. The `VisualisationLayer` enables you to implement

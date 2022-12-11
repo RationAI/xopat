@@ -17,15 +17,8 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "shows the data AS-IS";
     }
 
-    static defaultControls = {
-        opacity: {
-            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-            accepts: (type, instance) => type === "float"
-        }
-    };
-
     getFragmentShaderExecution() {
-        return this.render(`vec4(${this.sample("tile_texture_coords")}.rgb, ${this.opacity.sample()})`);
+        return `return ${this.sample("tile_texture_coords")};`;
     }
 };
 
