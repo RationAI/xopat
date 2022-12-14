@@ -264,10 +264,15 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
 vec4 lid_${layer._index}_xo() {
     ${renderCtx.getFragmentShaderExecution()}
 }`;
-                    execution += `
+                    if (renderCtx.opacity) {
+                        execution += `
     vec4 l${layer._index}_out = lid_${layer._index}_xo();
     l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
     ${renderCtx.__mode}(l${layer._index}_out);`;
+                    } else {
+                        execution += `
+    ${renderCtx.__mode}(lid_${layer._index}_xo());`;
+                    }
                     visible = true;
                     layer.rendering = true;
                     simultaneouslyVisible++;
@@ -485,10 +490,16 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
 vec4 lid_${layer._index}_xo() {
     ${renderCtx.getFragmentShaderExecution()}
 }`;
-                    execution += `
+                    if (renderCtx.opacity) {
+                        execution += `
     vec4 l${layer._index}_out = lid_${layer._index}_xo();
     l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
     ${renderCtx.__mode}(l${layer._index}_out);`;
+                    } else {
+                        execution += `
+    ${renderCtx.__mode}(lid_${layer._index}_xo());`;
+                    }
+
                     layer.rendering = true;
                     visible = true;
                     $.extend(globalScopeCode, _this.globalCodeRequiredByShaderType(layer.type))

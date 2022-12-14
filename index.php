@@ -24,8 +24,9 @@ function hasKey($array, $key) {
 }
 
 function isBoolFlagInObject($object, $key) {
+    if (!isset($object->$key)) return false;
     $v = $object->$key;
-    return isset($v) && ((gettype($v) === "string" && $v && $v !== "false") || $v);
+    return (gettype($v) === "string" && $v !== "" && $v !== "false") || $v;
 }
 
 function printJSConsole($message, $is_error=true) {

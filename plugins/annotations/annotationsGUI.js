@@ -195,6 +195,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
 
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
+		this.annotationModeChanged({mode: this.context.mode}); //init manually
+
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		// this.context.addHandler('import', e => {
 		// 	if (e.data.presets?.length > 0) {

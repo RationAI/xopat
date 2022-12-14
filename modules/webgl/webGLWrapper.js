@@ -780,10 +780,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             if (!ok('Program', 'LINK', program)) {
                 onError("Unable to use this visualisation.",
                     "Linking of shader failed. For more information, see logs in the console.");
-            } else {
-                if (isDebugMode) {
-                    console.debug("FRAGMENT SHADER\n", numberLines( FS ));
-                }
+            } else if (isDebugMode) {
+                console.info("FRAGMENT SHADER\n", numberLines( FS ));
             }
         }
     }

@@ -129,7 +129,8 @@ WebGLModule.VisualisationLayer = class {
             html = [];
         for (let control in controls) {
             if (this.hasOwnProperty(control)) {
-                html.push(this[control].define());
+                let code = this[control].define()?.trim();
+                if (code) html.push(code);
             }
         }
         return html.join("\n");
@@ -517,7 +518,7 @@ WebGLModule.VisualisationLayer = class {
     _buildControls(options) {
         let controls = this.constructor.defaultControls;
 
-        if (!controls.opacity || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
+        if (controls.opacity === undefined || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
             controls.opacity = {
                 default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
                 accepts: (type, instance) => type === "float"
@@ -527,6 +528,7 @@ WebGLModule.VisualisationLayer = class {
         for (let control in controls) {
             if (controls.hasOwnProperty(control)) {
                 let buildContext = controls[control];
+                if (!buildContext) continue;
                 this[control] = WebGLModule.UIControls.build(this, control, options[control],
                     buildContext.default, buildContext.accepts, buildContext.required)
             }

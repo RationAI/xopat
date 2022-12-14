@@ -30,15 +30,24 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
         editor : {
             default: {type: "button", title: "Open Editor"},
             accepts:  (type, instance) => type === "action"
-        }
+        },
+        opacity: false
     };
 
     getFragmentShaderDefinition() {
         let defined = this.loadProperty("fs", "");
         if (!defined) {
-            return this.constructor._getDefaultFSDefine() + `
-vec4 render_${this.uid}() {` + this._getDefaultFSExecute() + `
-    return vec4(.0);
+            return `
+//begin do not remove this block - internally used            
+${super.getFragmentShaderDefinition()}      
+//end      
+
+` + this.constructor._getDefaultFSDefine() + `
+
+//the following function has to exist, return your output here
+vec4 xo_render_${this.uid}() {
+` + this._getDefaultFSExecute() + `
+    return vec4(1.0, .0, .0, .5);
 }
 `;
         }
@@ -47,7 +56,7 @@ vec4 render_${this.uid}() {` + this._getDefaultFSExecute() + `
 
     getFragmentShaderExecution() {
         //todo possibly remove this delegation, we can define execution here immediately
-        return `return render_${this.uid}();`;
+        return `return xo_render_${this.uid}();`;
     }
 
     static _getDefaultFSDefine() {
@@ -108,7 +117,7 @@ float filtered = ${this.filter("0.123456")};
             `<span class="blob-code"><span class="blob-code-inner pl-0">//the output of 'render_${this.uid}()' is rendered</span></span>`,
             this.fs.toHtml(false, "font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;height: 170px;"),
             this.editor.toHtml(false, "float: left;"),
-            this.submit.toHtml()
+            this.submit.toHtml(),
         ].join("");
     }
 };
