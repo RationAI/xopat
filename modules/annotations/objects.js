@@ -846,7 +846,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                     cache: otherLayer.cache,
                     dataReferences: otherLayer.dataReferences,
                     params: otherLayer.params,
-                    index: otherLayer.index
+                    _index: otherLayer._index
                 }
             }
         }

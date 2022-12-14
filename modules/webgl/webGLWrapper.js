@@ -655,7 +655,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             console.warn("Skipping layer " + layer.name);
             return;
         }
-        layer.index = idx;
+        layer._index = idx;
         layer.visible = layer.visible ?? true;
         layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params || {}, {
             layer: layer,
@@ -725,7 +725,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     delete layer.desc;
                     if (layer.type === "none") continue;
                     let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
-                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer.index);
+                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer._index);
                 }
             }
         }
@@ -780,10 +780,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             if (!ok('Program', 'LINK', program)) {
                 onError("Unable to use this visualisation.",
                     "Linking of shader failed. For more information, see logs in the console.");
-            } else {
-                if (isDebugMode) {
-                    console.debug("FRAGMENT SHADER\n", numberLines( FS ));
-                }
+            } else if (isDebugMode) {
+                console.info("FRAGMENT SHADER\n", numberLines( FS ));
             }
         }
     }

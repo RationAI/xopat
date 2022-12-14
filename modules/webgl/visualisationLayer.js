@@ -120,6 +120,8 @@ WebGLModule.VisualisationLayer = class {
      *  DO NOT SAMPLE TEXTURE MANUALLY: use
      *  this.sample(...) or this.sampleChannel(...) to generate the code
      *
+     *  WHEN OVERRIDING, INCLUDE THE OUTPUT OF THIS METHOD AT THE BEGINNING OF THE NEW OUTPUT.
+     *
      * @return {string}
      */
     getFragmentShaderDefinition() {
@@ -127,18 +129,17 @@ WebGLModule.VisualisationLayer = class {
             html = [];
         for (let control in controls) {
             if (this.hasOwnProperty(control)) {
-                html.push(this[control].define());
+                let code = this[control].define()?.trim();
+                if (code) html.push(code);
             }
         }
         return html.join("\n");
     }
 
     /**
-     * Code placed inside fragment shader's main(...)
-     *
-     *  NOTE THAT ANY VARIABLE NAME
-     *  WITHIN THE GLOBAL SPACE MUST BE
-     *  ESCAPED WITH UNIQUE ID: this.uid
+     * Code executed to create the output color. The code
+     * must always return a vec4 value, otherwise the visualization
+     * will fail to compile (this code actually runs inside a vec4 function).
      *
      *  DO NOT SAMPLE TEXTURE MANUALLY: use
      *  this.sample(...) or this.sampleChannel(...) to generate the code
@@ -293,6 +294,7 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Add your shader part result
      * @param {string} output, GLSL code to output from the shader, output must be a vec4
+     * todo remove
      */
     render(output) {
         return `${this.__mode}(${output});`;
@@ -515,9 +517,18 @@ WebGLModule.VisualisationLayer = class {
 
     _buildControls(options) {
         let controls = this.constructor.defaultControls;
+
+        if (controls.opacity === undefined || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
+            controls.opacity = {
+                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            };
+        }
+
         for (let control in controls) {
             if (controls.hasOwnProperty(control)) {
                 let buildContext = controls[control];
+                if (!buildContext) continue;
                 this[control] = WebGLModule.UIControls.build(this, control, options[control],
                     buildContext.default, buildContext.accepts, buildContext.required)
             }

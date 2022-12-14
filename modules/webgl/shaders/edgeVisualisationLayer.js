@@ -37,18 +37,12 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
             default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
             accepts: (type, instance) => type === "float"
         },
-        opacity: {
-            default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
-            accepts: (type, instance) => type === "float"
-        }
     };
 
     getFragmentShaderDefinition() {
+        //here we override so we should call super method to include our uniforms
         return `
-${this.threshold.define()}
-${this.opacity.define()}
-${this.edgeThickness.define()}
-${this.color.define()}
+${super.getFragmentShaderDefinition()}
 
 //todo try replace with step function
 float clipToThresholdf_${this.uid}(float value) {
@@ -62,9 +56,11 @@ int clipToThresholdi_${this.uid}(float value) {
      //for some reason the condition > 0.02 is crucial to render correctly...
     if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample('value', 'float')} || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
     return 0;
-}
+}`;
+    }
 
-vec4 getBorder_${this.uid}() {
+    getFragmentShaderExecution() {
+        return `
     float mid = ${this.sampleChannel('tile_texture_coords')};
     if (mid < 1e-6) return vec4(.0);
     float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
@@ -93,14 +89,6 @@ vec4 getBorder_${this.uid}() {
         return vec4(${this.color.sample()} * 0.7, .7); //inner border
     } 
     return vec4(.0);
-}
-`;
-    }
-
-    getFragmentShaderExecution() {
-        return `
-        vec4 border_${this.uid} = getBorder_${this.uid}();
-        ${this.render(`vec4(border_${this.uid}.rgb, border_${this.uid}.a * ${this.opacity.sample()})`)}
 `;
     }
 };

@@ -195,6 +195,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
 
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
+		this.annotationModeChanged({mode: this.context.mode}); //init manually
+
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		// this.context.addHandler('import', e => {
 		// 	if (e.data.presets?.length > 0) {
@@ -472,14 +474,14 @@ style="height: 22px; width: 60px;" onchange="${this.PLUGIN}.context.freeFormTool
 		for (key in visualisation.shaders) {
 			if (!visualisation.shaders.hasOwnProperty(key)) continue;
 			layer = visualisation.shaders[key];
-			if (isNaN(layer.index)) continue;
+			if (isNaN(layer._index)) continue;
 
 			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
 			let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
 			let selected = "";
 
-			if (layer.index === autoStrategy.getLayerIndex()) {
-				index = layer.index;
+			if (layer._index === autoStrategy.getLayerIndex()) {
+				index = layer._index;
 				autoStrategy.setLayer(index, key);
 				selected = "selected";
 			}
@@ -488,7 +490,7 @@ style="height: 22px; width: 60px;" onchange="${this.PLUGIN}.context.freeFormTool
 
 		if (index < 0) {
 			if (!layer) return;
-			autoStrategy.setLayer(layer.index, key);
+			autoStrategy.setLayer(layer._index, key);
 			html = "<option selected " + html.substr(8);
 		}
 		return html;
@@ -511,7 +513,7 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 		self = $(self);
 		let key = self.val(),
 			layer = VIEWER.bridge.visualization().shaders[key];
-		this.context.automaticCreationStrategy.setLayer(layer.index, key);
+		this.context.automaticCreationStrategy.setLayer(layer._index, key);
 	}
 
 	/******************** PRESETS ***********************/
