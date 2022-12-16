@@ -1,18 +1,14 @@
 /**
- * Heatmap shader
- * data reference must contain one index to the data to render using heatmap strategy
+ * Colormap shader
+ * data reference must contain one index to the data to render using colormap strategy
  *
  * expected parameters:
  *  index - unique number in the compiled shader
  * supported parameters:
- *  color - must be a ColorMap, number of steps = x
+ *  color - can be a ColorMap, number of steps = x
  *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1, mask array size = x, incorrect
  *      values are changed to reflect the color steps
- *  opacity - for more details, see @WebGLModule.UIControls color UI type
- *  connect - a boolean switch to enable/disable advanced slider mapping to break values
- *
- *  logScale - use logarithmic scale instead of linear, 1 or 0, default 0
- *  logScaleMax - maximum value used in the scale (remember, data values range from 0 to 1), default 1.0
+ *  connect - a boolean switch to enable/disable advanced slider mapping to break values, enabled for type==="colormap" only
  *
  * colors shader will read underlying data (red component) and output
  * to canvas defined color with opacity based on the data
@@ -34,20 +30,30 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color scale";
     }
 
+    constructor(id, options, privateOptions) {
+        super(id, options, privateOptions);
+
+        //delete unused controls if applicable after initialization
+        if (this.color.getName() !== "colormap") {
+            delete this.connect;
+        }
+    }
+
     static defaultControls = {
         color: {
             default: {
+                type: "colormap",
                 steps: 3, //number of categories
                 default: "Viridis",
                 mode: "sequential",
                 title: "Colormap",
                 continuous: false,
             },
-            accepts: (type, instance) => type === "vec3",
-            required: {type: "colormap"}
+            accepts: (type, instance) => type === "vec3"
         },
         threshold: {
             default: {
+                type: "advanced_slider",
                 default: [0.25, 0.75], //breaks/separators, e.g. one less than bin count
                 mask: [1, 0, 1],  //same number of steps as color
                 title: "Breaks",
@@ -81,21 +87,23 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
         this.opacity.init();
 
-        this.connect.on('connect', function (raw, encoded, ctx) {
-            _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
-                _this.defaultColSteps(_this.color.maxSteps)
-            );
-            _this.color.updateColormapUI();
-        }, true);
-        this.connect.init();
-
-
-        this.threshold.on('threshold_values', function (raw, encoded, ctx) {
-            if (_this.connect.raw) { //if YES
-                _this.color.setSteps([0, ...raw, 1]);
+        if (this.connect) {
+            this.connect.on('connect', function (raw, encoded, ctx) {
+                _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
+                    _this.defaultColSteps(_this.color.maxSteps)
+                );
                 _this.color.updateColormapUI();
-            }
-        }, true);
+            }, true);
+            this.connect.init();
+
+
+            this.threshold.on('threshold_values', function (raw, encoded, ctx) {
+                if (_this.connect.raw) { //if YES
+                    _this.color.setSteps([0, ...raw, 1]);
+                    _this.color.updateColormapUI();
+                }
+            }, true);
+        }
         this.threshold.init();
 
         if (this.threshold.raw.length != this.color.params.steps - 1) {
@@ -103,12 +111,13 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             //console.warn("Invalid todododo");
         }
 
-        if (this.connect.raw) {
-            this.color.setSteps([0, ...this.threshold.raw, 1]);
-
-        } else {
-            //default breaks mapping for colormap if connect not enabled
-            this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
+        if (this.connect) {
+            if (this.connect.raw) {
+                this.color.setSteps([0, ...this.threshold.raw, 1]);
+            } else {
+                //default breaks mapping for colormap if connect not enabled
+                this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
+            }
         }
 
         this.color.init();

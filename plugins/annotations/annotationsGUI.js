@@ -332,13 +332,13 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
-					"click #fft-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
+					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
 				}, {
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
 				}, {
-					"next #fft-mode-add-radio + label": "Selected object can be appended to (Left Shift only) ..."
+					"next #fft-add-annotation-mode + label": "Selected object can be appended to (Left Shift only) ..."
 				}, {
-					"next #fft-mode-remove-radio + label": "... or removed from (Left Shift + Left Alt)."
+					"next #fft-remove-annotation-mode + label": "... or removed from (Left Shift + Left Alt)."
 				}, {
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{

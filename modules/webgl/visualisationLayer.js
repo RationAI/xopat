@@ -611,6 +611,7 @@ WebGLModule.UIControls = class {
             params = {default: params};
         }
         let originalType = defaultParams.type;
+
         defaultParams = $.extend(true, {}, defaultParams, params, requiredParams);
 
         if (!this._items.hasOwnProperty(defaultParams.type)) {
@@ -665,6 +666,7 @@ WebGLModule.UIControls = class {
             && check(uiElement, "sample", "sample(value, valueGlType):glslString")
             && check(uiElement, "glType", "glType:string")
         ) {
+            uiElement.prototype.getName = () => type;
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
@@ -679,6 +681,8 @@ WebGLModule.UIControls = class {
      */
     static registerClass(type, cls) {
         if (WebGLModule.UIControls.IControl.isPrototypeOf(cls)) {
+            cls.prototype.getName = () => type;
+
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
@@ -782,7 +786,7 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
 
         bool: {
             defaults: function () {
-                return { title: "Checkbox", interactive: true, default: "true" };
+                return { title: "Checkbox", interactive: true, default: true };
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -833,6 +837,17 @@ WebGLModule.UIControls.IControl = class {
      *      created as ${uniq}${name}-${context.uid}
      *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
      *
+     * If extended (class-based definition, see registerCass) children should define constructor as
+     *   constructor(context, name, webGLVariableName, params) {
+     *       super(context, name, webGLVariableName);
+     *       ...
+     *       //possibly make use of params:
+     *       this.params = this.getParams(params);
+     *
+     *       //now access params:
+     *       this.params...
+     *   }
+     *
      * @param {WebGLModule.VisualisationLayer} context shader context owning this control
      * @param {string} name name of the control (key to the params in the shader configuration)
      * @param {string} webGLVariableName configuration parameters,
@@ -844,6 +859,55 @@ WebGLModule.UIControls.IControl = class {
         this.id = `${uniq}${name}-${context.uid}`;
         this.name = name;
         this.webGLVariableName = webGLVariableName;
+    }
+
+    /**
+     * Safely sets params with extension from 'supports'
+     *  - overrides 'supports' values with the same type as from only
+     *  - sets 'supports' as defaults if not set
+     * @param params
+     */
+    getParams(params) {
+        const t = x => {
+            if (x === undefined) return "undefined";
+            if (x === null) return "null";
+            return Array.isArray(x) ? "array" : typeof x;
+        };
+
+        function mergeSafeType(mask, from, possibleTypes) {
+            const to = {...mask};
+            Object.keys(from).forEach(key => {
+                const tVal = to[key],
+                    fVal = from[key],
+                    tType = t(tVal),
+                    fType = t(tVal);
+
+                const typeList = possibleTypes?.[key],
+                    pTypeList = typeList ? typeList.map(x => t(x)) : [];
+
+                if (tVal && fVal && tType === "object" && fType === "object") {
+                    if (Array.isArray(tVal) && Array.isArray(fVal)) {
+                        to[key] = fVal; //override, not merge
+                    } else {
+                        to[key] = mergeSafeType(tVal, fVal, typeList);
+                    }
+                } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
+                    to[key] = fVal;
+                } else if (fType === "string") {
+                    //try parsing
+                    if (tType === "number") {
+                        const parsed = Number.parseFloat(fVal);
+                        if (!Number.isNaN(parsed)) to[key] = parsed;
+                    } else if (tType === "boolean") {
+                        const value = fVal.toLowerCase();
+                        if (value === "false") to[key] = false;
+                        if (value === "true") to[key] = true;
+                    }
+                }
+            });
+            return to;
+        }
+        return mergeSafeType(this.supports, params, this.supportsAll);
     }
 
     /**
@@ -911,14 +975,28 @@ WebGLModule.UIControls.IControl = class {
 
     /**
      * Parameters supported by this UI component, should contain at least 'interactive', 'title' and 'default'
-     * @return {object} name => default value mapping
+     * @return {{}} name: default value mapping
      */
     get supports() {
         throw "WebGLModule.UIControls.IControl::parameters must be implemented.";
     }
 
     /**
+     * Type definitions for supports. Can return empty object. In case of missing
+     * type definitions, the type is derived from the 'supports()' default value type.
+     *
+     * Each key must be an array of default values for the given key if applicable.
+     * This is an _extension_ to the supports() and can be used only for keys that have more
+     * than one default type applicable
+     * @return {{}}
+     */
+    get supportsAll() {
+        throw "WebGLModule.UIControls.IControl::typeDefs must be implemented.";
+    }
+
+    /**
      * GLSL type of this control: what type is returned from this.sample(...) ?
+     * @return {string}
      */
     get type() {
         throw "WebGLModule.UIControls.IControl::type must be implemented.";
@@ -927,6 +1005,7 @@ WebGLModule.UIControls.IControl = class {
     /**
      * Raw value sent to the GPU, note that not necessarily typeof raw() === type()
      * some controls might send whole arrays of data (raw) and do smart sampling such that type is only a number
+     * @return {any}
      */
     get raw() {
         throw "WebGLModule.UIControls.IControl::raw must be implemented.";
@@ -934,6 +1013,7 @@ WebGLModule.UIControls.IControl = class {
 
     /**
      * Encoded value as used in the UI, e.g. a name of particular colormap, or array of string values of breaks...
+     * @return {any}
      */
     get encoded() {
         throw "WebGLModule.UIControls.IControl::encoded must be implemented.";
@@ -942,6 +1022,14 @@ WebGLModule.UIControls.IControl = class {
     //////////////////////////////////////
     //////// COMMON API //////////////////
     //////////////////////////////////////
+
+    /**
+     * Automatically overridden to return the name of the control it was registered with
+     * @return {string}
+     */
+    getName() {
+        return "IControl";
+    }
 
     /**
      * On parameter change register self
@@ -1008,8 +1096,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     constructor(context, name, webGLVariableName, params, intristicComponent, uniq="") {
         super(context, name, webGLVariableName, uniq);
         this.component = intristicComponent;
-        this.params = this.component.defaults();
-        $.extend(this.params, params);
+        this.params = this.getParams(params);
     }
 
     init() {
@@ -1027,7 +1114,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
             };
             let node = $(`#${this.id}`);
             node.val(this.encodedValue);
-            node.change(updater); //note, set change only now! val(..) would trigger it
+            node.on('change', updater); //note, set change only now! val(..) would trigger it
         }
     }
 
@@ -1056,6 +1143,10 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
 
     get supports() {
         return this.component.defaults();
+    }
+
+    get supportsAll() {
+        return {};
     }
 
     get raw() {
