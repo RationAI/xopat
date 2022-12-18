@@ -75,12 +75,15 @@ WebGLModule.VisualisationLayer = class {
      * and this[controlId] instance set
      * structure:
      * {
-     *     controlId => {
+     *     controlId: {
                default: {type: <>, title: <>, interactive: true|false...},
                accepts: (type, instance) => <>,
                required: {type: <> ...} [OPTIONAL]
      *     }, ...
      * }
+     *
+     * use: controlId: false to disable a specific control (e.g. all shaders
+     *  support opacity by default - use to remove this feature)
      * @member {object}
      */
     static defaultControls = {};

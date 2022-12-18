@@ -131,6 +131,7 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
                 let supported = [];
                 for (let gltype in uicontrols) {
                     for (let existing of uicontrols[gltype]) {
+                        if (controls[control] === false) continue;
                         if (!controls[control].accepts(gltype, existing)) continue;
                         supported.push(existing.name);
                     }
