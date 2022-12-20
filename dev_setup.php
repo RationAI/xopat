@@ -19,6 +19,26 @@ include_once("./config.php");
         var OpenSeadragon = {};
     </script>
 
+    <?php
+
+    include_once(PROJECT_ROOT . "/modules.php");
+
+    $webglPath = "";
+    $version = VERSION;
+
+    $MODULES["webgl"]->loaded = true;
+    resolveDependencies($MODULES, $version);
+    foreach ($MODULES as $_ => $mod) {
+        if ($mod->loaded) {
+            printDependencies(MODULES_FOLDER, $mod);
+        }
+    }
+    function hasKey($array, $key) {
+        return isset($array[$key]) && $array[$key];
+    }
+
+    ?>
+
 </head>
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
@@ -27,25 +47,7 @@ include_once("./config.php");
   <div class="Layout-main ">
   <h1 class="f00-light">Developer visualisation setup</h1>
 <br><br>
-<?php
 
-include_once(PROJECT_ROOT . "/modules.php");
-
-$webglPath = "";
-$version = VERSION;
-foreach ($MODULES as $id => $mod) {
-    if ($id == "webgl") {
-        $webglPath = MODULES_FOLDER . "/" . $mod->directory;
-        foreach ($mod->includes as $__ => $file) {
-            echo "    <script src=\"" .$webglPath . "/$file?v=$version\"></script>\n";
-        }
-    }
-}
-function hasKey($array, $key) {
-  return isset($array[$key]) && $array[$key];
-}
-
-?>
       <br>
           <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
           try {

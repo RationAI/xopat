@@ -162,6 +162,10 @@ window.WebGLModule = class {
             if (!vis.hasOwnProperty("params")) {
                 vis.params = {};
             }
+            if (!vis.hasOwnProperty("shaders")) {
+                console.warn("Invalid visualization: no shaders defined", vis);
+                continue;
+            }
             this._visualisations.push(vis);
         }
         return true;
@@ -363,6 +367,9 @@ window.WebGLModule = class {
     /**
      * For easy initialization, do both in once call.
      * For separate initialization (prepare|init), see functions below.
+     * @param dataSources a list of data identifiers available to the visualisations
+     *  - visualisation configurations should not reference data not present in this array
+     *  - the module gives you current list of required subset of this list for particular active visualization goal
      */
     prepareAndInit(dataSources) {
         let _this = this;

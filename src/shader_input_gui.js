@@ -104,19 +104,12 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
 
     printShadersAndParams: function(id) {
         let node = document.getElementById(id);
+        node.innerHTML = this.getShadersHtml() + this.getInteractiveControlsHtmlFor('colormap');
+    },
+
+    getShadersHtml: function() {
         let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
-
-        let uicontrols = {};
-        let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {}, {layer: {}});
-        for (let type of types) {
-            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
-            let glType = ctrl.type;
-            ctrl.name = type;
-            if (!uicontrols.hasOwnProperty(glType)) uicontrols[glType] = [];
-            uicontrols[glType].push(ctrl);
-        }
-
+        const uicontrols = this._buildControls();
         for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
             let id = shader.type();
 
@@ -126,24 +119,22 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
                 "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
                 shader.type(),".png'></div><div><code class='f4'>", id, "</code>");
 
-            let controls = shader.defaultControls;
-            for (let control in controls) {
-                let supported = [];
-                for (let gltype in uicontrols) {
-                    for (let existing of uicontrols[gltype]) {
-                        if (controls[control] === false) continue;
-                        if (!controls[control].accepts(gltype, existing)) continue;
-                        supported.push(existing.name);
-                    }
-                }
+            const supports = this.getAvailableControlsForShader(shader);
+            for (let control in supports) {
+                let supported = supports[control];
                 html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
                     "class='position-relative'><span class='flex-1'>Control <code>",
                     control, "</code> | Supports: ", supported.join(", ") ,"</span></span></div>");
-
             }
             html.push("</div></div><br>");
         }
-        html.push("</div><br><div><h3>Available controls and their parameters</h3><br>");
+        html.push("</div><br>");
+        return html.join("");
+    },
+
+    getControlsHtml: function() {
+        let html = ["<div><h3>Available controls and their parameters</h3><br>"];
+        const uicontrols = this._buildControls();
 
         for (let type in uicontrols) {
             html.push("<div><h4>Type <code>", type, "</code></h4>");
@@ -158,8 +149,114 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
             }
             html.push("</div>");
         }
+        html.push("</div><br>");
+        return html.join("");
+    },
 
-        html.push("</div>");
-        node.innerHTML = html.join("");
+    getAvailableControlsForShader: function(shader) {
+        const uicontrols = this._buildControls();
+        let controls = shader.defaultControls;
+
+        const result = {};
+        for (let control in controls) {
+            let supported = [];
+            if (controls[control] === false) continue;
+            if (controls[control].required?.type) {
+                supported.push(controls[control].required.type);
+            } else {
+                for (let gltype in uicontrols) {
+                    for (let existing of uicontrols[gltype]) {
+                        if (controls[control] === false) continue;
+                        if (!controls[control].accepts(gltype, existing)) continue;
+                        supported.push(existing.name);
+                    }
+                }
+            }
+            result[control] = supported;
+        }
+        return result;
+    },
+
+    refreshUserSelected() {
+        //todo we need global access
+    },
+
+    getInteractiveControlsHtmlFor: function(shaderId) {
+        let shader;
+        for (let s of WebGLModule.ShaderMediator.availableShaders()) {
+            if (shaderId === s.type()) {
+                shader = s;
+                break;
+            }
+        }
+        if (!shader) throw "Invalid shader: " + shaderId + ". Not present.";
+
+        const supports = this.getAvailableControlsForShader(shader);
+
+        function onLoaded() {}
+        const module = this._buildModule('live-setup-interactive-controls', function (title, html, dataId, isVisible, layer, isControllable = true) {
+            const renders = [];
+            for (let control in layer._renderContext) {
+                let supported = supports[control];
+                if (!supported) continue; //skip other props, supports keep only controls
+
+                //todo onchange
+                renders.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+                    "class='position-relative'><span class='flex-1'>Control <code>",
+                    control, "</code> | One of supported: <select class='form-control' onchange='refreshUserSelected();'>");
+
+                let activeControl = layer._renderContext[control];
+                for (let supType of supported) {
+                    let active = activeControl.type === supType ? "selected" : "";
+                    renders.push("<option value='", supType ,"' ", active, ">", supType, "</option>");
+                }
+
+                renders.push("</select></span></span></div>");
+            }
+
+            return `${renders.join("")}<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div></div>`;
+        }, onLoaded);
+        module.reset();
+
+        const data = shader.sources(); //read static sources declaration
+
+        module.addVisualisation({
+            name: "Shader controls and configuration: " + shaderId,
+            shaders: {
+                "1": {
+                    name: "Shader controls and configuration: " + shaderId,
+                    dataReferences: data.map((x, i) => i),
+                    type: shaderId,
+                }
+            }
+        });
+        module.prepareAndInit(data.map(x => ""));
+        return "<div><h3>Available controls and their parameters</h3><br><div id='live-setup-interactive-controls'></div></div><br>";
+    },
+
+    _buildModule: function(id, htmlRenderer, onReady) {
+        if (this["__module_"+id]) return this["__module_"+id];
+        this["__module_"+id] = new WebGLModule({
+            htmlControlsId: id,
+            webGlPreferredVersion: "2.0",
+            htmlShaderPartHeader: htmlRenderer,
+            ready: onReady
+        });
+        return this["__module_"+id];
+    },
+
+    _buildControls: function () {
+        if (this.__uicontrols) return this.__uicontrols;
+        this.__uicontrols = {};
+        let types = WebGLModule.UIControls.types();
+        let fallbackLayer = new WebGLModule.IdentityLayer("id", {}, {layer: {}});
+        for (let type of types) {
+            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
+            let glType = ctrl.type;
+            ctrl.name = type;
+            if (!this.__uicontrols.hasOwnProperty(glType)) this.__uicontrols[glType] = [];
+            this.__uicontrols[glType].push(ctrl);
+        }
+        return this.__uicontrols;
     }
 };

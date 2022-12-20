@@ -140,9 +140,9 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
 
     glslCode() {
         return `
-#define COLORMAP_ARRAY_LEN ${this.MAX_SAMPLES}
-vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float steps[COLORMAP_ARRAY_LEN+1], in int max_steps, in bool discrete) {
-    for (int i = 1; i < COLORMAP_ARRAY_LEN+1; i++) {
+#define COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} ${this.MAX_SAMPLES}
+vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}], in float steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1], in int max_steps, in bool discrete) {
+    for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
         if (ratio <= steps[i]) {
             if (discrete) return map[i-1];
             
@@ -258,8 +258,8 @@ style="width: 60%;"></select><br>`;
     }
 
     define() {
-        return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN];
-uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN+1];
+        return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}];
+uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1];
 uniform int ${this.webGLVariableName}_colormap_size;`;
     }
 

@@ -186,46 +186,6 @@ foreach ($PLUGINS as $key => $plugin) {
 
 $visualisation = json_encode($parsedParams);
 
-function getAttributes($source, ...$properties) {
-    $html = "";
-    foreach ($properties as $property) {
-        if (isset($source->{$property})) {
-            $html .= " $property=\"{$source->{$property}}\"";
-        }
-    }
-    return $html;
-}
-
-function printDependencies($directory, $item) {
-    global $version;
-    //add module style sheet if exists
-    if (isset($item->styleSheet)) {
-        echo "<link rel=\"stylesheet\" href=\"$item->styleSheet\" type='text/css'>\n";
-    }
-    foreach ($item->includes as $__ => $file) {
-        if (is_string($file)) {
-            echo "    <script src=\"$directory/{$item->directory}/$file?v=$version\"></script>\n";
-        } else if (is_object($file)) {
-            echo "    <script" . getAttributes($file, 'async', 'crossorigin', 'use-credentials',
-                    'defer', 'integrity', 'referrerpolicy', 'src') . "></script>";
-        } else {
-            echo "<script>console.warn('Invalid include:', '{$item->id}', '$file');</script>";
-        }
-    }
-}
-
-//make sure all modules required by other modules are loaded
-foreach ($MODULES as $_ => $mod) {
-    if (file_exists(MODULES_FOLDER . "/" . $mod->directory . "/style.css")) {
-        $mod->styleSheet = MODULES_FOLDER . "/" . $mod->directory . "/style.css?v=$version";
-    }
-    if ($mod->loaded) {
-        foreach ($mod->requires as $__ => $requirement) {
-            $MODULES[$requirement]->loaded = true;
-        }
-    }
-}
-
 ?>
 <!DOCTYPE html>
 <html lang="en" dir="ltr" data-light-theme="light">
@@ -310,6 +270,8 @@ foreach ($MODULES as $_ => $mod) {
 
     <!--Modules-->
     <?php
+
+    resolveDependencies($MODULES, $version);
     foreach ($MODULES as $_ => $mod) {
         if ($mod->loaded) {
             printDependencies(MODULES_FOLDER, $mod);

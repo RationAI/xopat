@@ -1,6 +1,8 @@
 /**
  * Shader sharing point
  * @type {WebGLModule.ShaderMediator}
+ *
+ * todo allow __channel setup for different sources by respecting use_channelX that overrides use_channel
  */
 WebGLModule.ShaderMediator = class {
 
@@ -67,6 +69,16 @@ WebGLModule.VisualisationLayer = class {
      */
     static description() {
         return "WebGL shader";
+    }
+
+    /**
+     * Declare the number of data sources it reads from
+     * @return {[{}]} array of source specifications:
+     *  channels: the number of channels expected at most in the
+     *  [optional] description: the description of the source - what it is being used for
+     */
+    static sources() {
+        return [{channels: 1}];
     }
 
     /**
@@ -340,8 +352,10 @@ WebGLModule.VisualisationLayer = class {
      */
     sampleChannel(textureCoords, otherDataIndex=0, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
+        const chan = this.__channels[otherDataIndex] || this.__channel;
+
         if (otherDataIndex >= refs.length) {
-            switch (this.__channel.length) {
+            switch (chan.length) {
                 case 1: return ".0";
                 case 2: return "vec2(.0)";
                 case 3: return "vec3(.0)";
@@ -349,7 +363,7 @@ WebGLModule.VisualisationLayer = class {
                     return 'vec4(0.0)';
             }
         }
-        let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${this.__channel}`;
+        let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${chan}`;
         if (raw) return sampled;
         return this.filter(sampled);
     }
@@ -457,21 +471,28 @@ WebGLModule.VisualisationLayer = class {
      * @param {string} options.use_channel chanel to sample
      */
     resetChannel(options) {
-        if (options.hasOwnProperty("use_channel")) {
-            this.__channel = this.loadProperty("use_channel", options.use_channel);
+        //todo verify (and test) also against required channel count!
 
-            if (!this.__channel
-                || typeof this.__channel !== "string"
-                || this.constructor.__chanPattern.exec(this.__channel) === null) {
-                console.warn("Invalid channel. Will use RED channel.", this.__channel, options);
-                this.storeProperty("use_channel", "r");
-                this.__channel = "r";
+        const parseChannel = (name, def) => {
+            if (options.hasOwnProperty(name)) {
+                let channel = this.loadProperty(name, options[name]);
+
+                if (!channel
+                    || typeof channel !== "string"
+                    || this.constructor.__chanPattern.exec(channel) === null) {
+                    console.warn(`Invalid channel '${name}'. Will use channel '${def}'.`, channel, options);
+                    this.storeProperty(name, "r");
+                    channel = def;
+                }
+
+                if (channel !== options[name]) this.storeProperty(name, channel);
+                return channel;
             }
-
-            if (this.__channel !== options.use_channel) this.storeProperty("use_channel", this.__channel);
-        } else {
-            this.__channel = "r";
+            return def;
         }
+
+        this.__channel = parseChannel("use_channel", "r");
+        this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, this.__channel));
     }
 
     /**

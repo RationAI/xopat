@@ -281,6 +281,13 @@ how you define the controls affects what the shader constructor parameter `optio
             opacity: "float" 
        }
        ```
+      
+#### Rendering in nD
+The shader can specify data references for rendering from nD data sources. 
+> Note: prefer multiple sources over multiple channels (i.e. reading from two images 1x channels instead of 
+>1x image and using two channels) - the user can deliver such data in separate files or in one file by specifying the same data reference twice.
+
+You should override `static sources()` shader description.  
 
 ### More advanced stuff: using multiple data sources at once
 One might want to combine multiple data into one visualisation (shader) part. To do so:
