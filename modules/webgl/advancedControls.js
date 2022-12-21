@@ -76,7 +76,7 @@ WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.Slide
 WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-        this.params = this.getParams(params);
+        this._params = this.getParams(params);
         this.prepare();
     }
 
@@ -361,10 +361,10 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0" 
+        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block" 
 style="width: 60%;">&emsp;</span>`;
 
-return `<span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0" 
+return `<span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block" 
 style="width: 60%;"></span><br>`;
     }
 
@@ -398,7 +398,7 @@ WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.ICo
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this.MAX_SLIDERS = 12;
-        this.params = this.getParams(params);
+        this._params = this.getParams(params);
 
         this.context.includeGlobalCode('advanced_slider', `
 #define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS} 
@@ -650,8 +650,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     constructor(context, name, webGLVariableName, params) {
 //         super(context, name, webGLVariableName);
 //
-//         this.params = this.supports;
-//         $.extend(this.params, params);
+//         this._params = this.getParams(params);
 //
 //         if (this.params.width < 3) throw "Invalid kernel width < 3.";
 //         if (this.params.height < 3) throw "Invalid kernel height < 3.";
@@ -764,7 +763,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-        this.params = this.getParams(params);
+        this._params = this.getParams(params);
     }
 
     init() {
@@ -844,7 +843,7 @@ WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextAre
 WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-        this.params = this.getParams(params);
+        this._params = this.getParams(params);
     }
 
     init() {

@@ -391,6 +391,7 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Load value, useful for controls value caching
+     * todo add type checking?
      * @param {string} name value name
      * @param {string} defaultValue default value if no stored value available
      * @return {string} stored value or default value
@@ -694,6 +695,7 @@ WebGLModule.UIControls = class {
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
+            uiElement["uiType"] = type;
             this._items[type] = uiElement;
         }
     }
@@ -710,6 +712,7 @@ WebGLModule.UIControls = class {
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
+            cls._uiType = type;
             this._impls[type] = cls;
         } else {
             console.warn(`Skipping UI control '${type}': does not inherit from WebGLModule.UIControls.IControl.`);
@@ -883,6 +886,7 @@ WebGLModule.UIControls.IControl = class {
         this.id = `${uniq}${name}-${context.uid}`;
         this.name = name;
         this.webGLVariableName = webGLVariableName;
+        this._params = {};
     }
 
     /**
@@ -904,7 +908,7 @@ WebGLModule.UIControls.IControl = class {
                 const tVal = to[key],
                     fVal = from[key],
                     tType = t(tVal),
-                    fType = t(tVal);
+                    fType = t(fVal);
 
                 const typeList = possibleTypes?.[key],
                     pTypeList = typeList ? typeList.map(x => t(x)) : [];
@@ -1048,6 +1052,23 @@ WebGLModule.UIControls.IControl = class {
     //////////////////////////////////////
 
     /**
+     * The control type component was registered with. Handled internally.
+     * @return {*}
+     */
+    get uiControlType() {
+        return this.constructor._uiType;
+    }
+
+    /**
+     * Get current control parameters
+     * the control should set the value as this._params = this.getParams(incomingParams);
+     * @return {{}}
+     */
+    get params() {
+        return this._params;
+    }
+
+    /**
      * Automatically overridden to return the name of the control it was registered with
      * @return {string}
      */
@@ -1120,7 +1141,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     constructor(context, name, webGLVariableName, params, intristicComponent, uniq="") {
         super(context, name, webGLVariableName, uniq);
         this.component = intristicComponent;
-        this.params = this.getParams(params);
+        this._params = this.getParams(params);
     }
 
     init() {
@@ -1163,6 +1184,10 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     sample(value=undefined, valueGlType='void') {
         if (!value || valueGlType !== 'float') return this.webGLVariableName;
         return this.component.sample(this.webGLVariableName, value);
+    }
+
+    get uiControlType() {
+        return this.component["uiType"];
     }
 
     get supports() {

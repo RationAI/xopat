@@ -1,5 +1,6 @@
 //Not used for now, was meant to configure shader params/inputs in GUI layout (clickable setup)
 var PredefinedShaderControlParameters = {
+    REF: 'PredefinedShaderControlParameters',
 
     //todo replace by ui_components
     _text: function(cls, placeholder, funToCall, ofType, paramName) {
@@ -104,7 +105,8 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
 
     printShadersAndParams: function(id) {
         let node = document.getElementById(id);
-        node.innerHTML = this.getShadersHtml() + this.getInteractiveControlsHtmlFor('colormap');
+        node.innerHTML = this.getShadersHtml() + this.getControlsHtml();
+        // node.innerHTML = this.getShadersHtml() + this.getInteractiveControlsHtmlFor('colormap');
     },
 
     getShadersHtml: function() {
@@ -177,8 +179,70 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
         return result;
     },
 
-    refreshUserSelected() {
-        //todo we need global access
+    refreshUserSelected(controlId, type) {
+        if (!this.setup.params[controlId]) {
+            this.setup.params[controlId] = {};
+        }
+        this.setup.params[controlId].type = type;
+        this.refresh();
+    },
+
+    refreshUserScripted(node, controlId) {
+        try {
+            //todo include cache, but override stuff changed in this text
+            //  compare against old configuration and override cache with data changed
+
+            let config = JSON.parse($(node).val());
+            config.type = this.active.layer[controlId].uiControlType;
+            this.setup.params[controlId] = config;
+            this.refresh();
+        } catch (e) {
+            node.style.background = 'var(--color-bg-danger-inverse)';
+        }
+    },
+
+    refresh() {
+        $("#live-setup-interactive-container").replaceWith(this.getInteractiveControlsHtmlFor(this.setup.shader.type));
+    },
+
+    _buildControlJSONHtml(controlId) {
+        let control = this.active.layer[controlId];
+        const params = {...control.params};
+        delete params.type;
+
+        return `<div id='live-setup-interactive-control-${controlId}'>
+<textarea rows='5' class='form-control m-2 layer-params' style='resize: vertical; width: 90%;box-sizing: border-box;' 
+onchange="${this.REF}.refreshUserScripted(this, '${controlId}');">
+${JSON.stringify(params, null, '\t')}
+</textarea></div>`;
+    },
+
+    setup: {
+        _visualization: {
+            name: "Shader controls and configuration",
+            shaders: {
+                "1": {
+                    name: undefined,
+                    dataReferences: undefined,
+                    params: {}
+                }
+            }
+        },
+
+        get vis () { return this._visualization },
+        get shader() { return this._visualization.shaders["1"] },
+        get params() { return this._visualization.shaders["1"].params },
+    },
+
+    active: {
+        mod: function(id) {
+            let _this = window.PredefinedShaderControlParameters;
+            if (_this["__module_"+id]) return _this["__module_"+id];
+            throw "Module not instantiated!";
+        },
+        get vis () { return this.mod('live-setup-interactive-controls').visualization(0)},
+        get shader() { return this.mod('live-setup-interactive-controls').visualization(0).shaders["1"] },
+        get layer() { return this.mod('live-setup-interactive-controls').visualization(0).shaders["1"]._renderContext }
     },
 
     getInteractiveControlsHtmlFor: function(shaderId) {
@@ -192,6 +256,7 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
         if (!shader) throw "Invalid shader: " + shaderId + ". Not present.";
 
         const supports = this.getAvailableControlsForShader(shader);
+        const _this = this;
 
         function onLoaded() {}
         const module = this._buildModule('live-setup-interactive-controls', function (title, html, dataId, isVisible, layer, isControllable = true) {
@@ -203,33 +268,38 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
                 //todo onchange
                 renders.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
                     "class='position-relative'><span class='flex-1'>Control <code>",
-                    control, "</code> | One of supported: <select class='form-control' onchange='refreshUserSelected();'>");
+                    control, "</code> | One of supported:", `<select class='form-control' 
+onchange="${_this.REF}.refreshUserSelected('${control}', this.value);">`);
 
                 let activeControl = layer._renderContext[control];
                 for (let supType of supported) {
-                    let active = activeControl.type === supType ? "selected" : "";
+                    let active = activeControl.uiControlType === supType ? "selected" : "";
                     renders.push("<option value='", supType ,"' ", active, ">", supType, "</option>");
                 }
 
-                renders.push("</select></span></span></div>");
+                const params = {...activeControl.params};
+                delete params.type;
+
+                renders.push("</select></span></span>");
+                renders.push(_this._buildControlJSONHtml(control));
+                renders.push("</div>");
             }
 
-            return `${renders.join("")}<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div></div>`;
+            return `<div id="live-setup-interactive-container">
+${renders.join("")}
+<div id="live-setup-interactive-shader-head" style="margin: 0 auto; max-width: 500px;" class="configurable-border">
+<div class="shader-part-name">${title}</div>${html}</div>
+</div>
+</div>`;
         }, onLoaded);
         module.reset();
 
         const data = shader.sources(); //read static sources declaration
+        this.setup.shader.type = shaderId;
+        this.setup.shader.dataReferences = data.map((x, i) => i);
+        this.setup.shader.name = "Configuration: " + shaderId;
 
-        module.addVisualisation({
-            name: "Shader controls and configuration: " + shaderId,
-            shaders: {
-                "1": {
-                    name: "Shader controls and configuration: " + shaderId,
-                    dataReferences: data.map((x, i) => i),
-                    type: shaderId,
-                }
-            }
-        });
+        module.addVisualisation(this.setup.vis);
         module.prepareAndInit(data.map(x => ""));
         return "<div><h3>Available controls and their parameters</h3><br><div id='live-setup-interactive-controls'></div></div><br>";
     },
