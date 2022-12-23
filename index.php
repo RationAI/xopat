@@ -13,7 +13,7 @@ $errors_print = "";
 set_exception_handler(function (Throwable $exception) {
     global $i18n;
     if (!isset($i18n)) {
-        require_once PROJECT_ROOT . '/i18m.class.php';
+        require_once PROJECT_SOURCES . 'i18m.class.php';
         $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
     }
     throwFatalErrorIf(true, "error.unknown", "", $exception->getMessage());
@@ -37,7 +37,7 @@ function printJSConsole($message, $is_error=true) {
 
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
-        require_once(PROJECT_ROOT . "/error.php");
+        require_once(PROJECT_SOURCES . "error.php");
         show_error($title, $description, $details, $_GET["lang"] ?? 'en');
         exit;
     }
@@ -83,12 +83,12 @@ $cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOK
 $locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
 
 //now we can translate - translation known
-require_once PROJECT_ROOT . '/i18n.class.php';
+require_once PROJECT_SOURCES . 'i18n.class.php';
 i18n::$debug = $is_debug;
 $i18n = i18n::default($locale, LOCALES_ROOT);
 
 //load modules and plugins after translation is ready
-require_once(PROJECT_ROOT . "/plugins.php");
+require_once(PROJECT_SOURCES . "plugins.php");
 
 foreach ($parsedParams->background as $bg) {
     throwFatalErrorIf(!isset($bg->dataReference), "messages.urlInvalid", "messages.bgReferenceMissing",
@@ -161,8 +161,8 @@ foreach ($PLUGINS as $key => $plugin) {
         unset($PLUGINS[$key]);
     }
 
-    if (file_exists(PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css")) {
-        $plugin->styleSheet = PLUGINS_FOLDER . "/" . $plugin->directory . "/style.css?v=$version";
+    if (file_exists(PLUGINS_FOLDER . $plugin->directory . "/style.css")) {
+        $plugin->styleSheet = PLUGINS_FOLDER . $plugin->directory . "/style.css?v=$version";
     }
 
     $hasParams = isset($parsedParams->plugins->{$plugin->id});
@@ -194,15 +194,15 @@ $visualisation = json_encode($parsedParams);
     <meta charset="utf-8">
     <title>Visualisation</title>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="<?php echo ASSETS_ROOT; ?>/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="<?php echo ASSETS_ROOT; ?>/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="<?php echo ASSETS_ROOT; ?>/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="<?php echo ASSETS_ROOT; ?>apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="<?php echo ASSETS_ROOT; ?>favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="<?php echo ASSETS_ROOT; ?>favicon-16x16.png">
 <!--    <link rel="manifest" href="./assets/site.webmanifest">-->
-    <link rel="mask-icon" href="<?php echo ASSETS_ROOT; ?>/safari-pinned-tab.svg" color="#5bbad5">
+    <link rel="mask-icon" href="<?php echo ASSETS_ROOT; ?>safari-pinned-tab.svg" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
 
-    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>/style.css?v=$version">
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
+    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>style.css?v=$version">
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
     <!--
     Possible external dependency
     <link href="https://unpkg.com/@primer/css@^16.0.0/dist/primer.css" rel="stylesheet" />
@@ -246,27 +246,27 @@ $visualisation = json_encode($parsedParams);
     <script src="config_meta.js"></script>
 
     <!-- basic utilities-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/js.cookie.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.min.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/i18next.jquery.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>js.cookie.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.jquery.min.js"></script>
 
     <!-- OSD -->
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
 
     <!--OSD extensions-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/dziexttilesource.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/emptytilesource.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/osd_tools.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scalebar.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>dziexttilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>emptytilesource.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>osd_tools.js?v=<?php echo $version?>"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>scalebar.js?v=<?php echo $version?>"></script>
 
     <!--Tutorials-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/scrollTo.min.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/kinetic-v5.1.0.min.js"></script>
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.css">
-    <script src="<?php echo EXTERNAL_SOURCES; ?>/enjoyhint.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>scrollTo.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>kinetic-v5.1.0.min.js"></script>
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.css">
+    <script src="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.min.js"></script>
 
     <!--UI Classes-->
-    <script src="<?php echo PROJECT_ROOT; ?>/ui_components.js"></script>
+    <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
 
     <!--Modules-->
     <?php
@@ -881,7 +881,7 @@ EOF;
             let toLoad = sources.includes[index],
                 properties = {};
             if (typeof toLoad === "string") {
-                properties.src = `${folder}/${sources.directory}/${toLoad}?v=<?php echo $version?>`;
+                properties.src = `${folder}${sources.directory}/${toLoad}?v=<?php echo $version?>`;
             } else if (typeof toLoad === "object") {
                 extendIfContains(properties, toLoad, 'async', 'crossorigin', 'use-credentials', 'defer', 'integrity',
                     'referrerpolicy', 'src')
@@ -973,7 +973,7 @@ EOF;
         if (!locale) locale = $.i18n.language;
 
         if (typeof data === "string" && directory) {
-            await fetch(`${path}/${directory}/${data}`).then(response => {
+            await fetch(`${path}${directory}/${data}`).then(response => {
                     if (!response.ok) {
                         throw new HTTPError("HTTP error " + response.status, response, '');
                     }
@@ -1509,13 +1509,13 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
     </script>
 
     <!-- UI -->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/user_interface.js"></script>
+    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>user_interface.js"></script>
 
     <!--Event listeners, Utilities, Exporting...-->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/scripts.js"></script>
+    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>scripts.js"></script>
 
     <!--Visualization setup-->
-    <script type="text/javascript" src="<?php echo PROJECT_ROOT; ?>/layers.js"></script>
+    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>layers.js"></script>
 
     <!--Plugins Loading-->
     <script type="text/javascript">

@@ -1,8 +1,6 @@
 /**
  * Shader sharing point
  * @type {WebGLModule.ShaderMediator}
- *
- * todo allow __channel setup for different sources by respecting use_channelX that overrides use_channel
  */
 WebGLModule.ShaderMediator = class {
 
@@ -309,9 +307,10 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Add your shader part result
      * @param {string} output, GLSL code to output from the shader, output must be a vec4
-     * todo remove
+     * @deprecated todo remove
      */
     render(output) {
+        console.warn("WebGLModule:: VisualisationLayer::render deprecated!");
         return `${this.__mode}(${output});`;
     }
 
@@ -391,7 +390,6 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Load value, useful for controls value caching
-     * todo add type checking?
      * @param {string} name value name
      * @param {string} defaultValue default value if no stored value available
      * @return {string} stored value or default value
@@ -890,18 +888,13 @@ WebGLModule.UIControls.IControl = class {
     }
 
     /**
-     * Safely sets params with extension from 'supports'
-     *  - overrides 'supports' values with the same type as from only
+     * Safely sets outer params with extension from 'supports'
+     *  - overrides 'supports' values with the correct type (derived from supports or supportsAll)
      *  - sets 'supports' as defaults if not set
      * @param params
      */
     getParams(params) {
-        const t = x => {
-            if (x === undefined) return "undefined";
-            if (x === null) return "null";
-            return Array.isArray(x) ? "array" : typeof x;
-        };
-
+        const t = this.constructor.getVarType;
         function mergeSafeType(mask, from, possibleTypes) {
             const to = {...mask};
             Object.keys(from).forEach(key => {
@@ -913,12 +906,9 @@ WebGLModule.UIControls.IControl = class {
                 const typeList = possibleTypes?.[key],
                     pTypeList = typeList ? typeList.map(x => t(x)) : [];
 
+                //our type detector distinguishes arrays and objects
                 if (tVal && fVal && tType === "object" && fType === "object") {
-                    if (Array.isArray(tVal) && Array.isArray(fVal)) {
-                        to[key] = fVal; //override, not merge
-                    } else {
-                        to[key] = mergeSafeType(tVal, fVal, typeList);
-                    }
+                    to[key] = mergeSafeType(tVal, fVal, typeList);
                 } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
                     to[key] = fVal;
                 } else if (fType === "string") {
@@ -936,6 +926,17 @@ WebGLModule.UIControls.IControl = class {
             return to;
         }
         return mergeSafeType(this.supports, params, this.supportsAll);
+    }
+
+    /**
+     * Uniform behaviour wrt type checking in shaders
+     * @param x
+     * @return {string}
+     */
+    static getVarType(x) {
+        if (x === undefined) return "undefined";
+        if (x === null) return "null";
+        return Array.isArray(x) ? "array" : typeof x;
     }
 
     /**
@@ -1077,12 +1078,43 @@ WebGLModule.UIControls.IControl = class {
     }
 
     /**
+     * Load a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param defaultValue value to return in case of no cached value
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     * @return {*} cached or default value
+     */
+    load(defaultValue, paramName="") {
+        //todo test against required type wrt supports and return default if not valid
+        if (paramName === "default") paramName = "";
+        return this.context.loadProperty(this.name + paramName, defaultValue)
+    }
+
+    /**
+     * Store a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param value to store
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     */
+    store(value, paramName="") {
+        if (paramName === "default") paramName = "";
+        return this.context.storeProperty(this.name + paramName, value);
+    }
+
+    /**
      * On parameter change register self
-     * @param {string} event which event change
+     * @param {string} event which event to fire on
+     *  - events are with inputs the names of supported parameters (this.supports), separated by dot if nested
+     *  - most controls support "default" event - change of default value
+     *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
      * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
      */
     on(event, clbck) {
-        this.__onchange[event] = clbck; //just re-write
+        this.__onchange[event] = clbck; //only one possible event -> rewrite?
     }
 
     /**
@@ -1110,7 +1142,7 @@ WebGLModule.UIControls.IControl = class {
      * @param context self reference to bind to the callback
      */
     changed(event, value, encodedValue, context) {
-        if (this.__onchange.hasOwnProperty(event)) {
+        if (typeof this.__onchange[event] === "function") {
             this.__onchange[event](value, encodedValue, context);
         }
     }
@@ -1145,7 +1177,7 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     }
 
     init() {
-        this.encodedValue = this.context.loadProperty(this.name, this.params.default);
+        this.encodedValue = this.load(this.params.default);
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
         if (this.params.interactive) {
@@ -1153,8 +1185,8 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
             let updater = function(e) {
                 _this.encodedValue = $(e.target).val();
                 _this.value = _this.component.normalize(_this.component.decode(_this.encodedValue), _this.params);
-                _this.changed(_this.name, _this.value, _this.encodedValue, _this);
-                _this.context.storeProperty(_this.name, _this.encodedValue);
+                _this.changed("default", _this.value, _this.encodedValue, _this);
+                _this.store(_this.encodedValue);
                 _this.context.invalidate();
             };
             let node = $(`#${this.id}`);

@@ -12,12 +12,13 @@
 class i18n {
 
     static function default($locale, $locale_root): i18n {
-        $t = new i18n($locale, $locale_root . '/{LANGUAGE}.json', NULL, 'en', 'T');
+        $t = new i18n($locale, $locale_root . '{LANGUAGE}.json', NULL, 'en', 'T');
         $t->init();
         return $t;
     }
 
     static $debug = false;
+
 
     /**
      * Language to translate to

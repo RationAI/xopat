@@ -3,7 +3,7 @@
 $MODULES = array();
 
 foreach (array_diff(scandir(MODULES_FOLDER), array('..', '.')) as $_=>$dir) {
-    $interface = MODULES_FOLDER . "/" . $dir . "/include.json";
+    $interface = MODULES_FOLDER . $dir . "/include.json";
     if (file_exists($interface)) {
         $data = json_decode(file_get_contents($interface));
         $data->directory = $dir;
@@ -59,8 +59,8 @@ function resolveDependencies($itemList, $version) {
         //has to be in reverse order!
         $mod = current($itemList);
 
-        if (file_exists(MODULES_FOLDER . "/" . $mod->directory . "/style.css")) {
-            $mod->styleSheet = MODULES_FOLDER . "/" . $mod->directory . "/style.css?v=$version";
+        if (file_exists(MODULES_FOLDER . $mod->directory . "/style.css")) {
+            $mod->styleSheet = MODULES_FOLDER . $mod->directory . "/style.css?v=$version";
         }
 
         if ($mod->loaded) {
@@ -83,7 +83,7 @@ function getAttributes($source, ...$properties) {
 
 /**
  * Print module or plugin dependency based on its parsed configuration
- * @param $directory string parent context directory
+ * @param $directory string parent context directory full path, ending with slash
  * @param $item object item to load
  */
 function printDependencies($directory, $item) {
@@ -94,7 +94,7 @@ function printDependencies($directory, $item) {
     }
     foreach ($item->includes as $__ => $file) {
         if (is_string($file)) {
-            echo "    <script src=\"$directory/{$item->directory}/$file?v=$version\"></script>\n";
+            echo "    <script src=\"$directory{$item->directory}/$file?v=$version\"></script>\n";
         } else if (is_object($file)) {
             echo "    <script" . getAttributes($file, 'async', 'crossorigin', 'use-credentials',
                     'defer', 'integrity', 'referrerpolicy', 'src') . "></script>";

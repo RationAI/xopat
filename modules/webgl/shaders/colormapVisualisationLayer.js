@@ -88,7 +88,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         this.opacity.init();
 
         if (this.connect) {
-            this.connect.on('connect', function (raw, encoded, ctx) {
+            this.connect.on('default', function (raw, encoded, ctx) {
                 _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
                     _this.defaultColSteps(_this.color.maxSteps)
                 );
@@ -97,7 +97,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
             this.connect.init();
 
 
-            this.threshold.on('threshold_values', function (raw, encoded, ctx) {
+            this.threshold.on('breaks', function (raw, encoded, ctx) {
                 if (_this.connect.raw) { //if YES
                     _this.color.setSteps([0, ...raw, 1]);
                     _this.color.updateColormapUI();

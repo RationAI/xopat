@@ -15,7 +15,7 @@ $techNFO = $err_details ?? false;
 
 global $i18n;
 if (!isset($i18n)) {
-    require_once PROJECT_ROOT . '/i18n.class.php';
+    require_once PROJECT_SOURCES . 'i18n.class.php';
     $i18n = i18n::default($locale, LOCALES_ROOT);
 }
 
@@ -31,8 +31,8 @@ $description = $description ? $i18n->t($description) : $description;
     <meta charset="utf-8">
     <title>Error</title>
 
-    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>/style.css">
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
+    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>style.css">
+    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 </head>

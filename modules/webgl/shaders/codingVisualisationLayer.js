@@ -90,13 +90,13 @@ float filtered = ${this.filter("0.123456")};
         this.storeProperty("fs", this.getFragmentShaderDefinition());
         this.fs.init();
         this.submit.init();
-        this.submit.on('submit', function (raw, encoded, ctx)  {
+        this.submit.on('default', function (raw, encoded, ctx)  {
             _this._rebuild();
             _this.invalidate();
         });
 
         this.editor.init();
-        this.editor.on('editor', function (raw, encoded, ctx)  {
+        this.editor.on('default', function (raw, encoded, ctx)  {
             //todo dialogs should not be used in webgl module :D
             Dialogs.openEditor(
                 'FS-editor',

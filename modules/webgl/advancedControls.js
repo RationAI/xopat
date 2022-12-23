@@ -16,15 +16,15 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         const _this = this;
         this._c1.init();
         this._c2.init();
-        this._c1.on(this.name, function (value, encoded, context) {
+        this._c1.on("default", function (value, encoded, context) {
             $(`#${_this._c2.id}`).val(encoded);
             _this._c2.value = value;
-            _this.changed(this.name, value, encoded, context);
+            _this.changed("default", value, encoded, context);
         }, true); //silently fail if registered
-        this._c2.on(this.name, function (value, encoded, context) {
+        this._c2.on("default", function (value, encoded, context) {
             $(`#${_this._c1.id}`).val(encoded);
             _this._c1.value = value;
-            _this.changed(this.name, value, encoded, context);
+            _this.changed("default", value, encoded, context);
         }, true); //silently fail if registered
     }
 
@@ -95,7 +95,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         //steps could have been set manually from the outside
         if (!Array.isArray(this.steps)) this.setSteps();
@@ -114,8 +114,8 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
                 _this._setPallete(_this.colorPallete);
                 self.css("background", _this.cssGradient(_this.colorPallete));
                 _this.value = selected;
-                _this.context.storeProperty(_this.name, selected);
-                _this.changed(_this.name, _this.pallete, _this.value, _this);
+                _this.store(selected);
+                _this.changed("default", _this.pallete, _this.value, _this);
                 _this.context.invalidate();
             };
 
@@ -247,7 +247,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_S
 
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
-style="width: 60%;">${this.context.loadProperty(this.name, this.params.default)}</span>`;
+style="width: 60%;">${this.load(this.params.default)}</span>`;
 
         if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
             this.params.pallete = "OrRd";
@@ -317,13 +317,14 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         if (!Array.isArray(this.steps)) this.setSteps();
         if (this.maxSteps < this.value.length) {
             this.value = this.value.slice(0, this.maxSteps);
         }
 
+        //super class compatibility in methods, keep updated
         this.colorPallete = this.value;
 
         if (this.params.interactive) {
@@ -338,8 +339,8 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
                     _this._setPallete(_this.colorPallete);
                     self.parent().css("background", _this.cssGradient(_this.colorPallete));
                     _this.value = _this.colorPallete;
-                    _this.context.storeProperty(_this.name, _this.colorPallete);
-                    _this.changed(_this.name, _this.pallete, _this.value, _this);
+                    _this.store(_this.colorPallete);
+                    _this.changed("default", _this.pallete, _this.value, _this);
                     _this.context.invalidate();
                 }
             };
@@ -429,8 +430,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
     init() {
         this._updatePending = false;
         //encoded values hold breaks values between min and max,
-        this.encodedValues = this.context.loadProperty(this.name + "_values", this.params.breaks);
-        this.mask = this.context.loadProperty(this.name + "_mask", this.params.mask);
+        this.encodedValues = this.load(this.params.breaks, "breaks");
+        this.mask = this.load(this.params.mask, "mask");
 
         this.value = this.encodedValues.map(this._normalize.bind(this));
         this.value = this.value.slice(0, this.MAX_SLIDERS);
@@ -495,7 +496,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     }
                     _this.value[idx] = value;
 
-                    _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
+                    _this.changed("mask", _this.mask, _this.mask, _this);
                     _this.context.invalidate();
                 }
 
@@ -520,8 +521,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                             "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
                         _this.context.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize-1;
-                        _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
-                        _this.context.storeProperty(_this.name + "_mask", _this.mask);
+                        _this.changed("mask", _this.mask, _this.mask, _this);
+                        _this.store(_this.mask, "mask");
                     });
 
                     connects[i].addEventListener('mousedown', function (e) {
@@ -542,8 +543,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     _this._updatePending = true;
                     setTimeout(_ => {
                         //todo re-scale values or filter out -1ones
-                        _this.changed(_this.name + "_values", _this.value, strValues, _this);
-                        _this.context.storeProperty(_this.name, unencoded);
+                        _this.changed("values", _this.value, strValues, _this);
+                        _this.store(unencoded, "breaks");
 
                         _this.context.invalidate();
                         _this._updatePending = false;
@@ -660,7 +661,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     }
 //
 //     init() {
-//         this.value = this.context.loadProperty(this.name, this.params.default);
+//         this.value = this.load(this.params.default);
 //         if (!Array.isArray(this.value) || this.value.length !== this.width*this.height) {
 //             console.warn("Invalid kernel.");
 //             this.value = new Array(this.width*this.height);
@@ -677,8 +678,8 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //                     _this.value = JSON.parse(selected);
 //                     _this.encodedValue = selected;
 //                     self.css('border', 'none');
-//                     _this.context.storeProperty(_this.name, _this.value);
-//                     _this.changed(_this.name, _this.value, _this.encodedValue, _this);
+//                     _this.store(_this.value);
+//                     _this.changed("default", _this.value, _this.encodedValue, _this);
 //                     _this.context.invalidate();
 //                 } catch (e) {
 //                     self.css('border', 'red 1px solid');
@@ -767,15 +768,15 @@ WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl 
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 let self = $(e.target);
                 _this.value = self.val();
-                _this.context.storeProperty(_this.name, _this.value);
-                _this.changed(_this.name, _this.value, _this.value, _this);
+                _this.store(_this.value);
+                _this.changed("default", _this.value, _this.value, _this);
             };
             let node = $(`#${this.id}`);
             node.val(this.value);
@@ -847,12 +848,13 @@ WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 _this.value++;
+                _this.store(_this.value);
                 _this.changed(_this.name, _this.value, _this.value, _this);
             };
             let node = $(`#${this.id}`);

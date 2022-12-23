@@ -1,22 +1,25 @@
 <?php
 
+//PATHS to directories should end with a slash
+
 //TODO descriptions
 //Also check config_meta.js
 
 $production = false;
 
 //relative path system in the application
-define('PROJECT_ROOT', 'src');
-define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
-define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
-define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
-define('LOCALES_ROOT', PROJECT_ROOT . '/locales');
+defined('PROJECT_ROOT') || define('PROJECT_ROOT', '');
+defined('PROJECT_SOURCES') || define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
+defined('VISUALISATION_ROOT') || define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
+defined('EXTERNAL_SOURCES') || define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
+defined('ASSETS_ROOT') || define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
+defined('LOCALES_ROOT') || define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 
 //todo two versions - dev and production
 define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
 
-define('MODULES_FOLDER', 'modules');
-define('PLUGINS_FOLDER', 'plugins');
+define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
+define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
 if ($production) {
     define('PROTOCOL', "https://");

@@ -189,16 +189,43 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
 
     refreshUserScripted(node, controlId) {
         try {
-            //todo include cache, but override stuff changed in this text
-            //  compare against old configuration and override cache with data changed
-
-            let config = JSON.parse($(node).val());
-            config.type = this.active.layer[controlId].uiControlType;
-            this.setup.params[controlId] = config;
+            this.setup.params[controlId] = this.parseJSONConfig($(node).val());
             this.refresh();
         } catch (e) {
             node.style.background = 'var(--color-bg-danger-inverse)';
         }
+    },
+
+    parseJSONConfig(value) {
+        const config = JSON.parse(value);
+        const control = this.active.layer[controlId];
+        const t = WebGLModule.UIControls.IControl.getVarType;
+
+        function extendValuesBy(to, nameMap, suffix="") {
+            Object.keys(nameMap).forEach(key => {
+                const tVal = to[key],
+                    fVal = nameMap[key],
+                    tType = t(tVal),
+                    fType = t(fVal);
+
+                if (!tVal) return;
+                if (fVal && tType === "object" && fType === "object") {
+                    extendValuesBy(tVal, fVal, key + ".");
+                    return;
+                }
+
+                if (tVal == fVal) {
+                    //override config with cached values, only if cached did not change
+                    to[key] = control.load(tVal, suffix + key);
+                }
+            });
+            return to;
+        }
+        extendValuesBy(config, control.supports);
+
+        config.type = this.active.layer[controlId].uiControlType;
+        this.setup.params[controlId] = config;
+        return config
     },
 
     refresh() {

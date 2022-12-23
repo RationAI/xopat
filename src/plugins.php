@@ -1,11 +1,11 @@
 <?php
 
-require_once(PROJECT_ROOT . "/modules.php");
+require_once(PROJECT_SOURCES . "modules.php");
 global $i18n;
 $PLUGINS = array();
 
 foreach (array_diff(scandir(PLUGINS_FOLDER), array('..', '.')) as $_=>$dir) {
-    $dir_path = PLUGINS_FOLDER . "/" . $dir;
+    $dir_path = PLUGINS_FOLDER . $dir;
     if (is_dir($dir_path)) {
         $interface = $dir_path . "/include.json";
         if (file_exists($interface)) {

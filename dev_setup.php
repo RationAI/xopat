@@ -9,8 +9,8 @@ include_once("./config.php");
   <meta charset="utf-8">
   <title>Visualisation Developer Setup</title>
 
-  <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
-  <script src="<?php echo PROJECT_ROOT; ?>/shader_input_gui.js"></script>
+  <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
+  <script src="<?php echo PROJECT_SOURCES; ?>shader_input_gui.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
@@ -21,7 +21,7 @@ include_once("./config.php");
 
     <?php
 
-    include_once(PROJECT_ROOT . "/modules.php");
+    include_once(PROJECT_SOURCES . "modules.php");
 
     $webglPath = "";
     $version = VERSION;
