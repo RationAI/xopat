@@ -20,8 +20,8 @@ class Presenter {
 <button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
 <button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
 <button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
-<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button>`, `
+<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.fourthButton();"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.fifthButton();"><span class="material-icons">delete</span></button>`, `
 <br>
 ${UIComponents.Elements.checkBox({
             label: "Capture visuals",
@@ -140,6 +140,22 @@ ${UIComponents.Elements.checkBox({
         if (node) {
             this.snapshots.currentStep[key] = value;
             node.style[this._getStyleFor(key)] = this._convertValue(key, value);
+        }
+    }
+
+    fourthButton() {
+        if (this.isPlaying) {
+            this.snapshots.previous();
+        } else {
+            this.snapshots.playFromIndex(0);
+        }
+    }
+
+    fifthButton() {
+        if (this.isPlaying) {
+            this.snapshots.next();
+        } else {
+            this.removeHighlightedRecord();
         }
     }
 
@@ -374,6 +390,8 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
             }
 
             $("#presenter-play-icon span").addClass("timeline-play");
+            $("#presenter-replay-icon span").text("fast_rewind");
+            $("#presenter-delete-icon span").text("fast_forward");
             USER_INTERFACE.Tools.notify(_this._toolsMenuId, '➤');
 
             _this._referenceStamp = Date.now();
@@ -390,6 +408,8 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
         this.snapshots.addHandler('stop', function () {
             _this.isPlaying = false;
             $("#presenter-play-icon span").removeClass("timeline-play");
+            $("#presenter-replay-icon span").text("replay");
+            $("#presenter-delete-icon span").text("delete");
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
                 delete _this._loopMeasure;

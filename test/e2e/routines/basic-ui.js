@@ -77,7 +77,7 @@ export default {
         cy.get("#settings").should('be.visible').click()
 
         cy.get("#app-settings").contains('label', 'Show ToolBar').find('input').should('be.checked');
-        cy.get("#app-settings").contains('label', 'Show ScaleBar').find('input').should(
+        cy.get("#app-settings").contains('label', 'Show Scale Bar').find('input').should(
             (config.params.scaleBar ? '' : 'not.to.') + 'be.checked');
 
         cy.get("#app-settings").contains('label', 'Disable Cookies').find('input').should(

@@ -18,6 +18,18 @@ addPlugin("user-session", class {
                 "user-session-panel",
                 this.id
             );
+
+            //record visiting to the endpoint
+            UTILITIES.fetchJSON(this.server, {
+                ajax: "setSeen", //todo not flexible :/
+                user: APPLICATION_CONTEXT.config.meta.getUser(),
+                filename: this.sessionReferenceFile
+            }, this.headers, false).then(response => {
+                //ignore whatever response
+            }).catch(e => {
+                console.warn("Adding record of viewed tissue failed!", e);
+            });
+
         } else {
             $("#navigator-container").parent().append(`
 <span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.PLUGIN}.export();">save</span>`);

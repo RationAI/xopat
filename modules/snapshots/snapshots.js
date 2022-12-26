@@ -109,6 +109,22 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     /**
+     * Play previous step once more or go the previous keyframe
+     */
+    previous() {
+        if (this._playing) this._playStep(this._idx - 2, true);
+        else this.goToIndex(this.currentStepIndex - 1);
+    }
+
+    /**
+     * Play next step once more or go to the next keyframe
+     */
+    next() {
+        if (this._playing) this._playStep(this._idx, true);
+        else this.goToIndex(this.currentStepIndex + 1);
+    }
+
+    /**
      * Play from index.
      * @event start raised when playing has begun
      * @event enter called after the delay waiting is done and the step executes
@@ -255,7 +271,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         });
     }
 
-    _playStep(index) {
+    _playStep(index, jumps=false) {
         while (this._steps.length > index && !this._steps[index]) {
             index++;
         }
@@ -266,10 +282,23 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             return;
         }
 
-        let prevIdx = index > 0 ? index-1 : 0;
-        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        let withDelay = 1;
+        let prevIdx = -1;
+
+        if (jumps) {
+            if (this._currentStep) {
+                this._currentStep.cancel();
+                this._currentStep = null;
+            }
+            withDelay = 0;
+            prevIdx = this._idx-1; //'current' step when animating
+        } else {
+            prevIdx = index > 0 ? index-1 : 0;
+            while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        }
+
         let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
-        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
+        this._currentStep = this._setDelayed(withDelay * (this._steps[index].delay * 1000 + previousDuration), index);
 
         const _this = this;
         this._currentStep.promise.then(atIndex => {
@@ -314,6 +343,13 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     _setDelayed(ms, index) {
+        if (ms <= 0) {
+            return {
+                promise: new Promise(resolve => resolve(index)),
+                cancel: function () {}
+            };
+        }
+
         let timeout;
         let p = new Promise(function(resolve, reject) {
             timeout = setTimeout(_ => resolve(index), ms);
