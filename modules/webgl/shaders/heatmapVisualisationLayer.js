@@ -49,14 +49,15 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     };
 
     getFragmentShaderExecution() {
-        return `
+        return `    
     float chan = ${this.sampleChannel('tile_texture_coords')};
-    bool shows = chan > 0.02 && chan >= ${this.threshold.sample('chan', 'float')};
+    bool shows = chan >= ${this.threshold.sample('chan', 'float')};
     if (${this.inverse.sample()}) {
-        shows = !shows;
-        chan = 1.0 - chan;
+        if (!shows) {
+            shows = true;
+            chan = 1.0;
+        } else chan = 1.0 - chan;
     }
-    
     if (shows) return vec4(${this.color.sample()}, chan);
     return vec4(.0);
 `;

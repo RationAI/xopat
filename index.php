@@ -55,17 +55,27 @@ function ensureDefined($object, $property, $default) {
 //todo visualisation -> visualization
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
+if (!$visualisation) {
+    //for json-based POST requests
+    $_POST = json_decode(file_get_contents('php://input'));
+    $visualisation = $_POST["visualisation"];
+}
+
+file_put_contents('/mnt/data/visualization/importer/data/test.txt', $visualisation);
+
 throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
         print_r($_POST, true));
+
 
 /**
  * Parsing: verify valid parameters
  */
 
 //params that come in might be associative arrays :/
-$parsedParams = json_decode(is_string($visualisation) ? $visualisation : json_encode($visualisation));
+$parsedParams = $visualisation;
+if (is_string($visualisation)) $parsedParams = json_decode($parsedParams);
 throwFatalErrorIf(!is_object($parsedParams), "messages.urlInvalid", "messages.postDataSyntaxErr",
-    "JSON Error: " . json_last_error() . "<br>" . $visualisation);
+    "JSON Error: " . json_last_error_msg() . "<br>" . print_r($visualisation, true));
 
 ensureDefined($parsedParams, "params", (object)array());
 ensureDefined($parsedParams, "data", array());

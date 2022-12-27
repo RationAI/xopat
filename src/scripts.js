@@ -189,24 +189,28 @@
         <input type="submit" value="">
       </form>
       <script type="text/javascript">
-        document.getElementById("visualisation").value = \`${exported}\`;
+        document.getElementById("visualisation").value = \`${exported.replaceAll("\\", "\\\\")}\`;
         const form = document.getElementById("redirect");
         let node;`;
 
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-
         VIEWER.raiseEvent('export-data', {
             setSerializedData: (uniqueKey, data) => {
+                if (typeof data !== "string") {
+                    console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
+                    return;
+                }
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
 node.setAttribute("name", \`${uniqueKey}\`);
-node.setAttribute("value", \`${data}\`);
+node.setAttribute("value", \`${data.replaceAll("\\", "\\\\")}\`);
 form.appendChild(node);`;
             }
         });
 
         return `${form}
-form.submit();<\/script>`;
+form.submit();
+<\/script>`;
     }
 
 
@@ -396,7 +400,7 @@ ${constructExportVisualisationForm()}
         // } else if (window.detachEvent) {
         //     window.detachEvent('onbeforeunload', preventDirtyClose);
         // }
-        $("body").append(UTILITIES.getForm(formInputHtml, includedPluginsList, true));
+        $(document.body).append(UTILITIES.getForm(formInputHtml, includedPluginsList, true));
     };
 
     /**

@@ -819,7 +819,7 @@ style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled}
             default: "",
             placeholder: "",
             interactive: true,
-            title: "Text:"
+            title: "Text"
         };
     }
 

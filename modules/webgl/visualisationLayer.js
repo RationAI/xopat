@@ -536,7 +536,7 @@ WebGLModule.VisualisationLayer = class {
     ////////////////////////////////////
 
     static __globalIncludes = {};
-    static __chanPattern = new RegExp('[rgbxyzuvw]+');
+    static __chanPattern = new RegExp('[rgba]{1,4}');
 
     _buildControls(options) {
         let controls = this.constructor.defaultControls;

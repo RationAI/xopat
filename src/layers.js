@@ -345,14 +345,14 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     if (viz.shaders.hasOwnProperty(layerId)) {
                         let shaderPart = viz.shaders[layerId];
 
-                        //preserve parameters for the original type
-                        shaderPart[`__${shaderPart.type}_params`] = shaderPart.params;
-                        if (!shaderPart.hasOwnProperty(`__${type}_params`)) {
-                            shaderPart[`__${type}_params`] = {};
-                        }
-                        shaderPart.params = shaderPart[`__${type}_params`];
+                        // //parameter switching does not have to be done anymore - the routine can type-safe reuse params
+                        // shaderPart[`__${shaderPart.type}_params`] = shaderPart.params;
+                        // if (!shaderPart.hasOwnProperty(`__${type}_params`)) {
+                        //     shaderPart[`__${type}_params`] = {};
+                        // }
+                        // shaderPart.params = shaderPart[`__${type}_params`];
 
-                        viz.shaders[layerId].type = type;
+                        shaderPart.type = type;
                         seaGL.reorder(null); //force to re-build
                     } else {
                         console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': bad initialization?`);

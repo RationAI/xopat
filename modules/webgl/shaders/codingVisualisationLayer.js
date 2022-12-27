@@ -21,7 +21,8 @@ WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
             default: {type: 'text_area', title: false,
                 placeholder: "Input GLSL custom code.",
                 default: this._getDefaultFSDefine()},
-            accepts: (type, instance) => type === "text"
+            accepts: (type, instance) => type === "text",
+            required: {title: ""}
         },
         submit : {
             default: {type: "button", title: "Render"},
