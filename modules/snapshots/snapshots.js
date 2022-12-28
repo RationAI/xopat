@@ -425,7 +425,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             bridge.switchVisualisation(from.index);
         } else if (needsRefresh) {
             bridge.webGLEngine.rebuildVisualisation(from.order);
-            bridge.invalidate(duration * 900); //50% od the duration allowed to be constantly updated
+            bridge.redraw(duration * 900); //50% od the duration allowed to be constantly updated
         }
     }
 

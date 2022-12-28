@@ -14,7 +14,10 @@ window.OpenSeadragon.BridgeGL = class {
         let _this  = this;
         this.openSD = openSeaDragonInstance;
 
-        webGLEngine.resetCallback = _ => _this.redraw();
+        webGLEngine.resetCallback = _ => {
+            _this.clear();
+            _this.redraw();
+        };
         this._disabled = true; //so that first enable call is executed
         this.webGLEngine = webGLEngine;
         this._refreshTimeStamp = Date.now();
@@ -238,7 +241,15 @@ window.OpenSeadragon.BridgeGL = class {
         // Raise tstamp to force redraw
         this._refreshTimeStamp = Date.now();
         this._randomDelay = Math.max(0, randomDelay);
-        this.draw();
+    }
+
+    /**
+     * Clear the canvas - necessary for transparent items to render correctly
+     *  - done automatically on shader render updates
+     */
+    clear() {
+        this.openSD.drawer._clear();
+        this.openSD.navigator.drawer._clear();
     }
 
     /**
