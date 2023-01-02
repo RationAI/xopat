@@ -192,6 +192,21 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     max-height: initial;
 }
 
+/* Show Info in a nice box, use: <div class="info-container">text</div> */
+.info-container {
+    border: 1px solid var(--color-bg-info);
+    text-overflow: ellipsis;
+    cursor: auto;
+}
+.info-container::before {
+    content: 'info';
+    font-family: 'Material Icons';
+    color: var(--color-icon-info);
+    font-size: initial;
+    padding: 3px 9px;
+    /*vertical-align: sub;*/
+}
+
 .notification {
     position: relative !important;
 }
@@ -263,6 +278,9 @@ input.switch:checked + label span {
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
+/*Important: fixes the navigator viewport position*/
+div {box-sizing: initial !important;}
+/*div.openseadragon-container, div.openseadragon-canvas, #panel-navigator,  {box-sizing: initial !important;}*/
 
 /*.hover-dim:hover {opacity: 1}*/
 /*.hover-dim {opacity: 0.5; animation: hoverDims 5s normal linear; }*/
@@ -367,6 +385,9 @@ input.switch:checked + label span {
 }
 #tissue-preview-container img:hover {
 
+}
+#cache-snapshot:hover + div, .cache-snapshot-visible:hover {
+    display: flex !important;
 }
 
 /** DIALOGS*/

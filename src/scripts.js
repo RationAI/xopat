@@ -391,7 +391,10 @@ ${constructExportVisualisationForm()}
      */
     window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
-            Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.warnPageReload', {
+                onExport: "UTILITIES.export();",
+                onRefresh: "APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();"
+            }), 15000, Dialogs.MSG_WARN);
             return;
         }
 

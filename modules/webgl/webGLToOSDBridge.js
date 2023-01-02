@@ -203,7 +203,7 @@ window.OpenSeadragon.BridgeGL = class {
      * @param {array} order array of strings that refer to ID's in the visualisation
      *   data (e.g. pyramidal tiff paths in our case), first is rendered last (top)
      */
-    reorder(order) {
+    reorder(order=undefined) {
         if (!Array.isArray(order)) {
             this.webGLEngine.rebuildVisualisation(null);
         } else {

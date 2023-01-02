@@ -1174,10 +1174,13 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         super(context, name, webGLVariableName, uniq);
         this.component = intristicComponent;
         this._params = this.getParams(params);
+
+        this.encodedValue = this.load(this.params.default);
+        //this unfortunatelly makes cache erasing and rebuilding vis impossible, the shader part has to be fully re-instantiated
+        this.params.default = this.encodedValue;
     }
 
     init() {
-        this.encodedValue = this.load(this.params.default);
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
         if (this.params.interactive) {

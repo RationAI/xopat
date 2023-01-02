@@ -41,7 +41,8 @@ window.WebGLModule = class {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Default values overrideable from incomingOptions  /////////////////
         /////////////////////////////////////////////////////////////////////////////////
-        this.uniqueId = "";
+        this.uniqueId = ""; //todo ID cannot contain non-variable friendly names, check pattern
+
         this.ready = function () { };
         this.htmlControlsId = null;
         this.webGlPreferredVersion = "2.0";
@@ -268,14 +269,14 @@ window.WebGLModule = class {
      * Renders data using WebGL
      * @param {object} data image data
      * @param tileDimension expected dimension of the output (canvas)
-     * @param zoomLevel value passed to the shaders as zoom_level
+     * @param zoom value passed to the shaders as zoom_level
      * @param pixelSize value passed to the shaders as pixel_size_in_fragments
      * @returns canvas (with transparency) with the data rendered based on current program
      *          null if willUseWebGL(imageElement, e) would return false
      */
-    processImage(data, tileDimension, zoomLevel, pixelSize) {
+    processImage(data, tileDimension, zoom, pixelSize) {
         let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
-            data, tileDimension, zoomLevel, pixelSize);
+            data, tileDimension, zoom, pixelSize);
 
         if (this.debug) this._renderDebugIO(data, result);
         return result;
@@ -370,8 +371,12 @@ window.WebGLModule = class {
      * @param dataSources a list of data identifiers available to the visualisations
      *  - visualisation configurations should not reference data not present in this array
      *  - the module gives you current list of required subset of this list for particular active visualization goal
+     * @param width initialization width
+     * @param height initialization height
+     *
+     *  todo support data-less initialization - in that case throw when accessing requested data
      */
-    prepareAndInit(dataSources) {
+    prepareAndInit(dataSources, width=1, height=1) {
         let _this = this;
         this.prepare(dataSources, () => {
             _this.init(1, 1);

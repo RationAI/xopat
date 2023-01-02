@@ -242,7 +242,10 @@ window.addEventListener("beforeunload", (e) => {
             this._cachedCall = customCall;
             let result = this._openModalWindow(id, title, html, size);
             if (!result.context) {
-                this.show($.t('messages.modalWindowBlocked', {id, title, size}), 15000, this.MSG_WARN);
+                this.show($.t('messages.modalWindowBlocked', {
+                    title,
+                    action: `Dialogs._showCustomModalImpl('${id}', '${title}', null, '${size}'); Dialogs.hide();`
+                }), 15000, this.MSG_WARN);
             } else {
                 result.callback = this._cachedCall;
                 this._modals[id] = result;

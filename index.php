@@ -66,7 +66,6 @@ file_put_contents('/mnt/data/visualization/importer/data/test.txt', $visualisati
 throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
         print_r($_POST, true));
 
-
 /**
  * Parsing: verify valid parameters
  */
@@ -89,7 +88,6 @@ if ($is_debug) {
     ini_set('display_errors', 1);
 }
 $bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
-$cookieCache = isset($_COOKIE["_cache"]) && !$bypassCookies ? json_decode($_COOKIE["_cache"]) : (object)[];
 $locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
 
 //now we can translate - translation known
@@ -109,55 +107,12 @@ foreach ($parsedParams->background as $bg) {
         "Invalid data reference value '$bg->dataReference'. Available data: " . print_r($parsedParams->data, true));
 }
 
-$layerVisible = isset($parsedParams->visualizations) ? 1 : 0;
 $singleBgImage = count($parsedParams->background) == 1;
 $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
 
-
-if ($layerVisible) {
-    $layerVisible--;
-    foreach ($parsedParams->visualizations as $index=>$visualisationTarget) {
-        if (!isset($visualisationTarget->name)) {
-            $visualisationTarget->name = "Custom Visualisation";
-        }
-        if (!isset($visualisationTarget->shaders)) {
-            $visSummary = htmlentities(print_r($visualisationTarget, true));
-            $errors_print .= "console.warn('Visualisation #$index removed: missing shaders definition. The layer: <code>$visSummary</code>');";
-            unset($parsedParams->visualizations[$index]);
-        }
-
-        $shader_count = 0;
-        $source = $i18n->t("common.Source");
-        foreach ($visualisationTarget->shaders as $data=>$layer) {
-            if (!isset($layer->name)) {
-                $temp = substr($data, max(0, strlen($data)-24), 24);
-                if (strlen($temp) != strlen($data)) $temp  = "...$temp";
-                $layer->name = "$source: $temp";
-            }
-
-            throwFatalErrorIf(!isset($layer->type), "messages.urlInvalid",
-                "messages.shaderTypeMissing", print_r($layer, true));
-
-            if (!isset($layer->cache) && isset($layer->name) && isset($cookieCache->{$layer->name})) {
-                //todo fixme cached setup -> notify user rendering has changed....
-                $layer->cache = $cookieCache->{$layer->name};
-            } //todo else if not cookies enabled notify user they have been disabled
-            if (!isset($layer->params)) {
-                $layer->params = (object)array();
-            }
-            $shader_count++;
-        }
-
-        if ($shader_count > 0) {
-            $layerVisible++;
-        } else {
-            unset($parsedParams->visualizations[$index]);
-        }
-    }
-
+if (isset($parsedParams->visualizations)) {
     //requires webgl module
     $MODULES["webgl"]->loaded = true;
-    $layerVisible = $layerVisible > 0;
 }
 
 /**
@@ -383,7 +338,15 @@ $visualisation = json_encode($parsedParams);
                         <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                             <!--populated with shaders from the list -->
                         </select>
-                        <span id="cache-snapshot" class="material-icons btn-pointer" style="text-align:right; vertical-align:sub;float: right;" data-i18n="[title]main.shaders.saveCookies" onclick="UTILITIES.makeCacheSnapshot();">bookmark</span>
+                        <div class="d-inline-block float-right position-relative">
+                            <span id="cache-snapshot" class="material-icons btn-pointer text-right" 
+                            style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
+                            <div class="position-absolute px-2 py-1 rounded-2 border-sm cache-snapshot-visible top-0 right-2 flex-row" 
+                            style="display: none; background: var(--color-bg-tertiary);">
+                                <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cookiesByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
+                                <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cookiesByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="data-layer-options" class="inner-panel-hidden $shadersSettingsClass">
@@ -581,14 +544,14 @@ EOF;
                 cookies.set(key, value);
             }
         },
-        _getCookie(key) {
+        _getCookie(key, defaultValue=undefined) {
             if (!this.config.params.bypassCookies) {
                 let value = cookies.get(key);
                 if (value === "false") value = false;
                 else if (value === "true") value = true;
                 return value;
             }
-            return undefined;
+            return defaultValue;
         },
         _dangerouslyAccessConfig() {
             //remove in the future?

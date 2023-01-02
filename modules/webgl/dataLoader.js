@@ -3,11 +3,16 @@
  * Should you have your own data format, change/re-define these
  * to correctly load the textures to GPU, based on the WebGL version used.
  *
+ * TODO dataloader should be a component given to the configuration dynamically
+ * TODO make GLSL code as functions (proxies) instead of using code injection
+ *
+ * This implementation supports data as Image or Canvas objects
+ *
  * @type {{V2_0: WebGLModule.DataLoader.V2_0, V1_0: WebGLModule.DataLoader.V1_0}}
  */
 WebGLModule.DataLoader = {
     /**
-     * In case the system is fed by anything but 'Image' data object,
+     * In case the system is fed by anything but 'Image' (or the like) data object,
      * implement here conversion so that debug mode can draw it.
      * @param {*} data
      * @return {Image}
