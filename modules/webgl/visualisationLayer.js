@@ -750,7 +750,8 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "float"
+            glType: "float",
+            uiType: "number"
         },
 
         range: {
@@ -774,7 +775,8 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "float"
+            glType: "float",
+            uiType: "range"
         },
 
         color: {
@@ -806,7 +808,8 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "vec3"
+            glType: "vec3",
+            uiType: "color"
         },
 
         bool: {
@@ -832,7 +835,8 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "bool"
+            glType: "bool",
+            uiType: "bool"
         }
     };
 
@@ -1003,11 +1007,17 @@ WebGLModule.UIControls.IControl = class {
     }
 
     /**
-     * Parameters supported by this UI component, should contain at least 'interactive', 'title' and 'default'
+     * Parameters supported by this UI component, must contain at least
+     *  - 'interactive' - type bool, enables and disables the control interactivity
+     *  (by changing the content available when rendering html)
+     *  - 'title' - type string, the control title
+     *
+     *  Additionally, for compatibility reasons, you should, if possible, define
+     *  - 'default' - type any; the default value for the particular control
      * @return {{}} name: default value mapping
      */
     get supports() {
-        throw "WebGLModule.UIControls.IControl::parameters must be implemented.";
+        throw "WebGLModule.UIControls.IControl::supports must be implemented.";
     }
 
     /**

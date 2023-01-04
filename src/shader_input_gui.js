@@ -2,111 +2,36 @@
 var PredefinedShaderControlParameters = {
     REF: 'PredefinedShaderControlParameters',
 
-    //todo replace by ui_components
-    _text: function(cls, placeholder, funToCall, ofType, paramName) {
-        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
-        return `<input type="text" class="${cls} form-control" placeholder="${placeholder}" ${funToCall}>`;
-    },
-    _checkbox: function(cls, funToCall, ofType, paramName) {
-        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
-        return `<input type="checkbox" class="${cls} form-control" ${funToCall}>`;
-    },
-    _color: function(cls, placeholder, funToCall, ofType, paramName) {
-        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
-        return `<input type="color" class="${cls} form-control" placeholder="${placeholder}" ${funToCall}>`;
-    },
-    _real: function(cls, placeholder, funToCall, ofType, paramName, def, min, max) {
-        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" step="0.01" ${funToCall}>`;
-    },
-    _integer: function(cls, placeholder, funToCall, ofType, paramName, def, min, max) {
-        funToCall = typeof funToCall === "string" ? `onchange="${funToCall}(this, '${ofType}', '${paramName}');"` : "disabled";
-        return `<input type="number" class="${cls} form-control" placeholder="${placeholder}" min="${min}" max="${max}" value="${def}" ${funToCall}>`;
-    },
-
+    //todo why this.REF not working
+    __chngtml: (paramName, key, valueGetter) =>
+        `PredefinedShaderControlParameters.refreshUserUpdated(this, '${paramName}', '${key}', ${valueGetter})`,
 
     /**
-     * Input number by its value
-     * @param params
-     * @param params.title
-     * @param params.visible
-     * @param params.default
-     * @param params.min
-     * @param params.max
-     * @param params.step
+     * Render number by its value, a map of [uiType] => function values
+     * @param name name of the control as defined by its shader
+     * @param params for supported parameters see the control 'c.supports' value
      */
-    number: {
-        form: function (onChange) {
-            return `
-Title: ${this._text('', "Label", onChange, "number", "title")}<br>
-Visible in GUI: ${this._checkbox('', onChange, "number", "visible")}<br>
-Default value: ${this._real('', "", onChange, "number", "default")}<br>
-Minimum: ${this._real('', "Lower bound", onChange, "number", "min")}<br>
-Maximum: ${this._real('', "Upper bound", onChange, "number", "max")}<br>
-Step: ${this._real('', "Step size", onChange, "number", "step")}<br>
-`;
-        }
-    },
+    uiRenderers: {},
 
     /**
-     * Input number using range slider
-     * @param params
-     * @param params.title
-     * @param params.visible
-     * @param params.default
-     * @param params.min
-     * @param params.max
-     * @param params.step
+     * Set data for realtime data postprocessing
+     * @param {Image|Canvas} data to process
      */
-    range: {
-        form: function (onChange) {
-            return `
-Title: ${this._text('', "Label", onChange, "range", "title")}<br>
-Visible in GUI: ${this._checkbox('', onChange, "range", "visible")}<br>
-Default value: ${this._real('', "", onChange, "range", "default")}<br>
-Minimum: ${this._real('', "Lower bound", onChange, "range", "min")}<br>
-Maximum: ${this._real('', "Upper bound", onChange, "range", "max")}<br>
-Step: ${this._real('', "Step size", onChange, "range", "step")}<br>
-`;
+    setData: function (data) {
+        const module = this._getModule('live-setup-interactive-controls');
+        if (module) {
+            module.setDimensions(data.width, data.height);
         }
-    },
-
-    /**
-     * Input color using colorpicker
-     * @param params
-     * @param params.visible
-     * @param params.default
-     */
-    color: {
-        form: function (onChange) {
-            return `
-Title: ${this._text('', "Label", onChange, "color", "title")}<br>
-Visible in GUI: ${this._checkbox('', onChange, "color", "visible")}<br>
-Default value: ${this._color('', "", onChange, "color", "default")}<br>
-`;
-        }
-    },
-
-    /**
-     * Input boolean flag using checkbox
-     * @param params
-     * @param params.visible
-     * @param params.default
-     */
-    bool: {
-        form: function (onChange) {
-            return `
-Title: ${this._text('', "Label", onChange, "color", "title")}<br>
-Visible in GUI: ${this._checkbox('', onChange, "color", "visible")}<br>
-Default value: ${this._checkbox('', onChange, "color", "default")}<br>
-`;
-        }
+        this._renderData = data;
     },
 
     printShadersAndParams: function(id) {
         let node = document.getElementById(id);
-        node.innerHTML = this.getShadersHtml() + this.getControlsHtml();
-        // node.innerHTML = this.getShadersHtml() + this.getInteractiveControlsHtmlFor('colormap');
+        //node.innerHTML = this.getShadersHtml() + this.getControlsHtml();
+        node.innerHTML = this.getShadersHtml() + this.getInteractiveControlsHtmlFor('heatmap');
+
+        //todo only when intearctive
+        this.setModuleActiveRender();
     },
 
     getShadersHtml: function() {
@@ -179,6 +104,15 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
         return result;
     },
 
+    refreshUserSwitched(controlId) {
+        if (this.renderStyle.advanced(controlId)) {
+            this.renderStyle.setUi(controlId);
+        } else {
+            this.renderStyle.setAdvanced(controlId);
+        }
+        this.refresh();
+    },
+
     refreshUserSelected(controlId, type) {
         if (!this.setup.params[controlId]) {
             this.setup.params[controlId] = {};
@@ -190,6 +124,24 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
     refreshUserScripted(node, controlId) {
         try {
             this.setup.params[controlId] = this.parseJSONConfig($(node).val());
+            this.refresh();
+        } catch (e) {
+            node.style.background = 'var(--color-bg-danger-inverse)';
+        }
+    },
+
+    refreshUserUpdated(node, controlId, keyChain, value) {
+        try {
+            const ensure = (o, key) => {
+                if (!o[key]) o[key] = {};
+                return o[key];
+            }
+
+            let ref = ensure(this.setup.params, controlId);
+            const keys = keyChain.split('.');
+            const key = keys.pop();
+            keys.forEach(x => ref = ensure(ref, x));
+            ref[key] = value;
             this.refresh();
         } catch (e) {
             node.style.background = 'var(--color-bg-danger-inverse)';
@@ -229,7 +181,22 @@ Default value: ${this._checkbox('', onChange, "color", "default")}<br>
     },
 
     refresh() {
+        this.setup.shader.cache = {};
         $("#live-setup-interactive-container").replaceWith(this.getInteractiveControlsHtmlFor(this.setup.shader.type));
+        this.setModuleActiveRender();
+    },
+
+    setModuleActiveRender() {
+        if (this._renderData) {
+            const module = this._getModule('live-setup-interactive-controls');
+            if (module) {
+                document.getElementById("realtime-rendering-example").appendChild(module.gl.canvas);
+                module.processImage(this._renderData,
+                    {width: this._renderData.width, height: this._renderData.height},
+                    0,
+                    1);
+            }
+        }
     },
 
     _buildControlJSONHtml(controlId) {
@@ -263,13 +230,30 @@ ${JSON.stringify(params, null, '\t')}
 
     active: {
         mod: function(id) {
-            let _this = window.PredefinedShaderControlParameters;
-            if (_this["__module_"+id]) return _this["__module_"+id];
+            let _this = window.PredefinedShaderControlParameters,
+                module = _this._getModule(id);
+            if (module) return module;
             throw "Module not instantiated!";
         },
         get vis () { return this.mod('live-setup-interactive-controls').visualization(0)},
         get shader() { return this.mod('live-setup-interactive-controls').visualization(0).shaders["1"] },
         get layer() { return this.mod('live-setup-interactive-controls').visualization(0).shaders["1"]._renderContext }
+    },
+
+    renderStyle: {
+        _styles: {},
+        advanced: function (key) {
+            return this._styles[key] == true;
+        },
+        setAdvanced: function (key) {
+            this._styles[key] = true;
+        },
+        ui: function (key) {
+            return !this.advanced(key)
+        },
+        setUi: function (key) {
+            delete this._styles[key];
+        }
     },
 
     getInteractiveControlsHtmlFor: function(shaderId) {
@@ -290,25 +274,44 @@ ${JSON.stringify(params, null, '\t')}
             const renders = [];
             for (let control in layer._renderContext) {
                 let supported = supports[control];
-                if (!supported) continue; //skip other props, supports keep only controls
+                if (!supported) continue; //skip other props, supports keep only control
 
                 //todo onchange
-                renders.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+
+                //render type and renderer switching
+                renders.push("<div><div class='rounded-2 m-1 px-2 py-1' style='background: var(--color-bg-tertiary)'><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
                     "class='position-relative'><span class='flex-1'>Control <code>",
-                    control, "</code> | One of supported:", `<select class='form-control' 
+                    control, "</code> | One of supported: &nbsp;", `<select class='form-control' 
 onchange="${_this.REF}.refreshUserSelected('${control}', this.value);">`);
 
-                let activeControl = layer._renderContext[control];
+                const activeControl = layer._renderContext[control],
+                    activeType = activeControl.uiControlType;
                 for (let supType of supported) {
-                    let active = activeControl.uiControlType === supType ? "selected" : "";
+                    let active = activeType === supType ? "selected" : "";
                     renders.push("<option value='", supType ,"' ", active, ">", supType, "</option>");
                 }
-
                 const params = {...activeControl.params};
                 delete params.type;
-
                 renders.push("</select></span></span>");
-                renders.push(_this._buildControlJSONHtml(control));
+
+                const uiRenderer = _this.uiRenderers[activeType],
+                    willRenderUi = _this.renderStyle.ui(control) && uiRenderer;
+
+                if (uiRenderer) {
+                    renders.push(`&emsp;<span class="float-right">Simple configuration &nbsp;<input type='checkbox' class='form-control' 
+onchange="${_this.REF}.refreshUserSwitched('${control}')" ${willRenderUi ? "checked " : ""}></span>`);
+                }
+                renders.push("</div>");
+
+                //render control config
+                if (willRenderUi) {
+                    let controlObject = _this.active.layer[control];
+                    const params = {...controlObject.params};
+                    delete params.type;
+                    renders.push("<div class='m-2 layer-params'>", uiRenderer(control, controlObject.params), "</div>");
+                } else {
+                    renders.push(_this._buildControlJSONHtml(control));
+                }
                 renders.push("</div>");
             }
 
@@ -317,6 +320,7 @@ ${renders.join("")}
 <div id="live-setup-interactive-shader-head" style="margin: 0 auto; max-width: 500px;" class="configurable-border">
 <div class="shader-part-name">${title}</div>${html}</div>
 </div>
+<div id="realtime-rendering-example"></div>
 </div>`;
         }, onLoaded);
         module.reset();
@@ -327,7 +331,7 @@ ${renders.join("")}
         this.setup.shader.name = "Configuration: " + shaderId;
 
         module.addVisualisation(this.setup.vis);
-        module.prepareAndInit(data.map(x => ""));
+        module.prepareAndInit(data.map(x => ""), this._renderData?.width, this._renderData?.height);
         return "<div><h3>Available controls and their parameters</h3><br><div id='live-setup-interactive-controls'></div></div><br>";
     },
 
@@ -339,6 +343,10 @@ ${renders.join("")}
             htmlShaderPartHeader: htmlRenderer,
             ready: onReady
         });
+        return this["__module_"+id];
+    },
+
+    _getModule: function(id) {
         return this["__module_"+id];
     },
 
@@ -357,3 +365,71 @@ ${renders.join("")}
         return this.__uicontrols;
     }
 };
+
+/**
+ * Definition of tailored setters for shader controls
+ */
+PredefinedShaderControlParameters.uiRenderers.number = (name, params, onChange) => `
+Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+Interactive: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.interactive,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Default value: &emsp; ${UIComponents.Elements.numberInput({...params,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'Number.parseFloat(this.value)')})}<br>
+<!--Minimum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.min,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
+Maximum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.max,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
+Step: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.step,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'step', 'Number.parseFloat(this.value)')})}<br>-->
+`;
+PredefinedShaderControlParameters.uiRenderers.range = PredefinedShaderControlParameters.uiRenderers.number;
+PredefinedShaderControlParameters.uiRenderers.range_input = PredefinedShaderControlParameters.uiRenderers.number;
+PredefinedShaderControlParameters.uiRenderers.color = (name, params, onChange) => `
+Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+Interactive: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.interactive,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Default value: &emsp; ${UIComponents.Elements.colorInput({...params,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.value')})}<br>
+`;
+PredefinedShaderControlParameters.uiRenderers.colormap = (name, params, onChange) => `
+Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Default value: &emsp; ${UIComponents.Elements.select({...params, options: ColorMaps.schemeGroups[params.mode],
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.value')})}<br>
+Continuous: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.continuous,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'continuous', 'this.checked')})}<br>
+Mode: &emsp; ${UIComponents.Elements.select({...params, default: params.mode, options: Object.keys(ColorMaps.schemeGroups),
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'mode', 'this.value')})}<br>
+Steps: &emsp; ${UIComponents.Elements.numberInput({...params, min: 0, max: 8, step: 1, default: params.steps,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'steps', 'Number.parseInt(this.value)')})}<br>
+`;
+PredefinedShaderControlParameters.uiRenderers.advanced_slider = (name, params, onChange) => `
+Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Breaks: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.breaks,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'breaks', 'this.values')})}<br>
+Minimum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.min,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
+Maximum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.max,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
+Step: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.minGap,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'minGap', 'Number.parseFloat(this.value)')})}<br>
+Mask: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.mask,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'mask', 'this.values')})}<br>
+Pips: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.pips.values,
+        onchange: PredefinedShaderControlParameters.__chngtml(name, 'pips.values', 'this.values')})}<br>
+`;
+PredefinedShaderControlParameters.uiRenderers.bool = (name, params, onChange) => `
+Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
+    onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
+    onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Default value: &emsp; ${UIComponents.Elements.checkBox({...params,
+    onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.checked')})}<br>
+`;

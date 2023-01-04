@@ -100,7 +100,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         //steps could have been set manually from the outside
         if (!Array.isArray(this.steps)) this.setSteps();
 
-        if (!this.value || !ColorMaps.schemeGroups[this.params.mode][this.value]) {
+        if (!this.value || !ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
             this.value = ColorMaps.defaults[this.params.mode];
         }
         this.colorPallete = ColorMaps[this.value][this.maxSteps];
@@ -248,10 +248,6 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_S
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
 style="width: 60%;">${this.load(this.params.default)}</span>`;
-
-        if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
-            this.params.pallete = "OrRd";
-        }
 
         return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
 style="width: 60%;"></select><br>`;

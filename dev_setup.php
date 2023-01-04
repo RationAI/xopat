@@ -11,6 +11,7 @@ include_once("./config.php");
 
   <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
   <script src="<?php echo PROJECT_SOURCES; ?>shader_input_gui.js"></script>
+  <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->

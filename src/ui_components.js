@@ -9,12 +9,12 @@
  *      use context.opener to get reference to the original (parent) window
  */
 
-var UIComponents = {};
+var UIComponents = {
 
 /**
  * Simplified input controls creation
  */
-UIComponents.Elements = {
+Elements: {
     /**
      * Render TEXT input
      * @param options
@@ -44,7 +44,7 @@ placeholder="${options.placeholder}" value="${options.default}" ${options.onchan
         options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
         if (options.default === "false") options.default = false;
         return `<label style="font-weight: initial;"><input type="checkbox" 
-class="${options.classes} form-control v-align-middle" ${options.default?"checked" : ""} ${options.onchange}>&nbsp; 
+class="${options.classes} form-control v-align-middle" ${options.default ? "checked" : ""} ${options.onchange}>&nbsp; 
 ${options.label}</label>`;
     },
     /**
@@ -95,12 +95,34 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
     select: function (options) {
         options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
         options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
-        let innerContent = [];
+        let innerContent = [], optsArray = Array.isArray(options.options);
         for (let key in options.options) {
-            innerContent.push("<option value='", key, "'",
-                key===options.default ? " selected" : "", ">", options.options[key], "</option>");
+            const name = options.options[key], val = optsArray ? name : key;
+            innerContent.push("<option value='", val, "'", val===options.default ? " selected" : "", ">", name, "</option>");
         }
+
         return `<select class="${options.classes} form-control" ${options.onchange}>${innerContent.join("")}</select>`;
+    },
+    /**
+     * Render number array
+     * note: the parsed content can be retrieved as this.values
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {number|array} options.default a list of default values or the desired array length
+     * @return {string} HTML for select input
+     */
+    numberArray: function (options) {
+        options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
+        options.onchange = typeof  options.onchange === "string" ? `onchange="
+        try {
+            let values = JSON.parse(this.value);
+            if (!Array.isArray(values)) throw 'Cannot parse number array!';
+            else this.values = values.map(Number.parseFloat);
+            ${options.onchange}
+        } catch(e) { console.warn(e); this.style.background = 'var(--color-bg-danger-inverse)'; }"` : "disabled";
+        return `<textarea placeholder="[1,2,3]" rows="1" class="${options.classes} form-control" ${options.onchange}>${
+            JSON.stringify(Array.isArray(options.default) ? options.default : new Array(options.default))}</textarea>`;
     },
     /**
      * Render header
@@ -131,14 +153,14 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
     newline: function (options) {
         return '<br style="clear: both">';
     }
-};
+},
 
 /**
  * UI Actions
  *
  * functions that enable more complex UI interaction
  */
-UIComponents.Actions = {
+Actions: {
     /**
      * Makes children in a parent draggable. These children might contain other elements you want to
      * prevent the dragging on: such children need 'non-draggable' class
@@ -210,7 +232,7 @@ UIComponents.Actions = {
         }
         return enableDragItem;
     }
-};
+},
 
 /**
  * Single UI Components for re-use, styled and prepared
@@ -221,7 +243,7 @@ UIComponents.Actions = {
  *  - the same container also has class `[class-name]-container` if SingleComponents.ClassName used
  *  - the content has class `[class-name]`
  */
-UIComponents.Components = {
+Components: {
 
     ImageRow: class {
         /**
@@ -323,9 +345,9 @@ ${contentAction}
             document.getElementById(this.contextId).prepend(container);
         }
     },
-};
+},
 
-UIComponents.Containers = {
+Containers: {
 
     PanelMenu: class {
         constructor(containerId) {
@@ -527,4 +549,6 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
            this._getContext().html("");
         }
     },
+}
+
 };
