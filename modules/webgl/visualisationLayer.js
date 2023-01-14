@@ -39,7 +39,7 @@ WebGLModule.ShaderMediator = class {
 };
 
 /**
- * Abstract interface to any Shader
+ * Abstract interface to any Shader.
  * @type {WebGLModule.VisualisationLayer}
  */
 WebGLModule.VisualisationLayer = class {
@@ -67,6 +67,14 @@ WebGLModule.VisualisationLayer = class {
      */
     static description() {
         return "WebGL shader";
+    }
+
+    /**
+     * Default preview image URL getter,
+     * override if your image is not stored in webgl/shaders/[id].png
+     */
+    static preview() {
+        return WebGLModule.metadata.path + "/shaders/" + this.type() + ".png";
     }
 
     /**
@@ -1216,10 +1224,11 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         this.location_gluint = gl.getUniformLocation(program, this.webGLVariableName);
     }
 
+    //todo try to get rid of break line
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
-        return this.component.html(this.id, this.params, controlCss)
-            + (breakLine ? "<br>" : "");
+        const result = this.component.html(this.id, this.params, controlCss);
+        return breakLine ? `<div>${result}</div>` : result;
     }
 
     define() {

@@ -15,5 +15,6 @@
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],
-    "requires": ["nouislider", "colorMaps"]
+    "requires": ["nouislider", "colorMaps"],
+    "attach": "WebGLModule"
 }

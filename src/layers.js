@@ -177,7 +177,10 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             });
             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
             //load shaders just once
-            webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
+
+            if (!APPLICATION_CONTEXT.config.params.secureMode) {
+                webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
+            }
         }
 
         let seaGL = VIEWER.bridge;
@@ -188,7 +191,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
 
-        seaGL.createUrlMaker = function(vis) {
+        seaGL.createUrlMaker = function(vis, isSecureMode) {
+            if (isSecureMode && vis) delete vis.protocol;
             seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.layersProtocol));
             return seaGL.urlMaker;
         };

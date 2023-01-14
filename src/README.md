@@ -129,13 +129,14 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
     - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays 
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
+    - [O]`secureMode` - disable features allowing JS code injection (`protocol*` and `shaderSources`)
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`microns` - real world units to pixels mapping, default `undefined`,
     - [O]`name` - custom tissue name, default the tissue path
-    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation

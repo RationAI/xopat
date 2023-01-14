@@ -40,7 +40,7 @@ Using third party hosted scripts: an include record should look like this:
 {
     "src": "https://host.xy/file.js",
     "integrity": "hashofthefilesothatitsintegrityisverified",
-    "crossorigin": "anonymous"
+    "crossOrigin": "anonymous"
 }
 ````
 
@@ -83,8 +83,8 @@ if (data) {
 Additionaly, you can (like annotations module) perform this action after it has been requested, e.g. by exposing
 this as a ``bindIO()`` method that sets the IO if desired. Doing so will enable smooth exporting and data integration
 within the **context-free** viewer. Other plugins will not re-insert the same data multiple times if they work
-together over the same module. You should also provide some API so that plugins or other modules can export their
-own content with your data if applicable.
+together over the same module. You should also provide some API (e.g. defining your own event system) so that 
+plugins or other modules can export their own content with your data if applicable.
 
 > Example: annotations support force props exporting that makes the module allways export certain properties
 > if set. Other components can rely on their presence this way.

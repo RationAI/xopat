@@ -230,6 +230,8 @@ $visualisation = json_encode($parsedParams);
     <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.css">
     <script src="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.min.js"></script>
 
+    <script src="<?php echo PROJECT_SOURCES; ?>loader.js"></script>
+
     <!--UI Classes-->
     <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
 
@@ -418,6 +420,7 @@ EOF;
         stackedBackground: false,
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
+        secureMode: false,
     };
 
     const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
@@ -566,19 +569,6 @@ EOF;
         }
     };
 
-    /**
-     * Common Error thrown in JSON requests with failures (via fetchJSON(...)
-     * The content is not guaranteed to be translated.
-     * @type {Window.HTTPError}
-     */
-    window.HTTPError = class extends Error {
-        constructor(message, response, textData) {
-            super();
-            this.message = message;
-            this.response = response;
-            this.textData = textData;
-        }
-    };
 
     //preventive error message, that will be discarded after the full initialization, no translation
     window.onerror = function (message, file, line, col, error) {
@@ -660,242 +650,9 @@ EOF;
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
-
-    var registeredPlugins = [];
-    var LOADING_PLUGIN = false;
-
-    function showPluginError(id, e) {
-        if (!e) {
-            $(`#error-plugin-${id}`).html("");
-            $(`#load-plugin-${id}`).html("");
-            return;
-        }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
-        $(`#load-plugin-${id}`).html(`<button disabled class="btn">${$.t('common.Failed')}</button>`);
-        Dialogs.show($.t('messages.pluginRemovedNamed', {plugin: PLUGINS[id].name}), 4000, Dialogs.MSG_ERR);
-    }
-
-    function cleanUpScripts(id) {
-        $(`#script-section-${id}`).remove();
-        LOADING_PLUGIN = false;
-    }
-
-    function cleanUpPlugin(id, e=$.t('error.unknown')) {
-        delete PLUGINS[id].instance;
-        PLUGINS[id].loaded = false;
-        PLUGINS[id].error = e;
-
-        showPluginError(id, e);
-        $(`.${id}-plugin-root`).remove();
-        cleanUpScripts(id);
-    }
-
-    function instantiatePlugin(id, PluginClass) {
-        if (!id) {
-            console.warn("Plugin registered with no id defined!", id);
-            return;
-        }
-        if (!PLUGINS[id]) {
-            console.warn("Plugin registered with invalid id: no such id present in 'include.json'.", id);
-            return;
-        }
-
-        let plugin;
-        try {
-            let parameters = APPLICATION_CONTEXT.config.plugins[id];
-            if (!parameters) {
-                parameters = {};
-                APPLICATION_CONTEXT.config.plugins[id] = parameters;
-            }
-            PluginClass.prototype.staticData = function(metaKey) {
-                if (metaKey === "instance") return undefined;
-                return PLUGINS[id]?.[metaKey];
-            };
-            PluginClass.prototype.getLocaleFile = function(locale) {
-                return `locales/${locale}.json`;
-            };
-            PluginClass.prototype.localize = function (locale=undefined, data=undefined) {
-                return UTILITIES.loadPluginLocale(id, locale, data || this.getLocaleFile(locale || $.i18n.language));
-            };
-            PluginClass.prototype.t = function (key, options={}) {
-                options.ns = id;
-                return $.t(key, options);
-            };
-
-            plugin = new PluginClass(id, parameters);
-        } catch (e) {
-            console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
-            cleanUpPlugin(id, e);
-            return;
-        }
-
-        plugin.id = id; //silently set
-
-        let possiblyExisting = PLUGINS[id].instance;
-        if (possiblyExisting) {
-            console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
-            Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}), 7000, Dialogs.MSG_WARN);
-            cleanUpPlugin(plugin.id);
-            return;
-        }
-
-        PLUGINS[id].instance = plugin;
-        plugin.setOption = function(key, value, cookies=true) {
-            if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
-            APPLICATION_CONTEXT.config.plugins[id][key] = value;
-        };
-        plugin.getOption = function(key, defaultValue=undefined) {
-            let cookie = APPLICATION_CONTEXT._getCookie(key);
-            if (cookie !== undefined) return cookie;
-            let value = APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
-            if (value === "false") value = false; //true will eval to true anyway
-            return value;
-        };
-
-        showPluginError(id, null);
-        return plugin;
-    }
-
-    function initializePlugin(plugin) {
-        if (!plugin) return false;
-        if (!plugin.pluginReady) return true;
-        try {
-            plugin.pluginReady();
-            return true;
-        } catch (e) {
-            console.warn(`Failed to initialize plugin ${plugin}.`, e);
-            cleanUpPlugin(plugin.id, e);
-        }
-        return false;
-    }
-
-    /**
-     * Load a script at runtime. Plugin is REMOVED from the viewer
-     * if the script is faulty
-     *
-     * Enhancement: use Premise API instead
-     * @param pluginId plugin that uses particular script
-     * @param properties script attributes to set
-     * @param onload function to call on success
-     */
-    window.attachScript = function(pluginId, properties, onload) {
-        let errHandler = function (e) {
-            window.onerror = null;
-            if (LOADING_PLUGIN) {
-                cleanUpPlugin(pluginId, e);
-            } else {
-                cleanUpScripts(pluginId);
-            }
-        };
-
-        if (!properties.hasOwnProperty('src')) {
-            errHandler($.t('messages.pluginScriptSrcMissing'));
-            return;
-        }
-
-        let container = document.getElementById(`script-section-${pluginId}`);
-        if (!container) {
-            $("body").append(`<div id="script-section-${pluginId}"></div>`);
-            container = document.getElementById(`script-section-${pluginId}`);
-        }
-        let script = document.createElement("script");
-        for (let key in properties) {
-            if (key === 'src') continue;
-            script[key] = properties[key];
-        }
-        script.async = false;
-        script.onload = function () {
-            window.onerror = null;
-            onload();
-        };
-        script.onerror = errHandler;
-        window.onerror = errHandler;
-        script.src = properties.src;
-        container.append(script);
-        return true;
-    };
-
-    /**
-     * Get plugin.
-     * @param id plugin id, should be unique in the system and match the id value in includes.json
-     */
-    window.plugin = function(id) {
-        return PLUGINS[id]?.instance;
-    };
-
-    /**
-     * Register plugin. Plugin is instantiated and embedded into the viewer.
-     * @param id plugin id, should be unique in the system and match the id value in includes.json
-     * @param PluginClass class/class-like-function to register (not an instance!)
-     */
-    window.addPlugin = function(id, PluginClass) {
-        let plugin = instantiatePlugin(id, PluginClass);
-
-        if (!plugin) return;
-
-        if (registeredPlugins !== undefined) {
-            if (plugin && typeof plugin["pluginReady"] === "function") {
-                registeredPlugins.push(plugin);
-            }
-        } //else do not initialize plugin, wait untill all files loaded dynamically
-    };
-
-    function extendIfContains(target, source, ...properties) {
-        for (let property of properties) {
-            if (source.hasOwnProperty(property)) target[property] = source[property];
-        }
-    }
-
-    function chainLoad(id, sources, index, onSuccess, folder='<?php echo PLUGINS_FOLDER ?>') {
-        if (index >= sources.includes.length) {
-            onSuccess();
-        } else {
-            let toLoad = sources.includes[index],
-                properties = {};
-            if (typeof toLoad === "string") {
-                properties.src = `${folder}${sources.directory}/${toLoad}?v=<?php echo $version?>`;
-            } else if (typeof toLoad === "object") {
-                extendIfContains(properties, toLoad, 'async', 'crossorigin', 'use-credentials', 'defer', 'integrity',
-                    'referrerpolicy', 'src')
-            } else {
-                throw "Invalid dependency: invalid type " + (typeof toLoad);
-            }
-
-            attachScript(id, properties,
-                _ => chainLoad(id, sources, index+1, onSuccess, folder));
-        }
-    }
-
-    function chainLoadModules(moduleList, index, onSuccess) {
-        if (index >= moduleList.length) {
-            onSuccess();
-            return;
-        }
-        let module = MODULES[moduleList[index]];
-        if (!module || module.loaded) {
-            chainLoadModules(moduleList, index+1, onSuccess);
-            return;
-        }
-
-        function loadSelf() {
-            //load self files and continue loading from modulelist
-            chainLoad(module.id + "-module", module, 0,
-                function() {
-                    if (module.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${module.styleSheet}' type='text/css'/>`);
-                    }
-                    module.loaded = true;
-                    if (typeof module.attach === "string" && window[module.attach]) {
-                        window[module.attach].metadata = module;
-                    }
-                    chainLoadModules(moduleList, index+1, onSuccess);
-                }, '<?php echo MODULES_FOLDER ?>');
-        }
-
-        //first dependencies, then self
-        chainLoadModules(module.requires || [], 0, loadSelf);
-    }
+    const runLoader = initXOpatLoader(PLUGINS, MODULES, '<?php echo PLUGINS_FOLDER ?>', '<?php echo MODULES_FOLDER ?>', '<?php echo VERSION ?>');
+    VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     //properties depentend and important to change on bg image load/swap
     //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
@@ -942,194 +699,63 @@ EOF;
         }
     }
 
-    async function _getLocale(id, path, directory, data, locale) {
-        if (!locale) locale = $.i18n.language;
-
-        if (typeof data === "string" && directory) {
-            await fetch(`${path}${directory}/${data}`).then(response => {
-                    if (!response.ok) {
-                        throw new HTTPError("HTTP error " + response.status, response, '');
-                    }
-                    return response.json();
-                }).then(json => {
-                    $.i18n.addResourceBundle(locale, id, json);
-                });
-        } else if (data) {
-            $.i18n.addResourceBundle(locale, id, data);
-        } else {
-            throw "Invalid translation for item " + id;
-        }
-    }
-
     let preventedSwap = false;
 
-    window.UTILITIES = {
-
-        /**
-         * Load localization data for plugin
-         *  @param id
-         *  @param locale the current locale if undefined
-         *  @param data string to a file name relative to the plugin folder or a data containing the translation
-         */
-        loadPluginLocale: function(id, locale=undefined, data=undefined) {
-            return _getLocale(id, '<?php echo PLUGINS_FOLDER ?>', PLUGINS[id]?.directory, data, locale);
-        },
-
-        /**
-         * Load localization data for module
-         *  @param id
-         *  @param locale the current locale if undefined
-         *  @param data string to a file name relative to the module folder or a data containing the translation
-         */
-        loadModuleLocale: function(id, locale=undefined, data=undefined) {
-            return _getLocale(id, '<?php echo MODULES_FOLDER ?>', MODULES[id]?.directory, data, locale)
-        },
-
-        /**
-         * @param imageFilePath image path
-         * @param stripSuffix
-         */
-        fileNameFromPath: function(imageFilePath, stripSuffix=true) {
-            let begin = imageFilePath.lastIndexOf('/')+1;
-            if (stripSuffix) {
-                let end = imageFilePath.lastIndexOf('.');
-                if (end >= 0) return imageFilePath.substr(begin, end - begin);
-            }
-            return imageFilePath.substr(begin, imageFilePath.length - begin);
-        },
-
-        /**
-         * Load modules at runtime
-         * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
-         * @param onload function to call on successful finish
-         * @param ids all modules id to be loaded (rest parameter syntax)
-         */
-        loadModules: function(onload=_=>{}, ...ids) {
-            LOADING_PLUGIN = false;
-            chainLoadModules(ids, 0, () => {
-                ids.forEach(id => VIEWER.raiseEvent('module-loaded', {id: id}));
-                onload && onload();
-            });
-        },
-
-        /**
-         * Load a plugin at runtime
-         * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
-         * @param id plugin to load
-         * @param onload function to call on successful finish
-         */
-        loadPlugin: function(id, onload=_=>{}) {
-            let meta = PLUGINS[id];
-            if (!meta || meta.loaded || meta.instance) return;
-            if (window.hasOwnProperty(id)) {
-                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
-                console.warn("Plugin id collision on global scope", id);
-                return;
-            }
-            if (!Array.isArray(meta.includes)) {
-                Dialogs.show($.t('messages.pluginLoadFailed'), 5000, Dialogs.MSG_ERR);
-                console.warn("Plugin include invalid.");
-                return;
-            }
-
-            let successLoaded = function() {
-                LOADING_PLUGIN = false;
-
-                //loaded after page load
-                if (!initializePlugin(PLUGINS[id].instance)) {
-                    Dialogs.show($.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_WARN);
-                    return;
-                }
-                Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[id].name}), 2500, Dialogs.MSG_INFO);
-
-                if (meta.styleSheet) {  //load css if necessary
-                    $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
-                }
-                meta.loaded = true;
-                if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    let plugins = [];
-                    for (let p in PLUGINS) {
-                        if (PLUGINS[p].loaded) plugins.push(p);
-                    }
-                    APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
-                }
-
-                VIEWER.raiseEvent('plugin-loaded', {id: id});
-                onload();
-            };
-            LOADING_PLUGIN = true;
-            chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
-        },
-
-        /**
-         * Check whether component is loaded
-         * @param {string} id component id
-         * @param {boolean} isPlugin true if check for plugins
-         */
-        isLoaded: function (id, isPlugin=false) {
-            if (isPlugin) {
-                let plugin = PLUGINS[id];
-                return plugin.loaded && plugin.instance;
-            }
-            return MODULES[id].loaded;
-        },
-
-        /**
-         * Change background image if not in stacked mode
-         * @param bgIndex
-         */
-        swapBackgroundImages: function (bgIndex) {
-            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-                console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
-                return;
-            }
-            if (preventedSwap) {
-                Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
-                return;
-            }
-            let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
-            if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
-            if (activeBackground === bgIndex) return;
-            const image = APPLICATION_CONTEXT.config.background[bgIndex],
-                imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
-                sourceUrlMaker = new Function("path,data", "return " +
-                    (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-
-            let prevImage = VIEWER.world.getItemAt(0);
-            let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
-            preventedSwap = true;
-            VIEWER.addTiledImage({
-                tileSource: url,
-                index: 0,
-                opacity: 1,
-                replace: true,
-                success: function (e) {
-                    preventedSwap = false;
-                    APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-                    e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
-                    updateBackgroundChanged(0);
-                    let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
-                    VIEWER.raiseEvent('background-image-swap', {
-                        backgroundImageUrl: url,
-                        prevBackgroundSetup: previousBackgroundSetup,
-                        backgroundSetup: image,
-                        previousTiledImage: prevImage,
-                        tiledImage: e.item,
-                    });
-                    let container = document.getElementById('tissue-preview-container');
-                    container.children[activeBackground].classList.remove('selected');
-                    container.children[bgIndex].classList.add('selected');
-                },
-                error: function (e) {
-                    preventedSwap = false;
-                    console.error("Swap Images Failure", e);
-                    let container = document.getElementById('tissue-preview-container');
-                    Dialogs.show($.t('messages.swapImagesFail'), 5000, Dialogs.MSG_ERR);
-                    container.children[bgIndex].classList.remove('selected');
-                    container.children[activeBackground].classList.add('selected');
-                }
-            });
+    /**
+     * Change background image if not in stacked mode
+     * @param bgIndex
+     */
+    window.UTILITIES.swapBackgroundImages = function (bgIndex) {
+        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+            console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
+            return;
         }
+        if (preventedSwap) {
+            Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+        if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
+        if (activeBackground === bgIndex) return;
+        const image = APPLICATION_CONTEXT.config.background[bgIndex],
+            imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
+            sourceUrlMaker = new Function("path,data", "return " +
+                (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+
+        let prevImage = VIEWER.world.getItemAt(0);
+        let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+        preventedSwap = true;
+        VIEWER.addTiledImage({
+            tileSource: url,
+            index: 0,
+            opacity: 1,
+            replace: true,
+            success: function (e) {
+                preventedSwap = false;
+                APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+                e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
+                updateBackgroundChanged(0);
+                let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
+                VIEWER.raiseEvent('background-image-swap', {
+                    backgroundImageUrl: url,
+                    prevBackgroundSetup: previousBackgroundSetup,
+                    backgroundSetup: image,
+                    previousTiledImage: prevImage,
+                    tiledImage: e.item,
+                });
+                let container = document.getElementById('tissue-preview-container');
+                container.children[activeBackground].classList.remove('selected');
+                container.children[bgIndex].classList.add('selected');
+            },
+            error: function (e) {
+                preventedSwap = false;
+                console.error("Swap Images Failure", e);
+                let container = document.getElementById('tissue-preview-container');
+                Dialogs.show($.t('messages.swapImagesFail'), 5000, Dialogs.MSG_ERR);
+                container.children[bgIndex].classList.remove('selected');
+                container.children[activeBackground].classList.add('selected');
+            }
+        });
     };
 
     //initialization of UI and handling of background image load errors
@@ -1201,6 +827,9 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
             for (let idx = 0; idx < confBackground.length; idx++ ) {
                 const image = confBackground[idx],
                     imagePath = confData[image.dataReference];
+
+                if (APPLICATION_CONTEXT.config.params.secureMode) delete image.protocolPreview;
+
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
                 html += `
@@ -1298,16 +927,8 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
     function handleSyntheticEventFinish(opts={}) {
 
         if (reopenCounter === 0) {
-            for (let modID in MODULES) {
-                const module = MODULES[modID];
-                if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
-                    window[module.attach].metadata = module;
-                }
-            }
 
-            //Notify plugins OpenSeadragon is ready
-            registeredPlugins.forEach(plugin => initializePlugin(plugin));
-            registeredPlugins = undefined;
+            runLoader();
 
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
@@ -1357,6 +978,8 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         visualizations=[],
     ) {
         window.VIEWER.close();
+
+        const isSecureMode = APPLICATION_CONTEXT.config.params.secureMode;
 
         //todo loading animation?
         let renderingWithWebGL = visualizations?.length > 0;
@@ -1417,6 +1040,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             //reverse order: last opened IMAGE is the first visible
             for (let i = background.length-1; i >= 0; i--) {
                 const bg = background[i];
+                if (isSecureMode) delete bg.protocol;
                 const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
                 toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
             }
@@ -1430,6 +1054,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         } else if (background.length > 0) {
             const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
             let selectedImage = background[selectedIndex];
+            if (isSecureMode) delete selectedImage.protocol;
             const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
             toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
 
@@ -1468,7 +1093,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             VIEWER.bridge.loadShaders(
                 activeVisIndex,
                 function() {
-                    VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization());
+                    VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
                     openAll(1);
                 }

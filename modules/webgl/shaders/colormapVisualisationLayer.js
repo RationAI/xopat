@@ -2,6 +2,8 @@
  * Colormap shader
  * data reference must contain one index to the data to render using colormap strategy
  *
+ * todo allow invert
+ *
  * expected parameters:
  *  index - unique number in the compiled shader
  * supported parameters:
@@ -63,7 +65,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
                     density: 4
                 }},
             accepts: (type, instance) => type === "float",
-            required: {type: "advanced_slider"}
+            required: {type: "advanced_slider", inverted: false}
         },
         connect : {
             default: {type: "bool", interactive: true, title: "Connect breaks: ", default: false},

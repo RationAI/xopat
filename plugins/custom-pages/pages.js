@@ -7,7 +7,8 @@ addPlugin("custom-pages", class {
     }
 
     pluginReady() {
-        let sanitization = this.getOption('sanitizeConfig', this.staticData('sanitizeConfig'));
+        let sanitization = this.getOption('sanitizeConfig', this.staticData('sanitizeConfig'))
+            || APPLICATION_CONTEXT.config.params.secureMode;
         if (Array.isArray(this.data[0])) {
             for (let x of this.data) this.builder.buildMetaDataMenu(x, sanitization);
         } else {

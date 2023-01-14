@@ -20,7 +20,6 @@
 *   params: object
 *  }} Layer
 */
-
 window.WebGLModule = class {
     /**
      * @param {object} incomingOptions
@@ -122,6 +121,7 @@ window.WebGLModule = class {
      * Reset the engine to the initial state
      */
     reset() {
+        this._unloadCurrentProgram();
         this._visualisations = [];
         this._dataSources = [];
         this._origDataSources = [];
@@ -201,12 +201,7 @@ window.WebGLModule = class {
         if (order) {
             vis.order = order;
         }
-        if (this._programs.hasOwnProperty(this._program)) {
-            //must remove before attaching new
-            let program = this._programs[this._program];
-            this._detachShader(program, "VERTEX_SHADER");
-            this._detachShader(program, "FRAGMENT_SHADER");
-        }
+        this._unloadCurrentProgram();
         this._visualisationToProgram(vis, this._program);
         this._forceSwitchShader(this._program);
     }
@@ -379,7 +374,7 @@ window.WebGLModule = class {
     prepareAndInit(dataSources, width=1, height=1) {
         let _this = this;
         this.prepare(dataSources, () => {
-            _this.init(1, 1);
+            _this.init(width, height);
         });
     }
 
@@ -519,6 +514,15 @@ window.WebGLModule = class {
                 return this._forceSwitchShader(i, false); //force reset in errors
             }
             this._toBuffers(this._programs[i], target);
+        }
+    }
+
+    _unloadCurrentProgram() {
+        if (this._programs && this._programs.hasOwnProperty(this._program)) {
+            //must remove before attaching new
+            let program = this._programs[this._program];
+            this._detachShader(program, "VERTEX_SHADER");
+            this._detachShader(program, "FRAGMENT_SHADER");
         }
     }
 

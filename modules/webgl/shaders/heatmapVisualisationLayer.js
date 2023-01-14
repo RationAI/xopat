@@ -36,7 +36,7 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     static defaultControls = {
         color: {
             default: {type: "color", default: "#fff700", title: "Color: "},
-            accepts: (type, instance) => type === "vec3"
+            accepts: (type, instance) => type === "vec3",
         },
         threshold: {
             default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
@@ -58,7 +58,7 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
             chan = 1.0;
         } else chan = 1.0 - chan;
     }
-    if (shows) return vec4(${this.color.sample()}, chan);
+    if (shows) return vec4(${this.color.sample('chan', 'float')}, chan);
     return vec4(.0);
 `;
     }

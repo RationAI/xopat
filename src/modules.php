@@ -3,10 +3,13 @@
 $MODULES = array();
 
 foreach (array_diff(scandir(MODULES_FOLDER), array('..', '.')) as $_=>$dir) {
-    $interface = MODULES_FOLDER . $dir . "/include.json";
+    $full_path = MODULES_FOLDER . "$dir/";
+    $interface = $full_path . "include.json";
+
     if (file_exists($interface)) {
         $data = json_decode(file_get_contents($interface));
         $data->directory = $dir;
+        $data->path = $full_path;
         $data->loaded = false;
         $MODULES[$data->id] = $data;
     }
@@ -71,11 +74,11 @@ function resolveDependencies($itemList, $version) {
     }
 }
 
-function getAttributes($source, ...$properties) {
+function getAttributes($source, $properties) {
     $html = "";
-    foreach ($properties as $property) {
+    foreach ($properties as $property=>$propScriptName) {
         if (isset($source->{$property})) {
-            $html .= " $property=\"{$source->{$property}}\"";
+            $html .= " $propScriptName=\"{$source->{$property}}\"";
         }
     }
     return $html;
@@ -96,8 +99,10 @@ function printDependencies($directory, $item) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item->directory}/$file?v=$version\"></script>\n";
         } else if (is_object($file)) {
-            echo "    <script" . getAttributes($file, 'async', 'crossorigin', 'use-credentials',
-                    'defer', 'integrity', 'referrerpolicy', 'src') . "></script>";
+            //todo transalte js to html syntax
+            echo "    <script" . getAttributes($file, array(
+                    'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer',
+                    'integrity' => 'integrity', 'referrerPolicy' => 'referrerpolicy', 'src' => 'src')) . "></script>";
         } else {
             echo "<script>console.warn('Invalid include:', '{$item->id}', '$file');</script>";
         }

@@ -58,6 +58,9 @@ Same as above, an error event.
 #### `plugin-loaded` | e: `{id: string}
 Fired when plugin is loaded within a system (at runtime).
 
+#### `plugin-failed` | e: `{id: string, message:string}
+Fired when plugin fails to load within a system (at runtime).
+
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 

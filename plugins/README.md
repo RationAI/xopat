@@ -191,7 +191,7 @@ or an object to specify a file on the web. The object properties (almost) map to
         {
             "src": "https://host.xy/file.js",
             "integrity": "hashofthefilesothatitsintegrityisverified",
-            "crossorigin": "anonymous"
+            "crossOrigin": "anonymous"
         }
     ]
 }

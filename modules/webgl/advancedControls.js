@@ -55,6 +55,10 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         return this._c1.supports;
     }
 
+    get params() {
+        return this._c1.params;
+    }
+
     get type() {
         return this._c1.type;
     }
@@ -246,11 +250,11 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_S
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
-style="width: 60%;">${this.load(this.params.default)}</span>`;
+        if (!this.params.interactive) return `<div><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
+style="width: 60%;">${this.load(this.params.default)}</span></div>`;
 
-        return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
-style="width: 60%;"></select><br>`;
+        return `<div><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
+style="width: 60%;"></select></div>`;
     }
 
     define() {
@@ -358,11 +362,11 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block" 
-style="width: 60%;">&emsp;</span>`;
+        if (!this.params.interactive) return `<div><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block" 
+style="width: 60%;">&emsp;</span></div>`;
 
-return `<span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block" 
-style="width: 60%;"></span><br>`;
+return `<div><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block" 
+style="width: 60%;"></span></div>`;
     }
 
     get supports() {
@@ -539,7 +543,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     _this._updatePending = true;
                     setTimeout(_ => {
                         //todo re-scale values or filter out -1ones
-                        _this.changed("values", _this.value, strValues, _this);
+                        _this.changed("breaks", _this.value, strValues, _this);
                         _this.store(unencoded, "breaks");
 
                         _this.context.invalidate();
@@ -582,8 +586,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
 
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
-        return `<span style="height: 54px;">${this.params.title}: </span><div id="${this.id}" style="height: 9px; 
-margin-left: 5px; width: 60%; display: inline-block"></div>`;
+        return `<div><span style="height: 54px;">${this.params.title}: </span><div id="${this.id}" style="height: 9px; 
+margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
     }
 
     define() {
@@ -607,7 +611,7 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
             breaks: [0.2, 0.8],
             mask: [1, 0, 1],
             interactive: true,
-            inverted: false,
+            inverted: true,
             maskOnly: true,
             toggleMask: true,
             title: "Threshold",
@@ -794,8 +798,8 @@ WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl 
     toHtml(breakLine=true, controlCss="") {
         let disabled = this.params.interactive ? "" : "disabled";
         let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
-        return `${title}<textarea id="${this.id}" class="form-control" 
-style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled} placeholder="${this.params.placeholder}"></textarea>`;
+        return `<div>${title}<textarea id="${this.id}" class="form-control" 
+style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
     }
 
     define() {
