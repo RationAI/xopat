@@ -35,7 +35,8 @@ var PredefinedShaderControlParameters = {
     runShaderAndControlSelector: function(nodeId, onFinish) {
         const _this = this;
         this.runShaderSelector(nodeId, (shaderId) => {
-            const src = _this.picker.granularity("image");
+            const src = _this.picker.granularity("image")
+                || _this.picker.selectionRules.granularity._config.image.granular;
             if (src) {
                 const image = document.createElement('img');
                 image.onload = () => {
@@ -239,6 +240,7 @@ var PredefinedShaderControlParameters = {
                 const _this = this;
                 setTimeout(()=>{
                     document.getElementById(_this._uniqueId + "realtime-rendering-example").appendChild(module.gl.canvas);
+                    document.getElementById(_this._uniqueId + "realtime-rendering-example").appendChild(this._renderData);
                     module.processImage(this._renderData,
                         {width: this._renderData.width, height: this._renderData.height},
                         0,
@@ -384,11 +386,15 @@ ${renders.join("")}
         this.setup.shader.name = "Configuration: " + shaderId;
 
         const finish = this._onControlSelectFinish ?
-            `<button class="btn" onclick="${this.REF}._onControlSelectFinish(${this.REF}.setup.vis);">Done</button>` : '';
+            `<button class="btn" onclick="${this.REF}._onControlSelectFinish(${this.REF}.getCurrentShaderConfig());">Done</button>` : '';
 
         module.addVisualisation(this.setup.vis);
         module.prepareAndInit(data.map(x => ""), this._renderData?.width, this._renderData?.height);
         return `<div><h3>Available controls and their parameters</h3><br><div id='${this._uniqueId}interactive-controls'></div></div>${finish}<br>`;
+    },
+
+    getCurrentShaderConfig() {
+        return JSON.parse(JSON.stringify(this.setup.shader, WebGLModule.jsonReplacer))
     },
 
     /**********************/

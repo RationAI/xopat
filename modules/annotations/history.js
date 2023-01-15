@@ -403,6 +403,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         let ctx = this.winContext();
         if (ctx) {
             let header = ctx.document.getElementById("window-header");
+            if (!header) return; //todo test window mode hidden why it gets here ctx should be null
             if (enabled) {
                 ctx.document.body.style.background = "transparent";
                 header.readonly = false; this._context.canvas.renderAll()
