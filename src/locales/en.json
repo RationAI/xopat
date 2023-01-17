@@ -6,7 +6,9 @@
       "detailsBtn": "details",
       "unknown": "Unknown error",
       "back": "Go back",
-      "noDetails": "No details provided"
+      "noDetails": "No details provided",
+      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
+      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file."
     },
     "main": {
       "global": {
@@ -51,7 +53,7 @@
       "urlInvalid": "Invalid link",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualisation setup is not parse-able.",
-      "cookiesDisabled": "Cookies are disabled. You can change this option in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
+      "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
       "cookieConfSaved": "Modifications in parameters saved.",
       "bgReferenceMissing": "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualisation layer.",

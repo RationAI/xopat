@@ -234,23 +234,7 @@ $visualisation = json_encode($parsedParams);
 
     <!--UI Classes-->
     <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
-
-    <!--Modules-->
-    <?php
-
-    resolveDependencies($MODULES, $version);
-    foreach ($MODULES as $_ => $mod) {
-        if ($mod->loaded) {
-            printDependencies(MODULES_FOLDER, $mod);
-        }
-    }
-
-    ?>
-
 </head>
-
-
-
 <body style="overflow: hidden;">
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
@@ -363,24 +347,24 @@ EOF;
             <!-- Appended controls for other plugins -->
         </div>
 
-        <div class="d-flex flex-items-end p-2 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
-            <span id="copy-url" class="btn-pointer" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
+        <div class="d-flex flex-items-end px-1 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
+            <span id="copy-url" class="btn-pointer py-2 pr-1" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
                 <span class="material-icons pr-0" style="font-size: 22px;">link</span>
                 <span data-i18n="main.bar.exportUrl">URL</span>
             </span>&emsp;
-            <span id="global-export" class="btn-pointer" onclick="UTILITIES.export();" data-i18n="[title]main.bar.explainExportFile">
+            <span id="global-export" class="btn-pointer py-2 pr-1" onclick="UTILITIES.export();" data-i18n="[title]main.bar.explainExportFile">
                 <span class="material-icons pr-0" style="font-size: 22px;">download</span>
                 <span data-i18n="main.bar.exportFile">Export</span>
             </span>&emsp;
-            <span id="add-plugins" class="btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+            <span id="add-plugins" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
                 <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
                 <span data-i18n="main.bar.plugins">Plugins</span>
             </span>&emsp;
-            <span id="global-help" class="btn-pointer" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+            <span id="global-help" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
                 <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
                 <span data-i18n="main.bar.tutorials">Tutorial</span>
             </span>&emsp;
-            <span id="settings" class="p-0 material-icons btn-pointer" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
+            <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
     </div>
 
@@ -547,11 +531,14 @@ EOF;
                 cookies.set(key, value);
             }
         },
-        _getCookie(key, defaultValue=undefined) {
+        _getCookie(key, defaultValue=undefined, willParse=false) {
             if (!this.config.params.bypassCookies) {
                 let value = cookies.get(key);
-                if (value === "false") value = false;
-                else if (value === "true") value = true;
+
+                if (!willParse) {
+                    if (value === "false") value = false;
+                    else if (value === "true") value = true;
+                }
                 return value;
             }
             return defaultValue;
@@ -635,24 +622,24 @@ EOF;
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
-
-    // VIEWER.addHandler('warn-user', e => {
-    //     //todo time deduction from the message length
-    //     //todo make this as a last handler
-    //     Dialogs.show(e.message, 5000, Dialogs.MSG_WARN, false);
-    // });
-    // VIEWER.addHandler('error-user', e => {
-    //     //todo time deduction from the message length
-    //     //todo make this as a last handler
-    //     Dialogs.show(e.message, 5000, Dialogs.MSG_ERR, false);
-    // });
+    VIEWER.addHandler('warn-user', e => {
+        e.stopPropagation();
+        if (!e.message) return;
+        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
+    });
+    VIEWER.addHandler('error-user', e => {
+        e.stopPropagation();
+        if (!e.message) return;
+        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
+    });
+    VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
     const runLoader = initXOpatLoader(PLUGINS, MODULES, '<?php echo PLUGINS_FOLDER ?>', '<?php echo MODULES_FOLDER ?>', '<?php echo VERSION ?>');
-    VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+
 
     //properties depentend and important to change on bg image load/swap
     //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
@@ -1114,6 +1101,16 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
 
     <!--Visualization setup-->
     <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>layers.js"></script>
+
+    <!--Modules-->
+<?php
+resolveDependencies($MODULES, $version);
+foreach ($MODULES as $_ => $mod) {
+    if ($mod->loaded) {
+        printDependencies(MODULES_FOLDER, $mod);
+    }
+}
+?>
 
     <!--Plugins Loading-->
     <script type="text/javascript">

@@ -57,8 +57,6 @@
         constructor(viewer, scale) {
             var self = this;
 
-
-
             this._viewer = viewer;
             this._scale = scale;
             this._containerWidth = 0;

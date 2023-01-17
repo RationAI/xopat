@@ -7,19 +7,18 @@
  * 	//TODO https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
  *   // - blending ?
  */
-window.OSDAnnotations = class extends OpenSeadragon.EventSource {
+window.OSDAnnotations = class extends XOpatModuleSingleton {
 
-	/**
-	 * Get instance of the annotations manger, a singleton
-	 * (only one instance can run since it captures mouse events)
-	 * @static
-	 * @return {OSDAnnotations} manager instance
-	 */
-	static instance() {
-		if (this.__self) {
-			return this.__self;
-		}
-		return new OSDAnnotations();
+	constructor() {
+		super("annotations");
+		this.version = "0.0.1";
+		this.session = this.version + "_" + Date.now();
+
+		//todo try to avoid in the future accessing self through a global
+		window.annotations = this;
+		this.initEventSource();
+		this._init();
+		this._setListeners();
 	}
 
 	/**
@@ -81,7 +80,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			throw `The factory ${FactoryClass} does not inherit from ${OSDAnnotations.AnnotationObjectFactory}`;
 		}
 
-		if (! this.__self) {
+		if (! this.instantiated()) {
 			this.__registered = this.__registered ?? [];
 			this.__registered.push(FactoryClass);
 			return;
@@ -95,6 +94,26 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/******************* EXPORT, IMPORT... todo move to convertor? **********************/
+
+	async exportData() {
+		return await this.export();
+	}
+
+	async importData(data) {
+		await this.import(data);
+	}
+
+	async initIO() {
+		if (await super.initIO()) {
+			this.loadPresetsCookieSnapshot();
+			return true;
+		}
+		return false;
+	}
+
+	willParseImportData() {
+		return false;
+	}
 
 	defaultFileNameFor(format=undefined) {
 		if (!format || format === "native") {
@@ -138,8 +157,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	 */
 	async export(format=undefined, withAnnotations=true, withPresets=true) {
 		if (!format || format === "native") {
-			const _this = this,
-				result = withAnnotations ? this.toObject(false) : {};
+			const result = withAnnotations ? this.toObject(false) : {};
 			if (result.objects) {
 				this.trimExportJSON(result);
 			}
@@ -807,38 +825,69 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	/**
-	 * Binds IO to the export events, must be requested manually.
+	 * Create preset cache, this cache is loaded automatically with initIO request
+	 * @return {boolean}
 	 */
-	bindIO() {
-		if (this._handledIO) return;
+	createPresetsCookieSnapshot() {
+		return this.setCache(this.presetCookieKey, this.presets.toObject(true));
+	}
+
+	/**
+	 * Load cookies cache if available
+	 */
+	loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
-		//restore presents if any
-		VIEWER.addHandler('export-data', e => e.setSerializedData(
-			"annotation_presets", presets.toObject(true)));
-		let presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		if (presetData !== undefined) {
+		const presetCookiesData = this.getCache(this.presetCookieKey);
+		if (presetCookiesData) {
+			if (ask && this.presets._presetsImported) {
+				this.warn({
+					code: 'W_CACHE_IO_OMMITED',
+					message: 'There are presets available in the cache, but did not load since different presets were imported from data.<a onclick="annotations.loadPresetsCookieSnapshot(false);" class="pointer">Load anyway.</a>',
+				});
+				return;
+			}
+			try {
+				presets.import(presetCookiesData);
+			} catch (e) {
+				console.error(e);
+				this.warn({
+					error: e, code: "W_COOKIES_DISABLED",
+					message: "Could not load presets. Please, let us know about this issue and provide exported file.",
+				});
+			}
+		}
+	}
+
+	_deprecatedAPIHandlers() {
+		const presets = this.presets;
+		const presetData = APPLICATION_CONTEXT.getData("annotation_presets");
+		if (presetData) {
 			try {
 				presets.import(presetData);
 			} catch (e) {
-				//todo error event instead
 				console.error(e);
-				Dialogs.show("Could not load presets. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
+				VIEWER.raiseEvent('warn-user', {
+					error: e,
+					originType: "module",
+					originId: "annotations",
+					code: "W_COOKIES_DISABLED",
+					message: "Could not load presets. Please, let us know about this issue and provide exported file.",
+				});
 			}
 		}
-
-		//restore objects if any
-		VIEWER.addHandler('export-data', e =>
-			e.setSerializedData("annotation-list",
-				JSON.stringify(this.trimExportJSON(this.toObject(), ...this._extraProps))));
 		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
 		if (imageJson) {
 			this.loadObjects(JSON.parse(imageJson)).catch(e => {
 				console.warn(e);
-				//todo error event instead
-				Dialogs.show("Could not load annotations. Please, let us know about this issue and provide exported file.", 20000, Dialogs.MSG_ERR);
+				VIEWER.raiseEvent('warn-user', {
+					error: e,
+					originType: "module",
+					originId: "annotations",
+					code: "W_COOKIES_DISABLED",
+					message: "Could not load annotations. Please, let us know about this issue and provide exported file.",
+				});
 			});
 		}
-		this._handledIO = true;
 	}
 
 	/********************* PRIVATE **********************/
@@ -870,6 +919,7 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 		this.mode = this.Modes.AUTO;
 		this.opacity = 0.6;
 		this.disabledInteraction = false;
+		this.presetCookieKey = '-presets-cache';
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = [];
@@ -912,7 +962,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
 			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
 
-		this._handledIO = false;
 		const _this = this;
 
 		//after properties initialize
@@ -1126,8 +1175,8 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 	}
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
-		let _this = this.__self;
-		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
+		let _this = this.__self; //todo dirty
+		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets); //todo _this might be undefined
 		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
@@ -1263,23 +1312,6 @@ window.OSDAnnotations = class extends OpenSeadragon.EventSource {
 			reset();
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
-	}
-
-	static __self = undefined;
-	constructor() {
-		super();
-		if (this.constructor.__self) {
-			throw "Annotation system is not instantiable. Instead, use OSDAnnotations::instance().";
-		}
-
-		//possibly try to avoid in the future accessing self through a global
-		window.annotations = this;
-		this.id = "annotations";
-		this.version = "0.0.1";
-		this.session = this.version + "_" + Date.now();
-		this.constructor.__self = this;
-		this._init();
-		this._setListeners();
 	}
 };
 

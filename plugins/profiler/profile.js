@@ -1,7 +1,6 @@
-Profiler = class {
-
-    constructor() {
-
+addPlugin('profiler', class extends XOpatPlugin {
+    constructor(id, params) {
+        super(id);
     }
 
     pluginReady() {
@@ -38,5 +37,4 @@ Profiler = class {
             }, 500);
         });
     }
-};
-addPlugin('profiler', Profiler);
+});

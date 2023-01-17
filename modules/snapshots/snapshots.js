@@ -1,16 +1,23 @@
-window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
+//TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
+window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
+    constructor() {
+        super("snaphots");
+        this.viewer = VIEWER;
 
-    /**
-     * TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
-     *
-     * Singleton getter.
-     * @return {OpenSeadragon.Snapshots}
-     */
-    static instance() {
-        if (this.__self) {
-            return this.__self;
-        }
-        return new OpenSeadragon.Snapshots(VIEWER);
+        this.initEventSource();
+
+        this._idx = 0;
+        this._steps = [];
+        this._currentStep = null;
+        this._deprecated_IO_API();
+        this.initIO(); //todo consider delegation to plugins that use snapshots
+        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
+
+        this._captureVisualization = false;
+        this._captureViewport = true;
+        this._captureScreen = false;
+
+        this.captureVisualization = false;
     }
 
     /**
@@ -220,6 +227,14 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         return serialize ? JSON.stringify(this._steps) : [...this._steps];
     }
 
+    async exportData() {
+        return this.exportJSON();
+    }
+
+    async importData(data) {
+        this.importJSON(data);
+    }
+
     /**
      * Import state (deletes existing one)
      * @param {object[]|string} json
@@ -325,18 +340,14 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         }
     }
 
-    _init() {
+    _deprecated_IO_API() {
         const _this = this;
-        VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
-
         let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));
             } catch (e) {
                 console.warn(e);
-                //todo message to plugin since plugin has export controls
-                //or add option to download file - extracted keframes from post
                 Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
             }
         }
@@ -459,35 +470,5 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             if (arrA[i] !== arrB[i]) return false;
         }
         return true;
-    }
-
-
-    static __self = undefined;
-
-    /**
-     * @private
-     * @param {OpenSeadragon.Viewer} viewer
-     */
-    constructor(viewer) {
-        super();
-        if (this.constructor.__self) {
-            throw "Snaphots are not instantiable. Instead, use OpenSeadragon.Snapshots::instance().";
-        }
-
-        this.id = "snaphots";
-        this.viewer = viewer;
-        this.constructor.__self = this;
-
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
-        this._init();
-        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
-
-        this._captureVisualization = false;
-        this._captureViewport = true;
-        this._captureScreen = false;
-
-        this.captureVisualization = false;
     }
 };

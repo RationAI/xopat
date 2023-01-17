@@ -1,7 +1,7 @@
-addPlugin("extra-tutorials", class {
+addPlugin("extra-tutorials", class extends XOpatPlugin {
     constructor(id, params) {
+        super(id);
         this.id = id;
-        this.PLUGIN = `plugin('${id}')`;
         this.data = params.data || [];
     }
 

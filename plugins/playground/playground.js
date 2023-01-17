@@ -1,28 +1,27 @@
-class Playground  {
+class Playground extends XOpatPlugin {
 
     constructor(id, params) {
-        this.id = id;
+        super(id);
         //todo move params to 'plugins' ? probably yes...
         this.setup = params;
         this.strategy = null;
-        this.PLUGIN = `plugin('${id}')`;
 
         if (!this.setup.hasOwnProperty("server")) this.setup.server = "http://test.muni:8080";
         this.imageSources = [...APPLICATION_CONTEXT.config.data]; //copy
 
         USER_INTERFACE.MainMenu.appendExtended("Python Playground", `
-<span class="material-icons btn-pointer" id="reload-playground" title="Restart" style="float: right;" onclick="${this.PLUGIN}.refresh();"> refresh</span>
+<span class="material-icons btn-pointer" id="reload-playground" title="Restart" style="float: right;" onclick="${this.THIS}.refresh();"> refresh</span>
 <span class="material-icons btn-pointer" id="enable-disable-playground" title="Enable/disable" style="float: right;" data-ref="on" onclick="
         let self = $(this);
         if (self.attr('data-ref') === 'on'){
-            ${this.PLUGIN}.setEnabled(false); self.html('visibility_off'); self.attr('data-ref', 'off');
+            ${this.THIS}.setEnabled(false); self.html('visibility_off'); self.attr('data-ref', 'off');
         } else {
-            ${this.PLUGIN}.setEnabled(true); self.html('visibility'); self.attr('data-ref', 'on');
+            ${this.THIS}.setEnabled(true); self.html('visibility'); self.attr('data-ref', 'on');
         }"> visibility</span>
-        <span style="float: right;" class="material-icons btn-pointer" onclick="${this.PLUGIN}.openMenu();">receipt_long</span>
-<!--<span style="float: right;" class="material-icons btn-pointer" onclick="${this.PLUGIN}.workflow.open();">history_edu</span>-->`,
+        <span style="float: right;" class="material-icons btn-pointer" onclick="${this.THIS}.openMenu();">receipt_long</span>
+<!--<span style="float: right;" class="material-icons btn-pointer" onclick="${this.THIS}.workflow.open();">history_edu</span>-->`,
             `<select id="data-playground-select" style="max-width: 380px" class="form-control"
- onchange="${this.PLUGIN}.switchUnderlyingData($(this).val())"></select>`,
+ onchange="${this.THIS}.switchUnderlyingData($(this).val())"></select>`,
             `<div id="postprocess-algorithm"></div><div id=""></div>`,
             "python-playground", this.id);
 
@@ -320,7 +319,7 @@ class Playground  {
                     break;
                 default:
                     details = `Unknown error at the server. Please, restart the service. 
-Note that for this plugin to work, you need to run a python playground server by yourself. <a onclick="${this.PLUGIN}.refresh()">Retry</a>.`;
+Note that for this plugin to work, you need to run a python playground server by yourself. <a onclick="${this.THIS}.refresh()">Retry</a>.`;
                     Dialogs.show("Playground: " + details, 5000, Dialogs.MSG_ERR);
                     this.setStatus(details, {error: true});
                     break;

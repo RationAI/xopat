@@ -35,7 +35,7 @@ window.XOpatWorker = class extends OpenSeadragon.EventSource {
 
         try {
             if (window.Worker) {
-                const rootPath = XOpatWorker.metadata.directory,
+                const rootPath = XOpatModule.ROOT + "worker/",
                     self = this;
 
                 if (!this.worker) {
@@ -47,7 +47,7 @@ window.XOpatWorker = class extends OpenSeadragon.EventSource {
                         return;
                     }
 
-                    this.worker = new Worker(`${rootPath}/worker.js`);
+                    this.worker = new Worker(`${rootPath}worker.js`);
 
                     this.worker.onmessage = (e) => {
                         const data = e.data;

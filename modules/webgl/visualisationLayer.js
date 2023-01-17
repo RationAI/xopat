@@ -72,9 +72,10 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Default preview image URL getter,
      * override if your image is not stored in webgl/shaders/[id].png
+     * Remove XOpatModule.ROOT reference if you do not use XOpat API
      */
-    static preview() {
-        return WebGLModule.metadata.path + "/shaders/" + this.type() + ".png";
+    static preview(moduleRootDir=XOpatModule.ROOT) {
+        return moduleRootDir + "webgl/shaders/" + this.type() + ".png";
     }
 
     /**

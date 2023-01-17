@@ -25,6 +25,8 @@ window.HTTPError = class extends Error {
  * @return {function(...[*]=)} initializer function to call once ready
  */
 function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, version) {
+    //todo exit if loaded
+
     //dummy translation function in case of no translation available
     $.t = $.t || (x => x);
 
@@ -73,21 +75,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 parameters = {};
                 APPLICATION_CONTEXT.config.plugins[id] = parameters;
             }
-            PluginClass.prototype.staticData = function(metaKey) {
-                if (metaKey === "instance") return undefined;
-                return PLUGINS[id]?.[metaKey];
-            };
-            PluginClass.prototype.getLocaleFile = function(locale) {
-                return `locales/${locale}.json`;
-            };
-            PluginClass.prototype.localize = function (locale=undefined, data=undefined) {
-                return UTILITIES.loadPluginLocale(id, locale, data || this.getLocaleFile(locale || $.i18n.language));
-            };
-            PluginClass.prototype.t = function (key, options={}) {
-                options.ns = id;
-                return $.t(key, options);
-            };
-
             plugin = new PluginClass(id, parameters);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
@@ -113,19 +100,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         PLUGINS[id].instance = plugin;
-        plugin.setOption = function(key, value, cookies=true) {
-            if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
-            APPLICATION_CONTEXT.config.plugins[id][key] = value;
-        };
-        plugin.getOption = function(key, defaultValue=undefined) {
-            let cookie = APPLICATION_CONTEXT._getCookie(key);
-            if (cookie !== undefined) return cookie;
-            let value = APPLICATION_CONTEXT.config.plugins[id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.config.plugins[id][key] : defaultValue;
-            if (value === "false") value = false; //true will eval to true anyway
-            return value;
-        };
-
         //clean up possible errors
         showPluginError(id, null);
         return plugin;
@@ -261,9 +235,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                         $('head').append(`<link rel='stylesheet' href='${module.styleSheet}' type='text/css'/>`);
                     }
                     module.loaded = true;
-                    if (typeof module.attach === "string" && window[module.attach]) {
-                        window[module.attach].metadata = module;
-                    }
                     chainLoadModules(moduleList, index+1, onSuccess);
                 }, MODULES_FOLDER);
         }
@@ -292,27 +263,354 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
     }
 
+    class XOpatElement {
+
+        /**
+         * Relative locale file location as locales/[locale].json.
+         * Override for custom locales file location.
+         * @param locale
+         * @return {string} relative file path
+         */
+        getLocaleFile(locale) {
+            return `locales/${locale}.json`;
+        }
+
+        /**
+         * Translate the string in given element context
+         * @param key
+         * @param options
+         * @return {*}
+         */
+        t(key, options={}) {
+            options.ns = this.id;
+            return $.t(key, options);
+        }
+
+        /**
+         * Raise error event
+         * @param e
+         * @param e.code
+         * @param e.message
+         * @param e.error
+         */
+        error(e) {
+            //todo make sure default msg system works in core to listen and execute warns if not caught and rename this :/
+            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent('error-user', $.extend(e,
+                {originType: this.xoContext, originId: this.id}));
+        }
+
+        /**
+         * Raise warning event
+         * @param e
+         * @param e.code
+         * @param e.message
+         * @param e.error
+         */
+        warn(e) {
+            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent('warn-user', $.extend(e,
+                {originType: this.xoContext, originId: this.id}));
+        }
+
+        /**
+         * Initialize IO in the Element - enables use of export/import functions and cache
+         * @return {boolean} false if import failed (error thrown and caught)
+         */
+        async initIO() {
+            if (this.__ioInitialized) return false;
+
+            const _this = this;
+            VIEWER.addHandler('export-data', async e =>  e.setSerializedData(this.id, await _this.exportData()));
+            this.setCache = (key, value) => {
+                //todo employ user storage and avoid using cookies if so
+
+                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
+                    this.warn({
+                        code: "W_CACHE_EXPORT_ERROR",
+                        message: $.t('messages.cookiesDisabled', {action: "$('#settings').click()"})
+                    });
+                    return false;
+                }
+                APPLICATION_CONTEXT._setCookie(this.id + key, value);
+                return true;
+            };
+            this.getCache = (key, defaultValue=undefined, parse=true) => {
+                //todo employ user storage and avoid using cookies if so
+
+                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
+                    this.warn({
+                        code: "W_CACHE_IMPORT_ERROR",
+                        message: $.t('messages.cookiesDisabled', {action: "$('#settings').click()"})
+                    });
+                    return undefined;
+                }
+                let data = APPLICATION_CONTEXT._getCookie(this.id + key, defaultValue, parse);
+                try {
+                    return parse && typeof data === "string" ? JSON.parse(data) : data;
+                } catch (e) {
+                    console.error(e);
+                    this.error({
+                        error: e, code: "W_CACHE_IMPORT_ERROR",
+                        message: $.t('error.cacheImportFail',
+                            {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                    });
+                    return undefined;
+                }
+            };
+            this.__ioInitialized = true;
+
+            try {
+                let data = APPLICATION_CONTEXT.getData(this.id);
+                if (typeof data === "string" && data) {
+                    if (this.willParseImportData()) data = JSON.stringify(data);
+                    await this.importData(data);
+                }
+                return true;
+            } catch (e) {
+                console.error('IO Failure:', this.constructor.name,  e);
+                this.error({
+                    error: e, code: "W_IO_IMPORT_ERROR",
+                    message: $.t('error.pluginImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+                return false;
+            }
+        }
+
+        /**
+         * Called to export data, expects serialized object
+         * note: for multiple objects, serialize all and export serialized object with different keys
+         * @return {Promise<string>}
+         */
+        async exportData() {}
+        /**
+         * Called with this.initIO if data available
+         *  note: parseImportData return value decides if data is parsed data or passed as raw string
+         * @param data {string|*} data
+         */
+        async importData(data) {}
+        /**
+         * Decide whether importData gets parsed input
+         * @return {boolean}
+         */
+        willParseImportData() {
+            return true;
+        }
+        /**
+         * Set cached value, unlike setOption this value is stored in provided system cache (cookies or user)
+         * @param {string} key
+         * @param {string} value
+         */
+        setCache(key, value) {}
+        /**
+         * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
+         * @param {string} key
+         * @param {*} defaultValue value to return in case no value is available
+         * @param {boolean} parse deserialize if true
+         * @return {string|*} return serialized or unserialized data
+         */
+        getCache(key, defaultValue=undefined, parse=true) {}
+
+        /**
+         * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
+         */
+        initEventSource(errorBindingOnViewer=true) {
+            //consider _errorHandlers that would listen for errors and warnings and provide handling instead of global scope VIEWER (at least for plugins)
+
+            const events = this.__eventSource = new OpenSeadragon.EventSource();
+            this.addHandler = events.addHandler.bind(events);
+            this.addOnceHandler = events.addOnceHandler.bind(events);
+            this.getHandler = events.getHandler.bind(events);
+            this.numberOfHandlers = events.numberOfHandlers.bind(events);
+            this.raiseEvent = events.raiseEvent.bind(events);
+            this.removeAllHandlers = events.removeAllHandlers.bind(events);
+            this.removeHandler = events.removeHandler.bind(events);
+            this.__errorBindingOnViewer = errorBindingOnViewer;
+        }
+        /**
+         * Add an event handler for a given event. See OpenSeadragon.EventSource::addHandler
+         * Note: noop if initEventSource() not called.
+         */
+        addHandler() {}
+        /**
+         * Add an event handler to be triggered only once (or X times). See OpenSeadragon.EventSource::addOnceHandler
+         * Note: noop if initEventSource() not called.
+         */
+        addOnceHandler () {}
+        /**
+         * Get a function which iterates the list of all handlers registered for a given event, calling the handler for each.
+         * See OpenSeadragon.EventSource::getHandler
+         * Note: noop if initEventSource() not called.
+         */
+        getHandler () {}
+        /**
+         * Get the amount of handlers registered for a given event. See OpenSeadragon.EventSource::numberOfHandlers
+         * Note: noop if initEventSource() not called.
+         */
+        numberOfHandlers () {}
+        /**
+         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEvent
+         * Note: noop if initEventSource() not called.
+         */
+        raiseEvent () {}
+        /**
+         * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
+         * Note: noop if initEventSource() not called.
+         */
+        removeAllHandlers () {}
+        /**
+         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
+         * Note: noop if initEventSource() not called.
+         */
+        removeHandler () {}
+    }
+
+    window.XOpatModule = class extends XOpatElement {
+
+        constructor(id) {
+            super();
+            if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
+            this.id = id;
+            this.xoContext = "module";
+        }
+
+        /**
+         * Load localization data
+         * @param locale the current locale if undefined
+         * @param data possibly custom locale data if not fetched from a file
+         */
+        async loadLocale(locale=undefined, data=undefined) {
+            return await _getLocale(this.id, MODULES_FOLDER, MODULES[this.id]?.directory,
+                data || this.getLocaleFile(locale || $.i18n.language), locale);
+        }
+
+        /**
+         * Read static metadata - include.json contents and additional meta attached at runtime
+         * @param metaKey key to read
+         * @param defaultValue
+         * @return {undefined|*}
+         */
+        getStaticMeta(metaKey, defaultValue) {
+            if (metaKey === "instance") return undefined;
+            return MODULES[this.id]?.[metaKey] || defaultValue;
+        }
+
+        /**
+         * Root to the modules folder
+         */
+        static ROOT = MODULES_FOLDER;
+    }
+
+    window.XOpatModuleSingleton = class extends XOpatModule {
+        /**
+         * Get instance of the annotations manger, a singleton
+         * (only one instance can run since it captures mouse events)
+         * @static
+         * @return {XOpatModuleSingleton} manager instance
+         */
+        static instance() {
+            //this calls sub-class constructor, no args required
+            this.__self = this.__self || new this();
+            return this.__self;
+        }
+
+        /**
+         * Check if instantiated
+         * @return {boolean}
+         */
+        static instantiated() {
+            return this.__self && true; //retype
+        }
+
+        static __self = undefined;
+        constructor(id) {
+            super(id);
+            const staticContext = this.constructor;
+            if (staticContext.__self) {
+                throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
+            }
+            staticContext.__self = this;
+        }
+    }
+
+    window.XOpatPlugin = class extends XOpatElement {
+        
+        constructor(id) {
+            super();
+            this.id = id;
+            this.xoContext = "plugin";
+        }
+
+        /**
+         * Function called once a viewer is fully loaded
+         */
+        async pluginReady() {
+        }
+
+        /**
+         * Load localization data
+         * @param locale the current locale if undefined
+         * @param data possibly custom locale data if not fetched from a file
+         */
+        async loadLocale(locale=undefined, data=undefined) {
+            return await _getLocale(this.id, PLUGINS_FOLDER, PLUGINS[this.id]?.directory,
+                data || this.getLocaleFile(locale || $.i18n.language), locale)
+        }
+
+        /**
+         * Read static metadata - include.json contents and additional meta attached at runtime
+         * @param metaKey key to read
+         * @param defaultValue
+         * @return {undefined|*}
+         */
+        getStaticMeta(metaKey, defaultValue) {
+            if (metaKey === "instance") return undefined;
+            return PLUGINS[this.id]?.[metaKey] || defaultValue;
+        }
+
+        /**
+         * Store the plugin configuration parameters
+         * @param {string} key
+         * @param {*} value
+         * @param {boolean} cookies
+         */
+        setOption(key, value, cookies=true) {
+            if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
+            APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
+        }
+
+        /**
+         * Read the plugin configuration parameters
+         * @param {string} key
+         * @param {*} defaultValue
+         * @return {*}
+         */
+        getOption(key, defaultValue=undefined) {
+            let cookie = APPLICATION_CONTEXT._getCookie(key);
+            if (cookie !== undefined) return cookie;
+            let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
+                APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
+            if (value === "false") value = false; //true will eval to true anyway
+            return value;
+        };
+
+        /**
+         * Code for global-scope access to this instance
+         * @return {string}
+         */
+        get THIS() {
+            if (!this.id) return "__undefined__";
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `plugin('${this.id}')`,
+                writable: false,
+            });
+            return `plugin('${this.id}')`;
+        }
+
+        static ROOT = PLUGINS_FOLDER;
+    };
+
     window.UTILITIES = {
-        /**
-         * Load localization data for plugin
-         *  @param id
-         *  @param locale the current locale if undefined
-         *  @param data string to a file name relative to the plugin folder or a data containing the translation
-         */
-        loadPluginLocale: function(id, locale=undefined, data=undefined) {
-            return _getLocale(id, PLUGINS_FOLDER, PLUGINS[id]?.directory, data, locale);
-        },
-
-        /**
-         * Load localization data for module
-         *  @param id
-         *  @param locale the current locale if undefined
-         *  @param data string to a file name relative to the module folder or a data containing the translation
-         */
-        loadModuleLocale: function(id, locale=undefined, data=undefined) {
-            return _getLocale(id, MODULES_FOLDER, MODULES[id]?.directory, data, locale)
-        },
-
         /**
          * @param imageFilePath image path
          * @param stripSuffix
@@ -412,13 +710,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     };
 
     return function() {
-        for (let modID in MODULES) {
-            const module = MODULES[modID];
-            if (module && module.loaded && typeof module.attach === "string" && window[module.attach]) {
-                window[module.attach].metadata = module;
-            }
-        }
-
         //Notify plugins OpenSeadragon is ready
         registeredPlugins.forEach(plugin => initializePlugin(plugin));
         registeredPlugins = undefined;

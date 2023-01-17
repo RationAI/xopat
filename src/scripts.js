@@ -157,7 +157,7 @@
     /*------------ EXPORTING ----------------------------------*/
     /*---------------------------------------------------------*/
 
-    function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
+    async function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         //reconstruct active plugins
         let pluginsData = APPLICATION_CONTEXT.config.plugins;
         let includeEvaluator = includedPluginsList ?
@@ -194,7 +194,8 @@
         let node;`;
 
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        VIEWER.raiseEvent('export-data', {
+        await VIEWER.raiseEvent('export-data', {
+            waitForPromiseHandlers: true,
             setSerializedData: (uniqueKey, data) => {
                 if (typeof data !== "string") {
                     console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
@@ -348,7 +349,7 @@ form.submit();
         Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
-    window.UTILITIES.export = function () {
+    window.UTILITIES.export = async function () {
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
@@ -359,14 +360,14 @@ form.submit();
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
-${constructExportVisualisationForm()}
+${await constructExportVisualisationForm()}
 </body></html>`;
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         UTILITIES.downloadAsFile("export.html", doc);
         APPLICATION_CONTEXT.__cache.dirty = false;
     };
 
-    window.UTILITIES.clone = function () {
+    window.UTILITIES.clone = async function () {
         if (window.opener) {
             return;
         }
@@ -379,7 +380,7 @@ ${constructExportVisualisationForm()}
         let x = window.innerWidth / 2, y = window.innerHeight;
         window.resizeTo(x, y);
         Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
-            constructExportVisualisationForm(), `width=${x},height=${y}`);
+            await constructExportVisualisationForm(), `width=${x},height=${y}`);
     };
 
     window.UTILITIES.setDirty = () => APPLICATION_CONTEXT.__cache.dirty = true;
@@ -389,7 +390,7 @@ ${constructExportVisualisationForm()}
      * @param formInputHtml additional HTML to add to the refresh FORM
      * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
      */
-    window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
+    window.UTILITIES.refreshPage = async function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
             Dialogs.show($.t('messages.warnPageReload', {
                 onExport: "UTILITIES.export();",
@@ -403,7 +404,7 @@ ${constructExportVisualisationForm()}
         // } else if (window.detachEvent) {
         //     window.detachEvent('onbeforeunload', preventDirtyClose);
         // }
-        $(document.body).append(UTILITIES.getForm(formInputHtml, includedPluginsList, true));
+        $(document.body).append(await UTILITIES.getForm(formInputHtml, includedPluginsList, true));
     };
 
     /**
