@@ -422,7 +422,7 @@ EOF;
     //optimization allways present
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
-    const metaStore = new MetaStore(setup.meta || {});
+    const metaStore = new MetaStore(setup.meta || {}, '<?php echo METADATA_SERVER ?>');
 
     window.APPLICATION_CONTEXT = {
         config: {

@@ -30,9 +30,10 @@ if ($production) {
     define('JS_COOKIE_SAME_SITE', "None");
     define('JS_COOKIE_SECURE', "false");
 
-
     define('BG_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
+
+    define('METADATA_SERVER', ""); //server for metadata handling, see config_meta.js
 } else {
     define('PROTOCOL', "http://");
     define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
@@ -44,6 +45,8 @@ if ($production) {
     //note: you probably want to set up a reverse proxy for localhost rather than changing this (CORS)
     define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
+
+    define('METADATA_SERVER', ""); //server for metadata handling, see config_meta.js
 }
 
 define('VISUALISATION_ROOT_ABS_PATH', SERVER . VISUALISATION_ROOT);

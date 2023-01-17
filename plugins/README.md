@@ -183,8 +183,11 @@ three different options are available:
 
  1. ``getOption``, `setOption` suitable for small configuration metadata, present in the configuration present in _viewer URL and file exports_
  2. ``getStaticMeta``, ``-nothing-`` suitable for static (hardcoded) configuration metadata, reading from your `include.json`
- 3. `getCache`, `setCache` suitable for session-independent data (cookies or user data), always available
+ 3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available
     - use for user configurations caching to avoid re-setting in each session
+
+And one global meta store meant for reading only, global viewer metadata    
+ 4. ``APPLICATION_CONTEXT.config.meta`` as an instance of `MetaStore` class  
     
 For data IO, you ahve two options
  1. ``async importData``, `async exportData` suitable for data in general, present in _viewer file exports_

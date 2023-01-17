@@ -245,57 +245,6 @@ form.submit();
         return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
     };
 
-    /**
-     * Send requests - both request and response format JSON
-     * with POST, the viewer meta is automatically included
-     *  - makes the viewer flexible for integration within existing APIs
-     * @param url
-     * @param postData
-     * @param headers
-     * @param metaKeys metadata key list to include
-     * @throws HTTPError
-     * @return {Promise<string|any>}
-     */
-    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}, metaKeys=true) {
-        let method = postData ? "POST" : "GET";
-        headers = $.extend({
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        }, headers);
-
-        if (typeof postData === "object" && postData && metaKeys !== false) {
-            if (postData.metadata === undefined) {
-                if (Array.isArray(metaKeys)) {
-                    postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
-                } else {
-                    postData.metadata = APPLICATION_CONTEXT.config.meta.all();
-                }
-            }
-        }
-
-        const response = await fetch(url, {
-            method: method,
-            mode: 'cors',
-            cache: 'no-cache',
-            credentials: 'same-origin',
-            headers: headers,
-            body: postData ? JSON.stringify(postData) : null
-        });
-
-        if (response.status < 200 || response.status > 299) {
-            return response.text().then(text => {
-                throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
-            });
-        }
-
-        const data = await response.text();
-        try {
-            return JSON.parse(data);
-        } catch (e) {
-            throw new HTTPError(`Server returned non-JSON data: ${data}`, response, data);
-        }
-    };
-
     window.UTILITIES.updateTheme = function() {
         let theme = APPLICATION_CONTEXT.getOption("theme");
         if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultConfig.theme;

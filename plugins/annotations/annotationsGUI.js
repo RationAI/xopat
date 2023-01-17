@@ -371,8 +371,8 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 	}
 
 	cachePresets() {
-		if (!this.context.createPresetsCookieSnapshot()) return false; //todo removed dialogs cookiesDisabled
-		else Dialogs.show(this.t('presetsInCookies'), 5000, Dialogs.MSG_INFO);
+		this.context.createPresetsCookieSnapshot().then(set => set ?
+			Dialogs.show(this.t('presetsInCookies'), 5000, Dialogs.MSG_INFO) : undefined);
 	}
 
 

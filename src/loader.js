@@ -320,8 +320,16 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
             const _this = this;
             VIEWER.addHandler('export-data', async e =>  e.setSerializedData(this.id, await _this.exportData()));
-            this.setCache = (key, value) => {
-                //todo employ user storage and avoid using cookies if so
+            this.setCache = async (key, value) => {
+                const store = APPLICATION_CONTEXT.config.meta.persistent();
+                if (store) {
+                    try {
+                        await store.set(key, value);
+                        return true;
+                    } catch (e) {
+                        console.warn("Silent failure of cache setter -> delegate to cookies.");
+                    }
+                }
 
                 if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
                     this.warn({
@@ -333,8 +341,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 APPLICATION_CONTEXT._setCookie(this.id + key, value);
                 return true;
             };
-            this.getCache = (key, defaultValue=undefined, parse=true) => {
-                //todo employ user storage and avoid using cookies if so
+            this.getCache = async (key, defaultValue=undefined, parse=true) => {
+                const store = APPLICATION_CONTEXT.config.meta.persistent();
+                if (store) {
+                    try {
+                        return await store.get(key, defaultValue);
+                    } catch (e) {
+                        console.warn("Silent failure of cache getter -> delegate to cookies.");
+                    }
+                }
 
                 if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
                     this.warn({
@@ -400,7 +415,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {string} key
          * @param {string} value
          */
-        setCache(key, value) {}
+        async setCache(key, value) {}
         /**
          * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
          * @param {string} key
@@ -408,7 +423,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {boolean} parse deserialize if true
          * @return {string|*} return serialized or unserialized data
          */
-        getCache(key, defaultValue=undefined, parse=true) {}
+        async getCache(key, defaultValue=undefined, parse=true) {}
 
         /**
          * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
@@ -611,6 +626,74 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     };
 
     window.UTILITIES = {
+
+        /**
+         * Send requests - both request and response format JSON
+         * with POST, the viewer meta is automatically included
+         *  - makes the viewer flexible for integration within existing APIs
+         * @param url
+         * @param postData
+         * @param headers
+         * @param metaKeys metadata key list to include
+         * @throws HTTPError
+         * @return {Promise<string|any>}
+         */
+        fetch: async function(url, postData=null, headers={}, metaKeys=true) {
+            let method = postData ? "POST" : "GET";
+            headers = $.extend({
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            }, headers);
+
+            if (typeof postData === "object" && postData && metaKeys !== false) {
+                if (postData.metadata === undefined) {
+                    if (Array.isArray(metaKeys)) {
+                        postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+                    } else {
+                        postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+                    }
+                }
+            }
+
+            const response = await fetch(url, {
+                method: method,
+                mode: 'cors',
+                cache: 'no-cache',
+                credentials: 'same-origin',
+                headers: headers,
+                body: postData ? JSON.stringify(postData) : null
+            });
+
+            if (response.status < 200 || response.status > 299) {
+                return response.text().then(text => {
+                    throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
+                });
+            }
+
+            return response;
+        },
+
+        /**
+         * Send requests - both request and response format JSON
+         * with POST, the viewer meta is automatically included
+         *  - makes the viewer flexible for integration within existing APIs
+         * @param url
+         * @param postData
+         * @param headers
+         * @param metaKeys metadata key list to include
+         * @throws HTTPError
+         * @return {Promise<string|any>}
+         */
+        fetchJSON: async function(url, postData=null, headers={}, metaKeys=true) {
+            const response = await this.fetch(url, postData, headers, metaKeys),
+                data = await response.text();
+            try {
+                return JSON.parse(data);
+            } catch (e) {
+                throw new HTTPError("Server returned non-JSON data!", response, data);
+            }
+        },
+
         /**
          * @param imageFilePath image path
          * @param stripSuffix

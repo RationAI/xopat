@@ -105,7 +105,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	async initIO() {
 		if (await super.initIO()) {
-			this.loadPresetsCookieSnapshot();
+			await this.loadPresetsCookieSnapshot();
 			return true;
 		}
 		return false;
@@ -828,16 +828,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Create preset cache, this cache is loaded automatically with initIO request
 	 * @return {boolean}
 	 */
-	createPresetsCookieSnapshot() {
-		return this.setCache(this.presetCookieKey, this.presets.toObject(true));
+	async createPresetsCookieSnapshot() {
+		return await this.setCache(this.presetCookieKey, this.presets.toObject(true));
 	}
 
 	/**
 	 * Load cookies cache if available
 	 */
-	loadPresetsCookieSnapshot(ask=true) {
+	async loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
-		const presetCookiesData = this.getCache(this.presetCookieKey);
+		const presetCookiesData = await this.getCache(this.presetCookieKey);
 		if (presetCookiesData) {
 			if (ask && this.presets._presetsImported) {
 				this.warn({

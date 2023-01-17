@@ -30,8 +30,13 @@ addPlugin("user-session", class extends XOpatPlugin {
             });
 
         } else {
-            $("#navigator-container").parent().append(`
-<span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">save</span>`);
+            USER_INTERFACE.MainMenu.append(
+                "Session Store",
+                `<span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">save</span>`,
+                '',
+                "user-session-panel",
+                this.id
+            );
         }
     }
 

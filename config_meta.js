@@ -4,8 +4,25 @@
 
 window.MetaStore = class {
 
-    constructor(data) {
+    /**
+     * Implements both JSON Configuration and Persistent (see below) metadata service API
+     * initializes 'persistent' getter
+     * @return {null}
+     */
+    constructor(data, persistentServiceUrl) {
         this._data = data;
+
+        if (persistentServiceUrl) {
+            const user = this.getUser(undefined);
+
+            if (user) { //todo authorization? user url can be hacked :/
+                const service = new MetaStore.Persistent(persistentServiceUrl,
+                    this.getUser(undefined));
+                this.persistent = function () {
+                    return service.instance();
+                }
+            }
+        }
     }
 
     /**
@@ -80,5 +97,80 @@ window.MetaStore = class {
 
     static get sessionKey() {
         return "session";
+    }
+
+    /**
+     * Returns Persistent Meta Store if available, or undefined
+     * @type {MetaStore.Persistent|undefined}
+     */
+    persistent() {
+        return undefined;
+    };
+}
+
+/**
+ * Persistent store working with strings only
+ * @type {MetaStore.Persistent}
+ */
+MetaStore.Persistent = class {
+    __cached = {};
+    __upDate = Date.now();
+    _instance = undefined;
+
+    constructor(serviceUrl, id) {
+        this.url = serviceUrl;
+        this.id = id;
+        this._init();
+    }
+
+    async _init() {
+        try {
+            await this.set("session", this.__upDate);
+            this._instance = this;
+            console.log("Persistent meta store initialized with url ", this.url);
+        } catch (e) {
+            console.log("Persistent meta store failed:", e);
+        }
+    }
+
+    instance() {
+        return this._instance;
+    }
+
+    invalidate() {
+        this.__upDate = Date.now();
+    }
+
+    async get(key, defaultValue) {
+        let value = this.__cached[key];
+        if (!value || value.tStamp < this.__upDate) {
+            value = await UTILITIES.fetch(this.url, {
+                action: "save",
+                id: this.id,
+                key: key,
+                value: value,
+            }).text();
+
+            if (!value) value = defaultValue;
+            this._set(key, value);
+        }
+        return value || defaultValue;
+    }
+
+    async set(key, value) {
+        this._set(key, value);
+        return await UTILITIES.fetch(this.url, {
+            action: "save",
+            id: this.id,
+            key: key,
+            value: value,
+        }).text();
+    }
+
+    _set(k, v) {
+        this.__cached[k] = {
+            tStamp: Date.now(),
+            value: v
+        };
     }
 }
