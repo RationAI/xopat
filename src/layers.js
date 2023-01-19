@@ -8,6 +8,7 @@
         window.APPLICATION_CONTEXT.layersAvailable = false;
     }
 
+    //todo check for undefined before parsing - exception
     try {
         var namedCookieCache = JSON.parse(APPLICATION_CONTEXT._getCookie('_cache', "{}"));
     } catch (e) {

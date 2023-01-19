@@ -265,6 +265,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
     class XOpatElement {
 
+        constructor(id) {
+            if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
+            this.id = id;
+        }
+
         /**
          * Relative locale file location as locales/[locale].json.
          * Override for custom locales file location.
@@ -324,7 +329,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 const store = APPLICATION_CONTEXT.config.meta.persistent();
                 if (store) {
                     try {
-                        await store.set(key, value);
+                        await store.set(_this.id + key, value);
                         return true;
                     } catch (e) {
                         console.warn("Silent failure of cache setter -> delegate to cookies.");
@@ -345,7 +350,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 const store = APPLICATION_CONTEXT.config.meta.persistent();
                 if (store) {
                     try {
-                        return await store.get(key, defaultValue);
+                        return await store.get(_this.id + key, defaultValue);
                     } catch (e) {
                         console.warn("Silent failure of cache getter -> delegate to cookies.");
                     }
@@ -376,7 +381,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             try {
                 let data = APPLICATION_CONTEXT.getData(this.id);
                 if (typeof data === "string" && data) {
-                    if (this.willParseImportData()) data = JSON.stringify(data);
+                    if (this.willParseImportData()) data = JSON.parse(data);
                     await this.importData(data);
                 }
                 return true;
@@ -482,9 +487,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     window.XOpatModule = class extends XOpatElement {
 
         constructor(id) {
-            super();
-            if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
-            this.id = id;
+            super(id);
             this.xoContext = "module";
         }
 
@@ -548,10 +551,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     }
 
     window.XOpatPlugin = class extends XOpatElement {
-        
+
         constructor(id) {
-            super();
-            this.id = id;
+            super(id);
             this.xoContext = "plugin";
         }
 

@@ -6,12 +6,17 @@ window.MetaStore = class {
 
     /**
      * Implements both JSON Configuration and Persistent (see below) metadata service API
-     * initializes 'persistent' getter
      * @return {null}
      */
-    constructor(data, persistentServiceUrl) {
+    constructor(data) {
         this._data = data;
+    }
 
+    /**
+     * initializes 'persistent' getter
+     * @param persistentServiceUrl
+     */
+    initPersistentStore(persistentServiceUrl) {
         if (persistentServiceUrl) {
             const user = this.getUser(undefined);
 
@@ -144,12 +149,13 @@ MetaStore.Persistent = class {
     async get(key, defaultValue) {
         let value = this.__cached[key];
         if (!value || value.tStamp < this.__upDate) {
-            value = await UTILITIES.fetch(this.url, {
-                action: "save",
+            const response = await UTILITIES.fetch(this.url, {
+                action: "load",
                 id: this.id,
                 key: key,
                 value: value,
-            }).text();
+            });
+            value = await response.text();
 
             if (!value) value = defaultValue;
             this._set(key, value);
@@ -159,12 +165,13 @@ MetaStore.Persistent = class {
 
     async set(key, value) {
         this._set(key, value);
-        return await UTILITIES.fetch(this.url, {
+        const response = await UTILITIES.fetch(this.url, {
             action: "save",
             id: this.id,
             key: key,
             value: value,
-        }).text();
+        });
+        return await response.text();
     }
 
     _set(k, v) {

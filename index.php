@@ -382,6 +382,8 @@ EOF;
 
     const PLUGINS = <?php echo json_encode((object)$PLUGINS)?>;
     const MODULES = <?php echo json_encode((object)$MODULES) ?>;
+    const runLoader = initXOpatLoader(PLUGINS, MODULES,
+        '<?php echo PLUGINS_FOLDER ?>', '<?php echo MODULES_FOLDER ?>', '<?php echo VERSION ?>');
 
     const setup = <?php echo $visualisation ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
@@ -422,7 +424,7 @@ EOF;
     //optimization allways present
     setup.params.bypassCookies = setup.params.bypassCookies ?? defaultSetup.bypassCookies;
 
-    const metaStore = new MetaStore(setup.meta || {}, '<?php echo METADATA_SERVER ?>');
+    const metaStore = new MetaStore(setup.meta || {});
 
     window.APPLICATION_CONTEXT = {
         config: {
@@ -555,7 +557,7 @@ EOF;
             dirty: false
         }
     };
-
+    metaStore.initPersistentStore('<?php echo METADATA_SERVER ?>');
 
     //preventive error message, that will be discarded after the full initialization, no translation
     window.onerror = function (message, file, line, col, error) {
@@ -638,8 +640,6 @@ EOF;
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
-    const runLoader = initXOpatLoader(PLUGINS, MODULES, '<?php echo PLUGINS_FOLDER ?>', '<?php echo MODULES_FOLDER ?>', '<?php echo VERSION ?>');
-
 
     //properties depentend and important to change on bg image load/swap
     //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
