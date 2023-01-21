@@ -11,7 +11,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this._currentStep = null;
         this._deprecated_IO_API();
         this.initIO(); //todo consider delegation to plugins that use snapshots
-        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
+        this._utils = VIEWER.tools;
 
         this._captureVisualization = false;
         this._captureViewport = true;

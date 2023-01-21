@@ -65,7 +65,7 @@ window.addEventListener("beforeunload", (e) => {
             config: JSON.stringify(this.context.configuration),
             algorithm: this.context.algorithm,
             data: this.context.data,
-            image: OpenSeadragon.Tools.screenshot(VIEWER, true, VIEWER.viewport.getBounds())
+            image: VIEWER.tools.screenshot(true, VIEWER.viewport.getBounds())
         };
         this._active.children.push(node);
 

@@ -39,7 +39,7 @@ AnnotationsGUI.Previewer = class {
                 //todo hardcoded assets path
                 container.append(`
 <div onclick="${this.self}.context.context.focusObjectOrArea({left: ${bbox.left}, top: ${bbox.top}, 
-width: ${bbox.width}, height: ${bbox.height}}, ${object.incrementId});" class="d-inline-block pointer">
+width: ${bbox.width}, height: ${bbox.height}}, ${object.incrementId});" class="d-inline-block pointer text-center">
 <img alt="preview" width="120" height="120" data-left="${bbox.left}" data-top="${bbox.top}" id="matrix-${counter}-annotation-preview"
 data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.png"><br>${name}
 </div>
@@ -62,21 +62,25 @@ data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.
                 return;
             }
 
-            let region = {
+            const region = {
                 x: Number.parseInt(image.dataset.left) || 0,
                 y: Number.parseInt(image.dataset.top) || 0,
                 width: Number.parseInt(image.dataset.width) || 0,
                 height: Number.parseInt(image.dataset.height) || 0
-            }
+            };
+            const outputSize = {width: Math.round(region.width / region.height * 120), height: 120};
 
-            VIEWER.tools.offlineScreenshot(region, {width: 120, height: 120}, (canvas) => {
+            VIEWER.tools.offlineScreenshot(region, outputSize, (canvas) => {
                 let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
-                if (image) image.src = canvas.toDataURL();
+                if (image) {
+                    image.src = canvas.toDataURL();
+                    image.width = outputSize.width;
+                }
                 progress--;
                 if (progress < 1) {
                     self.loadImagesRecursive(step+batchSize, maxSteps, batchSize);
                 }
-            });
+            }, outputSize);
         }
 
         for (let i = 0; i < batchSize; i++) {

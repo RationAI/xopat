@@ -194,8 +194,7 @@
         let node;`;
 
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        await VIEWER.raiseEvent('export-data', {
-            waitForPromiseHandlers: true,
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
             setSerializedData: (uniqueKey, data) => {
                 if (typeof data !== "string") {
                     console.warn("Skipping", uniqueKey, "the exported data is not stringified.");

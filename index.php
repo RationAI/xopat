@@ -623,17 +623,15 @@ EOF;
         maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount")
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
-    VIEWER.tools = new OpenSeadragon.Tools(VIEWER);
+    new OpenSeadragon.Tools(VIEWER);
     VIEWER.addHandler('warn-user', e => {
-        e.stopPropagation();
-        if (!e.message) return;
+        if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
-    });
+    }, -Infinity);
     VIEWER.addHandler('error-user', e => {
-        e.stopPropagation();
-        if (!e.message) return;
+        if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
-    });
+    }, -Infinity);
     VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
     VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
@@ -933,7 +931,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             window.onerror = null;
 
             if (window.opener && window.opener.VIEWER) {
-                OpenSeadragon.Tools.link( window.VIEWER, window.opener.VIEWER);
+                VIEWER.tools.link( window.opener.VIEWER);
             }
 
             if (!USER_INTERFACE.Errors.active) {

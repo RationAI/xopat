@@ -4,7 +4,44 @@ OpenSeadragon.Tools = class {
      * @param context OpenSeadragon instance
      */
     constructor(context) {
+        if (context.tools) throw "OSD Tools already instantiated on the given viewer instance!";
+        context.tools = this;
         this.viewer = context;
+    }
+
+    /**
+     * EventSource - compatible event raising with support for async function waiting
+     * @param context EventSrouce instance
+     * @param eventName name of the event to invoke
+     * @param eventArgs event args object
+     * @return {Promise<void>} promise resolved once event finishes
+     */
+    async raiseAwaitEvent(context, eventName, eventArgs) {
+        let events = context.events[ eventName ];
+        if ( !events || !events.length ) {
+            return null;
+        }
+        events = events.length === 1 ?
+            [ events[ 0 ] ] :
+            Array.apply( null, events );
+        eventArgs = eventArgs || {};
+
+        const length = events.length;
+        async function loop(index) {
+            if ( index >= length || !events[ index ] ) {
+                return;
+            }
+            eventArgs.stopPropagation = function () {
+                index = length;
+            };
+            eventArgs.eventSource = context;
+            eventArgs.userData = events[ index ].userData;
+            let result = events[ index ].handler( eventArgs );
+            if (!result || OpenSeadragon.type(result) !== "promise") return;
+            await result;
+            await loop(index + 1);
+        }
+        return await loop(0);
     }
 
     /**
@@ -86,11 +123,13 @@ OpenSeadragon.Tools = class {
 
     /**
      * Create viewport screenshot
-     * @param toImage true if <img> element should be created, otherwise raw byte array sent
-     * @param {object} size
+     * @param toImage true if <img> element should be created, otherwise Context2D
+     * @param {object} size the output size
      * @param {number} size.width
      * @param {number} size.height
-     * @param {OpenSeadragon.Rect|object|undefined} focus screenshot focus area (screen coordinates)
+     * @param {OpenSeadragon.Rect|object|undefined} [focus=undefined] screenshot
+     *   focus area (screen coordinates), by default thw whole viewport
+     * @return {CanvasRenderingContext2D|Image}
      */
     screenshot(toImage, size, focus=undefined) {
         return this.constructor.screenshot(this.viewer, toImage, size, focus);
@@ -107,9 +146,8 @@ OpenSeadragon.Tools = class {
         if (focus.width < focus.height) focus.width *= ar;
         else focus.height /= ar;
 
-        let data = drawCtx.getImageData(focus.x,focus.y, focus.width, focus.height);
-
         if (toImage) {
+            let data = drawCtx.getImageData(focus.x,focus.y, focus.width, focus.height);
             let canvas = document.createElement('canvas'),
                 ctx = canvas.getContext('2d');
             canvas.width = size.width;
@@ -120,34 +158,30 @@ OpenSeadragon.Tools = class {
             img.src = canvas.toDataURL();
             return img;
         }
-        return data.data;
+        return drawCtx;
     }
 
     /**
+     * Create region screenshot, the screenshot CAN BE ANYWHERE
      * @param {object} region region of interest in the image pixel space
      * @param {number} region.x
      * @param {number} region.y
      * @param {number} region.width
      * @param {number} region.height
-     * @param {object} targetSize desired size, the result tries to find a level on which the region
+     * @param {object} targetSize desired size (should have the same AR -aspect ratio- as region),
+     *  the result tries to find a level on which the region
      *  is closest in size to the desired size
      * @param {number} targetSize.width
      * @param {number} targetSize.height
      * @param {function} onfinish function that is called on screenshot finish, argument is a canvas with resulting image
-     * @param {boolean} squarify enlarge region to form a square if true, default false
+     * @param {object} [outputSize=targetSize] output image size, defaults to target size
+     * @param {number} outputSize.width
+     * @param {number} outputSize.height
      */
-    offlineScreenshot(region, targetSize, onfinish, squarify=false) {
+    offlineScreenshot(region, targetSize, onfinish, outputSize=targetSize) {
         //todo support only one BG image at time, easier
         let referencedTiledImage = this.referencedTiledImage();
         let referencedSource = referencedTiledImage.source;
-
-        //todo cehck aspect ratio region -> target size
-        let level = Math.min(
-            this.constructor._bestLevelForTiledImage(referencedTiledImage, region, targetSize),
-            this.viewer.bridge ? this.viewer.bridge.getTiledImage().source.maxLevel : Infinity
-        );
-
-        //todo check how it performs on non-rect area
 
         function download(tiledImage, level, x, y, onload, onfail) {
             //copied over from tileSource.js
@@ -191,7 +225,7 @@ OpenSeadragon.Tools = class {
 
             tile.loading = true;
             tiledImage._imageLoader.addJob({
-                src: tile.url,
+                src: tile.getUrl(),
                 tile: tile,
                 source: tiledImage.source,
                 postData: tile.postData,
@@ -215,7 +249,7 @@ OpenSeadragon.Tools = class {
             });
         }
 
-        function buildImageForLayer(tiledImage, region, onBuilt) {
+        function buildImageForLayer(tiledImage, region, level, onBuilt) {
             let source = tiledImage.source,
                 viewportX = region.x / referencedSource.width,
                 viewportY = region.y / referencedSource.width,
@@ -255,11 +289,16 @@ OpenSeadragon.Tools = class {
                     sDy = -sy;
                     sy = 0;
                 }
-                //cache can be an empty object, it correctly processes the data and returns operate-able object
-                let cache = {};
-                source.createTileCache(cache, data, tile);
-                c2d.drawImage(source.getTileCacheDataAsContext2D(cache).canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-                source.destroyTileCache(cache);
+                //todo what about raising events
+                if (tile.context2D) {
+                    c2d.drawImage(tile.context2D.canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+                } else {
+                    //cache can be an empty object, it correctly processes the data and returns operate-able object
+                    let cache = {};
+                    source.createTileCache(cache, data, tile);
+                    c2d.drawImage(source.getTileCacheDataAsContext2D(cache).canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+                    source.destroyTileCache(cache);
+                }
                 finish();
             }
 
@@ -279,6 +318,7 @@ OpenSeadragon.Tools = class {
                 }
             }
 
+            //todo check this more programatically by comparing necessary coords
             let count = 4;
             download(tiledImage, level, tileXY.x, tileXY.y, draw, fill);
             if (tileXY.x !== tileXWY.x) download(tiledImage, level, tileXWY.x, tileXWY.y, draw, fill);
@@ -290,46 +330,45 @@ OpenSeadragon.Tools = class {
             else count--;
         }
 
-        let targetRegion = region;
-        if (squarify && targetRegion.width !== targetRegion.height) {
-            let maxD = Math.max(targetRegion.width, targetRegion.height);
-            targetRegion.width = targetRegion.height = maxD;
+        let canvasCache = {};
+
+        const itemCount = 1; //VIEWER.world.getItemCount(); todo not working properly across different levels :/
+
+        /**
+         * Problem: should render either the same level (preferred if possible),
+         *  or scale different level so that they overlap correctly
+         */
+
+
+        let steps = itemCount;
+        // let level = Math.min(
+        //     this.constructor._bestLevelForTiledImage(referencedTiledImage, region, targetSize),
+        //     this.viewer.bridge ? this.viewer.bridge.getTiledImage().source.maxLevel : Infinity
+        // );
+        for (let itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+            //todo if not transparent and opacity 1, do not draw previous item
+            const tImage = VIEWER.world.getItemAt(itemIndex);
+            const handler = (index, canvas) => {
+                steps--;
+                canvasCache[index] = canvas;
+
+                if (steps < 1) {
+                      let outputCanvas = document.createElement('canvas'),
+                        c2d = outputCanvas.getContext('2d');
+                    outputCanvas.width = outputSize.width;
+                    outputCanvas.height = outputSize.height;
+
+                    for (let i=0; i < itemCount; i++) {
+                        const c = canvasCache[i];
+                        if (c) c2d.drawImage(c, 0, 0, c.width, c.height);
+                    }
+                    onfinish(outputCanvas);
+                }
+            };
+
+            const level = this.constructor._bestLevelForTiledImage(tImage, region, targetSize);
+            buildImageForLayer(tImage, region, level, handler.bind(null, itemIndex));
         }
-
-        //todo this is hardcoded, fix after the word item api gets cleared
-        let canvasCache = null;
-
-        let steps = 2;
-        buildImageForLayer(VIEWER.world.getItemAt(0), targetRegion,(canvas) => {
-            steps--;
-            if (steps > 0) {
-                canvasCache = canvas;
-            } else {
-                let outputCanvas = document.createElement('canvas'),
-                    c2d = outputCanvas.getContext('2d');
-                outputCanvas.width = 256;
-                outputCanvas.height = 256;
-                c2d.drawImage(canvas, 0, 0, 256, 256);
-                c2d.drawImage(canvasCache, 0, 0, 256, 256);
-                onfinish(outputCanvas);
-            }
-        });
-        //todo not necessarily present
-        //todo must get loaded after we finish
-        buildImageForLayer(VIEWER.world.getItemAt(1), targetRegion,(canvas) => {
-            steps--;
-            if (steps > 0) {
-                canvasCache = canvas;
-            } else {
-                let outputCanvas = document.createElement('canvas'),
-                    c2d = outputCanvas.getContext('2d');
-                outputCanvas.width = 256;
-                outputCanvas.height = 256;
-                c2d.drawImage(canvasCache, 0, 0, 256, 256);
-                c2d.drawImage(canvas, 0, 0, 256, 256);
-                onfinish(outputCanvas);
-             }
-        });
     }
     static _bestLevelForTiledImage(image, region, targetSize) {
 

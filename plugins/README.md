@@ -225,6 +225,7 @@ approaches !!!
 First, get familiar with (sorted in importance order):
  - `window.VIEWER` 
     - OpenSeadragon and `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API for viewing and navigation functionality
+      - focusing certain area, taking screenshots, getting reference to _main_ tiled image, getting pixel size on screen, opening viewer clone and more
     - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
     - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
  - `window.USER_INTERFACE`

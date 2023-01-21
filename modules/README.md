@@ -188,6 +188,8 @@ Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ of a T
 all measures should be done.
 
 ## Gotchas
+Check plugin's README in case you did not. The available API is described there to greater detail.
+
 There is no event for IO initialization (events are included at will), however, you can override ``initIO`` to do so:
 ````js
 async initIO() {
