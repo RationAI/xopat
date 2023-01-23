@@ -99,7 +99,6 @@ function printDependencies($directory, $item) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item->directory}/$file?v=$version\"></script>\n";
         } else if (is_object($file)) {
-            //todo transalte js to html syntax
             echo "    <script" . getAttributes($file, array(
                     'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer',
                     'integrity' => 'integrity', 'referrerPolicy' => 'referrerpolicy', 'src' => 'src')) . "></script>";

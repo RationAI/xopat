@@ -179,7 +179,6 @@ OpenSeadragon.Tools = class {
      * @param {number} outputSize.height
      */
     offlineScreenshot(region, targetSize, onfinish, outputSize=targetSize) {
-        //todo support only one BG image at time, easier
         let referencedTiledImage = this.referencedTiledImage();
         let referencedSource = referencedTiledImage.source;
 

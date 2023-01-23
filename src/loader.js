@@ -2,8 +2,6 @@
  * Common Error thrown in JSON requests with failures (via fetchJSON(...)
  * The content is not guaranteed to be translated.
  * @type {Window.HTTPError}
- *
- * todo make possible for JS to load without relying on PHP
  */
 window.HTTPError = class extends Error {
     constructor(message, response, textData) {
@@ -15,8 +13,9 @@ window.HTTPError = class extends Error {
 };
 
 /**
- * Use:                  const runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
- * call once when ready: runLoader();
+ * IMPORTANT
+ * Use:                 const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
+ * call when all ready: initPlugins();
  * @param PLUGINS
  * @param MODULES
  * @param PLUGINS_FOLDER
@@ -25,7 +24,7 @@ window.HTTPError = class extends Error {
  * @return {function(...[*]=)} initializer function to call once ready
  */
 function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, version) {
-    //todo exit if loaded
+    if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
     $.t = $.t || (x => x);
@@ -265,9 +264,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
     class XOpatElement {
 
-        constructor(id) {
+        constructor(id, executionContextName) {
             if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
             this.id = id;
+            this.xoContext = executionContextName;
         }
 
         /**
@@ -299,7 +299,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param e.error
          */
         error(e) {
-            //todo make sure default msg system works in core to listen and execute warns if not caught and rename this :/
             (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent('error-user', $.extend(e,
                 {originType: this.xoContext, originId: this.id}));
         }
@@ -326,7 +325,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             const _this = this;
             VIEWER.addHandler('export-data', async e =>  e.setSerializedData(this.id, await _this.exportData()));
             this.setCache = async (key, value) => {
-                const store = APPLICATION_CONTEXT.config.meta.persistent();
+                const store = APPLICATION_CONTEXT.metadata.persistent();
                 if (store) {
                     try {
                         await store.set(_this.id + key, value);
@@ -347,7 +346,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 return true;
             };
             this.getCache = async (key, defaultValue=undefined, parse=true) => {
-                const store = APPLICATION_CONTEXT.config.meta.persistent();
+                const store = APPLICATION_CONTEXT.metadata.persistent();
                 if (store) {
                     try {
                         return await store.get(_this.id + key, defaultValue);
@@ -487,8 +486,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     window.XOpatModule = class extends XOpatElement {
 
         constructor(id) {
-            super(id);
-            this.xoContext = "module";
+            super(id, "module");
         }
 
         /**
@@ -553,8 +551,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     window.XOpatPlugin = class extends XOpatElement {
 
         constructor(id) {
-            super(id);
-            this.xoContext = "plugin";
+            super(id, "plugin");
         }
 
         /**
@@ -650,9 +647,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             if (typeof postData === "object" && postData && metaKeys !== false) {
                 if (postData.metadata === undefined) {
                     if (Array.isArray(metaKeys)) {
-                        postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
+                        postData.metadata = APPLICATION_CONTEXT.metadata.allWith(metaKeys);
                     } else {
-                        postData.metadata = APPLICATION_CONTEXT.config.meta.all();
+                        postData.metadata = APPLICATION_CONTEXT.metadata.all();
                     }
                 }
             }

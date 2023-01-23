@@ -52,7 +52,6 @@ function ensureDefined($object, $property, $default) {
 /**
  * Redirection: based on parameters, either setup visualisation or redirect
  */
-//todo visualisation -> visualization
 $visualisation = hasKey($_POST, "visualisation") ? $_POST["visualisation"] :
     (hasKey($_GET, "visualisation") ? $_GET["visualisation"] : false);
 if (!$visualisation) {
@@ -162,7 +161,7 @@ $visualisation = json_encode($parsedParams);
     <link rel="apple-touch-icon" sizes="180x180" href="<?php echo ASSETS_ROOT; ?>apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="<?php echo ASSETS_ROOT; ?>favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="<?php echo ASSETS_ROOT; ?>favicon-16x16.png">
-<!--    <link rel="manifest" href="./assets/site.webmanifest">-->
+    <!--<link rel="manifest" href="./assets/site.webmanifest">-->
     <link rel="mask-icon" href="<?php echo ASSETS_ROOT; ?>safari-pinned-tab.svg" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
 
@@ -202,7 +201,6 @@ $visualisation = json_encode($parsedParams);
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
-    <!--TODO add anonymous and integrity tags, require them from files included in safe mode-->
     <!-- jquery -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"
         integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
@@ -432,7 +430,7 @@ EOF;
                 return setup.params || {};
             },
             get meta () {
-                return metaStore;
+                return setup.meta;
             },
             get data () {
                 return setup.data || [];
@@ -449,6 +447,9 @@ EOF;
             get plugins () {
                 return setup.plugins || {};
             },
+        },
+        get metadata() {
+            return metaStore;
         },
         //here are all parameters supported by the core visualization
         get defaultConfig() {
@@ -475,15 +476,18 @@ EOF;
         get url() {
             return '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>';
         },
-        get rootPath() {
+        get rootAbsPath() {
             return '<?php echo VISUALISATION_ROOT_ABS_PATH ?>';
+        },
+        get rootPath() {
+            return '<?php echo VISUALISATION_ROOT ?>';
         },
         get postData() {
             return postData;
         },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
-        layersAvailable: false, //default todo getter instead
+        layersAvailable: false,
         getOption(name, defaultValue=undefined) {
             let cookie = this._getCookie(name);
             if (cookie !== undefined) return cookie;
@@ -520,7 +524,7 @@ EOF;
             }
             return result;
         },
-        referencedFileName(stripSuffix=false) { //todo unify namespace, move to tools or other function here?
+        referencedFileName(stripSuffix=false) {
             if (setup.background.length < 0) {
                 return undefined;
             }
@@ -540,6 +544,9 @@ EOF;
                 if (!willParse) {
                     if (value === "false") value = false;
                     else if (value === "true") value = true;
+                }
+                if (defaultValue !== undefined) {
+                    return value === undefined ? defaultValue : value;
                 }
                 return value;
             }
@@ -606,7 +613,7 @@ EOF;
     // Initialize viewer - OpenSeadragon
     window.VIEWER = OpenSeadragon({
         id: "osd",
-        prefixUrl: "openseadragon/build/openseadragon/images", //todo configurable
+        prefixUrl: "openseadragon/build/openseadragon/images",
         showNavigator: true,
         maxZoomPixelRatio: 1,
         blendTime: 0,
@@ -881,10 +888,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
             const activeVis = seaGL.visualization();
             if (layerWorldItem) {
-                if ((!activeVis.hasOwnProperty("lossless") || activeVis.lossless) && layerWorldItem.source.setFormat) {
-                    layerWorldItem.source.setFormat("png");
-                }
-                layerWorldItem.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+                UTILITIES.prepareTiledImage(layerWorldItem, activeVis);
 
                 $("#panel-shaders").css('display', 'block');
                 $("#global-opacity").css('display', 'initial');
@@ -950,7 +954,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             $("#viewer-container").addClass("disabled"); //preventive
         }
 
-        //todo this way of calling open event has in OpenSeadragon todo comment - check for API changes in future
+        //todo INHERITS OpenSeadragon todo comment - check for API changes in open event in future
         opts.source = VIEWER.world.getItemAt(0)?.source;
         opts.reopenCounter = reopenCounter;
         VIEWER.raiseEvent('open', opts);
@@ -965,8 +969,6 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         window.VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.config.params.secureMode;
-
-        //todo loading animation?
         let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
@@ -997,11 +999,12 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         const toOpen = [];
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
-        const handleFinishOpenImageEvent = () => {
+        const handleFinishOpenImageEvent = (item, url, index) => {
             openedSources--;
-            if (openedSources <= 0) {
-                handleSyntheticOpenEvent();
+            if (item) {
+                VIEWER.raiseEvent('tiled-image-created', {item, url, index});
             }
+            if (openedSources <= 0) handleSyntheticOpenEvent();
         };
         let imageOpenerCreator = (success, userArg=undefined) => {
             return (toOpenLastBgIndex, source, toOpenIndex) => {
@@ -1011,7 +1014,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
                     opacity: opacity,
                     success: (event) => {
                         success({userArg, toOpenLastBgIndex, toOpenIndex, event});
-                        handleFinishOpenImageEvent();
+                        handleFinishOpenImageEvent(event.item, source, toOpenIndex);
                     },
                     error: () => {
                         handleFinishOpenImageEvent();

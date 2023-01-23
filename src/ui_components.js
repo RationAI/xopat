@@ -9,6 +9,29 @@
  *      use context.opener to get reference to the original (parent) window
  */
 
+
+window.xoQueue = class {
+    constructor(size) {
+        this.SIZE = size;
+        this._items = {};
+    }
+    add(item) {
+        this._items[this._incr()] = item;
+    }
+    pop() {
+        let item = this._items[this._i];
+        delete this._items[this._i];
+        this._decr();
+        return item;
+    }
+    _incr(){
+        return (this._i = this._i + 1) % this.SIZE;
+    }
+    _decr() {
+        return (this._i = this._i > 0 ? this._i - 1 : this.SIZE)
+    }
+}
+
 var UIComponents = {
 
 /**
@@ -257,10 +280,8 @@ Components: {
         }
 
         build(options) {
-            //todo hardcoded assets path
-
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon || "src/assets/image.png";
+            let icon = options.icon || (APPLICATION_CONTEXT.rootPath + "src/assets/image.png");
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
@@ -293,11 +314,9 @@ ${contentAction}
         }
 
         build(options) {
-            //todo hardcoded assets path
-
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon || "src/assets/image.png";
+            let icon = options.icon || (APPLICATION_CONTEXT.rootPath + "src/assets/image.png");
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
@@ -329,20 +348,20 @@ ${contentAction}
         }
 
         attachHeader() {
-            //todo...?
-            let container = document.createElement("div");
-            container.classList.add("d-flex", "flex-row-reverse");
-            let btn = document.createElement("button");
-            btn.onclick = this.selectAll.bind(this);
-            btn.innerHTML = $.t('common.selectAll');
-            btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
-            container.append(btn);
-            btn = document.createElement("button");
-            btn.onclick = this.deselectAll.bind(this);
-            btn.innerHTML = $.t('common.deselectAll');
-            btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
-            container.append(btn);
-            document.getElementById(this.contextId).prepend(container);
+            //todo not working, although JS seems fine
+            // let container = document.createElement("div");
+            // container.classList.add("d-flex", "flex-row-reverse");
+            // let btn = document.createElement("button");
+            // btn.onclick = this.selectAll.bind(this);
+            // btn.innerHTML = $.t('common.selectAll');
+            // btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
+            // container.append(btn);
+            // btn = document.createElement("button");
+            // btn.onclick = this.deselectAll.bind(this);
+            // btn.innerHTML = $.t('common.deselectAll');
+            // btn.classList.add("btn", "btn-sm", "mb-2", "mx-1");
+            // container.append(btn);
+            // document.getElementById(this.contextId).prepend(container);
         }
     },
 },
@@ -525,17 +544,17 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
         constructor(containerId, builder=UIComponents.Components.ImageRow, builderOptions={}) {
             const context = document.getElementById(containerId);
             if (!context) throw "RowPanel(): invalid initialization: container does not exist!";
-            this.containerId = containerId;
-            this.builder = new builder(containerId, builderOptions);
+            this.containerId = containerId + "-content";
+            this.builder = new builder(this.containerId, builderOptions);
             this.uid = containerId;
-            context.innerHTML = `<div></div>`;
+            context.innerHTML = `<div id="${this.containerId}"></div>`;
             this.rows = [];
             this.count = 0;
             this.contentClass = "row-panel";
         }
 
         _getContext() {
-            return $(document.getElementById(this.containerId).children[0]);
+            return $(document.getElementById(this.containerId));
         }
 
         addRow(options) {

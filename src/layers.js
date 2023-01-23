@@ -8,17 +8,17 @@
         window.APPLICATION_CONTEXT.layersAvailable = false;
     }
 
-    //todo check for undefined before parsing - exception
-    try {
-        var namedCookieCache = JSON.parse(APPLICATION_CONTEXT._getCookie('_cache', "{}"));
-    } catch (e) {
-        namedCookieCache = {};
+    function parseCookie(key) {
+        try {
+            const cookie = APPLICATION_CONTEXT._getCookie(key, "{}", false);
+            return cookie ? JSON.parse(cookie) : {};
+        } catch (e) {
+            return {};
+        }
     }
-    try {
-        var orderedCookieCache = JSON.parse(APPLICATION_CONTEXT._getCookie('_orderedCache', "{}"));
-    } catch (e) {
-        orderedCookieCache = {};
-    }
+
+    var namedCookieCache = parseCookie('_cache');
+    var orderedCookieCache = parseCookie('_orderedCache');
 
     window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
         function isset(x, type="string") {
@@ -143,9 +143,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
-                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
-                                    e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
-                                }
+                                UTILITIES.prepareTiledImage(e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -157,9 +155,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
-                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
-                                    e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
-                                }
+                                UTILITIES.prepareTiledImage(e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -216,16 +212,6 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                 availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
             }
 
-            // let filterChange = "";
-            // if (canChangeFilters) {
-            //     canChangeFilters = "<select onchange='UTILITIES.setFilterOfLayer()'>";
-            //     for (let f in WebGLModule.VisualisationLayer.filterNames) {
-            //         let selected = available.type() === layer.type ? " selected" : "";
-            //         canChangeFilters +=  `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-            //     }
-            // }
-
-            //todo does not work?
             let filterUpdate = [];
             if (!fixed) {
                 for (let key in WebGLModule.VisualisationLayer.filters) {
@@ -239,7 +225,7 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                 }
             }
             const fullTitle = title.startsWith("...") ? dataId : title;
-            const cacheApplied = layer._cacheApplied ? //todo add ability to unset
+            const cacheApplied = layer._cacheApplied ?
                 `<div class="p2 info-container rounded-2" style="width: 97%">
 ${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
 
@@ -305,34 +291,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
         }
 
         if (firstTimeSetup) {
-            VIEWER.addHandler('open-failed', function (e) {
-                //todo check whether open failed only during opening, if so this is correct
-                //this event handless add:    add-item-failed
-
-                //should work only for rendering layer
-                //todo not called probably because it is not on VIEWER called but somewhere else
-                if (typeof e.source === 'string') {
-                    if (e.source == seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, seaGL.dataImageSources())) {
-                        VIEWER.addTiledImage({
-                            //todo what if this is the background image? :/
-                            tileSource : new EmptyTileSource({
-                                height: 512,
-                                width: 512,
-                                tileSize: 512
-                            }),
-                            //index: seaGL.getWorldIndex(),
-                            opacity: $("#global-opacity input").val(),
-                            replace: true,
-                            success: function (e) {
-                                //seaGL.addLayer(seaGL.getWorldIndex());
-                                //seaGL.initAfterOpen();
-                            }
-                        });
-                    }
-                } else {
-                    //unknown origin, just fail=ignore?
-                }
-            });
             /*---------------------------------------------------------*/
             /*------------ JS utilities and enhancements --------------*/
             /*---------------------------------------------------------*/
@@ -357,7 +315,15 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 APPLICATION_CONTEXT._setCookie(cookieKey, JSON.stringify(shaderCache));
             };
 
-            window.UTILITIES.makeCacheSnapshot = function(named=true) {
+            UTILITIES.prepareTiledImage = function (image, visSetup) {
+                //todo not flexible, propose format setting in OSD? depends on the protocol
+                if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
+                    image.source.setFormat("png");
+                }
+                image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+            };
+
+            UTILITIES.makeCacheSnapshot = function(named=true) {
                 if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
                     Dialogs.show($.t('messages.cookiesDisabled', {action: "$('#settings').click()"}), 5000, Dialogs.MSG_WARN);
                     return;
@@ -530,8 +496,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     if (!layers.hasOwnProperty(key)) continue;
 
                     let errorMessage;
-
-                    //todo check this attr existnce and invalidate layer if missing
                     for (let imgSource of layers[key].dataReferences) {
                         let idx = sources.findIndex(s => s === allSources[imgSource]);
                         if (idx !== -1

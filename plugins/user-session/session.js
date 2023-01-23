@@ -21,7 +21,7 @@ addPlugin("user-session", class extends XOpatPlugin {
             //record visiting to the endpoint
             UTILITIES.fetchJSON(this.server, {
                 ajax: "setSeen", //todo not flexible :/
-                user: APPLICATION_CONTEXT.config.meta.getUser(),
+                user: APPLICATION_CONTEXT.metadata.getUser(),
                 filename: this.sessionReferenceFile
             }, this.headers, false).then(response => {
                 //ignore whatever response
@@ -47,7 +47,7 @@ addPlugin("user-session", class extends XOpatPlugin {
         } else {
             UTILITIES.fetchJSON(this.server, {
                 ajax: "storeSession", //todo not flexible :/
-                user: APPLICATION_CONTEXT.config.meta.getUser(),
+                user: APPLICATION_CONTEXT.metadata.getUser(),
                 filename: this.sessionReferenceFile,
                 session: await UTILITIES.getForm()
             }, this.headers, false).then(response => {

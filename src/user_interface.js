@@ -8,17 +8,20 @@
         _modals: {},
 
         init: function() {
-            $("body").append(`<div id="dialogs-container" class="Toast popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
+            $("body").append(`<div id="dialogs-container" class="popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
+<div class="Toast" style="margin: 16px 0 0 0;">
 <span class="Toast-icon"><svg width="12" height="16" id="notification-bar-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
 <span id="system-notification" class="Toast-content v-align-middle height-full position-relative" style="max-width: 350px;"></span>
 <button class="Toast-dismissButton" onclick="Dialogs._hideImpl(false);">
 <svg width="12" height="16" viewBox="0 0 12 16" class="octicon octicon-x" aria-hidden="true"><path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48L7.48 8z"/></svg>
-</button></div>`);
+</button>
+</div></div>`);
 
             this._body = $("#dialogs-container");
+            this._toast = this._body.children().first();
             this._board = $("#system-notification");
             this._icon = $("#notification-bar-icon");
-
+            this._notifQueue = new xoQueue(5);
             const _this = this;
 
             //close all child modals if parent dies
@@ -42,20 +45,9 @@
          * @param queued this message is ignored if another is shown and queued=false
          */
         show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
-            //todo support concurrence, queue
-
-            if (!queued && this._timer) return;
-
-            this._board.html(text);
-            this._icon.html(importance.icon);
-            this._body.removeClass(); //all
-            this._body.addClass(`Toast position-fixed ${importance.class}`);
-            this._body.removeClass("popUpHide");
-            this._body.addClass("popUpEnter");
-
-            if (delayMS >= 1000) {
-                this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
-            }
+            if (queued && this._timer) {
+                this._notifQueue.add({text, delayMS, importance});
+            } else this._showImpl(text, delayMS, importance);
         },
 
         /**
@@ -73,6 +65,26 @@
                 clearTimeout(this._timer);
             }
             this._timer = null;
+
+            const elem = this._notifQueue.pop();
+            if (elem) {
+                this._showImpl(elem.text, elem.delayMS, elem.importance);
+            }
+        },
+
+        _showImpl: function (text, delayMS, importance) {
+            this._board.html(text);
+            this._icon.html(importance.icon);
+            this._toast.removeClass(); //all
+            this._toast.css("animation-duration", `${delayMS}ms`);
+            this._toast.addClass(`Toast ${importance.class} progress-bottom-bar`);
+            this._body.removeClass("popUpHide");
+            this._body.addClass("popUpEnter");
+
+            if (delayMS >= 1000) {
+                if (this._timer) clearTimeout(this._timer);
+                this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
+            }
         },
 
         /**
@@ -127,10 +139,10 @@
             }
 
             this._showCustomModalImpl(parentId, title, `
-<script type="text/javascript" src="${APPLICATION_CONTEXT.rootPath}/src/external/monaco/loader.js"><\/script>
+<script type="text/javascript" src="${APPLICATION_CONTEXT.rootAbsPath}src/external/monaco/loader.js"><\/script>
 <script type="text/javascript">
 require.config({
-  paths: { vs: "${APPLICATION_CONTEXT.rootPath}/src/external/monaco" }
+  paths: { vs: "${APPLICATION_CONTEXT.rootAbsPath}src/external/monaco" }
 });
 const DEFAULT_EDITOR_OPTIONS = {
   value: \`${inputText}\`,
@@ -189,7 +201,7 @@ window.addEventListener("beforeunload", (e) => {
          * Gets the context of a modal window,
          * destroys and cleans the context if necessary (e.g. window was closed by the user)
          *
-         * TODO sometimes ctx.window valid but does not have getElementByID etc... fix
+         * TODO sometimes ctx.window valid but does not have getElementByID etc...
          *
          * @param id id used to create the window
          * @returns {window || undefined || null} window context or undefined
@@ -261,8 +273,8 @@ window.addEventListener("beforeunload", (e) => {
 <html lang="en">
     <head>
         <title>${title}</title>
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootPath}/src/external/primer_css.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootAbsPath}src/assets/style.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootAbsPath}src/external/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script><!--todo integrity tags-->
         <script type="text/javascript">
@@ -559,7 +571,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
                 if (!pluginsToolsBuilder) {
                     pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
-                    //todo set these colors manually in CSS!!! for different themes
                     pluginsToolsBuilder.context.classList.add("bg-opacity");
                     USER_INTERFACE.MainMenu._sync();
                 }
@@ -658,7 +669,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {boolean} container true if a common container should be added (i.e. margins/padding)
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="", withSubmenu=true, container=true) {
-                //todo allow multiple main menus for plugin?
                 let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(ownerPluginId);
                 if (!plugin || !ownerPluginId) return;
                 this._buildMenu(plugin, "__selfMenu", ownerPluginId, plugin.name, ownerPluginId, toolsMenuId, title, html,
@@ -978,8 +988,10 @@ Theme &emsp; ${inputs.select({
             UIComponents.Components.SelectableImageRow,
             {multiselect: true, id: 'plug-list-content'});
 
+        pluginsMenuBuilder.builder.attachHeader();
+
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
-            //todo better approach?
+            //todo maybe avoid using _dangerously* ?
             let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
                 pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
 

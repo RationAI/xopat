@@ -76,6 +76,29 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     line-height: 20px;
     vertical-align: top;
 }
+
+/**
+ * Set parent with 'progress-bottom-bar' your animation-duration
+ *  so that it is inherited, color is inherited from background
+ */
+.progress-bottom-bar:after {
+    animation: progressAfterBar;
+    animation-duration: inherit;
+    animation-timing-function: ease-out;
+    animation-iteration-count: 1;
+    height: 5px;
+    background-color: inherit;
+    filter: invert();
+    width: 0;
+    content: "";
+    display: block;
+    margin: 0 auto;
+    position: absolute;
+    bottom: 0;
+}
+@keyframes progressAfterBar {
+    0% {width: 100%} 100% {width: 0}
+}
 /**
  * ==============================================
  * Dot Pulse from https://codepen.io/nzbin/pen/GGrXbp

@@ -187,7 +187,7 @@ three different options are available:
     - use for user configurations caching to avoid re-setting in each session
 
 And one global meta store meant for reading only, global viewer metadata    
- 4. ``APPLICATION_CONTEXT.config.meta`` as an instance of `MetaStore` class  
+ 4. ``APPLICATION_CONTEXT.metadata`` as an instance of `MetaStore` class  
     
 For data IO, you ahve two options
  1. ``async importData``, `async exportData` suitable for data in general, present in _viewer file exports_
