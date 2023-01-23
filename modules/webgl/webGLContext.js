@@ -217,7 +217,6 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         super();
         this.context = context;
         this.gl = gl;
-        //todo delete
         this.max_textures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
 
         this.wrap = gl.MIRRORED_REPEAT;
@@ -289,7 +288,9 @@ vec4 lid_${layer._index}_xo() {
             }
         });
 
-        //TODO this could implement the selection of data sources to fetch, not employed for now due to behavioral problems: requires re-fetching
+        /**
+         * Implementation of active-only data subset not enabled, because underlying system cannot easily manage cache miss
+         */
         //must preserve the definition order
         // let urls = [];
         // for (let key in visualisation.shaders) {
@@ -515,7 +516,9 @@ vec4 lid_${layer._index}_xo() {
             }
         });
 
-        //TODO this could implement the selection of data sources to fetch, not employed for now due to behavioral problems: requires re-fetching
+        /**
+         * Implementation of active-only data subset not enabled, because underlying system cannot easily manage cache miss
+         */
         //must preserve the definition order
         // let urls = [], indicesMapping = new Array(usableShaders).fill(0);
         // for (let key in visualisation.shaders) {

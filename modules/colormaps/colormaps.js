@@ -5,19 +5,19 @@
  *
  * Some ColorSchemes are taken from Matlab
  *
- * TODO exclude usseles schemes, include our own color schemes [yellow + tyrkys]
+ * TODO include our own color schemes [yellow + tyrkys  based]
  */
 window.ColorMaps = {
     defaults: {
         sequential: "Viridis",
-        singlehue: "Oranges",
+        singlehue: "Reds",
         diverging: "RdBu",
         cyclic: "TwilightShift",
         qualitative: "Accent"
     },
     schemeGroups: {
-        sequential: ["Viridis", "Parula", "Winter", "Turbo", "Hot", "Inferno", "Magma", "Plasma", "BuGn", "BuPu", "GnBu", "OrRd", "PuBu", "PuBuGn", "PuRd", "RdPu", "YlGn", "YlGnBu", "YlOrBr", "YlOrRd"],
-        singlehue: ["Blues", "Greens", "Greys", "Oranges", "Purples", "Reds"],
+        sequential: ["Viridis", "Parula", "Winter", "Turbo", "Hot", "Inferno", "Magma", "Plasma", "BuGn", "BuPu", "PuBuGn", "RdPu", "YlGn", "YlGnBu", "YlOrRd"],
+        singlehue: ["Blues", "Greens", "Greys", "Purples", "Reds"],
         diverging: ["BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "Spectral"],
         cyclic: ["Twilight", "TwilightShift"],
         qualitative: ["Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", "Turbo"],
@@ -139,15 +139,6 @@ window.ColorMaps = {
         7: ["#ffffcc", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#0c2c84"],
         8: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#0c2c84"],
         9: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#253494", "#081d58"]
-    }, GnBu: {
-        2: ["#e0f3db", "#43a2ca"],
-        3: ["#e0f3db", "#a8ddb5", "#43a2ca"],
-        4: ["#f0f9e8", "#bae4bc", "#7bccc4", "#2b8cbe"],
-        5: ["#f0f9e8", "#bae4bc", "#7bccc4", "#43a2ca", "#0868ac"],
-        6: ["#f0f9e8", "#ccebc5", "#a8ddb5", "#7bccc4", "#43a2ca", "#0868ac"],
-        7: ["#f0f9e8", "#ccebc5", "#a8ddb5", "#7bccc4", "#4eb3d3", "#2b8cbe", "#08589e"],
-        8: ["#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4", "#4eb3d3", "#2b8cbe", "#08589e"],
-        9: ["#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4", "#4eb3d3", "#2b8cbe", "#0868ac", "#084081"]
     }, BuGn: {
         2: ["#e5f5f9", "#2ca25f"],
         3: ["#e5f5f9", "#99d8c9", "#2ca25f"],
@@ -184,24 +175,6 @@ window.ColorMaps = {
         7: ["#feebe2", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177"],
         8: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177"],
         9: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177", "#49006a"]
-    }, PuRd: {
-        2: ["#e7e1ef", "#dd1c77"],
-        3: ["#e7e1ef", "#c994c7", "#dd1c77"],
-        4: ["#f1eef6", "#d7b5d8", "#df65b0", "#ce1256"],
-        5: ["#f1eef6", "#d7b5d8", "#df65b0", "#dd1c77", "#980043"],
-        6: ["#f1eef6", "#d4b9da", "#c994c7", "#df65b0", "#dd1c77", "#980043"],
-        7: ["#f1eef6", "#d4b9da", "#c994c7", "#df65b0", "#e7298a", "#ce1256", "#91003f"],
-        8: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#df65b0", "#e7298a", "#ce1256", "#91003f"],
-        9: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#df65b0", "#e7298a", "#ce1256", "#980043", "#67001f"]
-    }, OrRd: {
-        2: ["#fee8c8", "#e34a33"],
-        3: ["#fee8c8", "#fdbb84", "#e34a33"],
-        4: ["#fef0d9", "#fdcc8a", "#fc8d59", "#d7301f"],
-        5: ["#fef0d9", "#fdcc8a", "#fc8d59", "#e34a33", "#b30000"],
-        6: ["#fef0d9", "#fdd49e", "#fdbb84", "#fc8d59", "#e34a33", "#b30000"],
-        7: ["#fef0d9", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548", "#d7301f", "#990000"],
-        8: ["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548", "#d7301f", "#990000"],
-        9: ["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548", "#d7301f", "#b30000", "#7f0000"]
     }, YlOrRd: {
         2: ["#ffeda0", "#f03b20"],
         3: ["#ffeda0", "#feb24c", "#f03b20"],
@@ -211,15 +184,6 @@ window.ColorMaps = {
         7: ["#ffffb2", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#b10026"],
         8: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#b10026"],
         9: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#bd0026", "#800026"]
-    }, YlOrBr: {
-        2: ["#fff7bc", "#d95f0e"],
-        3: ["#fff7bc", "#fec44f", "#d95f0e"],
-        4: ["#ffffd4", "#fed98e", "#fe9929", "#cc4c02"],
-        5: ["#ffffd4", "#fed98e", "#fe9929", "#d95f0e", "#993404"],
-        6: ["#ffffd4", "#fee391", "#fec44f", "#fe9929", "#d95f0e", "#993404"],
-        7: ["#ffffd4", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#8c2d04"],
-        8: ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#8c2d04"],
-        9: ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#993404", "#662506"]
     }, Purples: {
         2: ["#efedf5", "#756bb1"],
         3: ["#efedf5", "#bcbddc", "#756bb1"],
@@ -247,15 +211,6 @@ window.ColorMaps = {
         7: ["#edf8e9", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#005a32"],
         8: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#005a32"],
         9: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"]
-    }, Oranges: {
-        2: ["#fee6ce", "#e6550d"],
-        3: ["#fee6ce", "#fdae6b", "#e6550d"],
-        4: ["#feedde", "#fdbe85", "#fd8d3c", "#d94701"],
-        5: ["#feedde", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"],
-        6: ["#feedde", "#fdd0a2", "#fdae6b", "#fd8d3c", "#e6550d", "#a63603"],
-        7: ["#feedde", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#8c2d04"],
-        8: ["#fff5eb", "#fee6ce", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#8c2d04"],
-        9: ["#fff5eb", "#fee6ce", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#a63603", "#7f2704"]
     }, Reds: {
         2: ["#fee0d2", "#de2d26"],
         3: ["#fee0d2", "#fc9272", "#de2d26"],
@@ -382,7 +337,7 @@ window.ColorMaps = {
         7: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17"],
         8: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17", "#666666"]
     }, Dark2: {
-        3: ["#1b9e77", "#d95f02"],
+        2: ["#1b9e77", "#d95f02"],
         3: ["#1b9e77", "#d95f02", "#7570b3"],
         4: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"],
         5: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e"],

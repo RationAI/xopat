@@ -131,6 +131,15 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * Predicate that checks how many channels are supported by certain shader
+     * @param {number} channelCount
+     * @return boolean
+     */
+    textureChannelSamplingAccepts(channelCount) {
+        throw "VisualisationLayer::textureChannelSamplingAccepts must be implemented!";
+    }
+
+    /**
      * Code placed outside fragment shader's main(...).
      * By default, it includes all definitions of
      * controls you defined in defaultControls
@@ -169,7 +178,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {string}
      */
     getFragmentShaderExecution() {
-        throw "This function must be implemented!";
+        throw "VisualisationLayer::getFragmentShaderExecution must be implemented!";
     }
 
     /**
@@ -311,16 +320,6 @@ WebGLModule.VisualisationLayer = class {
         } catch (e) {
             return defaultValue.toFixed(precisionLen);
         }
-    }
-
-    /**
-     * Add your shader part result
-     * @param {string} output, GLSL code to output from the shader, output must be a vec4
-     * @deprecated todo remove
-     */
-    render(output) {
-        console.warn("WebGLModule:: VisualisationLayer::render deprecated!");
-        return `${this.__mode}(${output});`;
     }
 
     /**
@@ -479,8 +478,6 @@ WebGLModule.VisualisationLayer = class {
      * @param {string} options.use_channel chanel to sample
      */
     resetChannel(options) {
-        //todo verify (and test) also against required channel count!
-
         const parseChannel = (name, def) => {
             if (options.hasOwnProperty(name)) {
                 let channel = this.loadProperty(name, options[name]);
@@ -493,11 +490,15 @@ WebGLModule.VisualisationLayer = class {
                     channel = def;
                 }
 
+                if (!this.textureChannelSamplingAccepts(channel.length)) {
+                    throw `${this.constructor.name()} does not support channel length for channel: ${channel}`;
+                }
+
                 if (channel !== options[name]) this.storeProperty(name, channel);
                 return channel;
             }
             return def;
-        }
+        };
 
         this.__channel = parseChannel("use_channel", "r");
         this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, this.__channel));
@@ -925,7 +926,7 @@ WebGLModule.UIControls.IControl = class {
                 } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
                     to[key] = fVal;
                 } else if (fType === "string") {
-                    //try parsing
+                    //try parsing NOTE: parsing from supportsAll is ignored!
                     if (tType === "number") {
                         const parsed = Number.parseFloat(fVal);
                         if (!Number.isNaN(parsed)) to[key] = parsed;
@@ -939,6 +940,48 @@ WebGLModule.UIControls.IControl = class {
             return to;
         }
         return mergeSafeType(this.supports, params, this.supportsAll);
+    }
+
+    /**
+     * Safely check certain param value
+     * @param value  value to check
+     * @param defaultValue default value to return if check fails
+     * @param paramName name of the param to check value type against
+     * @return {boolean|number|*}
+     */
+    getSafeParam(value, defaultValue, paramName) {
+        const t = this.constructor.getVarType;
+        function nest(suppNode, suppAllNode) {
+            if (t(suppNode) !== "object") return [suppNode, suppAllNode];
+            if (! suppNode.hasOwnProperty(paramName)) return [undefined, undefined];
+            return nest(suppNode[paramName], suppAllNode?.[paramName]);
+        }
+        const param = nest(this.supports, this.supportsAll), tParam = t(param[0]);
+        if (tParam === "object") {
+            console.warn("Parameters should not be stored at object level. No type inspection is done.");
+            return true; //no supported inspection
+        }
+        const tValue = t(value);
+        //supported type OR supports all types includes the type
+        if (tValue === tParam || (param[1] && param[1].map(t).includes(tValue))) {
+            return value;
+        }
+
+        if (tValue === "string") {
+            //try parsing NOTE: parsing from supportsAll is ignored!
+            if (tParam === "number") {
+                const parsed = Number.parseFloat(value);
+                if (!Number.isNaN(parsed)) return parsed;
+            } else if (tParam === "boolean") {
+                const val = value.toLowerCase();
+                if (val === "false") return false;
+                if (val === "true") return true;
+            }
+        }
+
+        //todo test
+        console.debug("Failed to load safe param -> new feature, debugging! ", value, defaultValue, paramName);
+        return defaultValue;
     }
 
     /**
@@ -1106,9 +1149,10 @@ WebGLModule.UIControls.IControl = class {
      * @return {*} cached or default value
      */
     load(defaultValue, paramName="") {
-        //todo test against required type wrt supports and return default if not valid
         if (paramName === "default") paramName = "";
-        return this.context.loadProperty(this.name + paramName, defaultValue)
+        const value = this.context.loadProperty(this.name + paramName, defaultValue);
+        //check param in case of input cache collision between shader types
+        return this.getSafeParam(value, defaultValue, paramName === "" ? "default" : paramName);
     }
 
     /**
@@ -1225,7 +1269,6 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         this.location_gluint = gl.getUniformLocation(program, this.webGLVariableName);
     }
 
-    //todo try to get rid of break line
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
         const result = this.component.html(this.id, this.params, controlCss);

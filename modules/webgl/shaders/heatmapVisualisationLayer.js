@@ -48,6 +48,10 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
+    }
+
     getFragmentShaderExecution() {
         return `    
     float chan = ${this.sampleChannel('tile_texture_coords')};

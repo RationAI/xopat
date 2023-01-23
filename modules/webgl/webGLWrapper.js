@@ -21,6 +21,13 @@
 *  }} Layer
 */
 window.WebGLModule = class {
+
+    /**
+     * ID pattern allowed for module, ID's are used in GLSL
+     * to distinguish uniquely between static generated code parts
+     * @type {RegExp}
+     */
+    static idPattern = /[0-9a-zA-Z_]*/;
     /**
      * @param {object} incomingOptions
      * @param {function} incomingOptions.htmlControlsId: where to render html controls,
@@ -40,7 +47,7 @@ window.WebGLModule = class {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Default values overrideable from incomingOptions  /////////////////
         /////////////////////////////////////////////////////////////////////////////////
-        this.uniqueId = ""; //todo ID cannot contain non-variable friendly names, check pattern
+        this.uniqueId = "";
 
         this.ready = function () { };
         this.htmlControlsId = null;
@@ -78,6 +85,10 @@ window.WebGLModule = class {
             if (incomingOptions.hasOwnProperty(key)) {
                 this[key] = incomingOptions[key];
             }
+        }
+
+        if (!this.constructor.idPattern.test(this.uniqueId)) {
+            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore. ID: " + this.uniqueId;
         }
 
         /**
@@ -363,7 +374,7 @@ window.WebGLModule = class {
     /**
      * For easy initialization, do both in once call.
      * For separate initialization (prepare|init), see functions below.
-     * @param dataSources a list of data identifiers available to the visualisations
+     * @param {[string]|undefined} dataSources a list of data identifiers available to the visualisations
      *  - visualisation configurations should not reference data not present in this array
      *  - the module gives you current list of required subset of this list for particular active visualization goal
      * @param width initialization width
@@ -371,7 +382,7 @@ window.WebGLModule = class {
      *
      *  todo support data-less initialization - in that case throw when accessing requested data
      */
-    prepareAndInit(dataSources, width=1, height=1) {
+    prepareAndInit(dataSources=[], width=1, height=1) {
         let _this = this;
         this.prepare(dataSources, () => {
             _this.init(width, height);
@@ -386,7 +397,7 @@ window.WebGLModule = class {
      * The idea is to open the protocol for OSD in onPrepared.
      * Shaders are fetched from `visualisation.url` parameter.
      *
-     * @param {[string]} dataSources id's of data such that server can understand which image to send (usually paths)
+     * @param {[string]|undefined} dataSources id's of data such that server can understand which image to send (usually paths)
      * @param {number} visIndex index of the initial visualisation
      * @param {function} onPrepared callback to execute after succesfull preparing.
      */
@@ -402,7 +413,7 @@ window.WebGLModule = class {
                 desc: "::prepare() called with no visualisation set."});
             return;
         }
-        this._origDataSources = dataSources;
+        this._origDataSources = dataSources || [];
         this._program = visIndex;
 
         this._prepared = true;
@@ -693,7 +704,16 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         }
         usedIds = [...usedIds].sort();
         this._dataSources = [];
-        this._dataSourceMapping = new Array(Math.max(this._origDataSources.length, usedIds[usedIds.length-1])).fill(-1);
+
+        while (usedIds[usedIds.length-1] >= this._origDataSources.length) {
+            //make sure values are set if user did not provide
+            this._origDataSources.push("__generated_do_not_use__");
+        }
+
+        this._dataSourceMapping = new Array(
+            Math.max(this._origDataSources.length, usedIds[usedIds.length-1])
+        ).fill(-1);
+
         for (let id of usedIds) {
             this._dataSourceMapping[id] = this._dataSources.length;
             this._dataSources.push(this._origDataSources[id]);

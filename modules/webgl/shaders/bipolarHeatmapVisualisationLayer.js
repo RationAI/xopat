@@ -65,6 +65,10 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
 `;
     }
 
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
+    }
+
     htmlControls() {
         return [
             this.colorHigh.toHtml(true),

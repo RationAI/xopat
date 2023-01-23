@@ -147,7 +147,6 @@
             //     let zoom = this._viewer.viewport.getZoom(true);
             //     var rotation = this._viewer.viewport.getRotation();
             //     var flipped = this._viewer.viewport.getFlip();
-            //     // TODO: Expose an accessor for _containerInnerSize in the OSD API so we don't have to use the private variable.
             //     var containerSizeX = this._viewer.viewport._containerInnerSize.x
             //     var scaleX = containerSizeX * zoom;
             //     var scaleY = scaleX;

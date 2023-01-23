@@ -4,7 +4,9 @@
  * to correctly load the textures to GPU, based on the WebGL version used.
  *
  * TODO dataloader should be a component given to the configuration dynamically
- * TODO make GLSL code as functions (proxies) instead of using code injection
+ *
+ * Future: try to make GLSL code as functions (proxies) instead of using static code injection
+ *  - cons: not able to generate correct uniform name from index in GLSL as of now
  *
  * This implementation supports data as Image or Canvas objects
  *

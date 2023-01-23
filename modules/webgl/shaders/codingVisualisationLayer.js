@@ -113,6 +113,10 @@ float filtered = ${this.filter("0.123456")};
         });
     }
 
+    textureChannelSamplingAccepts(count) {
+        return true;
+    }
+
     htmlControls() {
         return [
             `<span class="blob-code"><span class="blob-code-inner pl-0">//the output of 'render_${this.uid}()' is rendered</span></span>`,

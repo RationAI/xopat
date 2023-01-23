@@ -4,8 +4,6 @@
 *
 * Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
-*
-* TODO always use cache approach, do not rely on events, just program two approaches - with and without cache (setting c2d directly after tile load)
 */
 
 window.OpenSeadragon.BridgeGL = class {
@@ -435,11 +433,9 @@ window.OpenSeadragon.BridgeGL = class {
         if (e.tile.webglId === this.uid && e.tile.webglRefresh <= this.timeStamp) {
             e.tile.webglRefresh = this.highestTimestamp;
 
-            //todo make it such that it is called just once
-            this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
-
+            //noop if equal
+            this.webGLEngine.setDimensions(e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             let imageData = e.tile.__data;
-
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
                 this.openSD.viewport.getZoom(), this.imagePixelSizeOnScreen());
@@ -502,11 +498,10 @@ window.OpenSeadragon.BridgeGL = class {
             if (cache.webglRefresh <= _context.timeStamp) {
                 cache.webglRefresh = _context.highestTimestamp;
 
-                //todo make it such that it is called just once
+                //noop if equal
                 _context.webGLEngine.setDimensions(cache._dim.width, cache._dim.height);
-
                 // Render a webGL canvas to an input canvas using cached version
-                var output = _context.webGLEngine.processImage(cache._data, cache._dim,
+                const output = _context.webGLEngine.processImage(cache._data, cache._dim,
                     _context.openSD.viewport.getZoom(), _context.imagePixelSizeOnScreen());
 
                 // Note: you can comment out clearing if you don't use transparency

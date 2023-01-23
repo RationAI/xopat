@@ -2,8 +2,6 @@
  * Colormap shader
  * data reference must contain one index to the data to render using colormap strategy
  *
- * todo allow invert
- *
  * expected parameters:
  *  index - unique number in the compiled shader
  * supported parameters:
@@ -84,6 +82,10 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         return [...Array(length).keys()].forEach(x => x+1);
     }
 
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
+    }
+
     init() {
         const _this = this;
 
@@ -108,10 +110,9 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         }
         this.threshold.init();
 
-        if (this.threshold.raw.length != this.color.params.steps - 1) {
-            //todo fix this scenario
-            //console.warn("Invalid todododo");
-        }
+        //todo fix this scenario
+        // if (this.threshold.raw.length != this.color.params.steps - 1) {
+        // }
 
         if (this.connect) {
             if (this.connect.raw) {
