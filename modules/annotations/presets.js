@@ -100,7 +100,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Create Preset Manager
-     * @param {string} selfName name of the property 'self' in parent
+     * @param {string} selfName name of the property 'self' in parent (not used)
      * @param {OSDAnnotations} context parent context
      */
     constructor(selfName, context) {

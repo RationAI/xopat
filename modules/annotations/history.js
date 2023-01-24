@@ -8,7 +8,7 @@ OSDAnnotations.History = class {
      */
     constructor(selfName, context, presetManager) {
         //js code strings to execute on html node events
-        this.__self = `${context.id}['${selfName}']`;
+        this.__self = `OSDAnnotations.instance().${selfName}`;
         this._globalSelf = this.__self;
         this._canvasFocus = '';
 

@@ -293,6 +293,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         /**
          * Raise error event
+         * todo make modules use this
          * @param e
          * @param e.code
          * @param e.message
@@ -305,6 +306,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         /**
          * Raise warning event
+         * todo make modules use this
          * @param e
          * @param e.code
          * @param e.message

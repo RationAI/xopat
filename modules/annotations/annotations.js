@@ -4,8 +4,8 @@
  *
  * @typedef {{x: number, y: number}} Point
  *
- * 	//TODO https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
- *   // - blending ?
+ * Consider https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
+ *    - blending ?
  */
 window.OSDAnnotations = class extends XOpatModuleSingleton {
 
@@ -13,9 +13,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		super("annotations");
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
-
-		//todo try to avoid in the future accessing self through a global
-		window.annotations = this;
 		this.initEventSource();
 		this._init();
 		this._setListeners();
@@ -178,7 +175,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise(string)
 	 */
 	async import(data, format=undefined, clear=false) {
-		//todo allow for 'redo' history
+		//todo allow for 'redo' history (once layers are introduced)
 
 		let toImport;
 		if (!format || format === "native") {
@@ -268,7 +265,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise
 	 */
 	async loadObjects(annotations, clear=false) {
-		//todo allow for 'redo' history
+		//todo allow for 'redo' history (once layers are introduced)
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
 		return this._loadObjects(annotations, clear);
@@ -359,7 +356,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * FabricJS context
 	 * @member OSDAnnotations
-	 * @return {*} //todo fabric.Canvas type not recognized
+	 * @return {fabric.Canvas}
 	 */
 	get canvas() {
 		return this.overlay.fabric;
@@ -541,7 +538,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (!ofObject.hasOwnProperty("layerID")) {
 			if (this._layer) ofObject.layerID = this._layer.id;
 		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
-			//todo mode?
 			return this.createLayer(ofObject.layerID);
 		}
 	}
@@ -842,7 +838,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (ask && this.presets._presetsImported) {
 				this.warn({
 					code: 'W_CACHE_IO_OMMITED',
-					message: 'There are presets available in the cache, but did not load since different presets were imported from data.<a onclick="annotations.loadPresetsCookieSnapshot(false);" class="pointer">Load anyway.</a>',
+					message: 'There are presets available in the cache, but did not load since different presets were imported from data.<a onclick="OSDAnnotations.instance().loadPresetsCookieSnapshot(false);" class="pointer">Load anyway.</a>',
 				});
 				return;
 			}

@@ -181,8 +181,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         if (typeof array === "object") {
             array = objectList.objects;
         }
-        const _this = this;
-
         return array;
     }
 
