@@ -60,7 +60,8 @@ window.XOpatWorker = class extends OpenSeadragon.EventSource {
                             };
                             self.worker.postMessage(options);
                         } else {
-                            data.error = "Failed to load scripts!";
+                            data.message = "Failed to load scripts!";
+                            data.status = "error";
                             onFailure(data);
                         }
                     };
@@ -75,10 +76,10 @@ window.XOpatWorker = class extends OpenSeadragon.EventSource {
 
                 //todo timeout?
             } else {
-                //todo fallback implementation?
-                onFailure(data.payload);
+                onFailure({status: "error", message: "The browser does not support Worker thread!"});
             }
         } catch (e) {
+            e.status = "error";
             onFailure(e);
         }
     }

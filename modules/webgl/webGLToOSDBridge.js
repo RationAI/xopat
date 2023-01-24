@@ -457,7 +457,6 @@ window.OpenSeadragon.BridgeGL = class {
         //necessary to modify hash key so as to force the viewer download the image twice
         source.__cached_getTileHashKey = source.getTileHashKey;
         source.getTileHashKey = function(level, x, y, url, ajaxHeaders, postData) {
-            //todo implement instead feature of sharing the data :/
             return source.__cached_getTileHashKey(level, x, y, url, ajaxHeaders, postData) + "_webgl";
         };
 

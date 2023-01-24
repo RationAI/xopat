@@ -682,79 +682,79 @@ void main() {
 };
 
 /**Not yet a part of API, todo functionality to process polygons**/
-WebGLModule.RasterizerContext = class {
-    constructor(context, gl) {
-        this.context = context;
-        this.gl = gl;
-    }
-
-    toBuffers(program) {
-        if (!this.context.running) return;
-
-        let context = this.context,
-            gl = this.gl;
-
-        gl.useProgram(program);
-
-        // Vertices
-        this.positionBuffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-
-        // Indices
-        this.indexBuffer = gl.createBuffer();
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
-
-
-        this.positionLocation = gl.getAttribLocation(program, "vertex");
-
-        gl.enableVertexAttribArray(this.positionLocation);
-        gl.vertexAttribPointer(
-            this.positionLocation, 2, gl.FLOAT, false, 0, 0);
-
-        this.resolutionLocation = gl.getUniformLocation(program, "resolution");
-        this.colorPosition = gl.getUniformLocation(program, "color");
-    }
-
-    vs() {
-        return `
-attribute vec2 vertex;
-uniform vec2 resolution;
-
-void main() {
-   vec2 zeroToOne = vertex / resolution;
-   // convert from 0->1 to 0->2
-   vec2 zeroToTwo = zeroToOne * 2.0;
-   // convert from 0->2 to -1->+1 (clipspace)
-   vec2 clipSpace = zeroToTwo - 1.0;
-   gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
-}
-        
-        `;
-    }
-
-    fs() {
-        return `
-precision mediump float;
-uniform vec4 color;
-void main() {
-   gl_FragColor = color;
-}
-        `;
-    }
-
-    toCanvas(program, vertices, color, indices) {
-        if (!this.context.running) return;
-        // Allow for custom drawing in webGL and possibly avoid using webGL at all
-
-        let context = this.context,
-            gl = this.gl;
-
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
-        gl.uniform4fv(this.colorPosition, color);
-
-        gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
-        return gl.canvas;
-    }
-};
+// WebGLModule.RasterizerContext = class {
+//     constructor(context, gl) {
+//         this.context = context;
+//         this.gl = gl;
+//     }
+//
+//     toBuffers(program) {
+//         if (!this.context.running) return;
+//
+//         let context = this.context,
+//             gl = this.gl;
+//
+//         gl.useProgram(program);
+//
+//         // Vertices
+//         this.positionBuffer = gl.createBuffer();
+//         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+//
+//         // Indices
+//         this.indexBuffer = gl.createBuffer();
+//         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+//
+//
+//         this.positionLocation = gl.getAttribLocation(program, "vertex");
+//
+//         gl.enableVertexAttribArray(this.positionLocation);
+//         gl.vertexAttribPointer(
+//             this.positionLocation, 2, gl.FLOAT, false, 0, 0);
+//
+//         this.resolutionLocation = gl.getUniformLocation(program, "resolution");
+//         this.colorPosition = gl.getUniformLocation(program, "color");
+//     }
+//
+//     vs() {
+//         return `
+// attribute vec2 vertex;
+// uniform vec2 resolution;
+//
+// void main() {
+//    vec2 zeroToOne = vertex / resolution;
+//    // convert from 0->1 to 0->2
+//    vec2 zeroToTwo = zeroToOne * 2.0;
+//    // convert from 0->2 to -1->+1 (clipspace)
+//    vec2 clipSpace = zeroToTwo - 1.0;
+//    gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+// }
+//
+//         `;
+//     }
+//
+//     fs() {
+//         return `
+// precision mediump float;
+// uniform vec4 color;
+// void main() {
+//    gl_FragColor = color;
+// }
+//         `;
+//     }
+//
+//     toCanvas(program, vertices, color, indices) {
+//         if (!this.context.running) return;
+//         // Allow for custom drawing in webGL and possibly avoid using webGL at all
+//
+//         let context = this.context,
+//             gl = this.gl;
+//
+//         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+//         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+//         gl.uniform4fv(this.colorPosition, color);
+//
+//         gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+//         return gl.canvas;
+//     }
+// };
 

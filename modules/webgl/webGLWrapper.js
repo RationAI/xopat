@@ -379,8 +379,6 @@ window.WebGLModule = class {
      *  - the module gives you current list of required subset of this list for particular active visualization goal
      * @param width initialization width
      * @param height initialization height
-     *
-     *  todo support data-less initialization - in that case throw when accessing requested data
      */
     prepareAndInit(dataSources=[], width=1, height=1) {
         let _this = this;

@@ -1,6 +1,5 @@
 /**
  * Code shader
- * todo open window in https://github.com/microsoft/monaco-editor
  */
 WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
 
@@ -56,7 +55,6 @@ vec4 xo_render_${this.uid}() {
     }
 
     getFragmentShaderExecution() {
-        //todo possibly remove this delegation, we can define execution here immediately
         return `return xo_render_${this.uid}();`;
     }
 
@@ -97,19 +95,23 @@ float filtered = ${this.filter("0.123456")};
         });
 
         this.editor.init();
-        this.editor.on('default', function (raw, encoded, ctx)  {
-            //todo dialogs should not be used in webgl module :D
-            Dialogs.openEditor(
-                'FS-editor',
-                'Fragment Shader',
-                _this.getFragmentShaderDefinition(),
-                'glsl',
-                code => {
-                    _this.storeProperty("fs", code);
-                    //_this.fs.init(); //update UI?
-                    _this._rebuild();
-                    _this.invalidate();
-                });
+        this.editor.on('default', function (raw, encoded, ctx) {
+            if (window.Dialogs?.openEditor) {
+                Dialogs.openEditor(
+                    'FS-editor',
+                    'Fragment Shader',
+                    _this.getFragmentShaderDefinition(),
+                    'glsl',
+                    code => {
+                        _this.storeProperty("fs", code);
+                        //_this.fs.init(); //update UI?
+                        _this._rebuild();
+                        _this.invalidate();
+                    });
+            } else {
+                console.warn("Monaco editor and external dialog windows are part of xOpat core - this feature is missing!");
+                alert("Cannot open editor: no editor available!");
+            }
         });
     }
 
