@@ -716,7 +716,6 @@ OSDAnnotations.PolygonUtilities = {
 
 OSDAnnotations.AutoObjectCreationStrategy = class {
     constructor(selfName, context) {
-        this._globalSelf = `${context.id}['${selfName}']`;
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
     }
 

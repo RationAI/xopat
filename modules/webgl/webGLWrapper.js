@@ -117,7 +117,7 @@ window.WebGLModule = class {
             console.error(e);
             return;
         }
-        console.log("WebGL Rendering module with version " + this.webGLImplementation.getVersion());
+        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId})`);
 
         this.gl_loaded = function (gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
@@ -171,11 +171,22 @@ window.WebGLModule = class {
             return false;
         }
         for (let vis of visualisations) {
-            if (!vis.hasOwnProperty("params")) {
-                vis.params = {};
-            }
             if (!vis.hasOwnProperty("shaders")) {
                 console.warn("Invalid visualization: no shaders defined", vis);
+                continue;
+            }
+
+            let count = 0;
+            for (let sid in vis.shaders) {
+                const shader = vis.shaders[sid];
+                if (!shader.hasOwnProperty("params")) {
+                    shader.params = {};
+                }
+                count++;
+            }
+
+            if (count < 0) {
+                console.warn("Invalid visualization: no shader configuration present!", vis);
                 continue;
             }
             this._visualisations.push(vis);

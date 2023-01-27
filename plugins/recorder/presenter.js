@@ -290,13 +290,14 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
     }
 
     _recordAnnotationRef(annotation, sid) {
+        if (!annotation) return;
         let refs = this._annotationRefs[sid] || [];
         refs.push(annotation);
         this._annotationRefs[sid] = refs;
     }
 
     _removeAnnotationRef(annotation, sid=undefined) {
-        if (annotation.presenterSids) {
+        if (annotation?.presenterSids) {
             for (let id of (sid ? [sid] : annotation.presenterSids)) {
                 this._arrRemove(this._annotationRefs[id], annotation);
             }

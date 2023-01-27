@@ -71,7 +71,8 @@ throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostD
 
 //params that come in might be associative arrays :/
 $parsedParams = $visualisation;
-if (is_string($visualisation)) $parsedParams = json_decode($parsedParams);
+if (is_string($visualisation)) $parsedParams = json_decode($parsedParams, false);
+else if (is_array($visualisation)) $parsedParams = (object)$parsedParams;
 throwFatalErrorIf(!is_object($parsedParams), "messages.urlInvalid", "messages.postDataSyntaxErr",
     "JSON Error: " . json_last_error_msg() . "<br>" . print_r($visualisation, true));
 
@@ -98,6 +99,7 @@ $i18n = i18n::default($locale, LOCALES_ROOT);
 require_once(PROJECT_SOURCES . "plugins.php");
 
 foreach ($parsedParams->background as $bg) {
+    $bg = (object)$bg;
     throwFatalErrorIf(!isset($bg->dataReference), "messages.urlInvalid", "messages.bgReferenceMissing",
         print_r($parsedParams->background, true));
 
@@ -430,7 +432,7 @@ EOF;
                 return setup.params || {};
             },
             get meta () {
-                return setup.meta;
+                return setup.meta || {};
             },
             get data () {
                 return setup.data || [];
@@ -768,7 +770,8 @@ EOF;
                 for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
                     const image = confBackground[idx],
                         worldItem =  VIEWER.world.getItemAt(i),
-                        referencedImage = worldItem?.getBackgroundConfig();
+                        configGetter = worldItem?.getBackgroundConfig,
+                        referencedImage = configGetter && configGetter();
 
                     if (image == referencedImage) {
                         //todo not very flexible...
@@ -820,7 +823,7 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                 const image = confBackground[idx],
                     imagePath = confData[image.dataReference];
 
-                if (APPLICATION_CONTEXT.config.params.secureMode) delete image.protocolPreview;
+                if (APPLICATION_CONTEXT.getOption("secureMode")) delete image.protocolPreview;
 
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
@@ -839,9 +842,9 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             $("#global-tissue-visibility").css("display", "initial");
 
             const image = confBackground[activeIndex],
-                worldItem = VIEWER.world.getItemAt(0);
-
-            const referencedImage = worldItem?.getBackgroundConfig();
+                worldItem =  VIEWER.world.getItemAt(0),
+                configGetter = worldItem?.getBackgroundConfig,
+                referencedImage = configGetter && configGetter();
 
             if (image != referencedImage) {
                 const dimensions = worldItem?.getContentSize();
@@ -926,9 +929,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             }
 
             if (window.innerHeight < 630) {
-                <?php if (!$firstTimeVisited) {
-                echo "            $('#navigator-pin').click();";
-            }?>
+                $('#navigator-pin').click();
                 USER_INTERFACE.MainMenu.close();
             }
 
@@ -938,15 +939,14 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
                 VIEWER.tools.link( window.opener.VIEWER);
             }
 
-            if (!USER_INTERFACE.Errors.active) {
-                <?php
-                if ($firstTimeVisited) {
-                    echo "        setTimeout(function() {
-                    USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'), 
-                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')});
-                    }, 2000);";
-                }
-                ?>
+            const firstTimeVisit = APPLICATION_CONTEXT._getCookie("_shadersPin",
+                APPLICATION_CONTEXT.getOption("bypassCookies") ? false : null) === null;
+            if (!USER_INTERFACE.Errors.active && firstTimeVisit) {
+                setTimeout(() => {
+                    USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'),
+                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')})
+                    );
+                }, 2000);
             }
         }
 
@@ -968,7 +968,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
     ) {
         window.VIEWER.close();
 
-        const isSecureMode = APPLICATION_CONTEXT.config.params.secureMode;
+        const isSecureMode = APPLICATION_CONTEXT.getOption("secureMode");
         let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {

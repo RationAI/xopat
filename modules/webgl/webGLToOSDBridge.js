@@ -261,7 +261,7 @@ window.OpenSeadragon.BridgeGL = class {
     /**
      * Redraw the scene to reflect the latest visualization changes.
      * @param {number} randomDelay - time in milliseconds, tile updates can randomly occur within randomDelay
-     *   note: it is not guaranteed to be updated, e.g. if you need to have ALL
+     *   note: viewport canvas is not guaranteed to be updated, e.g. if you need to have ALL
      *   tiles updated after 'randomDelay', call draw() after the time has elapsed
      */
     redraw(randomDelay=0) {

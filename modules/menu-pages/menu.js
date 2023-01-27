@@ -71,7 +71,7 @@ window.AdvancedMenuPages = class {
                 const _this = this;
                 UTILITIES.loadModules(function() {
                     _this.loadVega(true);
-                }, APPLICATION_CONTEXT.config.params.secureMode ? 'vega-secure' : 'vega');
+                }, APPLICATION_CONTEXT.getOption("secureMode") ? 'vega-secure' : 'vega');
                 return;
             }
 

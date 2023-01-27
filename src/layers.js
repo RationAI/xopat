@@ -175,7 +175,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
             //load shaders just once
 
-            if (!APPLICATION_CONTEXT.config.params.secureMode) {
+            if (!APPLICATION_CONTEXT.getOption("secureMode")) {
                 webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
             }
         }

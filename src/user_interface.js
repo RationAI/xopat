@@ -246,6 +246,8 @@ window.addEventListener("beforeunload", (e) => {
         },
 
         _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function () {}) {
+            //todo support modal redirection, opening in current browser instead (ID container OR this window modal)
+
             //can be called recursively from message popup, that's why we cache it
             if (html) this._cachedHtml = html;
             else html = this._cachedHtml;

@@ -8,7 +8,8 @@ OSDAnnotations.History = class {
      */
     constructor(selfName, context, presetManager) {
         //js code strings to execute on html node events
-        this.__self = `OSDAnnotations.instance().${selfName}`;
+        this._globalContext = 'OSDAnnotations.instance()';
+        this.__self = `${this._globalContext}.${selfName}`;
         this._globalSelf = this.__self;
         this._canvasFocus = '';
 
@@ -76,14 +77,14 @@ window.addEventListener('load', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-    const parentContext = opener.${this._context.id};  
+    const parentContext = opener.${this._globalContext};  
     opener.focus();
     e.focusCanvas = true; //fake focus
     parentContext._keyDownHandler(e);
 });
 
 document.addEventListener('keyup', (e) => {
-    const parentContext = opener.${this._context.id};  
+    const parentContext = opener.${this._globalContext};  
     e.focusCanvas = true; //fake focus
     parentContext._keyUpHandler(e);
 });
