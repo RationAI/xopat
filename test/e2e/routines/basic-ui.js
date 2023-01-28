@@ -56,9 +56,7 @@ export default {
             expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
         })
 
-        elements.menuArrow("#shaders-pin", false);
-        shaderOpener.click()
-        elements.menuArrow("#shaders-pin", true);
+        elements.openMenuArrow("#shaders-pin");
 
         //testing of the submenu is too complex for general setup, tested in shader tests
 

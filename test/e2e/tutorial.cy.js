@@ -1,4 +1,4 @@
-import {config, shaders, withBrowser} from "../fixtures/configurations"
+import {config, shaders} from "../fixtures/configurations"
 import {testBasic, testElements} from "./routines"
 import {default as utils} from "../support/utilities"
 
@@ -8,7 +8,7 @@ function tutorialStep() {
     cy.get(".enjoyhint_next_btn", {timeout: 1000}).click();
 }
 
-describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', withBrowser, () => {
+describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', () => {
     it('Init', () => {
         let visualisation = {
             params: config.params({
@@ -50,7 +50,7 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
     })
 })
 
-describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', withBrowser, () => {
+describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
     it('Init', () => {
         let visualisation = {
             params: config.params({
@@ -75,13 +75,12 @@ describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', withBrowser, 
         tutorialStep(); //tollbar stacked
         tutorialStep(); //url
         tutorialStep(); //export
-        tutorialStep(); //finish
         cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
     })
 })
 
-describe('Basic Tutorial Walkthrough With Layer', withBrowser, () => {
+describe('Basic Tutorial Walkthrough With Layer', () => {
     it('Init', () => {
         let visualisation = {
             params: config.params({

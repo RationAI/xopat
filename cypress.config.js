@@ -15,6 +15,8 @@ module.exports = defineConfig({
     hideXHRInCommandLog: true,
     excludeSpecPattern: ['*.hot-update.js', '/image_snapshots/*', '**/__snapshots__/*', '**/__image_snapshots__/*'],
   },
+  viewportWidth: 1024,
+  viewportHeight: 700,
   downloadsFolder: 'test/downloads',
   fileServerFolder:	'.',
   fixturesFolder: 'test/fixtures',

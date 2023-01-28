@@ -120,7 +120,7 @@ if (isset($parsedParams->visualizations)) {
  * Plugins+Modules loading: load required parts of the application
  */
 $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
-
+$configPlugins = (object)$parsedParams->plugins;
 foreach ($PLUGINS as $key => $plugin) {
     if (!$plugin->id) {
         $errors_print .= "console.warn('Plugin ($key) removed: probably include.json misconfiguration.');";
@@ -131,13 +131,12 @@ foreach ($PLUGINS as $key => $plugin) {
         $plugin->styleSheet = PLUGINS_FOLDER . $plugin->directory . "/style.css?v=$version";
     }
 
-    $hasParams = isset($parsedParams->plugins->{$plugin->id});
+    $hasParams = isset($configPlugins->{$plugin->id});
+
     $plugin->loaded = !isset($plugin->error) &&
-        (isset($parsedParams->plugins->{$plugin->id})
+        $hasParams
             || (isset($plugin->permaLoad) && $plugin->permaLoad) //param in the static config
-            || $hasParams && $plugin->$parsedParams->plugins->{$plugin->id}->permaLoad //param in the plugin params
-            || in_array($plugin->id, $pluginsInCookies)
-        );
+            || in_array($plugin->id, $pluginsInCookies);
 
     //make sure all modules required by plugins are also loaded
     if ($plugin->loaded) {
