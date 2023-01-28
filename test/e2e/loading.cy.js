@@ -115,7 +115,6 @@ describe('Faulty data', withBrowser, () => {
         let visualisation = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
-                bypassCookies: false,
                 stackedBackground: true
             }),
             data: config.data('tissue'),
