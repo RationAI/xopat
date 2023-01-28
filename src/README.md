@@ -45,7 +45,7 @@ a script that is able to provide the user with a link, for reference see how `re
 
 ## Configuration
 Supported configuration for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests.
-The name of the argument is **`visualization`**, a JSON structure that sets up everything.
+The name of the argument is **`visualisation`**, a JSON structure that sets up everything.
 
 > Direct URL's are not supported, except for those generated within the application and sent to `redirect.php`, 
 > _unless_ the post data is sent in `GET`. Note that this is not recommended as the size of the JSON configuration
@@ -129,13 +129,14 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
     - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays 
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
+    - [O]`secureMode` - disable features allowing JS code injection (`protocol*` and `shaderSources`)
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`microns` - real world units to pixels mapping, default `undefined`,
     - [O]`name` - custom tissue name, default the tissue path
-    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation
@@ -261,7 +262,7 @@ However, you might
 need to send and integrate these further in the viewer. To do so, you are
 encouraged to employ the global metadata API:
 
- - metadata can be set and read using the global ``APPLICATION_CONTEXT.config.meta``
+ - metadata can be set and read using the global ``APPLICATION_CONTEXT.metadata``
    - a ``MetaStore`` object you can configure the behaviour of in `config_meta.js`
    - this class can be re-used for internal metadata parsing as well
  - this metadata is sent within all JSON POST requests automatically, unless set
@@ -278,7 +279,7 @@ So for example, an authentication can look like follows:
  - possibly adjust the ``MetaStore`` implementation 
    - do not modify existing API - functions
  - use the metadata
-   - read the user data through ``APPLICATION_CONTEXT.config.meta`` as `MetaStore` instance anywhere in the viewer
+   - read the user data through ``APPLICATION_CONTEXT.metadata`` as `MetaStore` instance anywhere in the viewer
    - read the user data in the POST requests as ``metadata`` field made from viewer via ``UTILITIES.fetchJSON``
        - builtin API always uses this method
    - optionally, send metadata in response as well and parse it using ``new MetaStore(object)``

@@ -25,7 +25,7 @@ AnnotationsGUI.DataLoader = class {
         this.context = context;
 
         //register metadata use
-        const meta = APPLICATION_CONTEXT.config.meta;
+        const meta = APPLICATION_CONTEXT.metadata;
         meta.set("annotations-format", "");
         meta.set("annotations-name", "");
     }
@@ -116,8 +116,8 @@ AnnotationsGUI.DataLoader = class {
         //set the data according to the current metadata values
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
-        APPLICATION_CONTEXT.config.meta.set("annotations-name", this.getMetaName(this.currentMeta));
-        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.getMetaFormat(this.currentMeta));
+        APPLICATION_CONTEXT.metadata.set("annotations-name", this.getMetaName(this.currentMeta));
+        APPLICATION_CONTEXT.metadata.set("annotations-format", this.getMetaFormat(this.currentMeta));
         this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
             onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
     }
@@ -145,8 +145,8 @@ AnnotationsGUI.DataLoader = class {
 
         //set metadata, no available active annotation meta
         const now = Date.now();
-        APPLICATION_CONTEXT.config.meta.set("annotations-name", `a${now}`);
-        APPLICATION_CONTEXT.config.meta.set("annotations-format", this.context._format);
+        APPLICATION_CONTEXT.metadata.set("annotations-name", `a${now}`);
+        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context._format);
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',

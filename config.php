@@ -1,36 +1,33 @@
 <?php
+/**
+ * Constants definition for static viewer configuration
+ *  - basic API links, directories etc.
+ *
+ * Note: directory paths are expected to end with directory separator!
+ * Note: also check config_meta.js for correct metadata configuration
+ */
 
-//TODO descriptions
-//Also check config_meta.js
+$localhost = false;
 
-$production = false;
+/**
+ * Allow for dynamic setting, e.g. by running the viewer from different index script
+ */
+defined('PROJECT_ROOT') || define('PROJECT_ROOT', '');
+defined('PROJECT_SOURCES') || define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
+defined('VISUALISATION_ROOT') || define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME']) . '/'); //note that this works only if the files that includes config is in the same directory
+defined('EXTERNAL_SOURCES') || define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
+defined('ASSETS_ROOT') || define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
+defined('LOCALES_ROOT') || define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 
-//relative path system in the application
-define('PROJECT_ROOT', 'src');
-define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); //note that this works only if the files that includes config is in the same directory
-define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
-define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
-define('LOCALES_ROOT', PROJECT_ROOT . '/locales');
-
-//todo two versions - dev and production
+/**
+ * Static part
+ */
 define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
 
-define('MODULES_FOLDER', 'modules');
-define('PLUGINS_FOLDER', 'plugins');
+define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
+define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
-if ($production) {
-    define('PROTOCOL', "https://");
-    define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
-    //auto domain: ($_SERVER['HTTP_HOST'] != 'localhost') ? $_SERVER['HTTP_HOST'] : false
-    define('JS_COOKIE_EXPIRE', 365); //days
-    define('JS_COOKIE_PATH', "/");
-    define('JS_COOKIE_SAME_SITE', "None");
-    define('JS_COOKIE_SECURE', "false");
-
-
-    define('BG_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
-    define('LAYERS_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
-} else {
+if ($localhost) {
     define('PROTOCOL', "http://");
     define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
     define('JS_COOKIE_EXPIRE', 365); //days
@@ -41,6 +38,21 @@ if ($production) {
     //note: you probably want to set up a reverse proxy for localhost rather than changing this (CORS)
     define('BG_TILE_SERVER', SERVER . "/iipsrv.fcgi");
     define('LAYERS_TILE_SERVER', SERVER . "/iipsrv.fcgi");
+
+    define('METADATA_SERVER', ""); //server for metadata handling, see config_meta.js
+} else {
+    define('PROTOCOL', "https://");
+    define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
+    //auto domain: ($_SERVER['HTTP_HOST'] != 'localhost') ? $_SERVER['HTTP_HOST'] : false
+    define('JS_COOKIE_EXPIRE', 365); //days
+    define('JS_COOKIE_PATH', "/");
+    define('JS_COOKIE_SAME_SITE', "None");
+    define('JS_COOKIE_SECURE', "false");
+
+    define('BG_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle regular images
+    define('LAYERS_TILE_SERVER', SERVER . "/iipsrv-martin/iipsrv.fcgi"); //server that can handle image arrays
+
+    define('METADATA_SERVER', ""); //server for metadata handling, see config_meta.js
 }
 
 define('VISUALISATION_ROOT_ABS_PATH', SERVER . VISUALISATION_ROOT);

@@ -39,6 +39,10 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         },
     };
 
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
+    }
+
     getFragmentShaderDefinition() {
         //here we override so we should call super method to include our uniforms
         return `

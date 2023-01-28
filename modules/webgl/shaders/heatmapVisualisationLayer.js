@@ -36,7 +36,7 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
     static defaultControls = {
         color: {
             default: {type: "color", default: "#fff700", title: "Color: "},
-            accepts: (type, instance) => type === "vec3"
+            accepts: (type, instance) => type === "vec3",
         },
         threshold: {
             default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
@@ -48,16 +48,21 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-    getFragmentShaderExecution() {
-        return `
-    float chan = ${this.sampleChannel('tile_texture_coords')};
-    bool shows = chan > 0.02 && chan >= ${this.threshold.sample('chan', 'float')};
-    if (${this.inverse.sample()}) {
-        shows = !shows;
-        chan = 1.0 - chan;
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
     }
-    
-    if (shows) return vec4(${this.color.sample()}, chan);
+
+    getFragmentShaderExecution() {
+        return `    
+    float chan = ${this.sampleChannel('tile_texture_coords')};
+    bool shows = chan >= ${this.threshold.sample('chan', 'float')};
+    if (${this.inverse.sample()}) {
+        if (!shows) {
+            shows = true;
+            chan = 1.0;
+        } else chan = 1.0 - chan;
+    }
+    if (shows) return vec4(${this.color.sample('chan', 'float')}, chan);
     return vec4(.0);
 `;
     }

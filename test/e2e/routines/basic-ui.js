@@ -56,9 +56,7 @@ export default {
             expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
         })
 
-        elements.menuArrow("#shaders-pin", false);
-        shaderOpener.click()
-        elements.menuArrow("#shaders-pin", true);
+        elements.openMenuArrow("#shaders-pin");
 
         //testing of the submenu is too complex for general setup, tested in shader tests
 
@@ -77,7 +75,7 @@ export default {
         cy.get("#settings").should('be.visible').click()
 
         cy.get("#app-settings").contains('label', 'Show ToolBar').find('input').should('be.checked');
-        cy.get("#app-settings").contains('label', 'Show ScaleBar').find('input').should(
+        cy.get("#app-settings").contains('label', 'Show Scale Bar').find('input').should(
             (config.params.scaleBar ? '' : 'not.to.') + 'be.checked');
 
         cy.get("#app-settings").contains('label', 'Disable Cookies').find('input').should(

@@ -42,7 +42,7 @@ window.AdvancedMenuPages = class {
                 default:
                     function sanitizeDeep(node) {
                         const t = typeof node;
-                        if (t === "string") return sanitizer(node);
+                        if (t === "string") return sanitizer ? sanitizer(node) : node;
                         if (Array.isArray(node)) return node.map(sanitizeDeep);
                         if (t === "object") {
                             const result = {};
@@ -71,7 +71,7 @@ window.AdvancedMenuPages = class {
                 const _this = this;
                 UTILITIES.loadModules(function() {
                     _this.loadVega(true);
-                }, 'vega');
+                }, APPLICATION_CONTEXT.getOption("secureMode") ? 'vega-secure' : 'vega');
                 return;
             }
 

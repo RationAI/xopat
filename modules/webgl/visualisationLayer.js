@@ -39,7 +39,7 @@ WebGLModule.ShaderMediator = class {
 };
 
 /**
- * Abstract interface to any Shader
+ * Abstract interface to any Shader.
  * @type {WebGLModule.VisualisationLayer}
  */
 WebGLModule.VisualisationLayer = class {
@@ -70,17 +70,39 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * Default preview image URL getter,
+     * override if your image is not stored in webgl/shaders/[id].png
+     * Remove XOpatModule.ROOT reference if you do not use XOpat API
+     */
+    static preview(moduleRootDir=XOpatModule.ROOT) {
+        return moduleRootDir + "webgl/shaders/" + this.type() + ".png";
+    }
+
+    /**
+     * Declare the number of data sources it reads from
+     * @return {[{}]} array of source specifications:
+     *  channels: the number of channels expected at most in the
+     *  [optional] description: the description of the source - what it is being used for
+     */
+    static sources() {
+        return [{channels: 1}];
+    }
+
+    /**
      * Declare supported controls by a particular shader
      * each controls is automatically created for the shader
      * and this[controlId] instance set
      * structure:
      * {
-     *     controlId => {
+     *     controlId: {
                default: {type: <>, title: <>, interactive: true|false...},
                accepts: (type, instance) => <>,
                required: {type: <> ...} [OPTIONAL]
      *     }, ...
      * }
+     *
+     * use: controlId: false to disable a specific control (e.g. all shaders
+     *  support opacity by default - use to remove this feature)
      * @member {object}
      */
     static defaultControls = {};
@@ -106,6 +128,15 @@ WebGLModule.VisualisationLayer = class {
         this.resetMode(options);
         this.resetFilters(options);
         this._buildControls(options);
+    }
+
+    /**
+     * Predicate that checks how many channels are supported by certain shader
+     * @param {number} channelCount
+     * @return boolean
+     */
+    textureChannelSamplingAccepts(channelCount) {
+        throw "VisualisationLayer::textureChannelSamplingAccepts must be implemented!";
     }
 
     /**
@@ -147,7 +178,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {string}
      */
     getFragmentShaderExecution() {
-        throw "This function must be implemented!";
+        throw "VisualisationLayer::getFragmentShaderExecution must be implemented!";
     }
 
     /**
@@ -292,15 +323,6 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Add your shader part result
-     * @param {string} output, GLSL code to output from the shader, output must be a vec4
-     * todo remove
-     */
-    render(output) {
-        return `${this.__mode}(${output});`;
-    }
-
-    /**
      * Apply global filters on value
      * @param {string} value GLSL code string, value to filter
      * @return {string} filtered value (GLSL oneliner without ';')
@@ -337,8 +359,10 @@ WebGLModule.VisualisationLayer = class {
      */
     sampleChannel(textureCoords, otherDataIndex=0, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
+        const chan = this.__channels[otherDataIndex] || this.__channel;
+
         if (otherDataIndex >= refs.length) {
-            switch (this.__channel.length) {
+            switch (chan.length) {
                 case 1: return ".0";
                 case 2: return "vec2(.0)";
                 case 3: return "vec3(.0)";
@@ -346,7 +370,7 @@ WebGLModule.VisualisationLayer = class {
                     return 'vec4(0.0)';
             }
         }
-        let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${this.__channel}`;
+        let sampled = `${this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords)}.${chan}`;
         if (raw) return sampled;
         return this.filter(sampled);
     }
@@ -454,21 +478,30 @@ WebGLModule.VisualisationLayer = class {
      * @param {string} options.use_channel chanel to sample
      */
     resetChannel(options) {
-        if (options.hasOwnProperty("use_channel")) {
-            this.__channel = this.loadProperty("use_channel", options.use_channel);
+        const parseChannel = (name, def) => {
+            if (options.hasOwnProperty(name)) {
+                let channel = this.loadProperty(name, options[name]);
 
-            if (!this.__channel
-                || typeof this.__channel !== "string"
-                || this.constructor.__chanPattern.exec(this.__channel) === null) {
-                console.warn("Invalid channel. Will use RED channel.", this.__channel, options);
-                this.storeProperty("use_channel", "r");
-                this.__channel = "r";
+                if (!channel
+                    || typeof channel !== "string"
+                    || this.constructor.__chanPattern.exec(channel) === null) {
+                    console.warn(`Invalid channel '${name}'. Will use channel '${def}'.`, channel, options);
+                    this.storeProperty(name, "r");
+                    channel = def;
+                }
+
+                if (!this.textureChannelSamplingAccepts(channel.length)) {
+                    throw `${this.constructor.name()} does not support channel length for channel: ${channel}`;
+                }
+
+                if (channel !== options[name]) this.storeProperty(name, channel);
+                return channel;
             }
+            return def;
+        };
 
-            if (this.__channel !== options.use_channel) this.storeProperty("use_channel", this.__channel);
-        } else {
-            this.__channel = "r";
-        }
+        this.__channel = parseChannel("use_channel", "r");
+        this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, this.__channel));
     }
 
     /**
@@ -513,7 +546,7 @@ WebGLModule.VisualisationLayer = class {
     ////////////////////////////////////
 
     static __globalIncludes = {};
-    static __chanPattern = new RegExp('[rgbxyzuvw]+');
+    static __chanPattern = new RegExp('[rgba]{1,4}');
 
     _buildControls(options) {
         let controls = this.constructor.defaultControls;
@@ -611,6 +644,7 @@ WebGLModule.UIControls = class {
             params = {default: params};
         }
         let originalType = defaultParams.type;
+
         defaultParams = $.extend(true, {}, defaultParams, params, requiredParams);
 
         if (!this._items.hasOwnProperty(defaultParams.type)) {
@@ -665,9 +699,11 @@ WebGLModule.UIControls = class {
             && check(uiElement, "sample", "sample(value, valueGlType):glslString")
             && check(uiElement, "glType", "glType:string")
         ) {
+            uiElement.prototype.getName = () => type;
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
+            uiElement["uiType"] = type;
             this._items[type] = uiElement;
         }
     }
@@ -679,9 +715,12 @@ WebGLModule.UIControls = class {
      */
     static registerClass(type, cls) {
         if (WebGLModule.UIControls.IControl.isPrototypeOf(cls)) {
+            cls.prototype.getName = () => type;
+
             if (this._items.hasOwnProperty(type)) {
                 console.warn("Registering an already existing control component: ", type);
             }
+            cls._uiType = type;
             this._impls[type] = cls;
         } else {
             console.warn(`Skipping UI control '${type}': does not inherit from WebGLModule.UIControls.IControl.`);
@@ -721,7 +760,8 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "float"
+            glType: "float",
+            uiType: "number"
         },
 
         range: {
@@ -745,7 +785,8 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "float"
+            glType: "float",
+            uiType: "range"
         },
 
         color: {
@@ -777,12 +818,13 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "vec3"
+            glType: "vec3",
+            uiType: "color"
         },
 
         bool: {
             defaults: function () {
-                return { title: "Checkbox", interactive: true, default: "true" };
+                return { title: "Checkbox", interactive: true, default: true };
             },
             html: function (uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
@@ -803,7 +845,8 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
             sample: function(name, ratio) {
                 return name;
             },
-            glType: "bool"
+            glType: "bool",
+            uiType: "bool"
         }
     };
 
@@ -833,6 +876,17 @@ WebGLModule.UIControls.IControl = class {
      *      created as ${uniq}${name}-${context.uid}
      *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
      *
+     * If extended (class-based definition, see registerCass) children should define constructor as
+     *   constructor(context, name, webGLVariableName, params) {
+     *       super(context, name, webGLVariableName);
+     *       ...
+     *       //possibly make use of params:
+     *       this.params = this.getParams(params);
+     *
+     *       //now access params:
+     *       this.params...
+     *   }
+     *
      * @param {WebGLModule.VisualisationLayer} context shader context owning this control
      * @param {string} name name of the control (key to the params in the shader configuration)
      * @param {string} webGLVariableName configuration parameters,
@@ -844,6 +898,101 @@ WebGLModule.UIControls.IControl = class {
         this.id = `${uniq}${name}-${context.uid}`;
         this.name = name;
         this.webGLVariableName = webGLVariableName;
+        this._params = {};
+    }
+
+    /**
+     * Safely sets outer params with extension from 'supports'
+     *  - overrides 'supports' values with the correct type (derived from supports or supportsAll)
+     *  - sets 'supports' as defaults if not set
+     * @param params
+     */
+    getParams(params) {
+        const t = this.constructor.getVarType;
+        function mergeSafeType(mask, from, possibleTypes) {
+            const to = {...mask};
+            Object.keys(from).forEach(key => {
+                const tVal = to[key],
+                    fVal = from[key],
+                    tType = t(tVal),
+                    fType = t(fVal);
+
+                const typeList = possibleTypes?.[key],
+                    pTypeList = typeList ? typeList.map(x => t(x)) : [];
+
+                //our type detector distinguishes arrays and objects
+                if (tVal && fVal && tType === "object" && fType === "object") {
+                    to[key] = mergeSafeType(tVal, fVal, typeList);
+                } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
+                    to[key] = fVal;
+                } else if (fType === "string") {
+                    //try parsing NOTE: parsing from supportsAll is ignored!
+                    if (tType === "number") {
+                        const parsed = Number.parseFloat(fVal);
+                        if (!Number.isNaN(parsed)) to[key] = parsed;
+                    } else if (tType === "boolean") {
+                        const value = fVal.toLowerCase();
+                        if (value === "false") to[key] = false;
+                        if (value === "true") to[key] = true;
+                    }
+                }
+            });
+            return to;
+        }
+        return mergeSafeType(this.supports, params, this.supportsAll);
+    }
+
+    /**
+     * Safely check certain param value
+     * @param value  value to check
+     * @param defaultValue default value to return if check fails
+     * @param paramName name of the param to check value type against
+     * @return {boolean|number|*}
+     */
+    getSafeParam(value, defaultValue, paramName) {
+        const t = this.constructor.getVarType;
+        function nest(suppNode, suppAllNode) {
+            if (t(suppNode) !== "object") return [suppNode, suppAllNode];
+            if (! suppNode.hasOwnProperty(paramName)) return [undefined, undefined];
+            return nest(suppNode[paramName], suppAllNode?.[paramName]);
+        }
+        const param = nest(this.supports, this.supportsAll), tParam = t(param[0]);
+        if (tParam === "object") {
+            console.warn("Parameters should not be stored at object level. No type inspection is done.");
+            return true; //no supported inspection
+        }
+        const tValue = t(value);
+        //supported type OR supports all types includes the type
+        if (tValue === tParam || (param[1] && param[1].map(t).includes(tValue))) {
+            return value;
+        }
+
+        if (tValue === "string") {
+            //try parsing NOTE: parsing from supportsAll is ignored!
+            if (tParam === "number") {
+                const parsed = Number.parseFloat(value);
+                if (!Number.isNaN(parsed)) return parsed;
+            } else if (tParam === "boolean") {
+                const val = value.toLowerCase();
+                if (val === "false") return false;
+                if (val === "true") return true;
+            }
+        }
+
+        //todo test
+        console.debug("Failed to load safe param -> new feature, debugging! ", value, defaultValue, paramName);
+        return defaultValue;
+    }
+
+    /**
+     * Uniform behaviour wrt type checking in shaders
+     * @param x
+     * @return {string}
+     */
+    static getVarType(x) {
+        if (x === undefined) return "undefined";
+        if (x === null) return "null";
+        return Array.isArray(x) ? "array" : typeof x;
     }
 
     /**
@@ -910,15 +1059,35 @@ WebGLModule.UIControls.IControl = class {
     }
 
     /**
-     * Parameters supported by this UI component, should contain at least 'interactive', 'title' and 'default'
-     * @return {object} name => default value mapping
+     * Parameters supported by this UI component, must contain at least
+     *  - 'interactive' - type bool, enables and disables the control interactivity
+     *  (by changing the content available when rendering html)
+     *  - 'title' - type string, the control title
+     *
+     *  Additionally, for compatibility reasons, you should, if possible, define
+     *  - 'default' - type any; the default value for the particular control
+     * @return {{}} name: default value mapping
      */
     get supports() {
-        throw "WebGLModule.UIControls.IControl::parameters must be implemented.";
+        throw "WebGLModule.UIControls.IControl::supports must be implemented.";
+    }
+
+    /**
+     * Type definitions for supports. Can return empty object. In case of missing
+     * type definitions, the type is derived from the 'supports()' default value type.
+     *
+     * Each key must be an array of default values for the given key if applicable.
+     * This is an _extension_ to the supports() and can be used only for keys that have more
+     * than one default type applicable
+     * @return {{}}
+     */
+    get supportsAll() {
+        throw "WebGLModule.UIControls.IControl::typeDefs must be implemented.";
     }
 
     /**
      * GLSL type of this control: what type is returned from this.sample(...) ?
+     * @return {string}
      */
     get type() {
         throw "WebGLModule.UIControls.IControl::type must be implemented.";
@@ -927,6 +1096,7 @@ WebGLModule.UIControls.IControl = class {
     /**
      * Raw value sent to the GPU, note that not necessarily typeof raw() === type()
      * some controls might send whole arrays of data (raw) and do smart sampling such that type is only a number
+     * @return {any}
      */
     get raw() {
         throw "WebGLModule.UIControls.IControl::raw must be implemented.";
@@ -934,6 +1104,7 @@ WebGLModule.UIControls.IControl = class {
 
     /**
      * Encoded value as used in the UI, e.g. a name of particular colormap, or array of string values of breaks...
+     * @return {any}
      */
     get encoded() {
         throw "WebGLModule.UIControls.IControl::encoded must be implemented.";
@@ -944,12 +1115,69 @@ WebGLModule.UIControls.IControl = class {
     //////////////////////////////////////
 
     /**
+     * The control type component was registered with. Handled internally.
+     * @return {*}
+     */
+    get uiControlType() {
+        return this.constructor._uiType;
+    }
+
+    /**
+     * Get current control parameters
+     * the control should set the value as this._params = this.getParams(incomingParams);
+     * @return {{}}
+     */
+    get params() {
+        return this._params;
+    }
+
+    /**
+     * Automatically overridden to return the name of the control it was registered with
+     * @return {string}
+     */
+    getName() {
+        return "IControl";
+    }
+
+    /**
+     * Load a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param defaultValue value to return in case of no cached value
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     * @return {*} cached or default value
+     */
+    load(defaultValue, paramName="") {
+        if (paramName === "default") paramName = "";
+        const value = this.context.loadProperty(this.name + paramName, defaultValue);
+        //check param in case of input cache collision between shader types
+        return this.getSafeParam(value, defaultValue, paramName === "" ? "default" : paramName);
+    }
+
+    /**
+     * Store a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param value to store
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     */
+    store(value, paramName="") {
+        if (paramName === "default") paramName = "";
+        return this.context.storeProperty(this.name + paramName, value);
+    }
+
+    /**
      * On parameter change register self
-     * @param {string} event which event change
+     * @param {string} event which event to fire on
+     *  - events are with inputs the names of supported parameters (this.supports), separated by dot if nested
+     *  - most controls support "default" event - change of default value
+     *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
      * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
      */
     on(event, clbck) {
-        this.__onchange[event] = clbck; //just re-write
+        this.__onchange[event] = clbck; //only one possible event -> rewrite?
     }
 
     /**
@@ -977,7 +1205,7 @@ WebGLModule.UIControls.IControl = class {
      * @param context self reference to bind to the callback
      */
     changed(event, value, encodedValue, context) {
-        if (this.__onchange.hasOwnProperty(event)) {
+        if (typeof this.__onchange[event] === "function") {
             this.__onchange[event](value, encodedValue, context);
         }
     }
@@ -1008,12 +1236,14 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
     constructor(context, name, webGLVariableName, params, intristicComponent, uniq="") {
         super(context, name, webGLVariableName, uniq);
         this.component = intristicComponent;
-        this.params = this.component.defaults();
-        $.extend(this.params, params);
+        this._params = this.getParams(params);
+
+        this.encodedValue = this.load(this.params.default);
+        //this unfortunatelly makes cache erasing and rebuilding vis impossible, the shader part has to be fully re-instantiated
+        this.params.default = this.encodedValue;
     }
 
     init() {
-        this.encodedValue = this.context.loadProperty(this.name, this.params.default);
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
         if (this.params.interactive) {
@@ -1021,13 +1251,13 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
             let updater = function(e) {
                 _this.encodedValue = $(e.target).val();
                 _this.value = _this.component.normalize(_this.component.decode(_this.encodedValue), _this.params);
-                _this.changed(_this.name, _this.value, _this.encodedValue, _this);
-                _this.context.storeProperty(_this.name, _this.encodedValue);
+                _this.changed("default", _this.value, _this.encodedValue, _this);
+                _this.store(_this.encodedValue);
                 _this.context.invalidate();
             };
             let node = $(`#${this.id}`);
             node.val(this.encodedValue);
-            node.change(updater); //note, set change only now! val(..) would trigger it
+            node.on('change', updater); //note, set change only now! val(..) would trigger it
         }
     }
 
@@ -1041,8 +1271,8 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
 
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
-        return this.component.html(this.id, this.params, controlCss)
-            + (breakLine ? "<br>" : "");
+        const result = this.component.html(this.id, this.params, controlCss);
+        return breakLine ? `<div>${result}</div>` : result;
     }
 
     define() {
@@ -1054,8 +1284,16 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         return this.component.sample(this.webGLVariableName, value);
     }
 
+    get uiControlType() {
+        return this.component["uiType"];
+    }
+
     get supports() {
         return this.component.defaults();
+    }
+
+    get supportsAll() {
+        return {};
     }
 
     get raw() {

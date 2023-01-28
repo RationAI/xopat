@@ -48,6 +48,9 @@ export default {
         bypassCookies: true, //by default tests do not work with cookies
         theme: "auto",
         stackedBackground: false,
+        maxImageCacheCount: 1200,
+        webGlPreferredVersion: "2.0",
+        secureMode: false,
         ...overrides
     }),
     viewport: (key, index) => ({

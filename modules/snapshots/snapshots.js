@@ -1,16 +1,23 @@
-window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
+//TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
+window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
+    constructor() {
+        super("snaphots");
+        this.viewer = VIEWER;
 
-    /**
-     * TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
-     *
-     * Singleton getter.
-     * @return {OpenSeadragon.Snapshots}
-     */
-    static instance() {
-        if (this.__self) {
-            return this.__self;
-        }
-        return new OpenSeadragon.Snapshots(VIEWER);
+        this.initEventSource();
+
+        this._idx = 0;
+        this._steps = [];
+        this._currentStep = null;
+        this._deprecated_IO_API();
+        this.initIO(); //todo consider delegation to plugins that use snapshots
+        this._utils = VIEWER.tools;
+
+        this._captureVisualization = false;
+        this._captureViewport = true;
+        this._captureScreen = false;
+
+        this.captureVisualization = false;
     }
 
     /**
@@ -109,6 +116,22 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
     }
 
     /**
+     * Play previous step once more or go the previous keyframe
+     */
+    previous() {
+        if (this._playing) this._playStep(this._idx - 2, true);
+        else this.goToIndex(this.currentStepIndex - 1);
+    }
+
+    /**
+     * Play next step once more or go to the next keyframe
+     */
+    next() {
+        if (this._playing) this._playStep(this._idx, true);
+        else this.goToIndex(this.currentStepIndex + 1);
+    }
+
+    /**
      * Play from index.
      * @event start raised when playing has begun
      * @event enter called after the delay waiting is done and the step executes
@@ -204,6 +227,14 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         return serialize ? JSON.stringify(this._steps) : [...this._steps];
     }
 
+    async exportData() {
+        return this.exportJSON();
+    }
+
+    async importData(data) {
+        this.importJSON(data);
+    }
+
     /**
      * Import state (deletes existing one)
      * @param {object[]|string} json
@@ -255,7 +286,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         });
     }
 
-    _playStep(index) {
+    _playStep(index, jumps=false) {
         while (this._steps.length > index && !this._steps[index]) {
             index++;
         }
@@ -266,10 +297,23 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             return;
         }
 
-        let prevIdx = index > 0 ? index-1 : 0;
-        while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        let withDelay = 1;
+        let prevIdx = -1;
+
+        if (jumps) {
+            if (this._currentStep) {
+                this._currentStep.cancel();
+                this._currentStep = null;
+            }
+            withDelay = 0;
+            prevIdx = this._idx-1; //'current' step when animating
+        } else {
+            prevIdx = index > 0 ? index-1 : 0;
+            while (prevIdx > 0 && !this._steps[prevIdx]) prevIdx--;
+        }
+
         let previousDuration = prevIdx >= 0 && this._steps[prevIdx] ? this._steps[prevIdx].duration * 1000 : 0;
-        this._currentStep = this._setDelayed(this._steps[index].delay * 1000 + previousDuration, index);
+        this._currentStep = this._setDelayed(withDelay * (this._steps[index].delay * 1000 + previousDuration), index);
 
         const _this = this;
         this._currentStep.promise.then(atIndex => {
@@ -296,24 +340,27 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
         }
     }
 
-    _init() {
+    _deprecated_IO_API() {
         const _this = this;
-        VIEWER.addHandler('export-data', e => e.setSerializedData("snapshot-keyframes", _this.exportJSON()));
-
         let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));
             } catch (e) {
                 console.warn(e);
-                //todo message to plugin since plugin has export controls
-                //or add option to download file - extracted keframes from post
                 Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
             }
         }
     }
 
     _setDelayed(ms, index) {
+        if (ms <= 0) {
+            return {
+                promise: new Promise(resolve => resolve(index)),
+                cancel: function () {}
+            };
+        }
+
         let timeout;
         let p = new Promise(function(resolve, reject) {
             timeout = setTimeout(_ => resolve(index), ms);
@@ -389,7 +436,7 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             bridge.switchVisualisation(from.index);
         } else if (needsRefresh) {
             bridge.webGLEngine.rebuildVisualisation(from.order);
-            bridge.invalidate(duration * 900); //50% od the duration allowed to be constantly updated
+            bridge.redraw(duration * 900); //50% od the duration allowed to be constantly updated
         }
     }
 
@@ -423,35 +470,5 @@ window.OpenSeadragon.Snapshots = class extends OpenSeadragon.EventSource {
             if (arrA[i] !== arrB[i]) return false;
         }
         return true;
-    }
-
-
-    static __self = undefined;
-
-    /**
-     * @private
-     * @param {OpenSeadragon.Viewer} viewer
-     */
-    constructor(viewer) {
-        super();
-        if (this.constructor.__self) {
-            throw "Snaphots are not instantiable. Instead, use OpenSeadragon.Snapshots::instance().";
-        }
-
-        this.id = "snaphots";
-        this.viewer = viewer;
-        this.constructor.__self = this;
-
-        this._idx = 0;
-        this._steps = [];
-        this._currentStep = null;
-        this._init();
-        this._utils = new OpenSeadragon.Tools(VIEWER); //todo maybe shared?
-
-        this._captureVisualization = false;
-        this._captureViewport = true;
-        this._captureScreen = false;
-
-        this.captureVisualization = false;
     }
 };

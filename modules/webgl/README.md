@@ -45,7 +45,7 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                    "dataSources": [1],
                    "fixed": false,
                    "params": { 
-                          "color": "#fa0058", //shader-dependent parameter, set as {default: value} if not an object
+                          "color": "#fa0058", //shader-dependent parameter, set as default value for a default control type specified by the shader itself if not an object
                           "opacity": { //shader-dependent parameter
                                  "default": 50,
                                  "type": "range", //show as a slider
@@ -55,7 +55,7 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                                  "interactive": true
                           }, 
                           "use_gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
-                          "channel": "b"  //global parameter, sample channel 'b' from the image
+                          "use_channel": "b"  //global parameter, sample channel 'b' from the image
                    }
             }
       }
@@ -96,6 +96,14 @@ An example of valid custom shader source declaration (object(s) passed to `addCu
 
 **Note that** some field names starting with `use_` within `[layer].params` are reserved. Do not name
 your parameters like this. For more detailed info and guidelines on writing shaders, see `shaders/README.md`.
+
+#### Reading from channels
+The shader can specify data references for rendering from nD data sources. You can spacify the chanel to be read,
+note that this option is ignored if the shader _reads all channels instead of a subset_. Reading from all channels
+is discouraged; the shader should specify the number (up to 4) of channels being read instead and let the user specify
+the channels themselves. Note that better is reading one channel from multiple sources for flexibility. You can set
+ - ``use_channel`` to specify global rule to apply on all unspecified channel readings
+ - ``use_channel[X]`` for specific index X in `dataReferences` (e.g. for second element, set `use_channel1` to override)
 
 
 

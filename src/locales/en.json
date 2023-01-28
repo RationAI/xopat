@@ -6,7 +6,9 @@
       "detailsBtn": "details",
       "unknown": "Unknown error",
       "back": "Go back",
-      "noDetails": "No details provided"
+      "noDetails": "No details provided",
+      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
+      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file."
     },
     "main": {
       "global": {
@@ -26,7 +28,14 @@
         "maskDisable": "Enable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
-        "faulty": "Possibly faulty layer."
+        "faulty": "Possibly faulty layer.",
+        "defaultTitle": "Custom Visualization",
+        "cookiesByOrder": "Remember settings by layers order",
+        "cookiesByName": "Remember settings by layer name",
+        "cache": {
+          "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
+          "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
+        }
       },
       "bar": {
         "exportUrl": "URL",
@@ -44,7 +53,7 @@
       "urlInvalid": "Invalid link",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualisation setup is not parse-able.",
-      "cookiesDisabled": "Cookies are disabled. You can change this option in <a onclick=\"$('#settings').click()\">Settings</a>.",
+      "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
       "cookieConfSaved": "Modifications in parameters saved.",
       "bgReferenceMissing": "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualisation layer.",
@@ -60,8 +69,8 @@
       "pluginsWelcome": "It looks like this is your first time here",
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "urlCopied": "The URL was copied to your clipboard.",
-      "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"UTILITIES.export();\" class='btn-pointer'>export</a> your setup first. <a onclick=\"APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();\" class='btn-pointer'>Reload now.</a>",
-      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"Dialogs._showCustomModalImpl('{{id}}', '{{title}}', null, '{{size}}'); Dialogs.hide();\" class='pointer'>Click here to open.</a>",
+      "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
+      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
       "stillLoadingSwap": "Another image is still being loaded - please wait."

@@ -20,8 +20,14 @@
 *   params: object
 *  }} Layer
 */
-
 window.WebGLModule = class {
+
+    /**
+     * ID pattern allowed for module, ID's are used in GLSL
+     * to distinguish uniquely between static generated code parts
+     * @type {RegExp}
+     */
+    static idPattern = /[0-9a-zA-Z_]*/;
     /**
      * @param {object} incomingOptions
      * @param {function} incomingOptions.htmlControlsId: where to render html controls,
@@ -42,6 +48,7 @@ window.WebGLModule = class {
         ///////////// Default values overrideable from incomingOptions  /////////////////
         /////////////////////////////////////////////////////////////////////////////////
         this.uniqueId = "";
+
         this.ready = function () { };
         this.htmlControlsId = null;
         this.webGlPreferredVersion = "2.0";
@@ -80,6 +87,10 @@ window.WebGLModule = class {
             }
         }
 
+        if (!this.constructor.idPattern.test(this.uniqueId)) {
+            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore. ID: " + this.uniqueId;
+        }
+
         /**
          * Current rendering context
          * @member {WebGLModule.WebGLImplementation}
@@ -106,7 +117,7 @@ window.WebGLModule = class {
             console.error(e);
             return;
         }
-        console.log("WebGL Rendering module with version " + this.webGLImplementation.getVersion());
+        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId})`);
 
         this.gl_loaded = function (gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
@@ -121,6 +132,7 @@ window.WebGLModule = class {
      * Reset the engine to the initial state
      */
     reset() {
+        this._unloadCurrentProgram();
         this._visualisations = [];
         this._dataSources = [];
         this._origDataSources = [];
@@ -159,8 +171,23 @@ window.WebGLModule = class {
             return false;
         }
         for (let vis of visualisations) {
-            if (!vis.hasOwnProperty("params")) {
-                vis.params = {};
+            if (!vis.hasOwnProperty("shaders")) {
+                console.warn("Invalid visualization: no shaders defined", vis);
+                continue;
+            }
+
+            let count = 0;
+            for (let sid in vis.shaders) {
+                const shader = vis.shaders[sid];
+                if (!shader.hasOwnProperty("params")) {
+                    shader.params = {};
+                }
+                count++;
+            }
+
+            if (count < 0) {
+                console.warn("Invalid visualization: no shader configuration present!", vis);
+                continue;
             }
             this._visualisations.push(vis);
         }
@@ -196,12 +223,7 @@ window.WebGLModule = class {
         if (order) {
             vis.order = order;
         }
-        if (this._programs.hasOwnProperty(this._program)) {
-            //must remove before attaching new
-            let program = this._programs[this._program];
-            this._detachShader(program, "VERTEX_SHADER");
-            this._detachShader(program, "FRAGMENT_SHADER");
-        }
+        this._unloadCurrentProgram();
         this._visualisationToProgram(vis, this._program);
         this._forceSwitchShader(this._program);
     }
@@ -264,14 +286,14 @@ window.WebGLModule = class {
      * Renders data using WebGL
      * @param {object} data image data
      * @param tileDimension expected dimension of the output (canvas)
-     * @param zoomLevel value passed to the shaders as zoom_level
+     * @param zoom value passed to the shaders as zoom_level
      * @param pixelSize value passed to the shaders as pixel_size_in_fragments
      * @returns canvas (with transparency) with the data rendered based on current program
      *          null if willUseWebGL(imageElement, e) would return false
      */
-    processImage(data, tileDimension, zoomLevel, pixelSize) {
+    processImage(data, tileDimension, zoom, pixelSize) {
         let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
-            data, tileDimension, zoomLevel, pixelSize);
+            data, tileDimension, zoom, pixelSize);
 
         if (this.debug) this._renderDebugIO(data, result);
         return result;
@@ -363,11 +385,16 @@ window.WebGLModule = class {
     /**
      * For easy initialization, do both in once call.
      * For separate initialization (prepare|init), see functions below.
+     * @param {[string]|undefined} dataSources a list of data identifiers available to the visualisations
+     *  - visualisation configurations should not reference data not present in this array
+     *  - the module gives you current list of required subset of this list for particular active visualization goal
+     * @param width initialization width
+     * @param height initialization height
      */
-    prepareAndInit(dataSources) {
+    prepareAndInit(dataSources=[], width=1, height=1) {
         let _this = this;
         this.prepare(dataSources, () => {
-            _this.init(1, 1);
+            _this.init(width, height);
         });
     }
 
@@ -379,7 +406,7 @@ window.WebGLModule = class {
      * The idea is to open the protocol for OSD in onPrepared.
      * Shaders are fetched from `visualisation.url` parameter.
      *
-     * @param {[string]} dataSources id's of data such that server can understand which image to send (usually paths)
+     * @param {[string]|undefined} dataSources id's of data such that server can understand which image to send (usually paths)
      * @param {number} visIndex index of the initial visualisation
      * @param {function} onPrepared callback to execute after succesfull preparing.
      */
@@ -395,7 +422,7 @@ window.WebGLModule = class {
                 desc: "::prepare() called with no visualisation set."});
             return;
         }
-        this._origDataSources = dataSources;
+        this._origDataSources = dataSources || [];
         this._program = visIndex;
 
         this._prepared = true;
@@ -507,6 +534,15 @@ window.WebGLModule = class {
                 return this._forceSwitchShader(i, false); //force reset in errors
             }
             this._toBuffers(this._programs[i], target);
+        }
+    }
+
+    _unloadCurrentProgram() {
+        if (this._programs && this._programs.hasOwnProperty(this._program)) {
+            //must remove before attaching new
+            let program = this._programs[this._program];
+            this._detachShader(program, "VERTEX_SHADER");
+            this._detachShader(program, "FRAGMENT_SHADER");
         }
     }
 
@@ -677,7 +713,16 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         }
         usedIds = [...usedIds].sort();
         this._dataSources = [];
-        this._dataSourceMapping = new Array(Math.max(this._origDataSources.length, usedIds[usedIds.length-1])).fill(-1);
+
+        while (usedIds[usedIds.length-1] >= this._origDataSources.length) {
+            //make sure values are set if user did not provide
+            this._origDataSources.push("__generated_do_not_use__");
+        }
+
+        this._dataSourceMapping = new Array(
+            Math.max(this._origDataSources.length, usedIds[usedIds.length-1])
+        ).fill(-1);
+
         for (let id of usedIds) {
             this._dataSourceMapping[id] = this._dataSources.length;
             this._dataSources.push(this._origDataSources[id]);

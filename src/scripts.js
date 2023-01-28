@@ -4,8 +4,7 @@
 
     //https://github.com/mrdoob/stats.js
     if (APPLICATION_CONTEXT.getOption("debugMode")) {
-        //todo hardcoded source path
-        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='src/external/stats.js';document.head.appendChild(script);})()
+        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.rootPath+'src/external/stats.js';document.head.appendChild(script);})()
     }
 
     // opacity of general layer available everywhere
@@ -110,8 +109,6 @@
             bounds.y += speedY*bounds.height;
             VIEWER.viewport.fitBounds(bounds);
         }
-
-        //todo article!!! also acceleration!
         VIEWER.addHandler('key-up', function(e) {
             if (e.focusCanvas) {
                 let zoom = null,
@@ -157,7 +154,7 @@
     /*------------ EXPORTING ----------------------------------*/
     /*---------------------------------------------------------*/
 
-    function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
+    async function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         //reconstruct active plugins
         let pluginsData = APPLICATION_CONTEXT.config.plugins;
         let includeEvaluator = includedPluginsList ?
@@ -189,24 +186,28 @@
         <input type="submit" value="">
       </form>
       <script type="text/javascript">
-        document.getElementById("visualisation").value = \`${exported}\`;
+        document.getElementById("visualisation").value = \`${exported.replaceAll("\\", "\\\\")}\`;
         const form = document.getElementById("redirect");
         let node;`;
 
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-
-        VIEWER.raiseEvent('export-data', {
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
             setSerializedData: (uniqueKey, data) => {
+                if (typeof data !== "string") {
+                    console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
+                    return;
+                }
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
 node.setAttribute("name", \`${uniqueKey}\`);
-node.setAttribute("value", \`${data}\`);
+node.setAttribute("value", \`${data.replaceAll("\\", "\\\\")}\`);
 form.appendChild(node);`;
             }
         });
 
         return `${form}
-form.submit();<\/script>`;
+form.submit();
+<\/script>`;
     }
 
 
@@ -240,57 +241,6 @@ form.submit();<\/script>`;
         return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
     };
 
-    /**
-     * Send requests - both request and response format JSON
-     * with POST, the viewer meta is automatically included
-     *  - makes the viewer flexible for integration within existing APIs
-     * @param url
-     * @param postData
-     * @param headers
-     * @param metaKeys metadata key list to include
-     * @throws HTTPError
-     * @return {Promise<string|any>}
-     */
-    window.UTILITIES.fetchJSON = async function(url, postData=null, headers={}, metaKeys=true) {
-        let method = postData ? "POST" : "GET";
-        headers = $.extend({
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        }, headers);
-
-        if (typeof postData === "object" && postData && metaKeys !== false) {
-            if (postData.metadata === undefined) {
-                if (Array.isArray(metaKeys)) {
-                    postData.metadata = APPLICATION_CONTEXT.config.meta.allWith(metaKeys);
-                } else {
-                    postData.metadata = APPLICATION_CONTEXT.config.meta.all();
-                }
-            }
-        }
-
-        const response = await fetch(url, {
-            method: method,
-            mode: 'cors',
-            cache: 'no-cache',
-            credentials: 'same-origin',
-            headers: headers,
-            body: postData ? JSON.stringify(postData) : null
-        });
-
-        if (response.status < 200 || response.status > 299) {
-            return response.text().then(text => {
-                throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
-            });
-        }
-
-        const data = await response.text();
-        try {
-            return JSON.parse(data);
-        } catch (e) {
-            throw new HTTPError(`Server returned non-JSON data: ${data}`, response, data);
-        }
-    };
-
     window.UTILITIES.updateTheme = function() {
         let theme = APPLICATION_CONTEXT.getOption("theme");
         if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultConfig.theme;
@@ -318,7 +268,7 @@ form.submit();<\/script>`;
     window.UTILITIES.getForm = constructExportVisualisationForm;
 
     window.UTILITIES.copyUrlToClipboard = function () {
-        let baseUrl = APPLICATION_CONTEXT.rootPath + "/redirect.php#";
+        let baseUrl = APPLICATION_CONTEXT.rootAbsPath + "redirect.php#";
 
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {
@@ -344,7 +294,7 @@ form.submit();<\/script>`;
         Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
-    window.UTILITIES.export = function () {
+    window.UTILITIES.export = async function () {
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
@@ -355,14 +305,14 @@ form.submit();<\/script>`;
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
-${constructExportVisualisationForm()}
+${await constructExportVisualisationForm()}
 </body></html>`;
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         UTILITIES.downloadAsFile("export.html", doc);
         APPLICATION_CONTEXT.__cache.dirty = false;
     };
 
-    window.UTILITIES.clone = function () {
+    window.UTILITIES.clone = async function () {
         if (window.opener) {
             return;
         }
@@ -375,7 +325,7 @@ ${constructExportVisualisationForm()}
         let x = window.innerWidth / 2, y = window.innerHeight;
         window.resizeTo(x, y);
         Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
-            constructExportVisualisationForm(), `width=${x},height=${y}`);
+            await constructExportVisualisationForm(), `width=${x},height=${y}`);
     };
 
     window.UTILITIES.setDirty = () => APPLICATION_CONTEXT.__cache.dirty = true;
@@ -385,9 +335,12 @@ ${constructExportVisualisationForm()}
      * @param formInputHtml additional HTML to add to the refresh FORM
      * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
      */
-    window.UTILITIES.refreshPage = function(formInputHtml="", includedPluginsList=undefined) {
+    window.UTILITIES.refreshPage = async function(formInputHtml="", includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
-            Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('messages.warnPageReload', {
+                onExport: "UTILITIES.export();",
+                onRefresh: "APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();"
+            }), 15000, Dialogs.MSG_WARN);
             return;
         }
 
@@ -396,7 +349,7 @@ ${constructExportVisualisationForm()}
         // } else if (window.detachEvent) {
         //     window.detachEvent('onbeforeunload', preventDirtyClose);
         // }
-        $("body").append(UTILITIES.getForm(formInputHtml, includedPluginsList, true));
+        $(document.body).append(await UTILITIES.getForm(formInputHtml, includedPluginsList, true));
     };
 
     /**

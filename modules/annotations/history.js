@@ -8,7 +8,8 @@ OSDAnnotations.History = class {
      */
     constructor(selfName, context, presetManager) {
         //js code strings to execute on html node events
-        this.__self = `${context.id}['${selfName}']`;
+        this._globalContext = 'OSDAnnotations.instance()';
+        this.__self = `${this._globalContext}.${selfName}`;
         this._globalSelf = this.__self;
         this._canvasFocus = '';
 
@@ -76,14 +77,14 @@ window.addEventListener('load', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-    const parentContext = opener.${this._context.id};  
+    const parentContext = opener.${this._globalContext};  
     opener.focus();
     e.focusCanvas = true; //fake focus
     parentContext._keyDownHandler(e);
 });
 
 document.addEventListener('keyup', (e) => {
-    const parentContext = opener.${this._context.id};  
+    const parentContext = opener.${this._globalContext};  
     e.focusCanvas = true; //fake focus
     parentContext._keyUpHandler(e);
 });
@@ -403,6 +404,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         let ctx = this.winContext();
         if (ctx) {
             let header = ctx.document.getElementById("window-header");
+            if (!header) return; //todo test window mode hidden why it gets here ctx should be null
             if (enabled) {
                 ctx.document.body.style.background = "transparent";
                 header.readonly = false; this._context.canvas.renderAll()

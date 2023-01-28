@@ -1,13 +1,15 @@
-import {config, shaders, withBrowser} from "../../../fixtures/configurations"
+import {config, shaders} from "../../../fixtures/configurations"
 import {testBasic, testElements} from "./../../routines"
 import {default as utils} from "../../../support/utilities"
 import helpers from "./helpers";
+import {default as elements} from "../../routines/basic-ui-elements";
 
-describe('Annotations - User Controls', withBrowser, () => {
+describe('Annotations - User Controls', () => {
 
     let ANNOTATIONS;
 
     afterEach(() => {
+        if (!ANNOTATIONS) return;
         //cleanup
         ANNOTATIONS.deleteAllAnnotations();
         ANNOTATIONS.presets.foreach(p => {
@@ -36,6 +38,8 @@ describe('Annotations - User Controls', withBrowser, () => {
         utils.waitForViewer().then(w => {
             ANNOTATIONS = w.OSDAnnotations.instance();
         });
+
+        elements.closeDialog(); //preventive
     });
 
     function testSameContent() {

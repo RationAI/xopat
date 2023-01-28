@@ -1,8 +1,8 @@
-import {config, shaders, withBrowser} from "../fixtures/configurations"
+import {config, shaders} from "../fixtures/configurations"
 import {testBasic, testElements} from "./routines"
 import {default as utils} from "../support/utilities"
 
-describe('Third party pyramidal image', withBrowser, () => {
+describe('Third party pyramidal image', () => {
     it('Background only: custom protocol', () => {
         let visualisation = {
             params: config.params({viewport: config.viewport('book', 0)}),
@@ -45,7 +45,7 @@ describe('Third party pyramidal image', withBrowser, () => {
 })
 
 
-describe('Faulty data', withBrowser, () => {
+describe('Faulty data', () => {
     it('No valid image in normal mode', () => {
         let visualisation = {
             params: config.params(),
@@ -115,7 +115,6 @@ describe('Faulty data', withBrowser, () => {
         let visualisation = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
-                bypassCookies: false,
                 stackedBackground: true
             }),
             data: config.data('tissue'),

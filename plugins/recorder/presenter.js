@@ -1,8 +1,7 @@
-class Presenter {
+class Presenter extends XOpatPlugin {
     constructor(id, params) {
-        this.id = id;
+        super(id);
         this._toolsMenuId = "presenter-tools-menu";
-        this.PLUGIN = `plugin('${id}')`;
 
         //todo document option, get via getOption instead
         this.playOnEnter = params.playEnterDelay ?? -1;
@@ -15,40 +14,40 @@ class Presenter {
 
         USER_INTERFACE.MainMenu.appendExtended("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
 <span onclick="this.nextElementSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span>
-<input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.PLUGIN}.importFromFile(event);$(this).val('');" />
-<span onclick="${this.PLUGIN}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
-<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.PLUGIN}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.PLUGIN}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
-<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.PLUGIN}.snapshots.stop();"><span class="material-icons">stop</span></button>
-<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.PLUGIN}.snapshots.playFromIndex(0);"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.PLUGIN}.removeHighlightedRecord();"><span class="material-icons">delete</span></button>`, `
+<input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
+<span onclick="${this.THIS}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
+<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.THIS}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
+<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.THIS}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
+<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.THIS}.snapshots.stop();"><span class="material-icons">stop</span></button>
+<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.THIS}.fourthButton();"><span class="material-icons">replay</span></button>
+<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.THIS}.fifthButton();"><span class="material-icons">delete</span></button>`, `
 <br>
 ${UIComponents.Elements.checkBox({
             label: "Capture visuals",
-            onchange: this.PLUGIN + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
+            onchange: this.THIS + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesVisualization
         })}&emsp;
 ${UIComponents.Elements.checkBox({
             label: "Capture viewport",
-            onchange: this.PLUGIN + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
+            onchange: this.THIS + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
             default: this.snapshots.capturesViewport
         })}
 <br><br>
 <h5 class="d-inline-block">Annotations in keyframes</h5>&emsp;
-<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.captureAnnotation()">Capture</button>
-<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.PLUGIN}.releaseAnnotation()">Release</button>
+<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.THIS}.captureAnnotation()">Capture</button>
+<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.THIS}.releaseAnnotation()">Release</button>
 `, "auto-recorder", this.id);
 
         USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
             `<div class="d-flex">
-<span class="material-icons timeline-play-small btn-pointer" onclick="${this.PLUGIN}.addRecord();">radio_button_checked</span>
+<span class="material-icons timeline-play-small btn-pointer" onclick="${this.THIS}.addRecord();">radio_button_checked</span>
 <div class='d-inline-block timeline-path'>
 <div class="d-inline-block"><span style="font-size: xx-small">Delay</span><br>
-<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.PLUGIN}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
+<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.THIS}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
 </div><div class="d-inline-block"><span style="font-size: xx-small">Duration</span><br>
-<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.PLUGIN}.setValue('duration', parseFloat($(this).val()));"> s<br>
+<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.THIS}.setValue('duration', parseFloat($(this).val()));"> s<br>
 </div>&emsp;<div class="d-inline-block"><span style="font-size: xx-small">Linear / Ease</span><br>
-<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.PLUGIN}.setValue('transition', parseFloat($(this).val()));"> 
+<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.THIS}.setValue('transition', parseFloat($(this).val()));"> 
 </div></div>
 <div id='playback-timeline' style="white-space: nowrap; overflow-x: auto; overflow-y: hidden; height: 48px" class="d-inline-block v-align-top position-relative flex-1 ml-3"></div>
 
@@ -143,6 +142,22 @@ ${UIComponents.Elements.checkBox({
         }
     }
 
+    fourthButton() {
+        if (this.isPlaying) {
+            this.snapshots.previous();
+        } else {
+            this.snapshots.playFromIndex(0);
+        }
+    }
+
+    fifthButton() {
+        if (this.isPlaying) {
+            this.snapshots.next();
+        } else {
+            this.removeHighlightedRecord();
+        }
+    }
+
     removeHighlightedRecord() {
         let index = this.snapshots.currentStepIndex;
         let child = $("#playback-timeline").children()[index];
@@ -229,7 +244,7 @@ ${UIComponents.Elements.checkBox({
                 Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14),
             parent = $("#playback-timeline"),
             html = `<span id="step-timeline-${step.id}" data-id="${step.id}"
-onclick="${this.PLUGIN}.selectPoint(this);" style="background: ${color}; border-color: ${color};
+onclick="${this.THIS}.selectPoint(this);" style="background: ${color}; border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; height: ${height}px; 
 margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
@@ -275,13 +290,14 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
     }
 
     _recordAnnotationRef(annotation, sid) {
+        if (!annotation) return;
         let refs = this._annotationRefs[sid] || [];
         refs.push(annotation);
         this._annotationRefs[sid] = refs;
     }
 
     _removeAnnotationRef(annotation, sid=undefined) {
-        if (annotation.presenterSids) {
+        if (annotation?.presenterSids) {
             for (let id of (sid ? [sid] : annotation.presenterSids)) {
                 this._arrRemove(this._annotationRefs[id], annotation);
             }
@@ -317,7 +333,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
         if (window.OSDAnnotations && !this.annotations) {
             this.annotations = OSDAnnotations.instance();
             this.annotations.forceExportsProp = "presenterSids";
-            this.annotations?.bindIO(); //enable IO export so we can work with annotations if any
+            this.annotations?.initIO(); //enable IO export so we can work with annotations if any
             this._bindAnnotations();
 
             const _this = this;
@@ -374,6 +390,8 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
             }
 
             $("#presenter-play-icon span").addClass("timeline-play");
+            $("#presenter-replay-icon span").text("fast_rewind");
+            $("#presenter-delete-icon span").text("fast_forward");
             USER_INTERFACE.Tools.notify(_this._toolsMenuId, '➤');
 
             _this._referenceStamp = Date.now();
@@ -390,6 +408,8 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
         this.snapshots.addHandler('stop', function () {
             _this.isPlaying = false;
             $("#presenter-play-icon span").removeClass("timeline-play");
+            $("#presenter-replay-icon span").text("replay");
+            $("#presenter-delete-icon span").text("delete");
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
                 delete _this._loopMeasure;

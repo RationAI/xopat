@@ -1,13 +1,14 @@
-import {config, shaders, withBrowser} from "../fixtures/configurations"
+import {config, shaders} from "../fixtures/configurations"
 import {testBasic} from "./routines"
 import {default as utils} from "../support/utilities"
+import {default as elements} from "./routines/basic-ui-elements";
 
 const probabilityId = "0";
 const explainId = "1";
 const annotationId = "2";
 
 for (let webglVersion of ["1.0", "2.0"]) {
-    describe('WebGL::'+webglVersion+' Shader Menu Testing', withBrowser, () => {
+    describe('WebGL::'+webglVersion+' Shader Menu Testing', () => {
         it('Start with identity, test out changes', () => {
             let visualisation = {
                 params: config.params({
@@ -82,13 +83,15 @@ for (let webglVersion of ["1.0", "2.0"]) {
          */
 
         it ('WebGL::'+webglVersion+' Mask testing', () => {
+            elements.openMenuArrow("#shaders-pin");
             cy.get("#" + annotationId + "-change-render-type").select("heatmap", {force: true});
             cy.get("#" + annotationId + "-mode-toggle").click();
 
             cy.canvas().matchImage({title: "S5 - global mask on annotation removes all other parts"});
 
+
             cy.get("#" + annotationId + "-shader-part").rightclick();
-            cy.get("#drop-down-menu").contains("Clipping mask").click();
+            cy.get("#drop-down-menu").contains("Set clipping mask").click();
 
             cy.canvas().matchImage({title: "S6 - clipping mask affects only explainability"});
         })

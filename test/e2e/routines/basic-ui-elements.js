@@ -1,4 +1,23 @@
 export default {
+    closeDialog() {
+        cy.get("#dialogs-container .Toast-dismissButton").first().then($button => {
+            if ($button.is(':visible')){
+                $button.click()
+            }
+        })
+    },
+    openMenuArrow(selector, open=true) {
+        return cy.get(selector).then(($element) => {
+            if (open && !$element.hasClass("opened")) {
+                $element.click();
+            } else if (!open && $element.hasClass("opened")) {
+                $element.click();
+            }
+
+            if (open) cy.get(selector).should('have.class', 'opened')
+            else  cy.get(selector).should('not.have.class', 'opened')
+        })
+    },
     menuArrow(selector, shoudBeOpened) {
         if (shoudBeOpened) {
             cy.get(selector).should('have.class', 'opened')

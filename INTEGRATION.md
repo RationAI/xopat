@@ -37,11 +37,13 @@ standard and many options (WampServer, Apache, ngnix...) are available.
 The viewer uses ``config.php`` to configure and customize its behaviour:
 ````php
 //path to the viewer CORE code
-define('PROJECT_ROOT', 'src');
+define('PROJECT_ROOT', '');
+//path to the viewer CORE code
+define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
 //path to the viewer MODULES code
-define('MODULES_FOLDER', 'modules');
+define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
 //path to the viewer PLUGINS code
-define('PLUGINS_FOLDER', 'plugins');
+define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
 //plugins and modules can be removed and added at will,
 //the only requirement is an existence of `include.json`
@@ -50,11 +52,11 @@ define('PLUGINS_FOLDER', 'plugins');
 //url path-part to the viewer (without domain), i.e. to the main index.php file
 define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); 
 //path to external sources
-define('EXTERNAL_SOURCES', PROJECT_ROOT . '/external');
+define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
 //path to assets
-define('ASSETS_ROOT', PROJECT_ROOT . '/assets');
+define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
 //path to CORE locales
-define('LOCALES_ROOT', PROJECT_ROOT . '/locales');
+define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 
 //path to OpenSeadragon build
 define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');

@@ -7,24 +7,24 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         super(context, name, webGLVariableName);
         this._c1 = new WebGLModule.UIControls.SimpleUIControl(
             context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('range'));
-        let paramsClone = $.extend({}, params, {title: ""});
+        params.title = "";
         this._c2 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, paramsClone, WebGLModule.UIControls.getUiElement('number'), "second-");
+            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'), "second-");
     }
 
     init() {
         const _this = this;
         this._c1.init();
         this._c2.init();
-        this._c1.on(this.name, function (value, encoded, context) {
+        this._c1.on("default", function (value, encoded, context) {
             $(`#${_this._c2.id}`).val(encoded);
             _this._c2.value = value;
-            _this.changed(this.name, value, encoded, context);
+            _this.changed("default", value, encoded, context);
         }, true); //silently fail if registered
-        this._c2.on(this.name, function (value, encoded, context) {
+        this._c2.on("default", function (value, encoded, context) {
             $(`#${_this._c1.id}`).val(encoded);
             _this._c1.value = value;
-            _this.changed(this.name, value, encoded, context);
+            _this.changed("default", value, encoded, context);
         }, true); //silently fail if registered
     }
 
@@ -55,6 +55,10 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         return this._c1.supports;
     }
 
+    get params() {
+        return this._c1.params;
+    }
+
     get type() {
         return this._c1.type;
     }
@@ -76,12 +80,14 @@ WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.Slide
 WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-        this.params = this.supports;
-        //Note that colormap must support 2->this.MAX_SAMPLES color arrays
-        this.MAX_SAMPLES = 8;
-        $.extend(this.params, params);
+        this._params = this.getParams(params);
+        this.prepare();
+    }
 
-        this.params.steps = Math.max(Math.round(this.params.steps), 2);
+    prepare() {
+        //Note that builtin colormap must support 2->this.MAX_SAMPLES color arrays
+        this.MAX_SAMPLES = 8;
+        this.GLOBAL_GLSL_KEY = 'colormap';
 
         this.parser = WebGLModule.UIControls.getUiElement("color").decode;
         if (this.params.continuous) {
@@ -89,10 +95,58 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         } else {
             this.cssGradient = this._discreteCssFromPallete;
         }
-        this.context.includeGlobalCode('colormap', `
-#define COLORMAP_ARRAY_LEN ${this.MAX_SAMPLES}
-vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float steps[COLORMAP_ARRAY_LEN+1], in int max_steps, in bool discrete) {
-    for (int i = 1; i < COLORMAP_ARRAY_LEN+1; i++) {
+        this.context.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        //steps could have been set manually from the outside
+        if (!Array.isArray(this.steps)) this.setSteps();
+
+        if (!this.value || !ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
+            this.value = ColorMaps.defaults[this.params.mode];
+        }
+        this.colorPallete = ColorMaps[this.value][this.maxSteps];
+
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target),
+                    selected = self.val();
+                _this.colorPallete = ColorMaps[selected][_this.maxSteps];
+                _this._setPallete(_this.colorPallete);
+                self.css("background", _this.cssGradient(_this.colorPallete));
+                _this.value = selected;
+                _this.store(selected);
+                _this.changed("default", _this.pallete, _this.value, _this);
+                _this.context.invalidate();
+            };
+
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+
+            let schemas = [];
+            for (let pallete of ColorMaps.schemeGroups[this.params.mode]) {
+                schemas.push(`<option value="${pallete}">${pallete}</option>`);
+            }
+            node.html(schemas.join(""));
+            node.val(this.value);
+            node.on('change', updater);
+        } else {
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+            //be careful with what the DOM elements contains or not if not interactive...
+            let existsNode = document.getElementById(this.id);
+            if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
+        }
+    }
+
+    glslCode() {
+        return `
+#define COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} ${this.MAX_SAMPLES}
+vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}], in float steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1], in int max_steps, in bool discrete) {
+    for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
         if (ratio <= steps[i]) {
             if (discrete) return map[i-1];
             
@@ -110,51 +164,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             return map[i-1];
         }
     }
-}`);
-    }
-
-    init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
-
-        //steps could have been set manually from the outside
-        if (!this.steps) this.setSteps();
-
-        if (!this.value || !ColorMaps.schemeGroups[this.params.mode][this.value]) {
-            this.value = ColorMaps.defaults[this.params.mode];
-        }
-        this.colorPallete = ColorMaps[this.value][this.maxSteps];
-
-        if (this.params.interactive) {
-            const _this = this;
-            let updater = function(e) {
-                let self = $(e.target),
-                    selected = self.val();
-                _this.colorPallete = ColorMaps[selected][_this.maxSteps];
-                _this._setPallete(_this.colorPallete);
-                self.css("background", _this.cssGradient(_this.colorPallete));
-                _this.value = selected;
-                _this.context.storeProperty(_this.name, selected);
-                _this.changed(_this.name, _this.pallete, _this.value, _this);
-                _this.context.invalidate();
-            };
-
-            this._setPallete(this.colorPallete);
-            let node = this.updateColormapUI();
-
-            let schemas = [];
-            for (let pallete of ColorMaps.schemeGroups[this.params.mode]) {
-                schemas.push(`<option value="${pallete}">${pallete}</option>`);
-            }
-            node.html(schemas.join(""));
-            node.val(this.value);
-            node.change(updater);
-        } else {
-            this._setPallete(this.colorPallete);
-            let node = this.updateColormapUI();
-            //be careful with what the DOM elements contains or not if not interactive...
-            let existsNode = document.getElementById(this.id);
-            if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
-        }
+}`
     }
 
     updateColormapUI() {
@@ -169,17 +179,19 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
      *   number: input number of colors to use
      *   array: put number of colors + 1 values, example: for three color pallete,
      *      put 4 numbers: 2 separators and 2 bounds (min, max value)
+     * @param maximum max number of steps available, should not be greater than this.MAX_SAMPLES
+     *   unless you know you can modify that value
      */
-    setSteps(steps) {
+    setSteps(steps, maximum=this.MAX_SAMPLES) {
         this.steps = steps || this.params.steps;
         if (! Array.isArray(this.steps)) {
             if (this.steps < 2) this.steps = 2;
-            if (this.steps > this.MAX_SAMPLES) this.steps = this.MAX_SAMPLES;
+            if (this.steps > maximum) this.steps = maximum;
             this.maxSteps = this.steps;
 
             this.steps++; //step generated must have one more value (separators for colors)
             let step = 1.0 / this.maxSteps;
-            this.steps = new Array(this.MAX_SAMPLES+1);
+            this.steps = new Array(maximum+1);
             this.steps.fill(-1);
             this.steps[0] = 0;
             for (let i = 1; i < this.maxSteps; i++) this.steps[i] = this.steps[i - 1] + step;
@@ -189,10 +201,10 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
             this.steps.sort();
             let max = this.steps[this.steps.length-1];
             let min = this.steps[0];
-            this.steps = this.steps.slice(0, this.MAX_SAMPLES+1);
+            this.steps = this.steps.slice(0, maximum+1);
             this.maxSteps = this.steps.length - 1;
             this.steps.forEach(x => (x - min) / (max-min));
-            for (let i = this.maxSteps+1; i < this.MAX_SAMPLES+1; i++) this.steps.push(-1);
+            for (let i = this.maxSteps+1; i < maximum+1; i++) this.steps.push(-1);
         }
     }
 
@@ -238,20 +250,16 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN], in float s
     }
 
     toHtml(breakLine=true, controlCss="") {
-        if (!this.params.interactive) return `<span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
-style="width: 60%;">${this.context.loadProperty(this.name, this.params.default)}</span>`;
+        if (!this.params.interactive) return `<div><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2" 
+style="width: 60%;">${this.load(this.params.default)}</span></div>`;
 
-        if (!ColorMaps.hasOwnProperty(this.params.pallete)) {
-            this.params.pallete = "OrRd";
-        }
-
-        return `<span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
-style="width: 60%;"></select><br>`;
+        return `<div><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow" 
+style="width: 60%;"></select></div>`;
     }
 
     define() {
-        return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN];
-uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN+1];
+        return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}];
+uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1];
 uniform int ${this.webGLVariableName}_colormap_size;`;
     }
 
@@ -277,6 +285,12 @@ uniform int ${this.webGLVariableName}_colormap_size;`;
         };
     }
 
+    get supportsAll() {
+        return {
+            steps: [3, [0, 0.5, 1]]
+        };
+    }
+
     get raw() {
         return this.pallete;
     }
@@ -286,6 +300,92 @@ uniform int ${this.webGLVariableName}_colormap_size;`;
     }
 };
 WebGLModule.UIControls.registerClass("colormap", WebGLModule.UIControls.ColorMap);
+
+
+WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModule.UIControls.ColorMap {
+    prepare() {
+        this.MAX_SAMPLES = 32;
+        this.GLOBAL_GLSL_KEY = 'custom_colormap';
+
+        this.parser = WebGLModule.UIControls.getUiElement("color").decode;
+        if (this.params.continuous) {
+            this.cssGradient = this._continuousCssFromPallete;
+        } else {
+            this.cssGradient = this._discreteCssFromPallete;
+        }
+        this.context.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        if (!Array.isArray(this.steps)) this.setSteps();
+        if (this.maxSteps < this.value.length) {
+            this.value = this.value.slice(0, this.maxSteps);
+        }
+
+        //super class compatibility in methods, keep updated
+        this.colorPallete = this.value;
+
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target),
+                    index = Number.parseInt(e.target.dataset.index),
+                    selected = self.val();
+
+                if (Number.isInteger(index)) {
+                    _this.colorPallete[index] = selected;
+                    _this._setPallete(_this.colorPallete);
+                    self.parent().css("background", _this.cssGradient(_this.colorPallete));
+                    _this.value = _this.colorPallete;
+                    _this.store(_this.colorPallete);
+                    _this.changed("default", _this.pallete, _this.value, _this);
+                    _this.context.invalidate();
+                }
+            };
+
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+
+            const width = 1 / this.colorPallete.length * 100;
+            node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
+            node.val(this.value);
+            node.children().on('change', updater);
+        } else {
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+            //be careful with what the DOM elements contains or not if not interactive...
+            let existsNode = document.getElementById(this.id);
+            if (existsNode) existsNode.style.background = this.cssGradient(this.pallete);
+        }
+    }
+
+    toHtml(breakLine=true, controlCss="") {
+        if (!this.params.interactive) return `<div><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block" 
+style="width: 60%;">&emsp;</span></div>`;
+
+return `<div><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block" 
+style="width: 60%;"></span></div>`;
+    }
+
+    get supports() {
+        return {
+            default: ["#000000", "#888888", "#ffffff"],
+            steps: 3,
+            mode: "sequential",
+            interactive: true,
+            title: "Colormap:",
+            continuous: false,
+        };
+    }
+
+    get supportsAll() {
+        return {
+            steps: [3, [0, 0.5, 1]]
+        };
+    }
+});
 
 /**
  * Advanced slider that can define multiple points and interval masks
@@ -299,8 +399,7 @@ WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.ICo
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this.MAX_SLIDERS = 12;
-        this.params = this.supports;
-        $.extend(this.params, params);
+        this._params = this.getParams(params);
 
         this.context.includeGlobalCode('advanced_slider', `
 #define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS} 
@@ -331,8 +430,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
     init() {
         this._updatePending = false;
         //encoded values hold breaks values between min and max,
-        this.encodedValues = this.context.loadProperty(this.name + "_values", this.params.breaks);
-        this.mask = this.context.loadProperty(this.name + "_mask", this.params.mask);
+        this.encodedValues = this.load(this.params.breaks, "breaks");
+        this.mask = this.load(this.params.mask, "mask");
 
         this.value = this.encodedValues.map(this._normalize.bind(this));
         this.value = this.value.slice(0, this.MAX_SLIDERS);
@@ -343,7 +442,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
         this.connects = this.value.map(_ => true); this.connects.push(true); //intervals have +1 elems
         for (let i = size; i <  this.MAX_SLIDERS+1; i++) this.mask.push(-1);
 
-        if (this.params.step && this.params.step < 1) delete this.params.step;
+        if (!this.params.step || this.params.step < 1) delete this.params.step;
 
         let limit =  this.value.length < 2 ? undefined : this.params.max;
 
@@ -397,7 +496,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     }
                     _this.value[idx] = value;
 
-                    _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
+                    _this.changed("mask", _this.mask, _this.mask, _this);
                     _this.context.invalidate();
                 }
 
@@ -422,8 +521,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                             "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
                         _this.context.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize-1;
-                        _this.changed(_this.name + "_mask", _this.mask, _this.mask, _this);
-                        _this.context.storeProperty(_this.name + "_mask", _this.mask);
+                        _this.changed("mask", _this.mask, _this.mask, _this);
+                        _this.store(_this.mask, "mask");
                     });
 
                     connects[i].addEventListener('mousedown', function (e) {
@@ -444,8 +543,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     _this._updatePending = true;
                     setTimeout(_ => {
                         //todo re-scale values or filter out -1ones
-                        _this.changed(_this.name + "_values", _this.value, strValues, _this);
-                        _this.context.storeProperty(_this.name, unencoded);
+                        _this.changed("breaks", _this.value, strValues, _this);
+                        _this.store(unencoded, "breaks");
 
                         _this.context.invalidate();
                         _this._updatePending = false;
@@ -487,8 +586,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
 
     toHtml(breakLine=true, controlCss="") {
         if (!this.params.interactive) return "";
-        return `<span style="height: 54px;">${this.params.title}: </span><div id="${this.id}" style="height: 9px; 
-margin-left: 5px; width: 60%; display: inline-block"></div>`;
+        return `<div><span style="height: 54px;">${this.params.title}: </span><div id="${this.id}" style="height: 9px; 
+margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
     }
 
     define() {
@@ -512,19 +611,25 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
             breaks: [0.2, 0.8],
             mask: [1, 0, 1],
             interactive: true,
-            inverted: false,
+            inverted: true,
             maskOnly: true,
             toggleMask: true,
             title: "Threshold",
             min: 0,
             max: 1,
             minGap: 0.05,
-            step: undefined,
+            step: null,
             pips: {
                 mode: 'positions',
                 values: [0, 20, 40, 50, 60, 80, 90, 100],
                 density: 4
             }
+        };
+    }
+
+    get supportsAll() {
+        return {
+            step: [null, 0.1]
         };
     }
 
@@ -538,29 +643,6 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
 };
 WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.AdvancedSlider);
 
-// WebGLModule.UIControls.LocalizeColorMap = class extends WebGLModule.UIControls.ColorMap {
-//
-//     constructor(context, name, webGLVariableName, params) {
-//         $.extend(true, params.col, );
-//         super(context, name, webGLVariableName, WebGLModule.UIControls.LocalizeColorMap.redefineParams(params));
-//     }
-//
-//     static redefineParams(params) {
-//         if (!params.hasOwnProperty("color")) params.color = {};
-//         if (!params.hasOwnProperty("threshold")) params.threshold = {};
-//         params.color.type = "colormap";
-//         params.threshold.type = "advanced_slider";
-//         params.color.default = params.color.default || "Set1";
-//         params.color.mode = "quantitative";
-//         params.color.interactive = false;
-//         params.color.title = params.color.title || "Localized: ";
-//
-//         //to-do maybe adjust steps/mask for threshold
-//     }
-// };
-// WebGLModule.UIControls.registerClass("localize_colormap", WebGLModule.UIControls.LocalizeColorMap);
-//
-//
 // /**
 //  * Kernel filter applied onto texture
 //  * @type {WebGLModule.UIControls.Kernel}
@@ -569,8 +651,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     constructor(context, name, webGLVariableName, params) {
 //         super(context, name, webGLVariableName);
 //
-//         this.params = this.supports;
-//         $.extend(this.params, params);
+//         this._params = this.getParams(params);
 //
 //         if (this.params.width < 3) throw "Invalid kernel width < 3.";
 //         if (this.params.height < 3) throw "Invalid kernel height < 3.";
@@ -580,7 +661,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     }
 //
 //     init() {
-//         this.value = this.context.loadProperty(this.name, this.params.default);
+//         this.value = this.load(this.params.default);
 //         if (!Array.isArray(this.value) || this.value.length !== this.width*this.height) {
 //             console.warn("Invalid kernel.");
 //             this.value = new Array(this.width*this.height);
@@ -597,8 +678,8 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //                     _this.value = JSON.parse(selected);
 //                     _this.encodedValue = selected;
 //                     self.css('border', 'none');
-//                     _this.context.storeProperty(_this.name, _this.value);
-//                     _this.changed(_this.name, _this.value, _this.encodedValue, _this);
+//                     _this.store(_this.value);
+//                     _this.changed("default", _this.value, _this.encodedValue, _this);
 //                     _this.context.invalidate();
 //                 } catch (e) {
 //                     self.css('border', 'red 1px solid');
@@ -606,7 +687,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //             };
 //             let node = $(`#${this.id}`);
 //             node.val(this.encodedValue);
-//             node.change(updater);
+//             node.on('change', updater);
 //         }
 //     }
 //
@@ -683,25 +764,23 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-
-        this.params = this.supports;
-        $.extend(this.params, params);
+        this._params = this.getParams(params);
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 let self = $(e.target);
                 _this.value = self.val();
-                _this.context.storeProperty(_this.name, _this.value);
-                _this.changed(_this.name, _this.value, _this.value, _this);
+                _this.store(_this.value);
+                _this.changed("default", _this.value, _this.value, _this);
             };
             let node = $(`#${this.id}`);
             node.val(this.value);
-            node.change(updater);
+            node.on('change', updater);
         } else {
             let node = $(`#${this.id}`);
             node.val(this.value);
@@ -719,8 +798,8 @@ WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl 
     toHtml(breakLine=true, controlCss="") {
         let disabled = this.params.interactive ? "" : "disabled";
         let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
-        return `${title}<textarea id="${this.id}" class="form-control" 
-style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled} placeholder="${this.params.placeholder}"></textarea>`;
+        return `<div>${title}<textarea id="${this.id}" class="form-control" 
+style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
     }
 
     define() {
@@ -740,8 +819,12 @@ style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled}
             default: "",
             placeholder: "",
             interactive: true,
-            title: "Text:"
+            title: "Text"
         };
+    }
+
+    get supportsAll() {
+        return {};
     }
 
     get raw() {
@@ -761,18 +844,17 @@ WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextAre
 WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
-
-        this.params = this.supports;
-        $.extend(this.params, params);
+        this._params = this.getParams(params);
     }
 
     init() {
-        this.value = this.context.loadProperty(this.name, this.params.default);
+        this.value = this.load(this.params.default);
 
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
                 _this.value++;
+                _this.store(_this.value);
                 _this.changed(_this.name, _this.value, _this.value, _this);
             };
             let node = $(`#${this.id}`);
@@ -817,6 +899,10 @@ ${breakLine ? '<br style="clear: both;">' : ""}`;
             interactive: true,
             title: "Button"
         };
+    }
+
+    get supportsAll() {
+        return {};
     }
 
     get raw() {

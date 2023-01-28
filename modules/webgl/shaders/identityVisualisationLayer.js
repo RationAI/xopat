@@ -17,7 +17,13 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "shows the data AS-IS";
     }
 
+    textureChannelSamplingAccepts(count) {
+        //return count === 1;
+        return count === 4;
+    }
+
     getFragmentShaderExecution() {
+        //return `return vec4(vec3(${this.sampleChannel("tile_texture_coords")}), 1.0);`;
         return `return ${this.sample("tile_texture_coords")};`;
     }
 };

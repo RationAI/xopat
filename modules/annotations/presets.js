@@ -100,7 +100,7 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Create Preset Manager
-     * @param {string} selfName name of the property 'self' in parent
+     * @param {string} selfName name of the property 'self' in parent (not used)
      * @param {OSDAnnotations} context parent context
      */
     constructor(selfName, context) {
@@ -112,6 +112,7 @@ OSDAnnotations.PresetManager = class {
         this.modeOutline = APPLICATION_CONTEXT.getOption(`annotation_presets_mode_outline`, true);
         this._colorSteps = 8;
         this._colorStep = 0;
+        this._presetsImported = false;
     }
 
     getActivePreset(isLeftClick) {
@@ -353,6 +354,7 @@ OSDAnnotations.PresetManager = class {
         if (clear) {
             Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
             this._presets = {};
+            this._presetsImported = false;
         } else {
             for (let pid in this._presets) {
                 const preset = this._presets[pid];
@@ -386,6 +388,9 @@ OSDAnnotations.PresetManager = class {
         if (presets.length > 0) {
             this.selectPreset(undefined, false);
             this.selectPreset(first?.presetID, true);
+            this._presetsImported = true;
+        } else {
+            this._presetsImported = false;
         }
         return first;
     }

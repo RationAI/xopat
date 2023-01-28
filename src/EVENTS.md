@@ -28,6 +28,12 @@ should be provided. These events should be invoked on the parent instance of the
    removing the annotation and getting the coordinates of the selected area
  - thoroughly test any user interaction with annotations plugin, rely on events
 
+### Event API extension
+Available is ``VIEWER.tools.raiseAwaitEvent(context, ...)`` that works the same as `context.raiseEvent()`
+except that it waits for asynchronous calls to finish. Async functions are not awaited for by default.
+
+Use ``preventDefault`` flag and check for its existence in the event handler to support aborting certain events.
+
 ## Event List
 Events have their name (for which you register) and when invoked, a parameter is passed
 to the handler function that might contain a lot of useful data.
@@ -57,6 +63,9 @@ Same as above, an error event.
 
 #### `plugin-loaded` | e: `{id: string}
 Fired when plugin is loaded within a system (at runtime).
+
+#### `plugin-failed` | e: `{id: string, message:string}
+Fired when plugin fails to load within a system (at runtime).
 
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).

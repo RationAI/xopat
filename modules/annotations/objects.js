@@ -181,8 +181,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         if (typeof array === "object") {
             array = objectList.objects;
         }
-        const _this = this;
-
         return array;
     }
 
@@ -718,7 +716,6 @@ OSDAnnotations.PolygonUtilities = {
 
 OSDAnnotations.AutoObjectCreationStrategy = class {
     constructor(selfName, context) {
-        this._globalSelf = `${context.id}['${selfName}']`;
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
     }
 

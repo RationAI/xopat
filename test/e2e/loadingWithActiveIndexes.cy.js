@@ -1,11 +1,11 @@
 //constructing individual tests before moving them to their folder
 
 
-import {config, shaders, withBrowser} from "../fixtures/configurations"
+import {config, shaders} from "../fixtures/configurations"
 import {testBasic, testElements} from "./routines"
 import {default as utils} from "../support/utilities"
 
-describe('Correct Active Indexes with stackedBackground:false', withBrowser, () => {
+describe('Correct Active Indexes with stackedBackground:false', () => {
 
    it("Bindings of indices initial state", ()=>  {
        let visualisation = {

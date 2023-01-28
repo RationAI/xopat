@@ -8,7 +8,65 @@
         window.APPLICATION_CONTEXT.layersAvailable = false;
     }
 
+    function parseCookie(key) {
+        try {
+            const cookie = APPLICATION_CONTEXT._getCookie(key, "{}", false);
+            return cookie ? JSON.parse(cookie) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    var namedCookieCache = parseCookie('_cache');
+    var orderedCookieCache = parseCookie('_orderedCache');
+
     window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+        function isset(x, type="string") {
+            return x && typeof x === type;
+        }
+
+        const visualizations = APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
+            if (!isset(visualisationTarget.name)) {
+                visualisationTarget.name = $.t('main.shaders.defaultTitle');
+            }
+            if (!isset(visualisationTarget.shaders, "object")) {
+                console.warn(`Visualisation #${index} removed: missing shaders definition.`, visualisationTarget);
+                return false;
+            }
+
+            let shaderCount = 0, sid = 0, source = $.t("common.Source");
+            for (let data in visualisationTarget.shaders) {
+                const layer = visualisationTarget.shaders[data];
+
+                if (!isset(layer.type)) {
+                    //message ui? 'messages.shaderTypeMissing'
+                    console.warn(`Visualisation #${index} shader layer removed: missing type.`, layer);
+                    delete visualisationTarget.shaders[data];
+                    continue;
+                }
+
+                if (!isset(layer.name)) {
+                    let temp = data.substring(Math.max(0, data.length-24), 24);
+                    if (temp.length !== data.length) temp  = "..." + temp;
+                    layer.name = source + ": " + temp;
+                }
+
+                const namedCache = namedCookieCache[layer.name] || {};
+                if (Object.keys(namedCache).length > 0) {
+                    layer.cache = namedCache;
+                    layer._cacheApplied = "name";
+                } else {
+                    layer.cache = orderedCookieCache[sid++] || {};
+                    layer._cacheApplied = Object.keys(layer.cache).length > 0 ? "order" : undefined;
+                }
+                shaderCount++;
+            }
+            return shaderCount > 0;
+        });
+
+        if (visualizations.length <= 0) {
+            return APPLICATION_CONTEXT.disableRendering();
+        }
 
         //We are active!
         window.APPLICATION_CONTEXT.layersAvailable = true;
@@ -85,9 +143,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
-                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
-                                    e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
-                                }
+                                UTILITIES.prepareTiledImage(e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -99,9 +155,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
-                                if ((!newVis.hasOwnProperty("lossless") || newVis.lossless) && e.item.source.setFormat) {
-                                    e.item.source.setFormat("png"); //todo unify tile initialization processing - put it into one function, now present at bottom of index.php and here
-                                }
+                                UTILITIES.prepareTiledImage(e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -120,18 +174,22 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             });
             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
             //load shaders just once
-            webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
+
+            if (!APPLICATION_CONTEXT.getOption("secureMode")) {
+                webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
+            }
         }
 
         let seaGL = VIEWER.bridge;
-        seaGL.addVisualisation(...APPLICATION_CONTEXT.config.visualizations);
+        seaGL.addVisualisation(...visualizations);
         seaGL.addData(...APPLICATION_CONTEXT.config.data);
-        if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > APPLICATION_CONTEXT.config.visualizations) {
+        if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
 
-        seaGL.createUrlMaker = function(vis) {
+        seaGL.createUrlMaker = function(vis, isSecureMode) {
+            if (isSecureMode && vis) delete vis.protocol;
             seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.layersProtocol));
             return seaGL.urlMaker;
         };
@@ -154,15 +212,6 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                 availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
             }
 
-            // let filterChange = "";
-            // if (canChangeFilters) {
-            //     canChangeFilters = "<select onchange='UTILITIES.setFilterOfLayer()'>";
-            //     for (let f in WebGLModule.VisualisationLayer.filterNames) {
-            //         let selected = available.type() === layer.type ? " selected" : "";
-            //         canChangeFilters +=  `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-            //     }
-            // }
-
             let filterUpdate = [];
             if (!fixed) {
                 for (let key in WebGLModule.VisualisationLayer.filters) {
@@ -176,6 +225,9 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                 }
             }
             const fullTitle = title.startsWith("...") ? dataId : title;
+            const cacheApplied = layer._cacheApplied ?
+                `<div class="p2 info-container rounded-2" style="width: 97%">
+${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
 
             return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
             <div class="h5 py-1 position-relative">
@@ -190,7 +242,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 ${modeChange}
                 <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
             </div>
-            <div class="non-draggable">${html}${filterUpdate.join("")}</div>
+            <div class="non-draggable">${html}${filterUpdate.join("")}</div>${cacheApplied}
             </div>`;
         }
 
@@ -239,53 +291,45 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
         }
 
         if (firstTimeSetup) {
-            VIEWER.addHandler('open-failed', function (e) {
-                //todo check whether open failed only during opening, if so this is correct
-                //this event handless add:    add-item-failed
-
-                //should work only for rendering layer
-                //todo not called probably because it is not on VIEWER called but somewhere else
-                if (typeof e.source === 'string') {
-                    if (e.source == seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, seaGL.dataImageSources())) {
-                        VIEWER.addTiledImage({
-                            //todo what if this is the background image? :/
-                            tileSource : new EmptyTileSource({
-                                height: 512,
-                                width: 512,
-                                tileSize: 512
-                            }),
-                            //index: seaGL.getWorldIndex(),
-                            opacity: $("#global-opacity input").val(),
-                            replace: true,
-                            success: function (e) {
-                                //seaGL.addLayer(seaGL.getWorldIndex());
-                                //seaGL.initAfterOpen();
-                            }
-                        });
-                    }
-                } else {
-                    //unknown origin, just fail=ignore?
-                }
-            });
             /*---------------------------------------------------------*/
             /*------------ JS utilities and enhancements --------------*/
             /*---------------------------------------------------------*/
 
-            window.UTILITIES.makeCacheSnapshot = function() {
-                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    Dialogs.show($.t('messages.cookiesDisabled'), 5000, Dialogs.MSG_WARN);
-                    return;
-                }
-
+            const recordCache = (cookieKey, currentCache, cacheKeyMaker, keepEmpty) => {
+                const shaderCache = currentCache;
+                let index = 0;
                 let active = seaGL.visualization().shaders;
-                const shaderCache = {};
                 for (let key in active) {
                     if (active.hasOwnProperty(key)) {
                         let shaderSettings = active[key];
-                        shaderCache[shaderSettings.name] = shaderSettings.cache;
+
+                        //filter cache so that only non-empty objects are stored
+                        const cache = Object.fromEntries(
+                            Object.entries(shaderSettings.cache).filter(([key, val]) => Object.keys(val)?.length > 0)
+                        );
+                        if (keepEmpty || Object.keys(cache).length > 0) {
+                            shaderCache[cacheKeyMaker(shaderSettings, index++)] = cache;
+                        }
                     }
                 }
-                APPLICATION_CONTEXT._setCookie('_cache', JSON.stringify(shaderCache));
+                APPLICATION_CONTEXT._setCookie(cookieKey, JSON.stringify(shaderCache));
+            };
+
+            UTILITIES.prepareTiledImage = function (image, visSetup) {
+                //todo not flexible, propose format setting in OSD? depends on the protocol
+                if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
+                    image.source.setFormat("png");
+                }
+                image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+            };
+
+            UTILITIES.makeCacheSnapshot = function(named=true) {
+                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
+                    Dialogs.show($.t('messages.cookiesDisabled', {action: "$('#settings').click()"}), 5000, Dialogs.MSG_WARN);
+                    return;
+                }
+                if (named) recordCache('_cache', namedCookieCache, (shader, i) => shader.name, false);
+                else recordCache('_orderedCache', orderedCookieCache, (shader, i) => i, true);
                 Dialogs.show($.t('messages.cookieConfSaved'), 5000, Dialogs.MSG_INFO);
             };
 
@@ -324,6 +368,16 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
             });
 
+            UTILITIES.clearShaderCache = function(layerId) {
+                const shader = seaGL.visualization().shaders[layerId];
+                if (!shader) return;
+                shader.cache = {};
+                //because webgl ui controls override their params by cache, we need to re-build that shader
+                shader.error = "force-rebuild";
+                delete shader._cacheApplied;
+                seaGL.reorder();
+            };
+
             UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
                 if (self.checked) {
                     seaGL.visualization().shaders[layerId].visible = true;
@@ -332,7 +386,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     seaGL.visualization().shaders[layerId].visible = false;
                     self.parentNode.parentNode.classList.add("shader-part-error");
                 }
-                seaGL.reorder(null);
+                seaGL.reorder();
             };
 
             UTILITIES.changeVisualisationLayer = function(self, layerId) {
@@ -345,14 +399,14 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     if (viz.shaders.hasOwnProperty(layerId)) {
                         let shaderPart = viz.shaders[layerId];
 
-                        //preserve parameters for the original type
-                        shaderPart[`__${shaderPart.type}_params`] = shaderPart.params;
-                        if (!shaderPart.hasOwnProperty(`__${type}_params`)) {
-                            shaderPart[`__${type}_params`] = {};
-                        }
-                        shaderPart.params = shaderPart[`__${type}_params`];
+                        // //parameter switching does not have to be done anymore - the routine can type-safe reuse params
+                        // shaderPart[`__${shaderPart.type}_params`] = shaderPart.params;
+                        // if (!shaderPart.hasOwnProperty(`__${type}_params`)) {
+                        //     shaderPart[`__${type}_params`] = {};
+                        // }
+                        // shaderPart.params = shaderPart[`__${type}_params`];
 
-                        viz.shaders[layerId].type = type;
+                        shaderPart.type = type;
                         seaGL.reorder(null); //force to re-build
                     } else {
                         console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': bad initialization?`);
@@ -442,8 +496,6 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     if (!layers.hasOwnProperty(key)) continue;
 
                     let errorMessage;
-
-                    //todo check this attr existnce and invalidate layer if missing
                     for (let imgSource of layers[key].dataReferences) {
                         let idx = sources.findIndex(s => s === allSources[imgSource]);
                         if (idx !== -1

@@ -4,8 +4,6 @@
 *
 * Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
-*
-* TODO always use cache approach, do not rely on events, just program two approaches - with and without cache (setting c2d directly after tile load)
 */
 
 window.OpenSeadragon.BridgeGL = class {
@@ -14,7 +12,10 @@ window.OpenSeadragon.BridgeGL = class {
         let _this  = this;
         this.openSD = openSeaDragonInstance;
 
-        webGLEngine.resetCallback = _ => _this.redraw();
+        webGLEngine.resetCallback = _ => {
+            _this.clear();
+            _this.redraw();
+        };
         this._disabled = true; //so that first enable call is executed
         this.webGLEngine = webGLEngine;
         this._refreshTimeStamp = Date.now();
@@ -200,7 +201,7 @@ window.OpenSeadragon.BridgeGL = class {
      * @param {array} order array of strings that refer to ID's in the visualisation
      *   data (e.g. pyramidal tiff paths in our case), first is rendered last (top)
      */
-    reorder(order) {
+    reorder(order=undefined) {
         if (!Array.isArray(order)) {
             this.webGLEngine.rebuildVisualisation(null);
         } else {
@@ -238,7 +239,15 @@ window.OpenSeadragon.BridgeGL = class {
         // Raise tstamp to force redraw
         this._refreshTimeStamp = Date.now();
         this._randomDelay = Math.max(0, randomDelay);
-        this.draw();
+    }
+
+    /**
+     * Clear the canvas - necessary for transparent items to render correctly
+     *  - done automatically on shader render updates
+     */
+    clear() {
+        this.openSD.drawer._clear();
+        this.openSD.navigator.drawer._clear();
     }
 
     /**
@@ -252,7 +261,7 @@ window.OpenSeadragon.BridgeGL = class {
     /**
      * Redraw the scene to reflect the latest visualization changes.
      * @param {number} randomDelay - time in milliseconds, tile updates can randomly occur within randomDelay
-     *   note: it is not guaranteed to be updated, e.g. if you need to have ALL
+     *   note: viewport canvas is not guaranteed to be updated, e.g. if you need to have ALL
      *   tiles updated after 'randomDelay', call draw() after the time has elapsed
      */
     redraw(randomDelay=0) {
@@ -424,11 +433,9 @@ window.OpenSeadragon.BridgeGL = class {
         if (e.tile.webglId === this.uid && e.tile.webglRefresh <= this.timeStamp) {
             e.tile.webglRefresh = this.highestTimestamp;
 
-            //todo make it such that it is called just once
-            this.webGLEngine.setDimensions( e.tile.sourceBounds.width, e.tile.sourceBounds.height);
-
+            //noop if equal
+            this.webGLEngine.setDimensions(e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             let imageData = e.tile.__data;
-
             // Render a webGL canvas to an input canvas using cached version
             let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
                 this.openSD.viewport.getZoom(), this.imagePixelSizeOnScreen());
@@ -450,7 +457,6 @@ window.OpenSeadragon.BridgeGL = class {
         //necessary to modify hash key so as to force the viewer download the image twice
         source.__cached_getTileHashKey = source.getTileHashKey;
         source.getTileHashKey = function(level, x, y, url, ajaxHeaders, postData) {
-            //todo implement instead feature of sharing the data :/
             return source.__cached_getTileHashKey(level, x, y, url, ajaxHeaders, postData) + "_webgl";
         };
 
@@ -491,11 +497,10 @@ window.OpenSeadragon.BridgeGL = class {
             if (cache.webglRefresh <= _context.timeStamp) {
                 cache.webglRefresh = _context.highestTimestamp;
 
-                //todo make it such that it is called just once
+                //noop if equal
                 _context.webGLEngine.setDimensions(cache._dim.width, cache._dim.height);
-
                 // Render a webGL canvas to an input canvas using cached version
-                var output = _context.webGLEngine.processImage(cache._data, cache._dim,
+                const output = _context.webGLEngine.processImage(cache._data, cache._dim,
                     _context.openSD.viewport.getZoom(), _context.imagePixelSizeOnScreen());
 
                 // Note: you can comment out clearing if you don't use transparency

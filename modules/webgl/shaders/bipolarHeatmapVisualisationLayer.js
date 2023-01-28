@@ -32,7 +32,7 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
     static defaultControls = {
         colorHigh: {
             default: {type: "color", default: "#ff1000", title: "Color High: "},
-            accepts: (type, instance) => type === "vec3"
+            accepts: (type, instance) => type === "vec3",
         },
         colorLow: {
             default: {type: "color", default: "#01ff00", title: "Color Low: "},
@@ -48,21 +48,25 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return `
     float chan = ${this.sampleChannel('tile_texture_coords', 0, true)};
     if (!close(chan, .5)) {
-        if (chan < .5) { 
+        if (chan < .5) {
             chan = ${this.filter(`1.0 - chan * 2.0`)};
             if (chan > ${this.threshold.sample('chan', 'float')}) {
                return vec4(${this.colorLow.sample('chan', 'float')}, chan);
             }
             return vec4(.0);
-        } else {  
-            chan = ${this.filter(`(chan - 0.5) * 2.0`)};
-            if (chan > ${this.threshold.sample('chan', 'float')}) {
-                return vec4(${this.colorHigh.sample('chan', 'float')}, chan);
-            } 
-            return vec4(.0);
+        } 
+        
+        chan = ${this.filter(`(chan - 0.5) * 2.0`)};
+        if (chan > ${this.threshold.sample('chan', 'float')}) {
+            return vec4(${this.colorHigh.sample('chan', 'float')}, chan);
         }
+        return vec4(.0);     
     }  
 `;
+    }
+
+    textureChannelSamplingAccepts(count) {
+        return count === 1;
     }
 
     htmlControls() {

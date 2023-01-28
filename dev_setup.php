@@ -9,8 +9,9 @@ include_once("./config.php");
   <meta charset="utf-8">
   <title>Visualisation Developer Setup</title>
 
-  <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>/primer_css.css">
-  <script src="<?php echo PROJECT_ROOT; ?>/shader_input_gui.js"></script>
+  <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
+  <script src="<?php echo PROJECT_SOURCES; ?>shader_input_gui.js"></script>
+  <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
   <!-- jquery -->
@@ -18,6 +19,26 @@ include_once("./config.php");
     <script>
         var OpenSeadragon = {};
     </script>
+
+    <?php
+
+    include_once(PROJECT_SOURCES . "modules.php");
+
+    $webglPath = "";
+    $version = VERSION;
+
+    $MODULES["webgl"]->loaded = true;
+    resolveDependencies($MODULES, $version);
+    foreach ($MODULES as $_ => $mod) {
+        if ($mod->loaded) {
+            printDependencies(MODULES_FOLDER, $mod);
+        }
+    }
+    function hasKey($array, $key) {
+        return isset($array[$key]) && $array[$key];
+    }
+
+    ?>
 
 </head>
 
@@ -27,25 +48,7 @@ include_once("./config.php");
   <div class="Layout-main ">
   <h1 class="f00-light">Developer visualisation setup</h1>
 <br><br>
-<?php
 
-include_once(PROJECT_ROOT . "/modules.php");
-
-$webglPath = "";
-$version = VERSION;
-foreach ($MODULES as $id => $mod) {
-    if ($id == "webgl") {
-        $webglPath = MODULES_FOLDER . "/" . $mod->directory;
-        foreach ($mod->includes as $__ => $file) {
-            echo "    <script src=\"" .$webglPath . "/$file?v=$version\"></script>\n";
-        }
-    }
-}
-function hasKey($array, $key) {
-  return isset($array[$key]) && $array[$key];
-}
-
-?>
       <br>
           <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
           try {

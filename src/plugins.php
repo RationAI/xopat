@@ -1,17 +1,18 @@
 <?php
 
-require_once(PROJECT_ROOT . "/modules.php");
+require_once(PROJECT_SOURCES . "modules.php");
 global $i18n;
 $PLUGINS = array();
 
 foreach (array_diff(scandir(PLUGINS_FOLDER), array('..', '.')) as $_=>$dir) {
-    $dir_path = PLUGINS_FOLDER . "/" . $dir;
+    $dir_path = PLUGINS_FOLDER . "$dir/";
     if (is_dir($dir_path)) {
-        $interface = $dir_path . "/include.json";
+        $interface = $dir_path . "include.json";
         if (file_exists($interface)) {
             try {
                 $data = json_decode(file_get_contents($interface));
                 $data->directory = $dir;
+                $data->path = $dir_path;
 
                 foreach ($data->modules as $modId) {
                     if (!isset($MODULES[$modId])) {
