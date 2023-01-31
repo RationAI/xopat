@@ -54,7 +54,7 @@
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualisation setup is not parse-able.",
       "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
-      "cookieConfSaved": "Modifications in parameters saved.",
+      "paramConfSaved": "Modifications in parameters saved.",
       "bgReferenceMissing": "JSON parametrization of the visualiser requires valid <i>dataReference</i> for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualisation layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",

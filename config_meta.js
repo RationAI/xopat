@@ -147,31 +147,40 @@ MetaStore.Persistent = class {
     }
 
     async get(key, defaultValue) {
-        let value = this.__cached[key];
-        if (!value || value.tStamp < this.__upDate) {
+        try {
+            //todo consider empty string as valid response...
+            let value = this.__cached[key];
+            if (!value || value.tStamp < this.__upDate) {
+                const response = await UTILITIES.fetch(this.url, {
+                    action: "load",
+                    id: this.id,
+                    key: key,
+                });
+                value = await response.text();
+
+                if (!value) value = defaultValue;
+                this._set(key, value);
+            }
+            return value || defaultValue;
+        } catch (e) {
+            console.warn("Persistent store load error", key, e);
+            return defaultValue;
+        }
+    }
+
+    async set(key, value) {
+        try {
+            this._set(key, value);
             const response = await UTILITIES.fetch(this.url, {
-                action: "load",
+                action: "save",
                 id: this.id,
                 key: key,
                 value: value,
             });
-            value = await response.text();
-
-            if (!value) value = defaultValue;
-            this._set(key, value);
+            return await response.text();
+        } catch (e) {
+            console.warn("Persistent store set error", key, e);
         }
-        return value || defaultValue;
-    }
-
-    async set(key, value) {
-        this._set(key, value);
-        const response = await UTILITIES.fetch(this.url, {
-            action: "save",
-            id: this.id,
-            key: key,
-            value: value,
-        });
-        return await response.text();
     }
 
     _set(k, v) {

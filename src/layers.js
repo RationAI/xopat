@@ -8,17 +8,17 @@
         window.APPLICATION_CONTEXT.layersAvailable = false;
     }
 
-    function parseCookie(key) {
+    function parseStore(key) {
         try {
-            const cookie = APPLICATION_CONTEXT._getCookie(key, "{}", false);
+            const cookie = localStorage.getItem(key) || "{}";
             return cookie ? JSON.parse(cookie) : {};
         } catch (e) {
             return {};
         }
     }
 
-    var namedCookieCache = parseCookie('_cache');
-    var orderedCookieCache = parseCookie('_orderedCache');
+    const namedCookieCache = parseStore('_layers.namedCache');
+    const orderedCookieCache = parseStore('_layers.orderedCache');
 
     window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
         function isset(x, type="string") {
@@ -312,7 +312,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         }
                     }
                 }
-                APPLICATION_CONTEXT._setCookie(cookieKey, JSON.stringify(shaderCache));
+                localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
             };
 
             UTILITIES.prepareTiledImage = function (image, visSetup) {
@@ -324,13 +324,9 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             };
 
             UTILITIES.makeCacheSnapshot = function(named=true) {
-                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    Dialogs.show($.t('messages.cookiesDisabled', {action: "$('#settings').click()"}), 5000, Dialogs.MSG_WARN);
-                    return;
-                }
-                if (named) recordCache('_cache', namedCookieCache, (shader, i) => shader.name, false);
-                else recordCache('_orderedCache', orderedCookieCache, (shader, i) => i, true);
-                Dialogs.show($.t('messages.cookieConfSaved'), 5000, Dialogs.MSG_INFO);
+                if (named) recordCache('_layers.namedCache', namedCookieCache, (shader, i) => shader.name, false);
+                else recordCache('_layers.orderedCache', orderedCookieCache, (shader, i) => i, true);
+                Dialogs.show($.t('messages.paramConfSaved'), 5000, Dialogs.MSG_INFO);
             };
 
             // load desired shader upon selection

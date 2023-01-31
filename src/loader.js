@@ -333,18 +333,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                         await store.set(_this.id + key, value);
                         return true;
                     } catch (e) {
-                        console.warn("Silent failure of cache setter -> delegate to cookies.");
+                        console.warn("Silent failure of cache setter -> delegate to local storage.");
                     }
                 }
 
-                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    this.warn({
-                        code: "W_CACHE_EXPORT_ERROR",
-                        message: $.t('messages.cookiesDisabled', {action: "$('#settings').click()"})
-                    });
-                    return false;
-                }
-                APPLICATION_CONTEXT._setCookie(this.id + key, value);
+                localStorage.setItem(this.id + key, value);
                 return true;
             };
             this.getCache = async (key, defaultValue=undefined, parse=true) => {
@@ -353,18 +346,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     try {
                         return await store.get(_this.id + key, defaultValue);
                     } catch (e) {
-                        console.warn("Silent failure of cache getter -> delegate to cookies.");
+                        console.warn("Silent failure of cache getter -> delegate to local storage.");
                     }
                 }
 
-                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    this.warn({
-                        code: "W_CACHE_IMPORT_ERROR",
-                        message: $.t('messages.cookiesDisabled', {action: "$('#settings').click()"})
-                    });
-                    return undefined;
-                }
-                let data = APPLICATION_CONTEXT._getCookie(this.id + key, defaultValue, parse);
+                let data = localStorage.getItem(key);
+                if (data === null) return defaultValue;
                 try {
                     return parse && typeof data === "string" ? JSON.parse(data) : data;
                 } catch (e) {
@@ -374,7 +361,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                         message: $.t('error.cacheImportFail',
                             {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
                     });
-                    return undefined;
+                    return defaultValue;
                 }
             };
             this.__ioInitialized = true;
@@ -587,10 +574,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * Store the plugin configuration parameters
          * @param {string} key
          * @param {*} value
-         * @param {boolean} cookies
+         * @param {boolean} cache
          */
-        setOption(key, value, cookies=true) {
-            if (cookies) APPLICATION_CONTEXT._setCookie(key, value);
+        setOption(key, value, cache=true) {
+            if (cache) localStorage.setItem(this.id + key, value);
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
         }
 
@@ -598,14 +587,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * Read the plugin configuration parameters
          * @param {string} key
          * @param {*} defaultValue
+         * @param {boolean} cache
          * @return {*}
          */
-        getOption(key, defaultValue=undefined) {
-            let cookie = APPLICATION_CONTEXT._getCookie(key);
-            if (cookie !== undefined) return cookie;
+        getOption(key, defaultValue=undefined, cache=true) {
+            if (cache) {
+                let cached = localStorage.getItem(this.id + key);
+                if (cached !== null) return cached;
+            }
             let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
                 APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
-            if (value === "false") value = false; //true will eval to true anyway
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
             return value;
         };
 

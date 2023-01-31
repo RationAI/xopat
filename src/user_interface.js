@@ -1028,7 +1028,7 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
             formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
         }
         let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-        APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie);
+        APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie); //todo local store? or persistent store?
         UTILITIES.refreshPage(formData.join(""), plugins);
     };
 })(window);

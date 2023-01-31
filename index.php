@@ -489,16 +489,19 @@ EOF;
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
         layersAvailable: false,
-        getOption(name, defaultValue=undefined) {
-            let cookie = this._getCookie(name);
-            if (cookie !== undefined) return cookie;
+        getOption(name, defaultValue=undefined, cache=true) {
+            if (cache) {
+                let cached = localStorage.getItem(name);
+                if (cached !== null) return cached;
+            }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
                 (defaultValue === undefined ? this.defaultConfig[name] : defaultValue);
-            if (value === "false") value = false; //true will eval to true anyway
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
             return value;
         },
-        setOption(name, value, cookies = false) {
-            if (cookies) this._setCookie(name, value);
+        setOption(name, value, cache=false) {
+            if (cache) localStorage.setItem(name, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             this.config.params[name] = value;
@@ -671,7 +674,7 @@ EOF;
             const microns = imageData.microns;
             const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
             VIEWER.scalebar({
-                pixelsPerMeter: microns * 1e3 || 1,
+                pixelsPerMeter: microns * 1e7 || 1,
                 sizeAndTextRenderer: microns ?
                     OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
                     : (ppm, minSize) => metricPx(ppm, minSize, "px", false),
