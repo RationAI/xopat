@@ -1,19 +1,15 @@
-# WebGL in OpenSeadragon [NEEDS UPDATES]
+# WebGL in OpenSeadragon
 Module for WebGL-based post-processing of images. Supports arrays of images concatenated into one image vertically.
 Multiple images can be post-processed using various strategies (which can be dynamically changed) and the result is
 blended into one resulting image. It is highly customizable and allows for multiple contexts in use.
 
-A bridge javascript file enables plugin-like integration to OpenSeadragon. But you can use this module (except the bridge class obviously) for any suitable purpose, without employing the OpenSeadragon library.
+> A javascript bridge file enables plugin-like integration to OpenSeadragon. But you can use this module (except the bridge class obviously) for any suitable purpose, without employing the OpenSeadragon library.
 
-You can run multiple visualisation goals (ways of pre-defined visualisation style, e.g. what shaders-layers are drawn with what data); 
-and each goal can define arbitrary amount of layers to render into the output canvas, using highly customizable shaders 
-(downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
-in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
 
-Constructors of both `OpenSeadragon.BridgeGL` and `WebGLModule` accept `options` argument
+Constructors of `WebGLModule` accepts `options` argument
 - `options.ready()` function called once the visualisation is prepared to render, for the first time only
 - `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
-- `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function for custom UI html controls (ignored if `htmlControlsId` not set)
+- `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function to customize HTML rendering of the shader controls (ignored if `htmlControlsId` not set)
 - `options.resetCallback()` function called when user changes a value using shader controls and the shader layer requests update: here OSD bridge registers redraw event 
 - `options.visualisationReady(i, visualisation)` function called once a visualisation is processed (which might result in error, in that case `visualisation.error` is set)
 - `options.visualisationInUse(visualisation)` called once every time if the visualisation was sucesfully compiled and linked (e.g. when user re-orders the layers or switches to this new goal)
@@ -24,14 +20,58 @@ Constructors of both `OpenSeadragon.BridgeGL` and `WebGLModule` accept `options`
 - `options.uniqueId` - unique identifier, **must be defined if multiple WebGLModules are running** (note: can be left out for one of them), can contain
 only `[A-Za-z0-9_]*` (can be empty, only numbers and letters with no diacritics or `_`) 
 
-Constructor of `OpenSeadragon.BridgeGL` furthermore expects `useEvaluator()` function callback predicate that handles the decision whether
-this module is going to be used on the given OSD TileSource post-processing. 
+Constructor of `OpenSeadragon.BridgeGL` accepts `openSeaDragonInstance`, a reference to the viewer, `webGLEngine` a referece
+to the webgl module that is being bridged; and `cachedMode` flag to enable or disable OSD caching for post-processed `TiledImage`s.
+ 
 
 ### Setting up the visualisation
 
 Visualisation and data must be set up. Then, you can also add custom shaders if you want and call `prepare()` and `init()`.
+A short example:
+
+``````javascript
+const webglProcessing = new WebGLModule({
+    // htmlControlsId: "div-id",  //if set, shader realtime controls are available 
+    // htmlShaderPartHeader: callback, //function that handles HTML rendering for each layer
+    // debug: t/f,
+    // for other control options, see WebGLModule class
+});
+
+const seaGL = viewer.bridge = new OpenSeadragon.BridgeGL(viewer, webglProcessing, true); //true to enable cache, false to disable
+seaGL.addVisualisation({
+    //here you want to add a visualization with compulsory member "shaders" - object that defines what postprocessing is applied
+    //note that for vanilla OSD protocols, you will not use more than first dataReferences index, example:
+    "name": "My first postprocessing",
+    "shaders": {
+        "id_1": {
+            "name": "Render with heatmap",
+            "type": "heatmap", 
+            "visible": "1", 
+            "dataSources": [0], //usually 0, unless you specify the data array, see below
+            "fixed": false,
+            "params": {} //let take over defaults
+        }
+    }
+});
+
+//requires open event to be fired on OSD, if not, fire it manually
+seaGL.initBeforeOpen();
+
+//or after open event:
+// seaGL.loadShaders(0, () => {
+//     seaGL.initAfterOpen();
+// });
+
+//to attach TiledImage to the renderer, simply call (once TiledImage at given index exists)
+seaGL.addLayer( index );
+``````
 
 #### Visualisation settings
+You can run multiple visualisation goals (ways of pre-defined visualisation style, e.g. what shaders-layers are drawn with what data); 
+and each goal can define arbitrary amount of layers to render into the output canvas, using highly customizable shaders 
+(downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
+in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
+
 An example of valid visualisation goal (object(s) passed to `addVisualisation()`):
 
 ````JSON
@@ -55,14 +95,14 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                                  "interactive": true
                           }, 
                           "use_gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
-                          "use_channel": "b"  //global parameter, sample channel 'b' from the image
+                          "use_channel": "b"  //global parameter, sample channel 'b' from the image, can be any combination of 'rgba' - but the shader used must support the number of channels you create this way 
                    }
             }
       }
 }
 ````
 - [O]`name` - visualisation goal name 
-- [O]`lossless` - default `true` if the data should be sent from the server as 'png' or 'jpg'
+- [O]`lossless` - default `true` if the data should be sent from the server as 'png' or 'jpg', this is not used but you can read this flag later to set up TileSource correctly
 - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - [0]`name` - name of the layer: displayed to the user
@@ -76,12 +116,76 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
         - no keys in `params` field should be required
         - some parameters are global, see more detailed description in `shaders/README.md`
 - [O]`order` - array of shader ID's - preferred order of rendering, if defined, id's of shader definitions that are ommited _do not get rendered and interacted with_        
-#### Data settings
+
+> Getting a list of supported shader types, their controls and control types and their params can be hard, it is a dynamic
+> environment. There is a JS script class that processes the API and extracts this information as a HTML summary.
+
+**Note that** some field names starting with `use_` within `[layer].params` are reserved. Do not name
+your parameters like this. For more detailed info and guidelines on writing shaders, see `shaders/README.md`.
+
+
+### Data settings
 Data must be loaded in compliance with indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
 - the module will automatically extract an ordered subset of the given data in the order in which it expects the data to arrive
-- see `WebGlWrapper.getSources()`
+    - see `WebGLModule.getSources()`
+    
+The idea of working with multiple data sources is:
+  - create bridge and module instances, initialize visualization
+  - read required data sources `WebGLModule::getSources()`, read other information necessary to fetch data such as `WebGlModule::visualization().lossless` flag
+    - do not forget to update correctly (re-initialize tiled image) when UI requests viz goal changes:
 
-#### Custom shader types
+                visualisationChanged: function(oldVis, newVis) {
+                    const seaGL = viewer.bridge,
+                        //we are rendering only on one TiledImage, so seaGL.getWorldIndex() will get us index to replace
+                        index = seaGL.getWorldIndex(),
+                        //read all files necessary to render, a proper subset of WebGLModule.getSources()
+                        sources = seaGL.dataImageSources(); 
+                        //possibly read lossless info from newVis object
+                        
+                    if (!seaGL.disabled()) {
+                        VIEWER.addTiledImage({
+                            tileSource: "", //todo: create the init protocol URL from sources array
+                            index: index,
+                            success: function (e) {
+                                seaGL.addLayer(index);
+                                seaGL.redraw(); //probably not necessary since we will be drawing the new tiled image anyway
+                            }
+                        });
+                    }
+                }
+
+  - add new tiled image to OSD with required properties
+  - bind the created tiled image instance to the bridge using ``OpenSeadragon.BridgeGL::addLayer( ... )``
+
+Your app can then request a configuration like so:
+````json
+{
+      "data": ["image1", "image2"],
+      "shaderSources" : [
+            {
+                 "url": "http://my-shader-url.com/customShader.js",
+                 "headers": {},
+                 "typedef": "new_type"
+            }
+      ],
+      "visualizations": [
+            {
+                  ... config references items in "data" 
+            }
+      ]
+}
+````
+then simply call:
+
+````js
+seaGl.addData(json.data); 
+seaGl.addVisualisation(...json.visualizations);
+````
+
+upon initialization
+
+
+### Custom shader types
 An example of valid custom shader source declaration (object(s) passed to `addCustomShader()`):
 ````JSON
 {
@@ -94,10 +198,8 @@ An example of valid custom shader source declaration (object(s) passed to `addCu
 - [0]`headers` - arbitrary headers
 - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
 
-**Note that** some field names starting with `use_` within `[layer].params` are reserved. Do not name
-your parameters like this. For more detailed info and guidelines on writing shaders, see `shaders/README.md`.
 
-#### Reading from channels
+### Reading from channels
 The shader can specify data references for rendering from nD data sources. You can spacify the chanel to be read,
 note that this option is ignored if the shader _reads all channels instead of a subset_. Reading from all channels
 is discouraged; the shader should specify the number (up to 4) of channels being read instead and let the user specify
@@ -105,26 +207,8 @@ the channels themselves. Note that better is reading one channel from multiple s
  - ``use_channel`` to specify global rule to apply on all unspecified channel readings
  - ``use_channel[X]`` for specific index X in `dataReferences` (e.g. for second element, set `use_channel1` to override)
 
-
-
-### webGLToOSDBridge.js
-Binding of WebGLModule to OpenSeadragon. The API is docummented in the code. A recommended use is:
-```js
-var renderer = new WebGLModule({...});
-var osd = new OpenSeadragon({...}); //init OSD without specifying the TileSources to load - delay the initialization
-var seaGL = new OpenSeadragon.BridgeGL(osd, renderer);
-
-//load shaders now, get prepared for the visualization at index 'atIndex'
-seaGL.loadShaders(atIndex, function() {
-    //fire OpenSeadragon initialization after WebGLModule finished and the rendering can begin
-    osd.open(...);
-});
-//init bridge before OSD 'open' event ocurred
-seaGL.initBeforeOpen(); //calls seaGL.loadShaders(...) if not performed manually
-```
-
 ### webGLWrapper.js
-Wrapper for WebGL, handles all the visualiser-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
+The main file, deifition of `WebGLModule` class, handles all the visualiser-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
 
 ### webGLContext.js
 Includes GlContextFactory definition and its default subclass that implements `getContext()` and returns either `WebGL20` or `WebGL10` that behave as a `State` pattern, providing either WebGL 2.0 (if supported) or WebGL 1.0 (fallback) functionality respectively.

@@ -332,7 +332,7 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Alias for sampleReferenced(textureCoords, 0)
+     * Sample specific texture AS-IS
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
      * @param {boolean} raw whether to output raw value from the texture (do not apply filters)

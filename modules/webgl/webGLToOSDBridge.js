@@ -25,6 +25,7 @@ window.OpenSeadragon.BridgeGL = class {
             this.uid = OpenSeadragon.BridgeGL.getUniqueId();
         }
         this._rendering = new WeakMap();
+        this.imageData = undefined;
     }
 
     static getUniqueId() {
@@ -171,7 +172,7 @@ window.OpenSeadragon.BridgeGL = class {
             console.warn("Invalid action: visualisations have been already loaded.");
             return false;
         }
-        this.imageData = data;
+        this.imageData = data.length === 0 ? undefined : data;
         return true;
     }
 
