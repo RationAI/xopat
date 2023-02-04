@@ -66,7 +66,7 @@ class Playground extends XOpatPlugin {
         UTILITIES.loadModules(function () {
             this.vectorCanvas = VIEWER.fabricjsOverlay({
                 //todo move this to the fabricjs module
-                scale: VIEWER.tools.referencedTiledImage().source.Image.Size.Width,
+                scale: VIEWER.scalebar.getReferencedTiledImage().source.Image.Size.Width,
                 fireRightClick: false,
                 fireMiddleClick: false,
             });

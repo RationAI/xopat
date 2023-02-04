@@ -42,7 +42,7 @@ Note that this is meant mainly for a viewer maintainer to set-up the plugin defa
 - A plugin must inherit from ``XOpatPlugin`` class
     - the constructor is given ``id`` and ``params`` arguments, call `super(id)` and use params at your will
 - Get familiar with both global and ``XOpatPlugin`` API - use it where possible
-
+    - especially, do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
 
 
 ### Interface XOpatPlugin
@@ -217,15 +217,19 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 
 
 
-
 ## Global API
- !!! Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
-approaches !!!
+> !!! Avoid touching directly any properties, attaching custom content to the DOM or inventing your own
+approaches when API is available !!!
  
 First, get familiar with (sorted in importance order):
  - `window.VIEWER` 
-    - OpenSeadragon and `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API for viewing and navigation functionality
-      - focusing certain area, taking screenshots, getting reference to _main_ tiled image, getting pixel size on screen, opening viewer clone and more
+    - OpenSeadragon 
+      - `TileSource` API, ``EventSource`` API for managing the rendering and events (e.g. user input)
+      - `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API for viewing and navigation functionality
+        - focusing certain area, taking screenshots, opening viewer clone and more
+      - `OpenSeadragon.Scalebar` (accessible as `VIEWER.scalebar`) API for measurements
+        - `imagePixelSizeOnScreen` for **cached, optimized** way of converting between image coordinates and window coordinates  
+        - getting reference to _main_ tiled image, getting pixel size on screen,
     - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
     - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
  - `window.USER_INTERFACE`
@@ -237,7 +241,7 @@ First, get familiar with (sorted in importance order):
     - TODO describe this more prominently
  - Third party code (see below)    
  - `window.UIComponents`
-    - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks
+    - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...
  - `window.APPLICATION_CONTEXT`
     - note that this interface is meant for inner logic and you probably do not need to access it
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`

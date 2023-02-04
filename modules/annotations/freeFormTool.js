@@ -62,7 +62,7 @@ OSDAnnotations.FreeFormTool = class {
      * Update cursor indicator radius
      */
     updateCursorRadius() {
-        let screenRadius = this.radius * VIEWER.tools.imagePixelSizeOnScreen() * 2;
+        let screenRadius = this.radius * VIEWER.scalebar.imagePixelSizeOnScreen() * 2;
         if (this._node) {
             this._node.style.width = screenRadius + "px";
             this._node.style.height = screenRadius + "px";
@@ -138,7 +138,7 @@ OSDAnnotations.FreeFormTool = class {
      * @param {number} radius in screen pixels
      */
     setRadius (radius) {
-        let imageTileSource = VIEWER.tools.referencedTiledImage();
+        let imageTileSource = VIEWER.scalebar.getReferencedTiledImage();
         let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
         let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal

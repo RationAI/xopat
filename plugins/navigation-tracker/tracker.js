@@ -21,7 +21,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
     }
 
     refresh() {
-        const conf = VIEWER.tools.referencedTiledImage()?.getBackgroundConfig();
+        const conf = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
         const index = Number.parseInt(conf?.dataReference);
         if (!Number.isInteger(index)) {
             //todo warn?
@@ -71,7 +71,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
                 }
             }
         });
-        this._pixel = VIEWER.tools.imagePixelSizeOnScreen(); //todo compute always against home bounds of navigator in refreshCanvas
+        this._pixel = VIEWER.scalebar.imagePixelSizeOnScreen(); //todo compute always against home bounds of navigator in refreshCanvas
 
         const outputCanvas = _this._renderEngine.gl.canvas;
         new OpenSeadragon.MouseTracker({

@@ -351,7 +351,7 @@ window.OpenSeadragon.BridgeGL = class {
             //if we have OSD TOOLs to-be plugin (?), use it
             if (this.openSD.hasOwnProperty("tools")) {
                 this.imagePixelSizeOnScreen =
-                    this.openSD.tools.imagePixelSizeOnScreen.bind(this.openSD.tools);
+                    this.openSD.scalebar.imagePixelSizeOnScreen.bind(this.openSD.scalebar);
             } else {
                 //just some placeholder
                 console.error("OpenSeadragon has no Tool extension with 'imagePixelSizeOnScreen' function and this " +

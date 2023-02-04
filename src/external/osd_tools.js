@@ -11,7 +11,7 @@ OpenSeadragon.Tools = class {
 
     /**
      * EventSource - compatible event raising with support for async function waiting
-     * @param context EventSrouce instance
+     * @param context EventSource instance
      * @param eventName name of the event to invoke
      * @param eventArgs event args object
      * @return {Promise<void>} promise resolved once event finishes
@@ -42,30 +42,6 @@ OpenSeadragon.Tools = class {
             await loop(index + 1);
         }
         return await loop(0);
-    }
-
-    /**
-     * OpenSeadragon is not accurate when dealing with
-     * multiple tilesources: set your own reference tile source
-     */
-    linkReferenceTileSourceIndex(index) {
-        this.referencedTiledImage = this.viewer.world.getItemAt.bind(this.viewer.world, index);
-    }
-
-    /**
-     * Compute size of one pixel in the image on your screen
-     * @return {number} image pixel size on screen (should be between 0 and 1 in most cases)
-     */
-    imagePixelSizeOnScreen() {
-        let viewport = this.viewer.viewport;
-        let zoom = viewport.getZoom(true);
-        if (this.__cachedZoom !== zoom) {
-            this.__cachedZoom = zoom;
-            let tileSource = this.referencedTiledImage ? this.referencedTiledImage() : viewport; //same API
-            this.__pixelRatio = tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-                tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
-        }
-        return this.__pixelRatio;
     }
 
     /**
@@ -179,7 +155,7 @@ OpenSeadragon.Tools = class {
      * @param {number} outputSize.height
      */
     offlineScreenshot(region, targetSize, onfinish, outputSize=targetSize) {
-        let referencedTiledImage = this.referencedTiledImage();
+        let referencedTiledImage = this.viewer.scalebar.getReferencedTiledImage();
         let referencedSource = referencedTiledImage.source;
 
         function download(tiledImage, level, x, y, onload, onfail) {

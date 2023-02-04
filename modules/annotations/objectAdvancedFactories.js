@@ -188,34 +188,32 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return false;
     }
 
-    _getWithUnit(value, unitSuffix) {
-        if (value < 0.000001) {
-            return value * 1000000000 + " n" + unitSuffix;
-        }
-        if (value < 0.001) {
-            return value * 1000000 + " μ" + unitSuffix;
-        }
-        if (value < 1) {
-            return value * 1000 + " m" + unitSuffix;
-        }
-        if (value >= 1000) {
-            return value / 1000 + " k" + unitSuffix;
-        }
-        return value + " " + unitSuffix;
+    _round(value) {
+        return Math.round(value * 100) / 100;
     }
 
+    // _getWithUnit(value, unitSuffix) {
+    //     if (value < 0.000001) {
+    //         return this._round(value * 1000000000) + " n" + unitSuffix;
+    //     }
+    //     if (value < 0.001) {
+    //         return this._round(value * 1000000) + " μ" + unitSuffix;
+    //     }
+    //     if (value < 1) {
+    //         return this._round(value * 1000) + " m" + unitSuffix;
+    //     }
+    //     if (value >= 1000) {
+    //         return this._round(value / 1000) + " k" + unitSuffix;
+    //     }
+    //     return this._round(value) + " " + unitSuffix;
+    // }
+
     _updateText(line, text) {
-        const tiledImage = VIEWER.tools.referencedTiledImage(),
-            microns = tiledImage.getBackgroundConfig()?.microns || -1;
-        let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
-            strText;
-        if (microns > 0) {
-            strText = this._getWithUnit(
-                Math.round(d * microns / 10000000) / 100, "m"
-            );
-        } else {
-            strText = Math.round(d) + " px";
-        }
+        const tiledImage = VIEWER.scalebar.getReferencedTiledImage(),
+            microns = tiledImage.getBackgroundConfig()?.microns || -1,
+            d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
+            strText = (microns > 0) ? VIEWER.scalebar.toMetricMeasurement(d, "m")
+                : Math.round(d) + " px";
         text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
         return strText;
     }

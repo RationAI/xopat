@@ -532,7 +532,7 @@ EOF;
             if (setup.background.length < 0) {
                 return undefined;
             }
-            const bgConfig = VIEWER.tools.referencedTiledImage()?.getBackgroundConfig();
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
             if (bgConfig) return UTILITIES.fileNameFromPath(setup.data[bgConfig.dataReference], stripSuffix);
             return undefined;
         },
@@ -655,8 +655,7 @@ EOF;
     function updateBackgroundChanged(index) {
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer, or possibly the rendering layers layer
-        VIEWER.tools.linkReferenceTileSourceIndex(index);
-        const tiledImage = VIEWER.tools.referencedTiledImage(),
+        const tiledImage = VIEWER.world.getItemAt(index),
             imageData = tiledImage?.getBackgroundConfig();
 
         const title = $("#tissue-title-header").removeClass('error-container');
@@ -670,29 +669,23 @@ EOF;
             title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
         }
 
-        if (imageData && APPLICATION_CONTEXT.getOption("scaleBar")) {
-            const microns = imageData.microns;
-            const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
-            VIEWER.scalebar({
-                pixelsPerMeter: microns * 1e7 || 1,
-                sizeAndTextRenderer: microns ?
-                    OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
-                    : (ppm, minSize) => metricPx(ppm, minSize, "px", false),
-                stayInsideImage: false,
-                location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
-                xOffset: 5,
-                yOffset: 10,
-                // color: "var(--color-text-primary)",
-                // fontColor: "var(--color-text-primary)",
-                backgroundColor: "rgba(255, 255, 255, 0.5)",
-                fontSize: "small",
-                barThickness: 2
-            });
-        } else {
-            VIEWER.scalebar({
-                destroy: true
-            });
-        }
+        const microns = imageData?.microns;
+        const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
+        VIEWER.makeScalebar({
+            pixelsPerMeter: microns * 1e7 || 1,
+            sizeAndTextRenderer: microns ?
+                OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
+                : (ppm, minSize) => metricPx(ppm, minSize, "px", false),
+            stayInsideImage: false,
+            location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+            xOffset: 5,
+            yOffset: 10,
+            backgroundColor: "rgba(255, 255, 255, 0.5)",
+            fontSize: "small",
+            barThickness: 2,
+            destroy: !APPLICATION_CONTEXT.getOption("scaleBar")
+        });
+        VIEWER.scalebar.linkReferenceTileSourceIndex(index);
     }
 
     let preventedSwap = false;
