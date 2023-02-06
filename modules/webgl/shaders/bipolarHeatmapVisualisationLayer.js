@@ -29,6 +29,13 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "values are of two categories, smallest considered in the middle";
     }
 
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x===1,
+            description: "1D diverging data encoded in opacity"
+        }];
+    }
+
     static defaultControls = {
         colorHigh: {
             default: {type: "color", default: "#ff1000", title: "Color High: "},
@@ -63,10 +70,6 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return vec4(.0);     
     }  
 `;
-    }
-
-    textureChannelSamplingAccepts(count) {
-        return count === 1;
     }
 
     htmlControls() {

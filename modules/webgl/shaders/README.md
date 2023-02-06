@@ -21,7 +21,7 @@ The visualisation setup is used to instantiate to JavaScript shader layer classe
                                  "interactive": true
                           }, 
                           "use_gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
-                          "use_channel": "b"  //global parameter, sample channel 'b' from the image, but make sure "heatmap" supports 1channel data
+                          "use_channel0": "b"  //global parameter, sample channel 'b' from the image, but make sure "heatmap" supports 1channel data
                   }
             }
       }
@@ -56,9 +56,8 @@ Parameters are fully dependent on the shader you use. If our policy is kept then
 #### shader-specific inherited parameters
 There are parameters common to all shaders and define how the layer is treated. Such parameters are specified **directly in**
 params field (such as custom 'color' in the example above):
- - `use_channel` - a shader might work only with grayscale values - in that case, it's preferred when the shader uses `sampleChannel()`
- to respect this value (if set): then, the shader samples the channel given in this parameter
-    - e.g. if `params.channel = "rrr"` the shader will sample the `RED` channel three times and obtain `vec3`
+ - `use_channel[X]` - sample desired channel combination (consists of `rgba`), make sure the specified amount of channels is supported by given shader type
+    - e.g. if `params.use_channel1 = "rrr"` the shader will sample the `RED` channel three times when reading a second texture in `dataReferences` and obtain `vec3`
 
 To specify blending, the params field can specify
  - `use_mode` - with values `"show"` (default alpha blending), `"mask"` or `"mask_clip"` (custom blending with default hard mask implementation)
@@ -96,15 +95,16 @@ class IdentityVisualisationLayer extends VisualisationLayer {
         return "shows the data AS-IS";
     }
 
-    textureChannelSamplingAccepts(count) {
-        //in case we call sampleChannel, the visualization can specify what channel(s) is/are being sampled
-        //to not no run into inconsistent types, specify how many channels this.sampleChannel(...) should have
-        return count === 4;
+    static sources() {
+        return [{
+            channels: 4,
+            description: "4-channel data to "
+        }];
     }
 
     getFragmentShaderExecution() {
         //opacity available by default without doing anything
-        return `return ${this.sample("tile_texture_coords")};`;
+        return `return ${this.sampleChannel("tile_texture_coords")};`;
     }
 }
 ````
@@ -164,7 +164,7 @@ At your disposal are these global variables:
 
 And a member function to sample a texture appropriately: [JavaScript] 
  - `this.sampleChannel(str)` where str is the string representing the sample coordinates, for example in WebGL 2 the result of
- `this.sample('coords.xy')` could be something like `texture(internally_defined_texarray_name, coords.xy).rggr` (where `rggr` comes from the shader configuration)
+ `this.sampleChannel('coords.xy')` could be something like `texture(internally_defined_texarray_name, coords.xy).rggr` (where `rggr` comes from the shader configuration)
 
 
 There are helper functions available so that it is easier to create more advanced, controllable shaders. You can
@@ -172,8 +172,7 @@ expect the object of the constructor to contain anything you wish to receive (e.
 rely on the following functions:
 - reading pixel values
     - `this.filter(value)` does not really read a value, but applies post-processing required for the layer
-    - `this.sampleChannel(textureCoords, textureIndex=0, raw=false)` - sample channel(s) as specified by shader configuration with (raw=false) or without post-processing, **preferred**
-    - `this.sample(textureCoords, textureIndex=0, raw=false)` - sample `vec4` with (raw=false) or without post-processing
+    - `this.sampleChannel(textureCoords, textureIndex=0, raw=false)` - sample channel(s) as specified by shader configuration with (raw=false) or without post-processing
 - sampling controls (the same names as specified within `static defaultControls` map)
     - `this.controlName.sample(str)` to sample particular UI control or texture (or preferred `sampleChannel` with textures) 
         - argument is any GLSL ``float`` value the control should be sampled against
@@ -329,7 +328,7 @@ and having one visualisation goal set-up in the following manner:
      }
 ```
 We can
-- sample the shader in the class with `this.sampleChannel(..)` or `this.sample(...)`
+- sample the shader in the class with `this.sampleChannel(..)`
     - arguments are: `vec2(--texture coordinates--)` string representing sampling coords and index to the `dataReference` array
     - e.g. to sample `"image1"`, call `this.sampleChannel('tile_texture_coords')` or `this.sampleChannel('tile_texture_coords', 0)`
     - e.g. to sample `"image6"`, call `this.sampleChannel('tile_texture_coords', 2)` which maps to third index in `dataReferences`

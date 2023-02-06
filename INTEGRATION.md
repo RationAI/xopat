@@ -268,7 +268,7 @@ The process happens as follows:
    - you get the same data as ``data`` object within `toCanvas(...)` method
    - for WebGL 1.0, `i`th texture is loaded as `TEXTURE_i` - up to max texture units of the given machine
    - for WebGL 2.0, `i`th texture is loaded as `2D_TEXTURE_ARRAY` `i`th element, sampled as texture 3D with `z` coordinate = `i`
-   - you can load the texture any way you like, ignoring the above, but you should make sure that ``sample(index, ...)`` samples `index=i`th texture
+   - you can load the texture any way you like, ignoring the above, but you should make sure that ``sampleChannel(index, ...)`` samples `index=i`th texture
    - all sampling overflows should be wrapped, e.g. overflow of texture coordinates behaves as
      - ``TEXTURE_WRAP_S``
      - ``TEXTURE_WRAP_T``

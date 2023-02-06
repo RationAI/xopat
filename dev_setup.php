@@ -108,7 +108,7 @@ include_once("./config.php");
 
 <script type="text/javascript">
 
-    PredefinedShaderControlParameters.printShadersAndParams("documentation");
+    PredefinedShaderControlParameters.buildShadersAndControlsDocs("documentation");
 
     $(document).off('submit');
 

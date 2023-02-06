@@ -1,12 +1,14 @@
-# WebGL in OpenSeadragon
+# WebGL Module
 Module for WebGL-based post-processing of images. Supports arrays of images concatenated into one image vertically.
 Multiple images can be post-processed using various strategies (which can be dynamically changed) and the result is
 blended into one resulting image. It is highly customizable and allows for multiple contexts in use.
 
-> A javascript bridge file enables plugin-like integration to OpenSeadragon. But you can use this module (except the bridge class obviously) for any suitable purpose, without employing the OpenSeadragon library.
+
+Setting up:
+``include.json`` specifies how to load the module as a series of JS files. `requires` specifies other module dependence.
 
 
-Constructors of `WebGLModule` accepts `options` argument
+Constructor of `WebGLModule` accepts `options` argument
 - `options.ready()` function called once the visualisation is prepared to render, for the first time only
 - `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
 - `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function to customize HTML rendering of the shader controls (ignored if `htmlControlsId` not set)
@@ -19,6 +21,9 @@ Constructors of `WebGLModule` accepts `options` argument
 - `options.debug` - boolean, outputs debug information if true
 - `options.uniqueId` - unique identifier, **must be defined if multiple WebGLModules are running** (note: can be left out for one of them), can contain
 only `[A-Za-z0-9_]*` (can be empty, only numbers and letters with no diacritics or `_`) 
+
+## WebGL in OpenSeadragon
+> A javascript bridge file enables plugin-like integration to OpenSeadragon. But you can use this module (except the bridge class obviously) for any suitable purpose, without employing the OpenSeadragon library.
 
 Constructor of `OpenSeadragon.BridgeGL` accepts `openSeaDragonInstance`, a reference to the viewer, `webGLEngine` a referece
 to the webgl module that is being bridged; and `cachedMode` flag to enable or disable OSD caching for post-processed `TiledImage`s.
@@ -48,7 +53,6 @@ seaGL.addVisualisation({
             "type": "heatmap", 
             "visible": "1", 
             "dataSources": [0], //usually 0, unless you specify the data array, see below
-            "fixed": false,
             "params": {} //let take over defaults
         }
     }
@@ -83,7 +87,6 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                    "type": "color", 
                    "visible": "1", 
                    "dataSources": [1],
-                   "fixed": false,
                    "params": { 
                           "color": "#fa0058", //shader-dependent parameter, set as default value for a default control type specified by the shader itself if not an object
                           "opacity": { //shader-dependent parameter
@@ -95,7 +98,7 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
                                  "interactive": true
                           }, 
                           "use_gamma": 2.0,   //global parameter, apply gamma correction with parameter 2
-                          "use_channel": "b"  //global parameter, sample channel 'b' from the image, can be any combination of 'rgba' - but the shader used must support the number of channels you create this way 
+                          "use_channel0": "b"  //global parameter, sample channel 'b' from the first image, can be any combination of 'rgba' - but the shader used must support the number of channels you create this way 
                    }
             }
       }
@@ -111,7 +114,6 @@ the key defines the data (e.g. path to the pyramidal tif such that that server c
     - [R]`dataReferences` - indices **array** to the `data` array
         - shaders can then reference `data` items using index to the `dataReferences` array
         - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
-    - [O]`fixed` - whether the user is allowed to change the visualisation (rendering mode, type...)
     - [O]`params` - special parameters for defined shader type (see corresponding shader), shader should define fault vaules values that are used if not set
         - no keys in `params` field should be required
         - some parameters are global, see more detailed description in `shaders/README.md`
@@ -181,8 +183,7 @@ then simply call:
 seaGl.addData(json.data); 
 seaGl.addVisualisation(...json.visualizations);
 ````
-
-upon initialization
+upon initialization.
 
 
 ### Custom shader types
@@ -202,13 +203,12 @@ An example of valid custom shader source declaration (object(s) passed to `addCu
 ### Reading from channels
 The shader can specify data references for rendering from nD data sources. You can spacify the chanel to be read,
 note that this option is ignored if the shader _reads all channels instead of a subset_. Reading from all channels
-is discouraged; the shader should specify the number (up to 4) of channels being read instead and let the user specify
+is discouraged; the shader should specify the number of channels being read instead and let the user specify
 the channels themselves. Note that better is reading one channel from multiple sources for flexibility. You can set
- - ``use_channel`` to specify global rule to apply on all unspecified channel readings
  - ``use_channel[X]`` for specific index X in `dataReferences` (e.g. for second element, set `use_channel1` to override)
 
 ### webGLWrapper.js
-The main file, deifition of `WebGLModule` class, handles all the visualiser-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
+The main file, definition of `WebGLModule` class, handles all the visualiser-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
 
 ### webGLContext.js
 Includes GlContextFactory definition and its default subclass that implements `getContext()` and returns either `WebGL20` or `WebGL10` that behave as a `State` pattern, providing either WebGL 2.0 (if supported) or WebGL 1.0 (fallback) functionality respectively.

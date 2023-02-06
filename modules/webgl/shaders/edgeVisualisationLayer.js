@@ -24,6 +24,13 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
         return "highlights edges at threshold values";
     }
 
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x===1,
+            description: "1D data to detect edges on threshold value"
+        }];
+    }
+
     static defaultControls = {
         color: {
             default: {type: "color", default: "#fff700", title: "Color: "},
@@ -38,10 +45,6 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
             accepts: (type, instance) => type === "float"
         },
     };
-
-    textureChannelSamplingAccepts(count) {
-        return count === 1;
-    }
 
     getFragmentShaderDefinition() {
         //here we override so we should call super method to include our uniforms
