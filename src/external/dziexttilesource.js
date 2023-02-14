@@ -175,28 +175,27 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
 
         if (format === "zip") {
             const _this = this;
-            let blackImage = () =>
-                new Promise((resolve, reject) => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = _this.tileSize.width;
-                    canvas.height = _this.tileSize.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+            let blackImage = (resolve, reject) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = _this.tileSize.width;
+                canvas.height = _this.tileSize.height;
+                const ctx = canvas.getContext('2d');
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                    const img = new Image(canvas.width, canvas.height);
-                    img.onload = () => {
-                        //next promise just returns the created object
-                        blackImage = () => new Promise((resolve, reject) => resolve(img));
-                        resolve(img);
-                    };
-                    img.onerror = img.onabort = reject;
-                    img.src = canvas.toDataURL();
-                });
+                const img = new Image(canvas.width, canvas.height);
+                img.onload = () => {
+                    //next promise just returns the created object
+                    blackImage = (ready, _) => ready(img);
+                    resolve(img);
+                };
+                img.onerror = img.onabort = reject;
+                img.src = canvas.toDataURL();
+            };
 
 
             this.downloadTileStart = function (context) {
-                const abort = context.finish.bind(null, undefined);
-                if (context.loadWithAjax) {
+                const abort = context.finish.bind(context, null, undefined);
+                if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
 
@@ -229,24 +228,26 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                             return abort("Empty image response.");
                         }
 
-                        const {zip, entries} = await unzipRaw(blb);
-                        await Promise.all(
+                        const {zip, entries} = await unzipit.unzipRaw(blb);
+                        Promise.all(
                             Object.entries(entries).map(([name, entry]) => {
-                                entry.blob().then(blob => {
-                                    if (blob.length > 0) {
-                                        return new Promise((resolve, reject) => {
+                                return new Promise((resolve, reject) => {
+                                    entry.blob().then(blob => {
+                                        if (blob.size > 0) {
                                             const img = new Image();
                                             img.onload = () => resolve(img);
                                             img.onerror = img.onabort = reject;
                                             img.src = URL.createObjectURL(blob);
-                                        });
-                                    } else return blackImage();
-                                }).catch(abort);
+                                        } else blackImage(resolve, reject);
+                                    });
+                                });
                             })
                         ).then(result =>
                             //we return array of promise responses - images
                             context.finish(result, dataStore.request, undefined)
-                        ).catch(abort);
+                        ).catch(
+                            abort
+                        );
                     },
                     error: function(request) {
                         abort("Image load aborted - XHR error");

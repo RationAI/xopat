@@ -446,6 +446,9 @@ void main() {
             currentVisualisation, imageElement, tileDimension, program, context.gl);
 
         gl.drawArrays.apply(gl, this._drawArrays);
+
+        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualisation,
+            imageElement, tileDimension, program, gl);
         return gl.canvas;
     }
 };
@@ -677,6 +680,9 @@ void main() {
 
         // Draw three points (obtained from gl_VertexID from a static array in vertex shader)
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualisation,
+            imageElement, tileDimension, program, gl);
         return gl.canvas;
     }
 };

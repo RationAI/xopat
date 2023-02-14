@@ -21,8 +21,18 @@ WebGLModule.DataLoader = {
      * @return {HTMLElement} Dom Element
      */
     dataAsHtmlElement: function (data) {
-        //todo arrays :/
-        return data;
+        return {
+            "[object HTMLImageElement]": () => data,
+            "[object HTMLCanvasElement]": () => data,
+            //Image objects in Array, we assume image objects only
+            "[object Array]": function () {
+                const node = document.createElement("div");
+                for (let image of data) {
+                    node.append(image);
+                }
+                return node;
+            }
+        }[toString.apply(data)]();
     },
 
     /**
@@ -44,6 +54,9 @@ WebGLModule.DataLoader = {
          */
         constructor(gl) {
             this._units = [];
+
+            //todo more elegant
+            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
         }
 
         /**
@@ -78,9 +91,24 @@ WebGLModule.DataLoader = {
          * @param {WebGLRenderingContext} gl
          */
         toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            (this._loaders[toString.apply(data)] || (() => throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)))(
+            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
                 this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
+        }
+
+        /**
+         * Todo docs
+         * Texture not necessary to re-initialize since we can reuse it straight away
+         * @param context
+         * @param dataIndexMapping
+         * @param visualisation
+         * @param data
+         * @param tileBounds
+         * @param program
+         * @param gl
+         */
+        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+
         }
 
         /**
@@ -197,9 +225,6 @@ WebGLModule.DataLoader = {
             //Image objects in Array, we assume image objects only
             "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 let index = 0;
-                tileBounds.width = Math.round(tileBounds.width);
-                tileBounds.height = Math.round(tileBounds.height);
-
                 const NUM_IMAGES = data.length;
                 //just load all images and let shaders reference them...
                 for (let i = 0; i < dataIndexMapping.length; i++) {
@@ -256,6 +281,9 @@ WebGLModule.DataLoader = {
         constructor(gl, textureName) {
             this.textureName = textureName;
             this.textureId = gl.createTexture();
+
+            //todo more elegant:
+            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
         }
 
         /**
@@ -286,9 +314,17 @@ WebGLModule.DataLoader = {
          * @param {WebGL2RenderingContext} gl
          */
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            (this._loaders[toString.apply(data)] || (() => throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)))(
+            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
                     this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
+        }
+
+        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            if (Array.isArray(data)) {
+                //need to re-initialize the texture
+                gl.deleteTexture(this.textureId);
+                this.textureId = gl.createTexture();
+            }
         }
 
 
@@ -364,6 +400,8 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
             "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D_ARRAY, self.textureId);
+                gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, data[0].width, data[0].height, data.length+1);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, 0);
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, self.filter);
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, self.filter);
                 gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, self.wrap);

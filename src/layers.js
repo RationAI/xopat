@@ -318,7 +318,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             UTILITIES.prepareTiledImage = function (image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
                 if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
-                    image.source.setFormat("png");
+                    image.source.setFormat("zip"); //todo png allow too
                 }
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
             };
