@@ -582,7 +582,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
         input.innerHTML = "";
-        input.append(WebGLModule.DataLoader.dataToImage(inputData));
+        input.append(WebGLModule.DataLoader.dataAsHtmlElement(inputData));
 
         if (outputData) {
             output.innerHTML = "";

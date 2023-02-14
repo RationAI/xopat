@@ -485,6 +485,11 @@ window.OpenSeadragon.BridgeGL = class {
             return true;
         };
 
+        source.__cached_tileDataToIamge = source.getTileCacheDataAsImage;
+        source.getTileCacheDataAsImage = function(cache) {
+            throw "WebGL Postprocessing works only with canvasses for now!";
+        };
+
         source.__cached_tileDataToRenderedContext = source.getTileCacheDataAsContext2D;
         source.getTileCacheDataAsContext2D = function (cache) {
             if (!cache._renderedContext) {
@@ -525,6 +530,8 @@ window.OpenSeadragon.BridgeGL = class {
         delete source.__cached_destroyTileCache;
         source.getTileCacheData = source.__cached_getTileCacheData;
         delete source.__cached_getTileCacheData;
+        source.getTileCacheDataAsImage = source.__cached_tileDataToIamge;
+        delete source.__cached_tileDataToIamge;
         source.getTileCacheDataAsContext2D = source.__cached_tileDataToRenderedContext;
         delete source.__cached_tileDataToRenderedContext;
         source.getTileHashKey = source.__cached_getTileHashKey;

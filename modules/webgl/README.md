@@ -212,3 +212,73 @@ The main file, definition of `WebGLModule` class, handles all the visualiser-spe
 
 ### webGLContext.js
 Includes GlContextFactory definition and its default subclass that implements `getContext()` and returns either `WebGL20` or `WebGL10` that behave as a `State` pattern, providing either WebGL 2.0 (if supported) or WebGL 1.0 (fallback) functionality respectively.
+
+## Advanced: processing custom raster data
+
+The ``processImage(...)`` method accepts any data an image loader is prepared for. `dataLoader.js` contains
+definitions for loading the data as textures to the GPU. In order to draw custom data, you can either extend or override classes in
+the loader.
+ - ``WebGLModule.DataLoader`` class that ensures data interpretation, by default supports Image and Canvas objects (including arrays of those)
+   - ``dataAsHtmlElement`` function that renders input data in the debug mode, needs a dom element to append the input data to
+   - ``V1_0`` class implementing WebGL 1.0 texture loader
+   - ``V2_0`` class implementing WebGL 2.0 texture loader
+   
+#### Texture Loader
+Class that has the following interface (details are documented in the implementation):
+
+````js
+    constructor(gl);
+    
+    /**
+     * Called when the program is being loaded (set as active)
+     */
+    toBuffers (context, gl, program, wrap, filter, visualisation);
+    
+    /**
+     * Called when tile is processed
+     */
+    toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl);
+    
+    /**
+     * Measure texture size
+     */
+    measure(index);
+    
+    /**
+     * Sample texture
+     */
+    sample(index, vec2coords);
+    
+    /**
+     * Declare elements in shader
+     */
+    declare(indicesOfImages);
+````
+
+Texture loaders by default support ``Canvas`` and `Image` objects. You can either re-implement the whole
+interface to load custom data to the GPU, or provide just the ``toCanvas`` implementation with custom
+mapping support in ``WebGLModule.DataLoader.V[X]_[Y]`` for WebGL X.Y version.
+
+Provided loaders use ``toCanvas`` to load data based on the data `toString.apply(data)` result. By default, 
+image or image arrays are supported for the rendering. Attaching new keys or modyfiing existing ones can
+be easier than implementing the whole loader interface.
+
+````js
+_loaders = {
+    "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);,
+    //Image objects in Array, we assume image objects only
+    "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);
+}
+````
+
+Thus allowing to add new definitions of loaders as such:
+````js
+WebGLModule.DataLoader.V1_0._loaders["<type>"] = function(...) {...};
+````
+with the ``<type>`` as a result of calling `toString.apply(myData)`.
+Note that doing so must conform to the existing environment; each loader uses certain
+texture types and other configuration, this part only takes care of the data loading
+that must conform to the existing context.
+
+## Advanced: processing vector data
+This feature is on the TODO list.

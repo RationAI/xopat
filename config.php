@@ -61,11 +61,8 @@ define('MODULES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . MODULES_FOLDER);
 define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
 
 /**
- * Version is attached to javascript
- * sources so that an update is enforced
- * with change
+ * Version definition is moved to index.php
  */
-define('VERSION', "1.0.1");
 
 /**
  * Default protocol = DZI

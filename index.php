@@ -7,7 +7,7 @@ if (version_compare(phpversion(), '7.1', '<')) {
 require_once("config.php");
 
 global $version, $i18n;
-$version = VERSION;
+$version = '3.1.0';
 $errors_print = "";
 
 set_exception_handler(function (Throwable $exception) {
@@ -213,6 +213,7 @@ $visualisation = json_encode($parsedParams);
     <script src="<?php echo EXTERNAL_SOURCES; ?>js.cookie.js"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.min.js"></script>
     <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.jquery.min.js"></script>
+    <script src="<?php echo EXTERNAL_SOURCES; ?>unzipit.min.js"></script>
 
     <!-- OSD -->
     <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>

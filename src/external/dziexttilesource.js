@@ -172,6 +172,90 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     },
     setFormat: function(format) {
         this.fileFormat = format;
+
+        if (format === "zip") {
+            const _this = this;
+            let blackImage = () =>
+                new Promise((resolve, reject) => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = _this.tileSize.width;
+                    canvas.height = _this.tileSize.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const img = new Image(canvas.width, canvas.height);
+                    img.onload = () => {
+                        //next promise just returns the created object
+                        blackImage = () => new Promise((resolve, reject) => resolve(img));
+                        resolve(img);
+                    };
+                    img.onerror = img.onabort = reject;
+                    img.src = canvas.toDataURL();
+                });
+
+
+            this.downloadTileStart = function (context) {
+                const abort = context.finish.bind(null, undefined);
+                if (context.loadWithAjax) {
+                    abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
+                }
+
+                var dataStore = context.userData;
+                dataStore.request = OpenSeadragon.makeAjaxRequest({
+                    url: context.src,
+                    withCredentials: context.ajaxWithCredentials,
+                    headers: context.ajaxHeaders,
+                    responseType: "arraybuffer",
+                    postData: context.postData,
+                    success: async function(request) {
+                        var blb;
+                        try {
+                            blb = new window.Blob([request.response]);
+                        } catch (e) {
+                            var BlobBuilder = (
+                                window.BlobBuilder ||
+                                window.WebKitBlobBuilder ||
+                                window.MozBlobBuilder ||
+                                window.MSBlobBuilder
+                            );
+                            if (e.name === 'TypeError' && BlobBuilder) {
+                                var bb = new BlobBuilder();
+                                bb.append(request.response);
+                                blb = bb.getBlob();
+                            }
+                        }
+                        // If the blob is empty for some reason consider the image load a failure.
+                        if (blb.size === 0) {
+                            return abort("Empty image response.");
+                        }
+
+                        const {zip, entries} = await unzipRaw(blb);
+                        await Promise.all(
+                            Object.entries(entries).map(([name, entry]) => {
+                                entry.blob().then(blob => {
+                                    if (blob.length > 0) {
+                                        return new Promise((resolve, reject) => {
+                                            const img = new Image();
+                                            img.onload = () => resolve(img);
+                                            img.onerror = img.onabort = reject;
+                                            img.src = URL.createObjectURL(blob);
+                                        });
+                                    } else return blackImage();
+                                }).catch(abort);
+                            })
+                        ).then(result =>
+                            //we return array of promise responses - images
+                            context.finish(result, dataStore.request, undefined)
+                        ).catch(abort);
+                    },
+                    error: function(request) {
+                        abort("Image load aborted - XHR error");
+                    }
+                });
+            }
+        } else {
+            this.downloadTileStart = OpenSeadragon.TileSource.prototype.downloadTileStart;
+        }
     },
 
     getTileHashKey: function(level, x, y, url, ajaxHeaders, postData) {
