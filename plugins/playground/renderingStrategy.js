@@ -14,7 +14,7 @@ Playground.ServerPixelStrategy = class {
         this.seaGL.reset();
         this.seaGL.addVisualisation(visualization);
         //todo allow just not setting at all if not needed
-        this.seaGL.addData(...new Array(imageCount).fill("_g_"));
+        this.seaGL.setData(...new Array(imageCount).fill("_g_"));
     }
 
     initVisualization(onloaded) {

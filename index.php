@@ -881,18 +881,17 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         updateBackgroundChanged(referenceImage);
         const eventOpts = {};
 
-        //private API
+
         const seaGL = VIEWER.bridge;
         if (APPLICATION_CONTEXT.config.visualizations.length > 0 && seaGL) {
             const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
             const activeVis = seaGL.visualization();
             if (layerWorldItem) {
-                UTILITIES.prepareTiledImage(layerWorldItem, activeVis);
+                UTILITIES.prepareTiledImage(layerPosition,
+                    layerWorldItem, activeVis);
 
                 $("#panel-shaders").css('display', 'block');
                 $("#global-opacity").css('display', 'initial');
-
-                seaGL.addLayer(layerPosition);
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
@@ -907,8 +906,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
         } else {
             $("#global-opacity").css('display', 'none');
         }
-
-        handleSyntheticEventFinish();
+        handleSyntheticEventFinish(eventOpts);
     }
 
     //fired when all TiledImages are on their respective places

@@ -17,15 +17,11 @@
         }
     }
 
-    const namedCookieCache = parseStore('_layers.namedCache');
-    const orderedCookieCache = parseStore('_layers.orderedCache');
-
-    window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+    function parseVisualization() {
         function isset(x, type="string") {
             return x && typeof x === type;
         }
-
-        const visualizations = APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
+        return APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
             if (!isset(visualisationTarget.name)) {
                 visualisationTarget.name = $.t('main.shaders.defaultTitle');
             }
@@ -46,8 +42,8 @@
                 }
 
                 if (!isset(layer.name)) {
-                    let temp = data.substring(Math.max(0, data.length-24), 24);
-                    if (temp.length !== data.length) temp  = "..." + temp;
+                    let temp = data.substring(Math.max(0, data.length - 24), 24);
+                    if (temp.length !== data.length) temp = "..." + temp;
                     layer.name = source + ": " + temp;
                 }
 
@@ -63,7 +59,13 @@
             }
             return shaderCount > 0;
         });
+    }
 
+    const namedCookieCache = parseStore('_layers.namedCache');
+    const orderedCookieCache = parseStore('_layers.orderedCache');
+
+    window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+        const visualizations = parseVisualization();
         if (visualizations.length <= 0) {
             return APPLICATION_CONTEXT.disableRendering();
         }
@@ -143,7 +145,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
-                                UTILITIES.prepareTiledImage(e.item, newVis);
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -155,7 +157,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
-                                UTILITIES.prepareTiledImage(e.item, newVis);
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -182,7 +184,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         let seaGL = VIEWER.bridge;
         seaGL.addVisualisation(...visualizations);
-        seaGL.addData(...APPLICATION_CONTEXT.config.data);
+        seaGL.setData(...APPLICATION_CONTEXT.config.data);
         if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
@@ -315,12 +317,13 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
             };
 
-            UTILITIES.prepareTiledImage = function (image, visSetup) {
+            UTILITIES.prepareTiledImage = function (index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
                 if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
                     image.source.setFormat("zip"); //todo png allow too
                 }
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+                seaGL.addLayer(index);
             };
 
             UTILITIES.makeCacheSnapshot = function(named=true) {

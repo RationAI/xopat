@@ -180,7 +180,7 @@ Your app can then request a configuration like so:
 then simply call:
 
 ````js
-seaGl.addData(json.data); 
+seaGl.setData(json.data); 
 seaGl.addVisualisation(...json.visualizations);
 ````
 upon initialization.
