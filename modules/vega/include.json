@@ -1,12 +1,10 @@
 {
-  "id": "vega",
-  "name": "VEGA: The visualization grammar",
-  "includes" : [
-    {
-      "src": "https://cdn.jsdelivr.net/npm/vega@5",
-      "crossOrigin": "anonymous",
-      "integrity": "sha384-AZeKeCsE6MsYa+2n+zcsJXGRycl6LzqjRZ4lVHVpL6dNmO15ySXwh7BViztvSCMO"
-    }
-  ],
-  "requires": []
+    "id": "vega",
+    "name": "VEGA: The visualization grammar",
+    "includes" : [{
+        "src": "https://cdn.jsdelivr.net/npm/vega@5",
+        "crossOrigin": "anonymous",
+        "integrity": "sha384-AZeKeCsE6MsYa+2n+zcsJXGRycl6LzqjRZ4lVHVpL6dNmO15ySXwh7BViztvSCMO"
+    }],
+    "requires": []
 }

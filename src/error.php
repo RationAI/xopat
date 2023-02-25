@@ -31,8 +31,7 @@ $description = $description ? $i18n->t($description) : $description;
     <meta charset="utf-8">
     <title>Error</title>
 
-    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>style.css">
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
+    <?php require_core("env"); ?>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 </head>

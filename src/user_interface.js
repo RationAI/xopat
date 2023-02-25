@@ -138,11 +138,13 @@
                 return;
             }
 
+            const monaco = APPLICATION_CONTEXT.url + APPLICATION_CONTEXT.env.monaco;
+
             this._showCustomModalImpl(parentId, title, `
-<script type="text/javascript" src="${APPLICATION_CONTEXT.rootAbsPath}src/external/monaco/loader.js"><\/script>
+<script type="text/javascript" src="${monaco}loader.js"><\/script>
 <script type="text/javascript">
 require.config({
-  paths: { vs: "${APPLICATION_CONTEXT.rootAbsPath}src/external/monaco" }
+  paths: { vs: "${monaco}" }
 });
 const DEFAULT_EDITOR_OPTIONS = {
   value: \`${inputText}\`,
@@ -275,10 +277,13 @@ window.addEventListener("beforeunload", (e) => {
 <html lang="en">
     <head>
         <title>${title}</title>
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootAbsPath}src/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.rootAbsPath}src/external/primer_css.css">
+        <!--TODO dirty hardcoded path-->
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-        <script src="https://code.jquery.com/jquery-3.5.1.min.js"><\/script><!--todo integrity tags-->
+        <script src="https://code.jquery.com/jquery-3.5.1.min.js"
+            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
+            crossorigin="anonymous"></script>
         <script type="text/javascript">
             //route to the parent context
             window.confirm = function(message) {
@@ -954,7 +959,7 @@ To apply changes, please <a onclick="UTILITIES.refreshPage()" class="pointer">re
 </svg>
 <span class="f3-light text-shadow" style="position: absolute; top: 80px; right: 84px;">xOpat</span>
 <span class="f3-light text-shadow" style="position: absolute; top: 97px;right: 71px;">Viewer</span>
-<span class="f6" style="color: var(--color-text-tertiary);position: absolute;top: 73px;right: 70px;">v${APPLICATION_CONTEXT.version}</span>
+<span class="f6" style="color: var(--color-text-tertiary);position: absolute;top: 73px;right: 70px;">v${APPLICATION_CONTEXT.env.version}</span>
 <span class="f3-light header-sep">Appearance</span><br>
 Theme &emsp; ${inputs.select({
                 classes: "select-sm",

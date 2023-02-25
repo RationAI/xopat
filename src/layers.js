@@ -134,14 +134,14 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     VIEWER.raiseEvent('visualisation-used', visualisation);
                 },
                 visualisationChanged: function(oldVis, newVis) {
-                    seaGL.createUrlMaker(newVis);
+                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.getOption("secureMode"));
                     let index = seaGL.getWorldIndex(),
                         sources = seaGL.dataImageSources();
 
                     if (seaGL.disabled()) {
                         seaGL.enable();
                         VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
@@ -152,7 +152,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                         });
                     } else {
                         VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             replace: true,
@@ -192,7 +192,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         seaGL.createUrlMaker = function(vis, isSecureMode) {
             if (isSecureMode && vis) delete vis.protocol;
-            seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.layersProtocol));
+            seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
             return seaGL.urlMaker;
         };
 
@@ -319,8 +319,12 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             UTILITIES.prepareTiledImage = function (index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
-                if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
-                    image.source.setFormat("zip"); //todo png allow too
+                if (image.source.setFormat) {
+                    const async = APPLICATION_CONTEXT.getOption("extendedDziAsync", false);
+                    const lossless = !visSetup.hasOwnProperty("lossless") || visSetup.lossless;
+                    const format = lossless ? (async? "png":"zip") : "jpg";
+                    //todo allow png/jpg selection with zip
+                    image.source.setFormat(format, async);
                 }
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
                 seaGL.addLayer(index);

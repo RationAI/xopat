@@ -1,22 +1,23 @@
 <?php
-
+error_reporting(E_ALL);
+ini_set('display_errors', 'On');
 if (version_compare(phpversion(), '7.1', '<')) {
     die("PHP version required is at least 7.1.");
 }
 
-require_once("config.php");
+require_once "src/core.php";
 
-global $version, $i18n;
-$version = '3.1.0';
-$errors_print = "";
+global $i18n;
 
 set_exception_handler(function (Throwable $exception) {
     global $i18n;
     if (!isset($i18n)) {
-        require_once PROJECT_SOURCES . 'i18m.class.php';
+        require_once ABS_ROOT . 'i18m.class.php';
         $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
     }
-    throwFatalErrorIf(true, "error.unknown", "", $exception->getMessage());
+    throwFatalErrorIf(true, "error.unknown", "",$exception->getMessage() .
+        " in " . $exception->getFile() . " line " . $exception->getLine() .
+        "<br>" . $exception->getTraceAsString());
 });
 
 function hasKey($array, $key) {
@@ -29,15 +30,9 @@ function isBoolFlagInObject($object, $key) {
     return (gettype($v) === "string" && $v !== "" && $v !== "false") || $v;
 }
 
-function printJSConsole($message, $is_error=true) {
-    global $errors_print;
-    $fn = $is_error ? "error" : "warn";
-    $errors_print .= "console.$fn(`$message`);";
-}
-
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
-        require_once(PROJECT_SOURCES . "error.php");
+        require_once(ABS_ROOT . "error.php");
         show_error($title, $description, $details, $_GET["lang"] ?? 'en');
         exit;
     }
@@ -91,12 +86,12 @@ $bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
 $locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
 
 //now we can translate - translation known
-require_once PROJECT_SOURCES . 'i18n.class.php';
+require_once ABS_ROOT . 'i18n.class.php';
 i18n::$debug = $is_debug;
 $i18n = i18n::default($locale, LOCALES_ROOT);
 
-//load modules and plugins after translation is ready
-require_once(PROJECT_SOURCES . "plugins.php");
+//load plugins
+require_once ABS_ROOT . "plugins.php";
 
 foreach ($parsedParams->background as $bg) {
     $bg = (object)$bg;
@@ -113,38 +108,28 @@ $firstTimeVisited = count($_COOKIE) < 1 && !$bypassCookies;
 
 if (isset($parsedParams->visualizations)) {
     //requires webgl module
-    $MODULES["webgl"]->loaded = true;
+    $MODULES["webgl"]["loaded"] = true;
 }
 
 /**
- * Plugins+Modules loading: load required parts of the application
+ * Detect required presence of plugins, 'permaLoaded' is supported only by the APP, not the loader - detect here
  */
 $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 $configPlugins = (object)$parsedParams->plugins;
-foreach ($PLUGINS as $key => $plugin) {
-    if (!$plugin->id) {
-        $errors_print .= "console.warn('Plugin ($key) removed: probably include.json misconfiguration.');";
-        unset($PLUGINS[$key]);
-    }
-
-    if (file_exists(PLUGINS_FOLDER . $plugin->directory . "/style.css")) {
-        $plugin->styleSheet = PLUGINS_FOLDER . $plugin->directory . "/style.css?v=$version";
-    }
-
-    $hasParams = isset($configPlugins->{$plugin->id});
-
-    $plugin->loaded = !isset($plugin->error) &&
+foreach ($PLUGINS as $key => &$plugin) {
+    $hasParams = isset($configPlugins->{$plugin["id"]});
+    $plugin["loaded"] = !isset($plugin["error"]) &&
         $hasParams
-            || (isset($plugin->permaLoad) && $plugin->permaLoad) //param in the static config
-            || in_array($plugin->id, $pluginsInCookies);
+            || (isset($plugin["permaLoad"]) && $plugin["permaLoad"]) //param in the static config
+            || in_array($plugin["id"], $pluginsInCookies);
 
     //make sure all modules required by plugins are also loaded
-    if ($plugin->loaded) {
+    if ($plugin["loaded"]) {
         if (!$hasParams) {
-            $parsedParams->plugins->{$plugin->id} = (object)array();
+            $parsedParams->plugins->{$plugin["id"]} = (object)array();
         }
-        foreach ($plugin->modules as $modId) {
-            $MODULES[$modId]->loaded = true;
+        foreach ($plugin["modules"] as $modId) {
+            $MODULES[$modId]["loaded"] = true;
         }
     }
 }
@@ -162,16 +147,8 @@ $visualisation = json_encode($parsedParams);
     <link rel="apple-touch-icon" sizes="180x180" href="<?php echo ASSETS_ROOT; ?>apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="<?php echo ASSETS_ROOT; ?>favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="<?php echo ASSETS_ROOT; ?>favicon-16x16.png">
-    <!--<link rel="manifest" href="./assets/site.webmanifest">-->
     <link rel="mask-icon" href="<?php echo ASSETS_ROOT; ?>safari-pinned-tab.svg" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
-
-    <link rel="stylesheet" href="<?php echo ASSETS_ROOT; ?>style.css?v=$version">
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
-    <!--
-    Possible external dependency
-    <link href="https://unpkg.com/@primer/css@^16.0.0/dist/primer.css" rel="stylesheet" />
-    -->
 
     <!--Remember WARNS/ERRORS to be able to export-->
     <script type="text/javascript">
@@ -196,44 +173,24 @@ $visualisation = json_encode($parsedParams);
                 defaultWarn.apply(window.console, arguments);
             };
         })();
-
-        <?php echo $errors_print; ?>
     </script>
 
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <?php require_core("env"); ?>
 
+    <!-- TODO move these to local dependencies -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <!-- jquery -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"
         integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
         crossorigin="anonymous"></script>
-
     <script src="config_meta.js"></script>
 
-    <!-- basic utilities-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>js.cookie.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.min.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>i18next.jquery.min.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>unzipit.min.js"></script>
 
-    <!-- OSD -->
-    <script src="<?php echo OPENSEADRAGON_BUILD; ?>"></script>
-
-    <!--OSD extensions-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>dziexttilesource.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>emptytilesource.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>osd_tools.js?v=<?php echo $version?>"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>scalebar.js?v=<?php echo $version?>"></script>
-
-    <!--Tutorials-->
-    <script src="<?php echo EXTERNAL_SOURCES; ?>scrollTo.min.js"></script>
-    <script src="<?php echo EXTERNAL_SOURCES; ?>kinetic-v5.1.0.min.js"></script>
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.css">
-    <script src="<?php echo EXTERNAL_SOURCES; ?>enjoyhint.min.js"></script>
-
-    <script src="<?php echo PROJECT_SOURCES; ?>loader.js"></script>
-
-    <!--UI Classes-->
-    <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
+    <?php require_libs(); ?>
+    <?php require_openseadragon(); ?>
+    <?php require_external(); ?>
+    <?php require_core("loader"); ?>
+    <?php require_core("deps"); ?>
 </head>
 <body style="overflow: hidden;">
 <!-- OSD viewer -->
@@ -380,8 +337,10 @@ EOF;
     /*---------- APPLICATION_CONTEXT and viewer data ----------*/
     /*---------------------------------------------------------*/
 
-    const PLUGINS = <?php echo json_encode((object)$PLUGINS)?>;
+    const PLUGINS = <?php echo json_encode((object)$PLUGINS) ?>;
     const MODULES = <?php echo json_encode((object)$MODULES) ?>;
+    const ENV = <?php echo json_encode((object)$CORE) ?>;
+
     const runLoader = initXOpatLoader(PLUGINS, MODULES,
         '<?php echo PLUGINS_FOLDER ?>', '<?php echo MODULES_FOLDER ?>', '<?php echo VERSION ?>');
 
@@ -407,16 +366,15 @@ EOF;
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
         secureMode: false,
+        extendedDziAsync: false,
     };
 
-    const sameSite = JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`);
     const cookies = Cookies;
-
     Cookies.withAttributes({
-        path: JSON.parse(`"<?php echo JS_COOKIE_PATH ?>"`) || undefined,
-        expires: JSON.parse(`<?php echo JS_COOKIE_EXPIRE ?>`) || undefined,
-        sameSite: JSON.parse(`"<?php echo JS_COOKIE_SAME_SITE ?>"`) || undefined,
-        secure: typeof sameSite === "boolean" ? sameSite : undefined
+        path: ENV.client.js_cookie_path,
+        expires: ENV.client.js_cookie_expire,
+        sameSite: ENV.client.js_cookie_same_site,
+        secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
     });
 
     //default parameters not extended by setup.params (would bloat link files)
@@ -457,32 +415,11 @@ EOF;
         get defaultConfig() {
            return defaultSetup;
         },
-        get version() {
-            return '<?php echo VERSION ?>';
-        },
-        get backgroundServer() {
-            return '<?php echo BG_TILE_SERVER ?>';
-        },
-        get backgroundProtocol() {
-            return '<?php echo BG_DEFAULT_PROTOCOL ?>';
-        },
-        get backgroundProtocolPreview() {
-            return '<?php echo BG_DEFAULT_PROTOCOL_PREVIEW ?>';
-        },
-        get layersServer() {
-            return '<?php echo LAYERS_TILE_SERVER ?>';
-        },
-        get layersProtocol() {
-            return '<?php echo LAYERS_DEFAULT_PROTOCOL ?>';
+        get env() {
+            return ENV;
         },
         get url() {
-            return '<?php echo SERVER . $_SERVER["REQUEST_URI"]; ?>';
-        },
-        get rootAbsPath() {
-            return '<?php echo VISUALISATION_ROOT_ABS_PATH ?>';
-        },
-        get rootPath() {
-            return '<?php echo VISUALISATION_ROOT ?>';
+            return this.env.client.domain + this.env.client.path;
         },
         get postData() {
             return postData;
@@ -569,7 +506,7 @@ EOF;
             dirty: false
         }
     };
-    metaStore.initPersistentStore('<?php echo METADATA_SERVER ?>');
+    metaStore.initPersistentStore(ENV.client.meta_store);
 
     //preventive error message, that will be discarded after the full initialization, no translation
     window.onerror = function (message, file, line, col, error) {
@@ -625,7 +562,7 @@ EOF;
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
-        ajaxHeaders: <?php echo json_encode((object)COMMON_HEADERS); ?>,
+        ajaxHeaders: ENV.client.headers,
         splitHashDataForPost: true,
         subPixelRoundingForTransparency:
             navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
@@ -710,10 +647,10 @@ EOF;
         const image = APPLICATION_CONTEXT.config.background[bgIndex],
             imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
             sourceUrlMaker = new Function("path,data", "return " +
-                (image.protocol || APPLICATION_CONTEXT.backgroundProtocol));
+                (image.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
 
         let prevImage = VIEWER.world.getItemAt(0);
-        let url = sourceUrlMaker(APPLICATION_CONTEXT.backgroundServer, imagePath);
+        let url = sourceUrlMaker(APPLICATION_CONTEXT.env.client.image_group_server, imagePath);
         preventedSwap = true;
         VIEWER.addTiledImage({
             tileSource: url,
@@ -822,11 +759,11 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                 if (APPLICATION_CONTEXT.getOption("secureMode")) delete image.protocolPreview;
 
                 const previewUrlmaker = new Function("path,data", "return " +
-                    (image.protocolPreview || APPLICATION_CONTEXT.backgroundProtocolPreview));
+                    (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
                 html += `
 <div onclick="UTILITIES.swapBackgroundImages(${idx});"
 class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
-                    previewUrlmaker(APPLICATION_CONTEXT.backgroundServer, imagePath)
+                    previewUrlmaker(APPLICATION_CONTEXT.env.client.image_group_server, imagePath)
                 }') center; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
             }
 
@@ -1023,8 +960,8 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             for (let i = background.length-1; i >= 0; i--) {
                 const bg = background[i];
                 if (isSecureMode) delete bg.protocol;
-                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[bg.dataReference]));
+                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+                toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
             }
 
             imageOpener = imageOpenerCreator(e => {
@@ -1037,8 +974,8 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
             const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
             let selectedImage = background[selectedIndex];
             if (isSecureMode) delete selectedImage.protocol;
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.backgroundProtocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.backgroundServer, data[selectedImage.dataReference]));
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
 
             imageOpener = imageOpenerCreator(e => {
                 const index = e.userArg;
@@ -1076,7 +1013,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
                 activeVisIndex,
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
-                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.layersServer, VIEWER.bridge.dataImageSources()));
+                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, VIEWER.bridge.dataImageSources()));
                     openAll(1);
                 }
             );
@@ -1088,23 +1025,9 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
 })(window);
     </script>
 
-    <!-- UI -->
-    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>user_interface.js"></script>
-
-    <!--Event listeners, Utilities, Exporting...-->
-    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>scripts.js"></script>
-
-    <!--Visualization setup-->
-    <script type="text/javascript" src="<?php echo PROJECT_SOURCES; ?>layers.js"></script>
-
-    <!--Modules-->
 <?php
-resolveDependencies($MODULES, $version);
-foreach ($MODULES as $_ => $mod) {
-    if ($mod->loaded) {
-        printDependencies(MODULES_FOLDER, $mod);
-    }
-}
+require_core("app");
+require_modules();
 ?>
 
     <!--Plugins Loading-->
@@ -1163,16 +1086,9 @@ foreach ($MODULES as $_ => $mod) {
 })(window);
     </script>
 
-    <!-- Permanently Loaded Plugins -->
-    <?php
-    foreach ($PLUGINS as $_ => $plugin) {
-        if ($plugin->loaded) {
-            echo "<div id='script-section-{$plugin->id}'>";
-            printDependencies(PLUGINS_FOLDER, $plugin);
-            echo "</div>";
-        }
-    }
-   ?>
+<?php
+require_plugins();
+?>
 
 <script>
     APPLICATION_CONTEXT.prepareViewer(

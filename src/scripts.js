@@ -4,7 +4,7 @@
 
     //https://github.com/mrdoob/stats.js
     if (APPLICATION_CONTEXT.getOption("debugMode")) {
-        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.rootPath+'src/external/stats.js';document.head.appendChild(script);})()
+        (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.url+'src/external/stats.js';document.head.appendChild(script);})()
     }
 
     // opacity of general layer available everywhere
@@ -268,7 +268,7 @@ form.submit();
     window.UTILITIES.getForm = constructExportVisualisationForm;
 
     window.UTILITIES.copyUrlToClipboard = function () {
-        let baseUrl = APPLICATION_CONTEXT.rootAbsPath + "redirect.php#";
+        let baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
 
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {

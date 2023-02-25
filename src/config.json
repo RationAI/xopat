@@ -1,0 +1,119 @@
+{
+    /* General xOpat Metadata */
+    "name": "xOpat",
+    "version":" 1.1.0",
+    /* Where xOpat redirects the user in case of error */
+    "gateway": "../",
+    /* Active configuration in the "client" */
+    "active_client": "localhost",
+    /* Client Server dependent configurations, at runtime "client" is replaced by its "active_client" child  */
+    "client": {
+        "localhost": {
+            /* The Viewer Domain Full URL including protocol */
+            "domain": "http://localhost/",
+            /*
+             The Path to the Viewer at given domain, so that 'domain+path+index.php' is the viewer index.
+             Use null to let the system detect the path automatically.
+            */
+            "path": "",
+            /* TODO */
+            "metadata_server": "",
+            /*
+               Image Group Server for data not processed by visualizations, specifies the server and protocol
+               and the tissue file preview URL getter. Both latter are javascript one-liners resulting in a string.
+               Available are 'path' (image server URL) and 'data' (image identifier such as image path).
+               Server URL can be relative, if on the same server domain as the viewer.
+             */
+            "image_group_server": "/iipsrv.fcgi",
+            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
+            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
+            /*
+               Data Group Server for visualized data, specifies the server and protocol as javascript one-liner
+               resulting in a string. Available are 'path' (image server URL) and 'data'
+               (string array of image identifiers such as image path).
+               Server URL can be relative, if on the same server domain as the viewer.
+             */
+            "data_group_server": "/iipsrv.fcgi",
+            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
+            /* TODO */
+            "headers": {},
+            /* Cookie Setup */
+            "js_cookie_expire": 365,
+            "js_cookie_path": "/",
+            "js_cookie_same_site": "",
+            "js_cookie_secure": ""
+        },
+        "prod": {
+            "domain": "https://rationai-vis.ics.muni.cz/",
+            "path": null,
+            "metadata_server": "",
+            "image_group_server": "/iipsrv-martin/iipsrv.fcgi",
+            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
+            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
+            "data_group_server": "/iipsrv-martin/iipsrv.fcgi",
+            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
+            "headers": {},
+            "js_cookie_expire": 365,
+            "js_cookie_path": "/",
+            "js_cookie_same_site": "None",
+            "js_cookie_secure": "false"
+        }
+    },
+
+    /**
+     * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.
+     */
+    "monaco": "src/libs/monaco/",
+    "openseadragon": "openseadragon/build/openseadragon/openseadragon.js",
+
+    /**
+     * JS Source files. Each group conforms to pre-determined folder path.
+     */
+    "js": {
+        // src/libs
+        "libs": {
+            "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
+            "kinetic": "kinetic-v5.1.0.min.js",
+            "scroll_to": "scrollTo.min.js",
+            "unzip_it": "unzipit.min.js"
+        },
+        // src/external
+        "external": {
+            "common": [
+                "dziexttilesource.js",
+                "emptytilesource.js",
+                "enjoyhint.js",
+                "js.cookie.js",
+                "osd_tools.js",
+                "scalebar.js"
+            ]
+        },
+        /**
+         * Unlike other keys, keys inside 'src' are pre-determined and must be kept:
+         * "env" sets up the browser environment - styles, todo: icons, coding libraries (jQuery)
+         * "loader" is the core component module functionality, loaded as soon as possible.
+         * "deps" are UI dependencies, loaded before JS index code.
+         * "app" contains the core files, loaded after JS index code.
+         */
+        "src": {
+            //"env": "",
+            "loader": "loader.js",
+            "deps": ["ui_components.js", "shader_configurator.js"],
+            "app": ["user_interface.js", "scripts.js", "layers.js"]
+        }
+    },
+
+    /**
+     * Css files shadow the JS structure, with custom keys except for "src"
+     */
+    "css": {
+        "libs": {
+        },
+        "external": {
+            "enjoyhint": "enjoyhint.css"
+        },
+        "src": {
+            "env": ["libs/primer_css.css", "assets/style.css", "assets/xopat.css"]
+        }
+    }
+}
