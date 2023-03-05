@@ -320,11 +320,15 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             UTILITIES.prepareTiledImage = function (index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
                 if (image.source.setFormat) {
-                    const async = APPLICATION_CONTEXT.getOption("extendedDziAsync", false);
+                    const mode = APPLICATION_CONTEXT.getOption("extendedDziMode", "sync");
+                    const async = mode === "async";
                     const lossless = !visSetup.hasOwnProperty("lossless") || visSetup.lossless;
-                    const format = lossless ? (async? "png":"zip") : "jpg";
+                    const format = lossless ? (async ? "png" : mode) : "jpg";
                     //todo allow png/jpg selection with zip
                     image.source.setFormat(format, async);
+                }
+                if (image.source.setAllData) {
+                    image.source.setAllData(VIEWER.bridge.dataImageSources());
                 }
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
                 seaGL.addLayer(index);

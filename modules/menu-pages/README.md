@@ -6,6 +6,7 @@ array of objects, each object contains:
 
 - [R]`title` - the page menu button title
 - [O]`icon` - material icon name
+- [O]`id` - if set, you can open the menu page programmatically using this ID
 - [O]`subtitle` - if set, the page subtitle, otherwise same as title
 - [O]`main` - if `false` (default), the page is attached to the previous main page, the first object ignores this property, always main
 - [R]`page` - a list of nodes of UI building blocks to generate data reports, where each node contains:
@@ -111,6 +112,15 @@ Note that this might not be the newest docs or miss ad-hoc appended functions: i
      * @return {string} HTML for content text
     */
     text: function (options) 
+    /**
+     * Render button
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.title
+     * @param {string} options.action
+     * @return {string} HTML for button
+     */
+    button: function (options)
     /**
      * Render newline
      * @param options no options supported as of now

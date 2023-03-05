@@ -346,28 +346,7 @@ EOF;
 
     const setup = <?php echo $visualisation ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
-    const defaultSetup = {
-        locale: "en",
-        customBlending: false,
-        debugMode: false,
-        webglDebugMode: false,
-        scaleBar: true,
-        statusBar: true,
-        viewport: undefined,
-        activeBackgroundIndex: 0,
-        activeVisualizationIndex: 0,
-        grayscale: false,
-        tileCache: true,
-        preventNavigationShortcuts: false,
-        permaLoadPlugins: true,
-        bypassCookies: false,
-        theme: "auto",
-        stackedBackground: false,
-        maxImageCacheCount: 1200,
-        webGlPreferredVersion: "2.0",
-        secureMode: false,
-        extendedDziAsync: false,
-    };
+    const defaultSetup = ENV.setup;
 
     const cookies = Cookies;
     Cookies.withAttributes({

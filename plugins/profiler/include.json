@@ -5,6 +5,6 @@
         "profile.js"
     ],
     "version": "1.0.0",
-    "modules": ["snapshots"],
+    "modules": ["snapshots", "menu-pages"],
     "permaLoad": false
 }

@@ -170,6 +170,18 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
         return `<p class="${options.classes}">${options.content}</p>`;
     },
     /**
+     * Render button
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.title
+     * @param {string} options.action
+     * @return {string} HTML for button
+     */
+    button: function (options) {
+        options = $.extend({classes: "", content: ""}, options);
+        return `<button class="btn ${options.classes}" onclick="${options.action}">${options.title}</button>`;
+    },
+    /**
      * Render newline
      * @param options no options supported as of now
      */

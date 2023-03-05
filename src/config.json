@@ -59,6 +59,38 @@
             "js_cookie_secure": "false"
         }
     },
+    /**
+     * The Viewer Default Settings, all overrideable through params configuration.
+     */
+    "setup": {
+        // depends on available locales in locales/ folder
+        "locale": "en",
+        "customBlending": false,
+        "debugMode": false,
+        "webglDebugMode": false,
+        "scaleBar": true,
+        "statusBar": true,
+        // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
+        // point is in the viewport coordinate system of OpenSeadragon
+        "viewport": null,
+        // default active indexes for image (background) and data (visualization) group
+        "activeBackgroundIndex": 0,
+        "activeVisualizationIndex": 0,
+        "grayscale": false,
+        "tileCache": true,
+        "preventNavigationShortcuts": false,
+        "permaLoadPlugins": true,
+        "bypassCookies": false,
+        // can be dimmed, dark, light, auto
+        "theme": "auto",
+        "stackedBackground": false,
+        "maxImageCacheCount": 1200,
+        // can be 1.0 or 2.0
+        "webGlPreferredVersion": "2.0",
+        "secureMode": false,
+        // can be "zip", "png", "jpg" or "async"
+        "extendedDziMode": "zip"
+    },
 
     /**
      * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.

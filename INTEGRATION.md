@@ -156,14 +156,34 @@ the ``config.php`` default protocols to conform to the protocol configuration ph
 
 An example is already existing Extended Dzi implementation.
 
-> Such protocol MUST still return the actual data concatenated vertically
-> with missing images as black tiles - except you define your own custom data pipeline.
+> Such protocol MUST return the actual data concatenated vertically, or use another
+> way of delivering the data in desired order (such as `zip`), the internal renderer
+> can natively work with concatenated image or image arrays.
+> Missing images must be present as black tiles - either in array or concatenated at the right position.
+
+### Synchronous VS Asynchronous Protocols
+We prefer for the visualisation data to come in synchronous requests due to scalability.
+It is a fact that most image servers do not support queries for multiple images at once;
+therefore it is possible to create custom protocols that implement desired approach.
+The best example is the ``ExtendedDZI`` protocol implementation that supports
+both synchronous and asynchronous transfer, which you can relate to when implementing the below.
+
+Step by step for asynchronous transfer implementation (demonstrated on DeepZoom protocol). Some steps might seem difficult, please check the [Advanced Data API model documentation](https://openseadragon.github.io/examples/advanced-data-model/).
+ 1. First, you need to configure the viewer so that only one image is sent in the configuration phase, e.g. setting 
+  > "data_group_protocol": \`${path}?Deepzoom=${data[0]}.dzi\`
+ 2. Now, the OSD will recognize the image array requests as a basic DZI protocol. Additionally, implement custom protocol, register it and make sure it can process your server initialization response, see [``configure`` method](https://openseadragon.github.io/docs/OpenSeadragon.TileSource.html#configure).
+ 3. Since in our example we re-use DZI, we will have to implement all data fetching manually. We use OSD Advanced data API to override required functions in the default DZI Protocol implementation,
+the important part is that a) we suppose the metadata match across all the files (dimensions, tile size) and b) we get all
+the files we require by implementing a new method ``setAllData(data)`` that will get called (if exists) after initialization with the list of all required data.
+4. We now re-implement a data fetching that awaits all tile data of given ``level``, ``x`` and ``y`` coordinates (can be forwarded to the downloading method within the
+post data) and calls finish with an array of images.
 
 ### Custom Data Pipeline
 You actually do not have to even return the data in vertical image as said above. But,
 in order to be able to do that you must define how the data is 
-[stored within the system -- todo link to the new data API OSD docs after release](https://github.com/openseadragon/openseadragon/pull/2148)
-as well as how to load it to the GPU.
+[stored within the system](https://openseadragon.github.io/examples/advanced-data-model/)
+as well as how to load it to the GPU, unless you call ``finish`` with either vertically concatenated image or an image array.
+Note that canvas objects are accepted too.
 
 #### Custom Data GPU Loading (WebGL)
 The WebGL module responsible for interactive visualizations supports
