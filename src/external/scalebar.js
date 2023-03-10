@@ -21,21 +21,15 @@
             'OpenSeadragon version 2.0.0+');
     }
 
-    $.Viewer.prototype.scalebar = function(options) {
-        if (options.destroy) {
-            if (this.scalebarInstance) {
-                this.scalebarInstance.destroy();
-                delete this.scalebarInstance;
-            }
-            return;
-        }
-
-        if (!this.scalebarInstance) {
+    $.Viewer.prototype.makeScalebar = function(options) {
+        if (!this.scalebar) {
             options = options || {};
             options.viewer = this;
-            this.scalebarInstance = new $.Scalebar(options);
+            this.scalebar = new $.Scalebar(options);
+        } else if (options.destroy) {
+            this.scalebar.destroy();
         } else {
-            this.scalebarInstance.refresh(options);
+            this.scalebar.refresh(options);
         }
     };
 
@@ -125,13 +119,47 @@
         this.refreshHandler = function() {
             self.refresh();
         };
-        this.viewer.addHandler("open", this.refreshHandler);
-        this.viewer.addHandler("animation", this.refreshHandler);
-        this.viewer.addHandler("resize", this.refreshHandler);
+
+        if (options.destroy) {
+            this._active = false;
+        } else {
+            this.viewer.addHandler("open", this.refreshHandler);
+            this.viewer.addHandler("animation", this.refreshHandler);
+            this.viewer.addHandler("resize", this.refreshHandler);
+            this._active = true;
+        }
     };
 
     $.Scalebar.prototype = {
+        /**
+         * Referenced tile image getter used for measurements
+         */
+        getReferencedTiledImage: function () {},
+        /**
+         * OpenSeadragon is not accurate when dealing with
+         * multiple tilesources: set your own reference tile source
+         */
+        linkReferenceTileSourceIndex: function(index) {
+            this.getReferencedTiledImage = this.viewer.world.getItemAt.bind(this.viewer.world, index);
+        },
+        /**
+         * Compute size of one pixel in the image on your screen
+         * @return {number} image pixel size on screen (should be between 0 and 1 in most cases)
+         */
+        imagePixelSizeOnScreen: function() {
+            let viewport = this.viewer.viewport;
+            let zoom = viewport.getZoom(true);
+            if (this.__cachedZoom !== zoom) {
+                this.__cachedZoom = zoom;
+                let tileSource = this.getReferencedTiledImage() || viewport; //same API
+                this.__pixelRatio = tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
+                    tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+            }
+            return this.__pixelRatio;
+        },
+
         destroy: function() {
+            this._active = false;
             this.viewer.removeHandler("open", this.refreshHandler);
             this.viewer.removeHandler("animation", this.refreshHandler);
             this.viewer.removeHandler("resize", this.refreshHandler);
@@ -247,7 +275,7 @@
             this.divElt.style.display = "";
 
             var props = this.sizeAndTextRenderer(
-                this.pixelsPerMeter * this.viewer.tools.imagePixelSizeOnScreen(), this.minWidth
+                this.pixelsPerMeter * this.imagePixelSizeOnScreen(), this.minWidth
             );
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
@@ -387,6 +415,10 @@
             var location = this.getScalebarLocation();
             newCtx.drawImage(scalebarCanvas, location.x, location.y);
             return newCanvas;
+        },
+        //todo proprietary function, does not respect units, just metric
+        toMetricMeasurement: function (pixels, suffix) {
+            return getWithUnitRounded(pixels / this.pixelsPerMeter, suffix);
         }
     };
 
@@ -545,6 +577,22 @@
         }
         if (value >= 1000) {
             return value / 1000 + " k" + unitSuffix;
+        }
+        return getWithSpaces(value / 1000, "k" + unitSuffix);
+    }
+
+    function getWithUnitRounded(value, unitSuffix) {
+        if (value < 0.000001) {
+            return (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
+        }
+        if (value < 0.001) {
+            return (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
+        }
+        if (value < 1) {
+            return (Math.round(value * 100000) / 100) + " m" + unitSuffix;
+        }
+        if (value >= 1000) {
+            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
         return getWithSpaces(value / 1000, "k" + unitSuffix);
     }

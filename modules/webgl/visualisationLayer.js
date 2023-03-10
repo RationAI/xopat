@@ -50,7 +50,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} unique id under which is the shader registered
      */
     static type() {
-        throw "Type must be specified!";
+        throw "VisualisationLayer::type() Type must be specified!";
     }
 
     /**
@@ -58,7 +58,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} name of the shader (user-friendly)
      */
     static name() {
-        throw "Name must be specified!";
+        throw "VisualisationLayer::name() Name must be specified!";
     }
 
     /**
@@ -66,7 +66,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} optional description
      */
     static description() {
-        return "WebGL shader";
+        return "VisualisationLayer::description() WebGL shader must provide description.";
     }
 
     /**
@@ -79,13 +79,13 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Declare the number of data sources it reads from
+     * Declare the number of data sources it reads from (how many dataSources indexes should the shader contain)
      * @return {[{}]} array of source specifications:
-     *  channels: the number of channels expected at most in the
+     *  acceptsChannelCount: predicate that evaluates whether given number of channels (argument) is acceptable
      *  [optional] description: the description of the source - what it is being used for
      */
     static sources() {
-        return [{channels: 1}];
+        throw "VisualisationLayer::sources() Shader must specify channel acceptance predicates for each source it uses!";
     }
 
     /**
@@ -103,6 +103,25 @@ WebGLModule.VisualisationLayer = class {
      *
      * use: controlId: false to disable a specific control (e.g. all shaders
      *  support opacity by default - use to remove this feature)
+     *
+     *
+     * Additionally, use_[...] value can be specified, such controls enable shader
+     * to specify default or required values for built-in use_[...] params. example:
+     * {
+     *     use_channel0: {
+     *         default: "bg"
+     *     },
+     *     use_channel1: {
+     *         required: "rg"
+     *     },
+     *     use_gamma: {
+     *         default: 0.5
+     *     }
+     * }
+     * reads by default for texture 1 channels 'bg', second texture is always forced to read 'rg',
+     * textures apply gamma filter with 0.5 by default if not overridden
+     * todo: allow to use_[filter][X] to distinguish between textures
+     *
      * @member {object}
      */
     static defaultControls = {};
@@ -124,19 +143,10 @@ WebGLModule.VisualisationLayer = class {
         //use with care...
         this._rebuild = privateOptions.rebuild;
 
+        this._buildControls(options);
         this.resetChannel(options);
         this.resetMode(options);
         this.resetFilters(options);
-        this._buildControls(options);
-    }
-
-    /**
-     * Predicate that checks how many channels are supported by certain shader
-     * @param {number} channelCount
-     * @return boolean
-     */
-    textureChannelSamplingAccepts(channelCount) {
-        throw "VisualisationLayer::textureChannelSamplingAccepts must be implemented!";
     }
 
     /**
@@ -148,8 +158,7 @@ WebGLModule.VisualisationLayer = class {
      *  WITHIN THE GLOBAL SPACE MUST BE
      *  ESCAPED WITH UNIQUE ID: this.uid
      *
-     *  DO NOT SAMPLE TEXTURE MANUALLY: use
-     *  this.sample(...) or this.sampleChannel(...) to generate the code
+     *  DO NOT SAMPLE TEXTURE MANUALLY: use this.sampleChannel(...) to generate the code
      *
      *  WHEN OVERRIDING, INCLUDE THE OUTPUT OF THIS METHOD AT THE BEGINNING OF THE NEW OUTPUT.
      *
@@ -159,6 +168,8 @@ WebGLModule.VisualisationLayer = class {
         let controls = this.constructor.defaultControls,
             html = [];
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             if (this.hasOwnProperty(control)) {
                 let code = this[control].define()?.trim();
                 if (code) html.push(code);
@@ -172,8 +183,7 @@ WebGLModule.VisualisationLayer = class {
      * must always return a vec4 value, otherwise the visualization
      * will fail to compile (this code actually runs inside a vec4 function).
      *
-     *  DO NOT SAMPLE TEXTURE MANUALLY: use
-     *  this.sample(...) or this.sampleChannel(...) to generate the code
+     *  DO NOT SAMPLE TEXTURE MANUALLY: use this.sampleChannel(...) to generate the code
      *
      * @return {string}
      */
@@ -193,6 +203,8 @@ WebGLModule.VisualisationLayer = class {
         let controls = this.constructor.defaultControls,
             html = [];
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             if (this.hasOwnProperty(control)) {
                 this[control].glDrawing(program, dimension, gl);
             }
@@ -208,6 +220,8 @@ WebGLModule.VisualisationLayer = class {
         let controls = this.constructor.defaultControls,
             html = [];
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             if (this.hasOwnProperty(control)) {
                 this[control].glLoaded(program, gl);
             }
@@ -223,6 +237,8 @@ WebGLModule.VisualisationLayer = class {
         let controls = this.constructor.defaultControls,
             html = [];
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             if (this.hasOwnProperty(control)) {
                 this[control].init();
             }
@@ -237,6 +253,8 @@ WebGLModule.VisualisationLayer = class {
         let controls = this.constructor.defaultControls,
             html = [];
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             if (this.hasOwnProperty(control)) {
                 html.push(this[control].toHtml(true));
             }
@@ -332,23 +350,6 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
-     * Alias for sampleReferenced(textureCoords, 0)
-     * @param {string} textureCoords valid GLSL vec2 object as string
-     * @param {number} otherDataIndex index of the data in self.dataReference JSON array
-     * @param {boolean} raw whether to output raw value from the texture (do not apply filters)
-     * @return {string} code for appropriate texture sampling within the shader
-     */
-    sample(textureCoords, otherDataIndex=0, raw=false) {
-        let refs = this.__visualisationLayer.dataReferences;
-        if (otherDataIndex >= refs.length) {
-            return 'vec4(0.0)';
-        }
-        let sampled = this.webglContext.getTextureSamplingCode(refs[otherDataIndex], textureCoords);
-        if (raw) return sampled;
-        return this.filter(sampled);
-    }
-
-    /**
      * Sample only one channel (which is defined in options)
      * @param {string} textureCoords valid GLSL vec2 object as string
      * @param {number} otherDataIndex index of the data in self.dataReference JSON array
@@ -359,7 +360,7 @@ WebGLModule.VisualisationLayer = class {
      */
     sampleChannel(textureCoords, otherDataIndex=0, raw=false) {
         let refs = this.__visualisationLayer.dataReferences;
-        const chan = this.__channels[otherDataIndex] || this.__channel;
+        const chan = this.__channels[otherDataIndex];
 
         if (otherDataIndex >= refs.length) {
             switch (chan.length) {
@@ -475,12 +476,14 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Set sampling channel
      * @param {object} options
-     * @param {string} options.use_channel chanel to sample
+     * @param {string} options.use_channel[X] chanel swizzling definition to sample
      */
     resetChannel(options) {
-        const parseChannel = (name, def) => {
-            if (options.hasOwnProperty(name)) {
-                let channel = this.loadProperty(name, options[name]);
+        const parseChannel = (name, def, sourceDef) => {
+            const predefined = this.constructor.defaultControls[name];
+
+            if (options.hasOwnProperty(name) || predefined) {
+                let channel = predefined?.required || this.loadProperty(name, options[name]) || predefined?.default;
 
                 if (!channel
                     || typeof channel !== "string"
@@ -490,7 +493,7 @@ WebGLModule.VisualisationLayer = class {
                     channel = def;
                 }
 
-                if (!this.textureChannelSamplingAccepts(channel.length)) {
+                if (!sourceDef.acceptsChannelCount(channel.length)) {
                     throw `${this.constructor.name()} does not support channel length for channel: ${channel}`;
                 }
 
@@ -499,9 +502,7 @@ WebGLModule.VisualisationLayer = class {
             }
             return def;
         };
-
-        this.__channel = parseChannel("use_channel", "r");
-        this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, this.__channel));
+        this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, "r", source));
     }
 
     /**
@@ -510,11 +511,12 @@ WebGLModule.VisualisationLayer = class {
      * @param {string} options.use_mode blending mode to use: "show" or "mask"
      */
     resetMode(options) {
+        const predefined = this.constructor.defaultControls.use_mode;
         if (options.hasOwnProperty("use_mode")) {
-            this._mode = this.loadProperty("use_mode", options.use_mode);
+            this._mode = predefined?.required || this.loadProperty("use_mode", options.use_mode);
             if (this._mode !== options.use_mode) this.storeProperty("use_mode", this._mode);
         } else {
-            this._mode = "show";
+            this._mode = predefined?.default || "show";
         }
 
         this.__mode = this.constructor.modes[this._mode] || "show";
@@ -529,9 +531,15 @@ WebGLModule.VisualisationLayer = class {
         this.__scalePrefix = [];
         this.__scaleSuffix = [];
         let THIS = this.constructor;
-        for (let key in options) {
-            if (options.hasOwnProperty(key) && THIS.filters.hasOwnProperty(key)) {
-                let value = this.loadProperty(key, options[key]);
+        for (let key in THIS.filters) {
+            const predefined = this.constructor.defaultControls[key];
+            let value = predefined?.required;
+            if (value === undefined) {
+                if (options.hasOwnProperty(key)) value = this.loadProperty(key, options[key]);
+                else value = predefined?.default;
+            }
+
+            if (value !== undefined) {
                 let filter = THIS.filters[key](value);
                 this.__scalePrefix.push(filter[0]);
                 this.__scaleSuffix.push(filter[1]);
@@ -560,6 +568,8 @@ WebGLModule.VisualisationLayer = class {
 
         for (let control in controls) {
             if (controls.hasOwnProperty(control)) {
+                if (control.startsWith("use_")) continue;
+
                 let buildContext = controls[control];
                 if (!buildContext) continue;
                 this[control] = WebGLModule.UIControls.build(this, control, options[control],

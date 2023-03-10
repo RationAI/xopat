@@ -30,6 +30,13 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color scale";
     }
 
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x===1,
+            description: "1D data mapped to color map"
+        }];
+    }
+
     constructor(id, options, privateOptions) {
         super(id, options, privateOptions);
 
@@ -80,10 +87,6 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
 
     defaultColSteps(length) {
         return [...Array(length).keys()].forEach(x => x+1);
-    }
-
-    textureChannelSamplingAccepts(count) {
-        return count === 1;
     }
 
     init() {

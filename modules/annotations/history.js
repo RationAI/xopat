@@ -371,13 +371,13 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             //show such that the annotation would fit on the screen three times
             let offX = bbox.width,
                 offY = bbox.height;
-            let target = VIEWER.tools.referencedTiledImage().imageToViewportRectangle(bbox.left-offX*1.5,
+            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportRectangle(bbox.left-offX*1.5,
                 bbox.top-offY*1.5, bbox.width+offX*3, bbox.height+offY*3);
 
             VIEWER.tools.focus({bounds: target});
         } else {
             let cx = bbox.left + bbox.width / 2, cy = bbox.top + bbox.height / 2;
-            let target = VIEWER.tools.referencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
             VIEWER.viewport.panTo(target, false);
             VIEWER.viewport.applyConstraints();
         }

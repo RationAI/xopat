@@ -478,7 +478,7 @@ OSDAnnotations.PolygonUtilities = {
         // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
-        let tolerance = 7 / VIEWER.tools.imagePixelSizeOnScreen();
+        let tolerance = 7 / VIEWER.scalebar.imagePixelSizeOnScreen();
         points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
         points = this._simplifyDouglasPeucker(points, tolerance);
 
@@ -489,7 +489,7 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = Math.pow((10 - 9*quality) / VIEWER.tools.imagePixelSizeOnScreen(), 2);
+        let tolerance = Math.pow((10 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen(), 2);
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
     },
 
@@ -849,7 +849,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         }
         this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
 
-        this._currentPixelSize = VIEWER.tools.imagePixelSizeOnScreen();
+        this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
 
         let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
         for (let i = 0; i < tiles.length; i++) {
@@ -860,7 +860,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
             this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
             let canvas = this._renderEngine.processImage(
-                tile.getImage(), tile.sourceBounds, 0, this._currentPixelSize
+                tile.cacheImageRecord?.getData() || tile.__data, tile.sourceBounds, 0, this._currentPixelSize
             );
             tile.annotationCanvas.width = tile.sourceBounds.width;
             tile.annotationCanvas.height = tile.sourceBounds.height;
@@ -1031,11 +1031,11 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     toGlobalPointXY (x, y) {
-		return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+		return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 	}
 
 	toGlobalPoint (point) {
-		return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(point);
+		return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(point);
 	}
 
 	isValidPixel(eventPosition) {

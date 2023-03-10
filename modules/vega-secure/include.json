@@ -1,13 +1,13 @@
 {
-  "id": "vega-secure",
-  "name": "VEGA: The visualization grammar (with secure interpreter)",
-  "includes" : [
-    {
-      "src": "https://cdn.jsdelivr.net/npm/vega-interpreter@1",
-      "crossOrigin": "anonymous",
-      "integrity": "sha384-WTWdb9mGVEJxYBHrkBY8E6M01GTcUxvw3cbOF5kblEx0Z3tZZHJdYQqEOY1F7ruW"
-    },
-    "init.js"
-  ],
-  "requires": ["vega"]
+    "id": "vega-secure",
+    "name": "VEGA: The visualization grammar (with secure interpreter)",
+    "includes" : [
+        {
+            "src": "https://cdn.jsdelivr.net/npm/vega-interpreter@1",
+            "crossOrigin": "anonymous",
+            "integrity": "sha384-WTWdb9mGVEJxYBHrkBY8E6M01GTcUxvw3cbOF5kblEx0Z3tZZHJdYQqEOY1F7ruW"
+        },
+        "init.js"
+    ],
+    "requires": ["vega"]
 }

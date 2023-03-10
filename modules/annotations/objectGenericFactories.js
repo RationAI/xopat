@@ -853,7 +853,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
                 this._context.addHelperAnnotation(this._initPoint);
             } else {
                 if (Math.sqrt(Math.pow(this._initPoint.left - x, 2) +
-                    Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.tools.imagePixelSizeOnScreen()) {
+                    Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.scalebar.imagePixelSizeOnScreen()) {
                     this.finishIndirect();
                     return;
                 }
@@ -947,7 +947,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.tools.imagePixelSizeOnScreen(),
+            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
@@ -959,7 +959,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     //todo add to factory as some general functions
     _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
+        return Math.pow(1 / VIEWER.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 };
 
@@ -1204,7 +1204,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.tools.imagePixelSizeOnScreen() * relativeDiff, 2);
+        return Math.pow(1 / VIEWER.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 
 
@@ -1236,7 +1236,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.tools.imagePixelSizeOnScreen(),
+            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,

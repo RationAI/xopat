@@ -6,8 +6,18 @@ Here we discuss further possibilities and corner cases.
 
 ## Cloning & Building
 
+The viewer can be used AS-IS. Its configuration can be done through ``env/env.json`` file. Certain
+things must be set up correctly (depends on the server the viewer runs on). The viewer (as well as OpenSeadragon)
+use ``grunt`` command line tool. It can be installed as `npm install -g grunt-cli`.
+
+To build the configuration file example, run
+
+> ``npm install && grunt env``
+
+##### OpenSeadragon
+
 The viewer builds on OpenSeadragon - a _proxy_ repository can be found here: https://github.com/RationAI/openseadragon.git.
-You can use the original repository - here you just have the compatibility confidence.
+You can use the original repository - here you just have guaranteed compatibility.
 
 In order to install the library you have to clone it and generate the source code:
 
@@ -19,116 +29,20 @@ In order to install the library you have to clone it and generate the source cod
 >
 > you should see `build/` folder. For more info on building see [the guide](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
 
-Optionally, you can get the OpenSeadragon code from somewhere (**compatiblity not guartanteed**) and playce it under
-a custom folder - just update the ``config.php`` path to the library.
+Optionally, you can get the OpenSeadragon code from somewhere (**v 4.1.0+**) and place it under
+a custom folder - just update the path to the library.
 
 
 
-## Plugins API
+## Plugins&Modules API
 Each plugin can perform custom tasks that might depend on some service. After you manage to successfully run
-the viewer and some plugin feature does not work properly, please check the plugin README to learn what is needed
-to fix the issue.
+the viewer and some plugin feature does not work properly, please check the generated ENV example files. There might be
+configurations you need to adjust.
 
 
 ## Setting up the viewer: client server
-xOpat runs on PHP, a PHP server is needed to run it. The setup is pretty
-standard and many options (WampServer, Apache, ngnix...) are available.
-
-The viewer uses ``config.php`` to configure and customize its behaviour:
-````php
-//path to the viewer CORE code
-define('PROJECT_ROOT', '');
-//path to the viewer CORE code
-define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
-//path to the viewer MODULES code
-define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
-//path to the viewer PLUGINS code
-define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
-
-//plugins and modules can be removed and added at will,
-//the only requirement is an existence of `include.json`
-//file within. See README files for each. 
-
-//url path-part to the viewer (without domain), i.e. to the main index.php file
-define('VISUALISATION_ROOT', dirname($_SERVER['SCRIPT_NAME'])); 
-//path to external sources
-define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
-//path to assets
-define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
-//path to CORE locales
-define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
-
-//path to OpenSeadragon build
-define('OPENSEADRAGON_BUILD', './openseadragon/build/openseadragon/openseadragon.js');
-
-// use http:// OR https://
-define('PROTOCOL', "https://");
-// define the server host name including scheme (protocol)
-define('SERVER', PROTOCOL . $_SERVER['HTTP_HOST']);
-//auto domain: ($_SERVER['HTTP_HOST'] != 'localhost') ? $_SERVER['HTTP_HOST'] : false
-    
-//define cookies behaviour 
-define('JS_COOKIE_EXPIRE', 365); //days
-define('JS_COOKIE_PATH', "/");
-define('JS_COOKIE_SAME_SITE', "None");
-define('JS_COOKIE_SECURE', "false");
-
-/* 
- * DEFAULT IMAGE SERVER DEFINITION: 
- * NOTE: THESE SERVERS CAN BE OVERRIDEN VIA CONFIGURATION 
- */
-
-//define background server endpoint
-//a server that can handle regular images
-define('BG_TILE_SERVER', "https://some.url/iipsrv.fcgi"); 
-
-//define data server endpoint
-//a server that can handle image arrays, can be the same server but does not have to
-define('LAYERS_TILE_SERVER', "https://some.other.url/iipsrv.fcgi"); 
-
-
-//the whole URL to the viewer
-define('VISUALISATION_ROOT_ABS_PATH', SERVER . VISUALISATION_ROOT);
-//the whole URL to assets
-define('EXTERNAL_SOURCES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . EXTERNAL_SOURCES);
-//the whole URL to modules
-define('MODULES_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . MODULES_FOLDER);
-//the whole URL to plugins
-define('PLUGINS_ABS_PATH', VISUALISATION_ROOT_ABS_PATH . "/" . PLUGINS_FOLDER);
-
-/**
- * Version is attached to javascript
- * sources so that an update is enforced
- * with change
- */
-define('VERSION', "1.0.1");
-
-/**
- * Default protocol = DZI
- * one-liner javascript expression with two available variables:
- *  - path: server URL
- *  - data: requested images ids/paths (comma-separated if multiple)
- *  - do not use " symbol as this is used to convert the value to string (or escape, e.g. \\")
- *
- * preview is an url creator for whole image preview fetching
- */
-define('BG_DEFAULT_PROTOCOL', '`${path}?Deepzoom=\${data}.dzi`');
-define('BG_DEFAULT_PROTOCOL_PREVIEW', '`${path}?Deepzoom=\${data}_files/0/0_0.jpg`');
-define('LAYERS_DEFAULT_PROTOCOL', '`${path}#DeepZoomExt=\${data.join(",")}.dzi`');
-
-/**
- * Headers used to fetch data from image servers
- */
-define('COMMON_HEADERS', array());
-
-/**
- * Path/URL to a context page
- * (where user should be offered to go in case of failure)
- */
-define('GATEWAY', '../index.php');
-````
-
-The viewer is now running and listening for requests with JSON configurations
+After you succesfully set up correct conbfiguration values (see `env/README.md`),
+the viewer is now running and listening for requests with JSON configurations
 (details in `src/README.md`). There is a small issue: although the viewer can
 request images from any server (the php configuration only sets up defaults),
 the browser might not _accept_ responses from such servers (see CORS policy).
@@ -189,7 +103,10 @@ server needs.
 
 ### (Data) Image Server Requirements
 The _data group_ is fetched as one request per visualization.
-That means an array of tiles is fetched from multiple files at once.
+That means an array of tiles is fetched from multiple files at once. This 
+might be problem for your image server that does not support image array queries.
+Our IIPServer modification supports Extended Deep Zoom protocol described below.
+This protocol can fallback to async DeepZoom mode by fetching images one-by-one.
 
 #### Extended DZI - the request
 We modified DZI protocol to support this feature - the client
@@ -212,24 +129,21 @@ The configuration response should
 - have root element is expected to be ``<ImageArray>`` tag
     - ``rationai.fi.muni.cz/deepzoom/images`` as its `xmlns` property or `namespaceURI`
 - the children nodes are individual Image nodes as in DZI
-    - we expect ``Format`` presence - e.g. `jpg` or `png`
-        - see ``OpenSeadragon.imageFormatSupported()`` for supported list
+    - we expect ``Format`` presence - `jpg`, `png` or `zip`
 - optionally, root element can be ``<Error>`` with `<Message>` child
 - for all missing files in the request
   - the image node should have width and height set to 0 (or negative)
   - if all images are missing, no subsequent requests are sent
 
 Expected response from the server is a vertically-concatenated
-tiles image in the requested order. 
-Missing tiles should be replaced with a black (zero) image (with required bandwidth).
+tiles image in the requested order; or a zip file (based on `format`). 
+Missing tiles should be replaced with a black (zero) image (with required bandwidth)
+or an empty entry in case of zip files.
 The concatenated image must have the same bandwidth as the highest bands count
 across all tiles.
 
 The protocol does not assume server ability to derive inconsistent levels, 
 it is programmed so that the deepest _common_ level is fetched only.
-
-In future, we will add support for ZIP instead of concatenation which
-could significantly help with performance.
 
 
 ### Custom Image Protocols
@@ -242,14 +156,34 @@ the ``config.php`` default protocols to conform to the protocol configuration ph
 
 An example is already existing Extended Dzi implementation.
 
-> Such protocol MUST still return the actual data concatenated vertically
-> with missing images as black tiles - except you define your own custom data pipeline.
+> Such protocol MUST return the actual data concatenated vertically, or use another
+> way of delivering the data in desired order (such as `zip`), the internal renderer
+> can natively work with concatenated image or image arrays.
+> Missing images must be present as black tiles - either in array or concatenated at the right position.
+
+### Synchronous VS Asynchronous Protocols
+We prefer for the visualisation data to come in synchronous requests due to scalability.
+It is a fact that most image servers do not support queries for multiple images at once;
+therefore it is possible to create custom protocols that implement desired approach.
+The best example is the ``ExtendedDZI`` protocol implementation that supports
+both synchronous and asynchronous transfer, which you can relate to when implementing the below.
+
+Step by step for asynchronous transfer implementation (demonstrated on DeepZoom protocol). Some steps might seem difficult, please check the [Advanced Data API model documentation](https://openseadragon.github.io/examples/advanced-data-model/).
+ 1. First, you need to configure the viewer so that only one image is sent in the configuration phase, e.g. setting 
+  > "data_group_protocol": \`${path}?Deepzoom=${data[0]}.dzi\`
+ 2. Now, the OSD will recognize the image array requests as a basic DZI protocol. Additionally, implement custom protocol, register it and make sure it can process your server initialization response, see [``configure`` method](https://openseadragon.github.io/docs/OpenSeadragon.TileSource.html#configure).
+ 3. Since in our example we re-use DZI, we will have to implement all data fetching manually. We use OSD Advanced data API to override required functions in the default DZI Protocol implementation,
+the important part is that a) we suppose the metadata match across all the files (dimensions, tile size) and b) we get all
+the files we require by implementing a new method ``setAllData(data)`` that will get called (if exists) after initialization with the list of all required data.
+4. We now re-implement a data fetching that awaits all tile data of given ``level``, ``x`` and ``y`` coordinates (can be forwarded to the downloading method within the
+post data) and calls finish with an array of images.
 
 ### Custom Data Pipeline
 You actually do not have to even return the data in vertical image as said above. But,
 in order to be able to do that you must define how the data is 
-[stored within the system -- todo link to the new data API OSD docs after release](https://github.com/openseadragon/openseadragon/pull/2148)
-as well as how to load it to the GPU.
+[stored within the system](https://openseadragon.github.io/examples/advanced-data-model/)
+as well as how to load it to the GPU, unless you call ``finish`` with either vertically concatenated image or an image array.
+Note that canvas objects are accepted too.
 
 #### Custom Data GPU Loading (WebGL)
 The WebGL module responsible for interactive visualizations supports
@@ -268,7 +202,7 @@ The process happens as follows:
    - you get the same data as ``data`` object within `toCanvas(...)` method
    - for WebGL 1.0, `i`th texture is loaded as `TEXTURE_i` - up to max texture units of the given machine
    - for WebGL 2.0, `i`th texture is loaded as `2D_TEXTURE_ARRAY` `i`th element, sampled as texture 3D with `z` coordinate = `i`
-   - you can load the texture any way you like, ignoring the above, but you should make sure that ``sample(index, ...)`` samples `index=i`th texture
+   - you can load the texture any way you like, ignoring the above, but you should make sure that ``sampleChannel(index, ...)`` samples `index=i`th texture
    - all sampling overflows should be wrapped, e.g. overflow of texture coordinates behaves as
      - ``TEXTURE_WRAP_S``
      - ``TEXTURE_WRAP_T``

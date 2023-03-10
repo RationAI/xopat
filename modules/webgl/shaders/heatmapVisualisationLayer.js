@@ -33,6 +33,13 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         return "data values encoded in color/opacity";
     }
 
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x===1,
+            description: "1D sequential data encoded in opacity"
+        }];
+    }
+
     static defaultControls = {
         color: {
             default: {type: "color", default: "#fff700", title: "Color: "},
@@ -48,9 +55,6 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
         }
     };
 
-    textureChannelSamplingAccepts(count) {
-        return count === 1;
-    }
 
     getFragmentShaderExecution() {
         return `    

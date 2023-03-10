@@ -170,6 +170,18 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
         return `<p class="${options.classes}">${options.content}</p>`;
     },
     /**
+     * Render button
+     * @param options
+     * @param {string} options.classes classes to assign, space-separated
+     * @param {string} options.title
+     * @param {string} options.action
+     * @return {string} HTML for button
+     */
+    button: function (options) {
+        options = $.extend({classes: "", content: ""}, options);
+        return `<button class="btn ${options.classes}" onclick="${options.action}">${options.title}</button>`;
+    },
+    /**
      * Render newline
      * @param options no options supported as of now
      */
@@ -281,7 +293,7 @@ Components: {
 
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon || (APPLICATION_CONTEXT.rootPath + "src/assets/image.png");
+            let icon = options.icon || (APPLICATION_CONTEXT.url + "src/assets/image.png");
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
@@ -316,7 +328,7 @@ ${contentAction}
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon || (APPLICATION_CONTEXT.rootPath + "src/assets/image.png");
+            let icon = options.icon || (APPLICATION_CONTEXT.url + "src/assets/image.png");
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";

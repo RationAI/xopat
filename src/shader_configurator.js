@@ -405,8 +405,18 @@ ${renders.join("")}
         const uiControls = this._buildControls();
         let controls = shader.defaultControls;
 
+        //this is done with visualisation layer as hard-coded control option, include here as well
+        if (controls.opacity === undefined || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
+            controls.opacity = {
+                default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                accepts: (type, instance) => type === "float"
+            };
+        }
+
         const result = {};
         for (let control in controls) {
+            if (control.startsWith("use_")) continue;
+
             let supported = [];
             if (controls[control] === false) continue;
             if (controls[control].required?.type) {

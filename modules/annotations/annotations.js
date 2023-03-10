@@ -924,7 +924,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			isDown: false,  //FABRIC handler click down recognition
 		};
 
-		let refTileImage = VIEWER.tools.referencedTiledImage();
+		let refTileImage = VIEWER.scalebar.getReferencedTiledImage();
 		this.overlay = VIEWER.fabricjsOverlay({
 			scale: refTileImage.source.dimensions ?
 				refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
@@ -1036,8 +1036,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		**************************************************************************************************/
 
 		let screenToPixelCoords = function (x, y) {
-			//cannot use VIEWER.tools.imagePixelSizeOnScreen() because of canvas margins
-			return VIEWER.tools.referencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+			//cannot use VIEWER.scalebar.imagePixelSizeOnScreen() because of canvas margins
+			return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
 		}.bind(this);
 
 		//prevents event bubling if the up event was handled by annotations

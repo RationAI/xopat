@@ -855,7 +855,7 @@ WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
             let updater = function(e) {
                 _this.value++;
                 _this.store(_this.value);
-                _this.changed(_this.name, _this.value, _this.value, _this);
+                _this.changed("default", _this.value, _this.value, _this);
             };
             let node = $(`#${this.id}`);
             node.html(this.params.title);

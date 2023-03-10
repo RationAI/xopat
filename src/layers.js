@@ -8,24 +8,20 @@
         window.APPLICATION_CONTEXT.layersAvailable = false;
     }
 
-    function parseCookie(key) {
+    function parseStore(key) {
         try {
-            const cookie = APPLICATION_CONTEXT._getCookie(key, "{}", false);
+            const cookie = localStorage.getItem(key) || "{}";
             return cookie ? JSON.parse(cookie) : {};
         } catch (e) {
             return {};
         }
     }
 
-    var namedCookieCache = parseCookie('_cache');
-    var orderedCookieCache = parseCookie('_orderedCache');
-
-    window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+    function parseVisualization() {
         function isset(x, type="string") {
             return x && typeof x === type;
         }
-
-        const visualizations = APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
+        return APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
             if (!isset(visualisationTarget.name)) {
                 visualisationTarget.name = $.t('main.shaders.defaultTitle');
             }
@@ -46,8 +42,8 @@
                 }
 
                 if (!isset(layer.name)) {
-                    let temp = data.substring(Math.max(0, data.length-24), 24);
-                    if (temp.length !== data.length) temp  = "..." + temp;
+                    let temp = data.substring(Math.max(0, data.length - 24), 24);
+                    if (temp.length !== data.length) temp = "..." + temp;
                     layer.name = source + ": " + temp;
                 }
 
@@ -63,7 +59,13 @@
             }
             return shaderCount > 0;
         });
+    }
 
+    const namedCookieCache = parseStore('_layers.namedCache');
+    const orderedCookieCache = parseStore('_layers.orderedCache');
+
+    window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+        const visualizations = parseVisualization();
         if (visualizations.length <= 0) {
             return APPLICATION_CONTEXT.disableRendering();
         }
@@ -132,30 +134,30 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     VIEWER.raiseEvent('visualisation-used', visualisation);
                 },
                 visualisationChanged: function(oldVis, newVis) {
-                    seaGL.createUrlMaker(newVis);
+                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.getOption("secureMode"));
                     let index = seaGL.getWorldIndex(),
                         sources = seaGL.dataImageSources();
 
                     if (seaGL.disabled()) {
                         seaGL.enable();
                         VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             success: function (e) {
-                                UTILITIES.prepareTiledImage(e.item, newVis);
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
                         });
                     } else {
                         VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.layersServer, sources),
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             replace: true,
                             success: function (e) {
-                                UTILITIES.prepareTiledImage(e.item, newVis);
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
                             }
@@ -182,7 +184,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         let seaGL = VIEWER.bridge;
         seaGL.addVisualisation(...visualizations);
-        seaGL.addData(...APPLICATION_CONTEXT.config.data);
+        seaGL.setData(...APPLICATION_CONTEXT.config.data);
         if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
@@ -190,7 +192,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
 
         seaGL.createUrlMaker = function(vis, isSecureMode) {
             if (isSecureMode && vis) delete vis.protocol;
-            seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.layersProtocol));
+            seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
             return seaGL.urlMaker;
         };
 
@@ -312,25 +314,30 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         }
                     }
                 }
-                APPLICATION_CONTEXT._setCookie(cookieKey, JSON.stringify(shaderCache));
+                localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
             };
 
-            UTILITIES.prepareTiledImage = function (image, visSetup) {
+            UTILITIES.prepareTiledImage = function (index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
-                if ((!visSetup.hasOwnProperty("lossless") || visSetup.lossless) && image.source.setFormat) {
-                    image.source.setFormat("png");
+                if (image.source.setFormat) {
+                    const mode = APPLICATION_CONTEXT.getOption("extendedDziMode", "zip");
+                    const async = mode === "async";
+                    const lossless = !visSetup.hasOwnProperty("lossless") || visSetup.lossless;
+                    const format = lossless ? (async ? "png" : mode) : "jpg";
+                    //todo allow png/jpg selection with zip
+                    image.source.setFormat(format, async);
+                }
+                if (image.source.setAllData) {
+                    image.source.setAllData(VIEWER.bridge.dataImageSources());
                 }
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
+                seaGL.addLayer(index);
             };
 
             UTILITIES.makeCacheSnapshot = function(named=true) {
-                if (APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    Dialogs.show($.t('messages.cookiesDisabled', {action: "$('#settings').click()"}), 5000, Dialogs.MSG_WARN);
-                    return;
-                }
-                if (named) recordCache('_cache', namedCookieCache, (shader, i) => shader.name, false);
-                else recordCache('_orderedCache', orderedCookieCache, (shader, i) => i, true);
-                Dialogs.show($.t('messages.cookieConfSaved'), 5000, Dialogs.MSG_INFO);
+                if (named) recordCache('_layers.namedCache', namedCookieCache, (shader, i) => shader.name, false);
+                else recordCache('_layers.orderedCache', orderedCookieCache, (shader, i) => i, true);
+                Dialogs.show($.t('messages.paramConfSaved'), 5000, Dialogs.MSG_INFO);
             };
 
             // load desired shader upon selection

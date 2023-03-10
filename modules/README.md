@@ -42,6 +42,8 @@ You should not pollute the global scope (`window`...) and follow the following:
     - avoid working with HTML in modules where possible - modules should implement logics, not UI
     - if you need to add HTML to DOM, think rather about splitting your implementation to the module (logics) and
     a plugin (UI)
+ - do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
+
     
 ## Modules: Extensions
 Extensions are unconstrained code libraries with no (or little) constrains; but without features. Only basic rules 

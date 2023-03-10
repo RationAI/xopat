@@ -17,14 +17,21 @@ WebGLModule.IdentityLayer = class extends WebGLModule.VisualisationLayer {
         return "shows the data AS-IS";
     }
 
-    textureChannelSamplingAccepts(count) {
-        //return count === 1;
-        return count === 4;
+    static defaultControls = {
+        use_channel0: {
+            required: "rgba"
+        }
+    };
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x===4,
+            description: "4d texture to render AS-IS"
+        }];
     }
 
     getFragmentShaderExecution() {
-        //return `return vec4(vec3(${this.sampleChannel("tile_texture_coords")}), 1.0);`;
-        return `return ${this.sample("tile_texture_coords")};`;
+        return `return ${this.sampleChannel("tile_texture_coords")};`;
     }
 };
 

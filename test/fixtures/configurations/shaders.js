@@ -41,11 +41,11 @@ export default {
         "params": {
             "colorHigh": {
                 "type": "color",
-                "default": options.value || "#ff1255"
+                "default": options.valueHigh || "#ff1255"
             },
             "colorLow": {
                 "type": "color",
-                "default": options.value || "#6dff12"
+                "default": options.valueLow || "#6dff12"
             },
             ...(options.controls || {})
         },

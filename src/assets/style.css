@@ -29,6 +29,9 @@ html[data-color-mode=dark] .invert-icon {
 .pointer, .btn-pointer {
     cursor: pointer;
 }
+.color-bg-white {
+    background-color: white;
+}
 /*Use with material icons class 'btn-pointer' to make them highlight on hover, add class 'selected' to highlight,
 also good idea to use <span class="btn-pointer"><span class="material-icons">icon</span>text</span> */
 .btn-pointer:hover, .btn-pointer.selected,

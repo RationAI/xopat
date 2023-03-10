@@ -3,12 +3,13 @@
  * Should you have your own data format, change/re-define these
  * to correctly load the textures to GPU, based on the WebGL version used.
  *
- * TODO dataloader should be a component given to the configuration dynamically
+ * The processing accepts arrays of images to feed to the shader built from configuration.
+ * This implementation supports data as Image or Canvas objects. We will refer to them as <image*>
  *
- * Future: try to make GLSL code as functions (proxies) instead of using static code injection
- *  - cons: not able to generate correct uniform name from index in GLSL as of now
+ * Implemented texture loaders support
+ *  - working with <image*> object - image data chunks are vertically concatenated
+ *  - working with [<image*>] object - images are in array
  *
- * This implementation supports data as Image or Canvas objects
  *
  * @type {{V2_0: WebGLModule.DataLoader.V2_0, V1_0: WebGLModule.DataLoader.V1_0}}
  */
@@ -17,10 +18,21 @@ WebGLModule.DataLoader = {
      * In case the system is fed by anything but 'Image' (or the like) data object,
      * implement here conversion so that debug mode can draw it.
      * @param {*} data
-     * @return {Image}
+     * @return {HTMLElement} Dom Element
      */
-    dataToImage: function (data) {
-        return data;
+    dataAsHtmlElement: function (data) {
+        return {
+            "[object HTMLImageElement]": () => data,
+            "[object HTMLCanvasElement]": () => data,
+            //Image objects in Array, we assume image objects only
+            "[object Array]": function () {
+                const node = document.createElement("div");
+                for (let image of data) {
+                    node.append(image);
+                }
+                return node;
+            }
+        }[toString.apply(data)]();
     },
 
     /**
@@ -42,10 +54,9 @@ WebGLModule.DataLoader = {
          */
         constructor(gl) {
             this._units = [];
-            this.canvas = document.createElement('canvas');
-            this.canvasReader = this.canvas.getContext('2d', {willReadFrequently: true});
-            this.canvasConverter = document.createElement('canvas');
-            this.canvasConverterReader = this.canvasConverter.getContext('2d', {willReadFrequently: true});
+
+            //todo more elegant
+            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
         }
 
         /**
@@ -80,69 +91,24 @@ WebGLModule.DataLoader = {
          * @param {WebGLRenderingContext} gl
          */
         toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            let index = 0;
-            tileBounds.width = Math.round(tileBounds.width);
-            tileBounds.height = Math.round(tileBounds.height);
+            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
+                this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
+            );
+        }
 
-            //we read from here
-            this.canvas.width = data.width;
-            this.canvas.height = data.height;
-            this.canvasReader.drawImage(data, 0, 0);
+        /**
+         * Todo docs
+         * Texture not necessary to re-initialize since we can reuse it straight away
+         * @param context
+         * @param dataIndexMapping
+         * @param visualisation
+         * @param data
+         * @param tileBounds
+         * @param program
+         * @param gl
+         */
+        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
 
-            const NUM_IMAGES = Math.round(data.height / tileBounds.height);
-            //Allowed texture size dimension only 256+ and power of two...
-
-            //it worked for arbitrary size until we begun with image arrays... is it necessary?
-            const IMAGE_SIZE = data.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(data.width)));
-            this.canvasConverter.width = IMAGE_SIZE;
-            this.canvasConverter.height = IMAGE_SIZE;
-
-            //just load all images and let shaders reference them...
-            for (let i = 0; i < dataIndexMapping.length; i++) {
-                if (dataIndexMapping[i] < 0) {
-                    continue;
-                }
-                if (index >= NUM_IMAGES) {
-                    console.warn("The visualisation contains less data than layers. Skipping layers ...");
-                    return;
-                }
-
-                //create textures
-                while (index >= this._units.length) {
-                    this._units.push(gl.createTexture());
-                }
-                let bindConst = `TEXTURE${index}`;
-                gl.activeTexture(gl[bindConst]);
-                let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
-                gl.uniform1i(location, index);
-
-                gl.bindTexture(gl.TEXTURE_2D, this._units[index]);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, this.wrap);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, this.wrap);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.filter);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.filter);
-                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-
-                let pixels;
-                if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                    this.canvasConverterReader.drawImage(this.canvas, 0, dataIndexMapping[i]*tileBounds.height,
-                        tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
-
-                    pixels = this.canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
-                } else {
-                    //load data
-                    pixels = this.canvasReader.getImageData(0,
-                        dataIndexMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
-                }
-
-                gl.texImage2D(gl.TEXTURE_2D,
-                    0,
-                    gl.RGBA,
-                    gl.RGBA,
-                    gl.UNSIGNED_BYTE,
-                    pixels);
-                index++;
-            }
         }
 
         /**
@@ -178,6 +144,124 @@ WebGLModule.DataLoader = {
             }
             return samplers;
         }
+
+        /**
+         * Loader strategy based on toString result
+         * @private
+         */
+        _loaders = {
+            "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+                if (!this._canvas) {
+                    this._canvas = document.createElement('canvas');
+                    this._canvasReader = this._canvas.getContext('2d', {willReadFrequently: true});
+                    this._canvasConverter = document.createElement('canvas');
+                    this._canvasConverterReader = this._canvasConverter.getContext('2d', {willReadFrequently: true});
+                }
+
+                let index = 0;
+                tileBounds.width = Math.round(tileBounds.width);
+                tileBounds.height = Math.round(tileBounds.height);
+
+                //we read from here
+                this._canvas.width = data.width;
+                this._canvas.height = data.height;
+                this._canvasReader.drawImage(data, 0, 0);
+
+                const NUM_IMAGES = Math.round(data.height / tileBounds.height);
+                //Allowed texture size dimension only 256+ and power of two...
+
+                //it worked for arbitrary size until we begun with image arrays... is it necessary?
+                const IMAGE_SIZE = data.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(data.width)));
+                this._canvasConverter.width = IMAGE_SIZE;
+                this._canvasConverter.height = IMAGE_SIZE;
+
+                //just load all images and let shaders reference them...
+                for (let i = 0; i < dataIndexMapping.length; i++) {
+                    if (dataIndexMapping[i] < 0) {
+                        continue;
+                    }
+                    if (index >= NUM_IMAGES) {
+                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
+                        return;
+                    }
+
+                    //create textures
+                    while (index >= self._units.length) {
+                        self._units.push(gl.createTexture());
+                    }
+                    let bindConst = `TEXTURE${index}`;
+                    gl.activeTexture(gl[bindConst]);
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
+                    gl.uniform1i(location, index);
+
+                    gl.bindTexture(gl.TEXTURE_2D, self._units[index]);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, self.wrap);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, self.wrap);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, self.filter);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, self.filter);
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+
+                    let pixels;
+                    if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
+                        this._canvasConverterReader.drawImage(this._canvas, 0, dataIndexMapping[i]*tileBounds.height,
+                            tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
+
+                        pixels = this._canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
+                    } else {
+                        //load data
+                        pixels = this._canvasReader.getImageData(0,
+                            dataIndexMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
+                    }
+
+                    gl.texImage2D(gl.TEXTURE_2D,
+                        0,
+                        gl.RGBA,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        pixels);
+                    index++;
+                }
+            },
+            //Image objects in Array, we assume image objects only
+            "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+                let index = 0;
+                const NUM_IMAGES = data.length;
+                //just load all images and let shaders reference them...
+                for (let i = 0; i < dataIndexMapping.length; i++) {
+                    if (dataIndexMapping[i] < 0) {
+                        continue;
+                    }
+                    if (index >= NUM_IMAGES) {
+                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
+                        return;
+                    }
+
+                    //create textures
+                    while (index >= self._units.length) {
+                        self._units.push(gl.createTexture());
+                    }
+                    let bindConst = `TEXTURE${index}`;
+                    gl.activeTexture(gl[bindConst]);
+                    let location = gl.getUniformLocation(program, `vis_data_sampler_${i}`);
+                    gl.uniform1i(location, index);
+
+                    gl.bindTexture(gl.TEXTURE_2D, self._units[index]);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, self.wrap);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, self.wrap);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, self.filter);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, self.filter);
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+                    //do not check the image size, we render what wwe
+                    gl.texImage2D(gl.TEXTURE_2D,
+                        0,
+                        gl.RGBA,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        data[index++]
+                    );
+                }
+            }
+        };
     },
 
     /**
@@ -197,6 +281,9 @@ WebGLModule.DataLoader = {
         constructor(gl, textureName) {
             this.textureName = textureName;
             this.textureId = gl.createTexture();
+
+            //todo more elegant:
+            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
         }
 
         /**
@@ -227,34 +314,17 @@ WebGLModule.DataLoader = {
          * @param {WebGL2RenderingContext} gl
          */
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            const NUM_IMAGES = Math.round(data.height / tileBounds.height);
-
-            // Texture checking disabled due to performance reasons
-            // if (NUM_IMAGES < dataIndexMapping.reduce((sum, val, _i, _a) => sum + (val >= 0 ? 1 : 0), 0).length) {
-            //     console.warn("Incoming data does not contain necessary number of images!", NUM_IMAGES, dataIndexMapping);
-            // }
-
-            //Just load the texture since it comes as an Image element concatenated below each other
-            //in the correct order --> directly to GPU
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureId);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, this.filter);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, this.filter);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, this.wrap);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, this.wrap);
-
-            gl.texImage3D(
-                gl.TEXTURE_2D_ARRAY,
-                0,
-                gl.RGBA,
-                tileBounds.width,
-                tileBounds.height,
-                NUM_IMAGES,
-                0,
-                gl.RGBA,
-                gl.UNSIGNED_BYTE,
-                data
+            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
+                    this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
+        }
+
+        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            if (Array.isArray(data)) {
+                //need to re-initialize the texture
+                gl.deleteTexture(this.textureId);
+                this.textureId = gl.createTexture();
+            }
         }
 
 
@@ -289,5 +359,60 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
   ${indicesOfImages.join(",")}
 );`;
         }
+
+        /**
+         * Loader strategy based on toString result
+         * @private
+         */
+        _loaders = {
+            //Vertically Concatenated Images
+            "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+                const NUM_IMAGES = Math.round(data.height / tileBounds.height);
+
+                // Texture checking disabled due to performance reasons
+                // if (NUM_IMAGES < dataIndexMapping.reduce((sum, val, _i, _a) => sum + (val >= 0 ? 1 : 0), 0).length) {
+                //     console.warn("Incoming data does not contain necessary number of images!", NUM_IMAGES, dataIndexMapping);
+                // }
+
+                //Just load the texture since it comes as an Image element concatenated below each other
+                //in the correct order --> directly to GPU
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, self.textureId);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, self.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, self.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, self.wrap);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, self.wrap);
+
+                gl.texImage3D(
+                    gl.TEXTURE_2D_ARRAY,
+                    0,
+                    gl.RGBA,
+                    tileBounds.width,
+                    tileBounds.height,
+                    NUM_IMAGES,
+                    0,
+                    gl.RGBA,
+                    gl.UNSIGNED_BYTE,
+                    data
+                );
+            },
+            //Image objects in Array, we assume image objects only
+            "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, self.textureId);
+                gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, data[0].width, data[0].height, data.length+1);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, 0);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, self.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, self.filter);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, self.wrap);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, self.wrap);
+
+                let index = 0;
+                for (let image of data) {
+                    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, index++, image.width, image.height,
+                        1, gl.RGBA, gl.UNSIGNED_BYTE, image);
+                }
+            }
+        };
     }
 };

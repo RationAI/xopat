@@ -70,6 +70,7 @@ window.AdvancedMenuPages = class {
 
                 const _this = this;
                 UTILITIES.loadModules(function() {
+                    //todo in case of failure e.g. integrity tag not verified, create error image
                     _this.loadVega(true);
                 }, APPLICATION_CONTEXT.getOption("secureMode") ? 'vega-secure' : 'vega');
                 return;
@@ -96,14 +97,15 @@ window.AdvancedMenuPages = class {
                 this.buildElements(html, element, sanitizer);
             }
 
+            //count is generated ID, if not supplied used generic ID that is not traceable
             if (!parent || data.main) {
-                parentUnique = "-"+(++this._count)+"-module-menu-pages";
-                parent = '__builder-' + this._count;
+                parentUnique = this.getMenuId(data.id, this._count++)
+                parent = this.builderInstance(data.id, this._count);
             }
 
-            let unique = this.uid + "-" + (++this._count) + "-module-data-page";
+            let unique = this.getSubMenuId(data.id, this._count++);
             USER_INTERFACE.AdvancedMenu._buildMenu(this, parent,
-                'pages-menu' + parentUnique,
+                parentUnique,
                 data.title,
                 unique,
                 unique,
@@ -113,13 +115,40 @@ window.AdvancedMenuPages = class {
                 true,
                 true);
         }
+        this._count += config.length;
         this.loadVega();
     }
 
+    builderInstance(id, counter=undefined) {
+        if (id) return `__builder-${id}`;
+        if (! Number.isNaN(counter))  return `__builder-${counter}`;
+        throw "Cannot create builder ID: either valid ID or counter value must be supplied!";
+    }
+
+    getMenuId(id, counter=undefined) {
+        if (id) return `pages-menu-root-${this.uid}-${id}`;
+        if (! Number.isNaN(counter)) return `pages-menu-root-${this.uid}-${counter}`;
+        throw "Cannot create menu ID: either valid ID or counter value must be supplied!";
+    }
+
+    getSubMenuId(id, counter=undefined) {
+        if (id) return `pages-menu-item-${this.uid}-${id}`;
+        if (! Number.isNaN(counter)) return `pages-menu-item-${this.uid}-${counter}`;
+        throw "Cannot create submenu ID: either valid ID or counter value must be supplied!";
+    }
+
+    openMenu(id) {
+        USER_INTERFACE.AdvancedMenu.openMenu(this.getMenuId(id));
+    }
+
+    openSubMenu(id) {
+        USER_INTERFACE.AdvancedMenu.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
+    }
+
     /**
-     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
+     * Allowed types of config[i].page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
      * Columns
-     * @param {object} config array of objects - page specs
+     * @param {object} config array of objects - advanced menu page specs, each spec must have title and page props
      * @param {boolean|object} sanitizeConfig configuration (see https://github.com/apostrophecms/sanitize-html)
      *   or simple on/off flag for default behaviour
      * @type {{}}
