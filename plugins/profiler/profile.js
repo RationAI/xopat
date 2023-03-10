@@ -42,7 +42,7 @@ addPlugin('profiler', class extends XOpatPlugin {
 
     exportFile() {
         UTILITIES.downloadAsFile(
-            `tile-request-times-layers-${VIEWER.bridge.visualization().order.length}.json`,
+            `tile-request-times-layers-${VIEWER.bridge?.visualization()?.order.length || 'missing'}.json`,
             JSON.stringify(this.records));
     }
 

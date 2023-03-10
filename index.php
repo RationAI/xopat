@@ -6,8 +6,7 @@ if (version_compare(phpversion(), '7.1', '<')) {
 }
 
 require_once "src/core.php";
-
-global $i18n;
+global $i18n, $PLUGINS, $MODULES, $CORE;
 
 set_exception_handler(function (Throwable $exception) {
     global $i18n;
@@ -589,7 +588,7 @@ EOF;
         const microns = imageData?.microns;
         const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
         VIEWER.makeScalebar({
-            pixelsPerMeter: microns * 1e7 || 1,
+            pixelsPerMeter: microns * 1e6 || 1,
             sizeAndTextRenderer: microns ?
                 OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
                 : (ppm, minSize) => metricPx(ppm, minSize, "px", false),

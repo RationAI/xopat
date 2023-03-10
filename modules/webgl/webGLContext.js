@@ -342,10 +342,8 @@ bool close(float value, float target) {
 void show(vec4 color) {
     vec4 fg = _last_rendered_color;
     _last_rendered_color = color;
-
-    if (close(fg.a, 0.0)) return;
-    float t = fg.a + gl_FragColor.a - fg.a*gl_FragColor.a;
-    gl_FragColor = vec4((fg.rgb * fg.a + gl_FragColor.rgb * gl_FragColor.a - gl_FragColor.rgb * (gl_FragColor.a * fg.a)) / t, t);
+    vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
+    final_color = (pre_fg + gl_FragColor * (1.0-fg.a));
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
@@ -362,6 +360,16 @@ void blend(vec4 foreground) {
     _last_rendered_color = vec4(.0);
 }
 
+void finalize() {
+    show(vec4(.0));
+    
+    if (close(gl_FragColor.a, 0.0)) {
+        gl_FragColor = vec4(0.);
+    } else {
+        gl_FragColor = vec4(gl_FragColor.rgb/gl_FragColor.a, gl_FragColor.a);
+    }
+}
+
 ${Object.values(globalScopeCode).join("\n")}
 
 ${definition}
@@ -369,7 +377,7 @@ ${definition}
 void main() {
     ${execution}
     
-    show(vec4(.0));
+    finalize();
 }
 `;
     }
@@ -586,12 +594,21 @@ bool close(float value, float target) {
 }
         
 void show(vec4 color) {
+    //premultiplied alpha blending
     vec4 fg = _last_rendered_color;
     _last_rendered_color = color;
+    vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
+    final_color = (pre_fg + final_color * (1.0-fg.a));
+}
+
+void finalize() {
+    show(vec4(.0));
     
-    if (close(fg.a, 0.0)) return;
-    float t = fg.a + final_color.a - fg.a*final_color.a;
-    final_color = vec4((fg.rgb * fg.a + final_color.rgb * final_color.a - final_color.rgb * (final_color.a * fg.a)) / t, t);
+    if (close(final_color.a, 0.0)) {
+        final_color = vec4(0.);
+    } else {
+        final_color = vec4(final_color.rgb/final_color.a, final_color.a);
+    }
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
@@ -612,12 +629,10 @@ ${Object.values(globalScopeCode).join("\n")}
         
 ${definition}
         
-void main() {
-    final_color = vec4(1., 1., 1., 0.);
-        
+void main() {        
     ${execution}
     
-    show(vec4(.0));
+    finalize();
 }`;
     }
 
