@@ -54,8 +54,6 @@ if (!$visualisation) {
     $visualisation = $_POST["visualisation"];
 }
 
-file_put_contents('/mnt/data/visualization/importer/data/test.txt', $visualisation);
-
 throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
         print_r($_POST, true));
 
