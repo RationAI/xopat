@@ -9,8 +9,10 @@ openseadragon/
 node_modules/
 build/
 coverage/
+env/
+!env/README.md
 
-#test data
+#test suite data
 test/downloads/
 test/screenshots/
 test/videos/
