@@ -77,40 +77,57 @@ module.exports = function(grunt) {
     /*********************************************************************************
      * Plugins configuration, defaults located at 'plugins/[plugin_id]/include.json' *
      *********************************************************************************/ 
-    "plugins": [
+    "plugins": {
         `);
         const plugins = grunt.file.expand({filter: "isDirectory", cwd: "plugins"}, ["*"]);
         let pushed = false;
         for (let pluginFolder of plugins) {
+            //todo remove all development configuration data
             const file = `plugins/${pluginFolder}/include.json`;
+
             if (grunt.file.isFile(file)) {
                 pushed = true;
-                output.push(grunt.file.read(file).toString().trim().replaceAll(/\n/g, '\n        '));
-                output.push(`, `);
+                const content = grunt.file.read(file).toString().trim();
+                const data = JSON.parse(content), id = data.id;
+                delete data.id;
+                delete data.includes;
+                delete data.requires;
+                delete data.modules;
+                delete data.version;
+                delete data.author;
+                delete data.icon;
+                output.push('"', id, '": ', JSON.stringify(data, null, '\t').replaceAll(/\n/g, '\n        '), `,\n        `);
             }
         }
         if (pushed) output.pop();
         grunt.log.write("Modules configuration...\n");
         output.push(`
-    ],
+    },
     /*********************************************************************************
      * Modules configuration, defaults located at 'modules/[module_id]/include.json' *
      ********************************************************************************/ 
-    "modules": [
+    "modules": {
         `);
         const modules = grunt.file.expand({filter: "isDirectory", cwd: "modules"}, ["*"]);
         pushed = false;
         for (let moduleFolder of modules) {
             const file = `modules/${moduleFolder}/include.json`;
+            //todo remove all development configuration data
             if (grunt.file.isFile(file)) {
                 pushed = true;
-                output.push(grunt.file.read(file).toString().trim().replaceAll(/\n/g, '\n        '));
-                output.push(`, `);
+                const content = grunt.file.read(file).toString().trim();
+                const data = JSON.parse(content), id = data.id;
+                delete data.id;
+                delete data.name;
+                delete data.includes;
+                delete data.requires;
+                delete data.description;
+                output.push('"', id, '": ', JSON.stringify(data, null, '\t').replaceAll(/\n/g, '\n        '), `,\n        `);
             }
         }
         if (pushed) output.pop();
         output.push(`
-    ]
+    }
 }`);
         grunt.file.write("env/env.example.json", output.join(""));
         grunt.log.write("Saved.\n");

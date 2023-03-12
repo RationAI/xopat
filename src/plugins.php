@@ -53,12 +53,23 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
 }
 
 try {
-    global $ENV;
+    global $ENV, $MODULES, $PLUGINS;
     if (is_array($ENV)) {
-        if (!is_array($ENV["modules"])) $ENV["modules"] = [];
-        if (!is_array($ENV["plugins"])) $ENV["plugins"] = [];
-        $MODULES = array_merge_recursive_distinct($MODULES, $ENV["modules"]);
-        $PLUGINS = array_merge_recursive_distinct($PLUGINS, $ENV["plugins"]);
+        if (!isset($ENV["modules"]) || !is_array($ENV["modules"])) $ENV["modules"] = [];
+        if (!isset($ENV["plugins"]) || !is_array($ENV["plugins"])) $ENV["plugins"] = [];
+        $ENV_MOD = $ENV["modules"]; $ENV_PLUG = $ENV["plugins"];
+
+        foreach ($MODULES as $id=>$item) {
+            if (isset($ENV_MOD[$id])) {
+                $MODULES[$id] = array_merge_recursive_distinct($item, $ENV_MOD[$id]);
+            }
+        }
+
+        foreach ($PLUGINS as $id=>$item) {
+            if (isset($ENV_PLUG[$id])) {
+                $PLUGINS[$id] = array_merge_recursive_distinct($item, $ENV_PLUG[$id]);
+            }
+        }
     } else {
         trigger_error("Env setup shold have been loaded, but the data is missing!", E_USER_WARNING);
     }
