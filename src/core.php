@@ -8,12 +8,12 @@
 use Ahc\Json\Comment;
 
 //Absolute Root Path to the project
-define('ABS_ROOT', dirname(__FILE__) . "/");
+defined('ABS_ROOT', "") || define('ABS_ROOT', dirname(__FILE__) . "/");
 define('ABS_MODULES', ABS_ROOT . '../modules/');
 define('ABS_PLUGINS', ABS_ROOT . '../plugins/');
 
 //Relative Paths For the Viewer
-define('PROJECT_ROOT', "");
+defined('PROJECT_ROOT', "") || define('PROJECT_ROOT', "");
 define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
 define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
 define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
