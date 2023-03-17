@@ -130,6 +130,9 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays 
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`secureMode` - disable features allowing JS code injection (`protocol*` and `shaderSources`)
+    - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
+    - [O]`fetchAsync` - by default uses generic multiplexing on tile protocols to support async fetching, overrideable behaviour
+
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
@@ -298,3 +301,51 @@ You can use also the (other) API of ``jquery i18next``.
 In spawned child window, the translation is available also through ``$`` symbol, but ``jquery i18next`` is not available.
 
 For plugins localization, see the plugins README.
+
+### Re-using parts of the CORE in PHP and JS
+This is an example how to include modules and plugins API with loading capabilities
+to a custom PHP script:
+
+````php
+//load static config and core functions
+require_once "src/core.php";
+//load plugins and modules (required by plugins)
+include_once(PROJECT_SOURCES . "plugins.php");
+global $PLUGINS, $MODULES;
+// use require_*() to load parts of the core -> prints JS script tags to attach
+//optionally add other parts of the core -> .js files
+//choose some of these to load (files to load are mapped in the env file)
+//    require_libs(); //libs - jquery, i18next... /src/libs)
+//    require_openseadragon(); //osd viewer
+//    require_external(); //external dependencies (some of src/external)
+//    require_core("loader"); //dynamic component loading
+//    require_core("deps"); //UI classes, shader configurator
+
+//set up here which modules/plugins are to be
+//statically loaded by setting $item["loaded"] = true;
+//after you are done resolve dependencies
+resolveDependencies($MODULES);
+//and print them to the HTML:
+require_modules();
+require_plugins();
+
+//if we include this
+require_core("loader");
+//we can do in javascript later
+?>
+<script>
+    //loader needs this data from the plugins.php
+    const runLoader = initXOpatLoader(
+        <?php echo json_encode($PLUGINS) ?>,
+        <?php echo json_encode($MODULES) ?>,
+        '<?php echo PLUGINS_FOLDER ?>',
+        '<?php echo MODULES_FOLDER ?>',
+        '<?php echo VERSION ?>');
+    runLoader();
+
+    UTILITIES.loadModules(()=>{
+        console.log('Loaded, yay!');
+    }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
+</script>
+
+````

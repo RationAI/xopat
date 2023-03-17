@@ -32,6 +32,8 @@
                resulting in a string. Available are 'path' (image server URL) and 'data'
                (string array of image identifiers such as image path).
                Server URL can be relative, if on the same server domain as the viewer.
+
+               In case of parameter fetchAsync = true, data is a single string, not an array!
              */
             "data_group_server": "/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
@@ -88,8 +90,12 @@
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
         "secureMode": false,
-        // can be "zip", "png", "jpg" or "async"
-        "extendedDziMode": "zip"
+        // custom headers for image fetching
+        "headers": {},
+        // can be anything that supports the protocol of your choice,
+        // ExtendedDZI supports "png", "zip", "jpg"
+        "preferredFormat": "zip",
+        "fetchAsync": false
     },
 
     /**

@@ -95,7 +95,9 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     },
 
     /**
-     *
+     * TODO!!!! this is not tileSource but tiledImage!!!
+     *    in TiledImage:
+     *             options = $TileSource.prototype.configure.apply( _this, [ data, url, postData ]);
      * @function
      * @param {Object|XMLDocument} data - the raw configuration
      * @param {String} url - the url the data was retrieved from if any.
@@ -195,33 +197,11 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         return this.ImageArray[index];
     },
 
-    setFormat: function(format, async) {
+    setFormat: function(format) {
         this.fileFormat = format;
 
-        const _this = this;
-        let blackImage = (resolve, reject) => {
-            const canvas = document.createElement('canvas');
-            canvas.width = _this.getTileWidth();
-            canvas.height = _this.getTileHeight();
-            const ctx = canvas.getContext('2d');
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const img = new Image(canvas.width, canvas.height);
-            img.onload = () => {
-                //next promise just returns the created object
-                blackImage = (ready, _) => ready(img);
-                resolve(img);
-            };
-            img.onerror = img.onabort = reject;
-            img.src = canvas.toDataURL();
-        };
-
-        if (this.__cached_getTilePostData) {
-            this.getTilePostData = this.__cached_getTilePostData;
-            delete this.__cached_getTilePostData;
-        }
-
         if (format === "zip") {
+            this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function (context) {
                 const abort = context.finish.bind(context, null, undefined);
                 if (!context.loadWithAjax) {
@@ -284,132 +264,11 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                 });
             }
             //no need to provide downloadTileAbort since we keep the meta structure
+            this.__cached_downloadTileAbort = this.downloadTileAbort;
             this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
-        } else if (!async) {
-            this.downloadTileStart = OpenSeadragon.TileSource.prototype.downloadTileStart;
-            this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
-        } else {
-            //a bit dirty but enables use of async requests
-            this.__cached_getTilePostData = this.getTilePostData;
-            this.getTilePostData = function(level, x, y) {
-                return [level, x, y];
-            }
-
-            //see https://stackoverflow.com/questions/41996814/how-to-abort-a-fetch-request
-            function afetch(input, init) {
-                let controller = new AbortController();
-                let signal = controller.signal;
-                init = Object.assign({signal}, init);
-                let promise = fetch(input, init);
-                promise.controller = controller;
-                return promise;
-            }
-
-            //extract tile urls from the post data/url
-            let URLs, URI;
-            if (this.postData) {
-                URLs = this.postData.replace(
-                    /^.?DeepZoomExt=(.*)_files\/$/, '$1').split(",");
-                URI = this.tilesUrl;
-            } else {
-                URLs = this.tilesUrl.replace(
-                    /.+DeepZoomExt=(.*)_files\/$/, '$1').split(",");
-                URI = this.tilesUrl.replace(
-                    /(.+)DeepZoomExt=.*_files\/$/, '$1');
-            }
-
-            this.downloadTileStart = function(imageJob) {
-
-                let count = URLs.length, errors = 0;
-                const context = imageJob.userData,
-                    finish = (error) => {
-                        if (error) {
-                            imageJob.finish(null, context.promise, error);
-                            return;
-                        }
-                        count--;
-                        if (count < 1) {
-                            if (context.images.length < 1) context.images = null;
-                            if (errors === URLs.length) {
-                                imageJob.finish(null, context.promise, "All images failed to load!");
-                            } else {
-                                imageJob.finish(context.images, context.promise);
-                            }
-                        }
-                    },
-                    fallBack = (i) => {
-                        errors++;
-                        return blackImage(
-                            (image) => {
-                                context.images[i] = image;
-                                finish();
-                            },
-                            () => finish("Failed to create black image!")
-                        );
-                    };
-
-
-                const coords = imageJob.postData,
-                    success = finish.bind(this, null)
-                    self = this;
-
-                if (imageJob.loadWithAjax) {
-                    context.images = new Array(count);
-                    for (let i = 0; i < count; i++) {
-                        const img = new Image();
-                        img.onerror = img.onabort = fallBack.bind(this, i);
-                        img.onload = success;
-                        context.images[i] = img;
-                    }
-
-                    context.promises = URLs.map((url, i) => {
-                        //re-contruct the data
-                        let method, furl, postData;
-                        if (self.postData) {
-                            furl = self.getUrl(coords[0], coords[1], coords[2], URI);
-                            postData = this.getPostData(coords[0], coords[1], coords[2], `Deepzoom=${url}_files/`);
-                            method = "POST";
-                        } else {
-                            furl = self.getUrl(coords[0], coords[1], coords[2], `${URI}Deepzoom=${url}_files/`);
-                            postData = null;
-                            method = "GET";
-                        }
-
-                        return afetch(furl, {
-                            method: method,
-                            mode: 'cors',
-                            cache: 'no-cache',
-                            credentials: 'same-origin',
-                            headers: imageJob.ajaxHeaders || {},
-                            body: postData
-                        }).then(data => data.blob()).then(blob => {
-                            if (imageJob.userData.didAbort) throw "Aborted!";
-                            context.images[i].src = URL.createObjectURL(blob);
-                        }).catch((e) => {
-                            console.log(e);
-                            fallBack(i);
-                        });
-                    });
-
-                } else {
-                    context.images = new Array(count);
-                    for (let i = 0; i < count; i++) {
-                        const img = new Image();
-                        img.onerror = img.onabort = fallBack.bind(this, i);
-                        img.onload = finish;
-                        context.images[i] = img;
-
-                        if (imageJob.crossOriginPolicy !== false) {
-                            img.crossOrigin = imageJob.crossOriginPolicy;
-                        }
-                        img.src = this.getUrl(coords[0], coords[1], coords[2], URI + URLs[i] + "_files/");
-                    }
-                }
-            }
-            this.downloadTileAbort = function(imageJob) {
-                imageJob.userData.didAbort = true;
-                imageJob.userData.promises?.forEach(p => p.controller.abort());
-            }
+        } else if (this.__cached_downloadTileStart) {
+            this.downloadTileStart = this.__cached_downloadTileStart;
+            this.downloadTileAbort = this.__cached_downloadTileAbort;
         }
     },
 

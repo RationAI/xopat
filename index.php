@@ -1,12 +1,11 @@
 <?php
-error_reporting(E_ALL);
+error_reporting(0); //todo make configurable
 ini_set('display_errors', 'On');
 if (version_compare(phpversion(), '7.1', '<')) {
     die("PHP version required is at least 7.1.");
 }
 
-require_once "src/core.php";
-global $i18n, $PLUGINS, $MODULES, $CORE;
+global $i18n;
 
 set_exception_handler(function (Throwable $exception) {
     global $i18n;
@@ -18,6 +17,9 @@ set_exception_handler(function (Throwable $exception) {
         " in " . $exception->getFile() . " line " . $exception->getLine() .
         "<br>" . $exception->getTraceAsString());
 });
+
+global $PLUGINS, $MODULES, $CORE;
+require_once "src/core.php";
 
 function hasKey($array, $key) {
     return isset($array[$key]) && $array[$key];
@@ -107,7 +109,7 @@ if (isset($parsedParams->visualizations)) {
     //requires webgl module
     $MODULES["webgl"]["loaded"] = true;
 }
-
+//todo if secure mode remove all sensitive data from config and set it up in cache
 /**
  * Detect required presence of plugins, 'permaLoaded' is supported only by the APP, not the loader - detect here
  */
@@ -528,6 +530,7 @@ EOF;
 &description=${encodeURIComponent('ERROR: The visualisation requires canvasses in order to work.')}`;
     }
 
+    const headers = $.extend({}, ENV.client.headers, setup.params.headers);
     // Initialize viewer - OpenSeadragon
     window.VIEWER = OpenSeadragon({
         id: "osd",
@@ -538,7 +541,7 @@ EOF;
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
-        ajaxHeaders: ENV.client.headers,
+        ajaxHeaders: headers,
         splitHashDataForPost: true,
         subPixelRoundingForTransparency:
             navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
@@ -989,7 +992,10 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
                 activeVisIndex,
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
-                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, VIEWER.bridge.dataImageSources()));
+                    const async = APPLICATION_CONTEXT.getOption("fetchAsync");
+                    let data = VIEWER.bridge.dataImageSources();
+                    if (async && data.length > 0) data = data[0];
+                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, data));
                     openAll(1);
                 }
             );

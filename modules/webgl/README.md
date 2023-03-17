@@ -264,7 +264,7 @@ image or image arrays are supported for the rendering. Attaching new keys or mod
 be easier than implementing the whole loader interface.
 
 ````js
-_loaders = {
+loadersByType = {
     "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);,
     //Image objects in Array, we assume image objects only
     "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);
@@ -273,7 +273,7 @@ _loaders = {
 
 Thus allowing to add new definitions of loaders as such:
 ````js
-WebGLModule.DataLoader.V1_0._loaders["<type>"] = function(...) {...};
+WebGLModule.DataLoader.V1_0.loadersByType["<type>"] = function(...) {...};
 ````
 with the ``<type>`` as a result of calling `toString.apply(myData)`.
 Note that doing so must conform to the existing environment; each loader uses certain

@@ -319,17 +319,22 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             UTILITIES.prepareTiledImage = function (index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
+
+                const async = APPLICATION_CONTEXT.getOption("fetchAsync");
                 if (image.source.setFormat) {
-                    const mode = APPLICATION_CONTEXT.getOption("extendedDziMode", "zip");
-                    const async = mode === "async";
+                    const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
                     const lossless = !visSetup.hasOwnProperty("lossless") || visSetup.lossless;
-                    const format = lossless ? (async ? "png" : mode) : "jpg";
-                    //todo allow png/jpg selection with zip
-                    image.source.setFormat(format, async);
+                    const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
+                    image.source.setFormat(format);
                 }
-                if (image.source.setAllData) {
-                    image.source.setAllData(VIEWER.bridge.dataImageSources());
+
+                if (async && !image.source.multiConfigure) {
+                    UTILITIES.multiplexSingleTileSource(image);
+                    image.source.multiConfigure(VIEWER.bridge.dataImageSources().map(s =>
+                        seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, s)));
                 }
+
+                //todo get rid of?
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
                 seaGL.addLayer(index);
             };
@@ -494,7 +499,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
 
                 if (typeof tiledImage.source.getImageMetaAt !== 'function') {
-                    console.warn('OpenSeadragon TileSource for the visualization layers is missing getImageMetaAt() function.',
+                    console.info('OpenSeadragon TileSource for the visualization layers is missing getImageMetaAt() function.',
                         'The visualization is unable to inspect problems with data sources.');
                     return;
                 }
@@ -516,6 +521,226 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     }
                 }
             };
+
+            /**
+             * Generic Multiplexing for TileSources
+             * allows to use built-in protocols as multi tile sources,
+             * the image exchange must be in images - the tile response is interpreted as an Image object
+             *
+             * todo provide faulty error message
+             * @param image
+             */
+            UTILITIES.multiplexSingleTileSource = function (image) {
+                const source = image.source,
+                    isHash = image.splitHashDataForPost;
+
+                //a bit dirty but enables use of async requests
+                source.__cached_getTilePostData = source.getTilePostData;
+                source.getTilePostData = function(level, x, y) {
+                    return [level, x, y];
+                }
+
+                source.configureItem = source.configureItem || function (data, url, postData, options) {
+                    console.warn("The Tile Source has been automatically multiplexed to support async requests.", "Url", url);
+                    console.info(`You can adjust the $TileSourceImplementation::configureItem function, we now assume all tiles just share the same metadata (e.g. maxLevel).`);
+                    console.info(`The function is the same as configure() method except it has fourth argument 'options' that is the outcome of 'configure', it's called for each item, multiple times (similar to iterator).`);
+                    //no-op
+                    return options;
+                }
+
+                source.multiConfigure = source.multiConfigure || function (dataList) {
+                    let blackImage = (context, resolve, reject) => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = context.getTileWidth();
+                        canvas.height = context.getTileHeight();
+                        const ctx = canvas.getContext('2d');
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                        const img = new Image(canvas.width, canvas.height);
+                        img.onload = () => {
+                            //next promise just returns the created object
+                            blackImage = (context, ready, _) => ready(img);
+                            resolve(img);
+                        };
+                        img.onerror = img.onabort = reject;
+                        img.src = canvas.toDataURL();
+                    };
+
+                    source._childSources = [];
+                    for (let index in dataList) {
+                        let url = dataList[index], postData;
+                        if (isHash) {
+                            var hashIdx = url.indexOf("#");
+                            if (hashIdx !== -1) {
+                                postData = url.substring(hashIdx + 1);
+                                url = url.substr(0, hashIdx);
+                            }
+                        }
+                        if( url.match(/\.js$/) ){
+                            const callbackName = url.split('/').pop().replace('.js', '');
+                            OpenSeadragon.jsonp({
+                                url: url,
+                                async: false,
+                                callbackName: callbackName,
+                                callback: callback
+                            });
+                        } else {
+                            // request info via xhr asynchronously.
+                            OpenSeadragon.makeAjaxRequest( {
+                                url: url,
+                                postData: postData,
+                                withCredentials: this.ajaxWithCredentials,
+                                headers: this.ajaxHeaders,
+                                success: function( xhr ) {
+                                    var responseText = xhr.responseText,
+                                        status       = xhr.status,
+                                        statusText,
+                                        data;
+
+                                    if ( !xhr ) {
+                                        throw new Error( OpenSeadragon.getString( "Errors.Security" ) );
+                                    } else if ( xhr.status !== 200 && xhr.status !== 0 ) {
+                                        status     = xhr.status;
+                                        statusText = ( status === 404 ) ?
+                                            "Not Found" :
+                                            xhr.statusText;
+                                        throw new Error( OpenSeadragon.getString( "Errors.Status", status, statusText ) );
+                                    }
+
+                                    if( responseText.match(/\s*<.*/) ){
+                                        try{
+                                            data = ( xhr.responseXML && xhr.responseXML.documentElement ) ?
+                                                xhr.responseXML :
+                                                OpenSeadragon.parseXml( responseText );
+                                        } catch (e) {
+                                            data = xhr.responseText;
+                                        }
+                                    }else if( responseText.match(/\s*[{[].*/) ){
+                                        try {
+                                            data = OpenSeadragon.parseJSON(responseText);
+                                        } catch(e) {
+                                            data =  responseText;
+                                        }
+                                    } else data = responseText;
+                                    if ( typeof (data) === "string" ) {
+                                        data = OpenSeadragon.parseXml( data );
+                                    }
+                                    const $TileSource = source.constructor;
+                                    const options = $TileSource.prototype.configure.apply( image, [ data, url, postData ]);
+                                    const newOpts = source.configureItem(data, url, postData, options);
+                                    source._childSources[index] = new $TileSource( newOpts || options );
+                                },
+                                error: function ( xhr, exc ) {
+                                    source._childSources[index] = null;
+                                    console.warn();
+                                }
+                            });
+                        }
+
+                    }
+
+                    //see https://stackoverflow.com/questions/41996814/how-to-abort-a-fetch-request
+                    function afetch(input, init) {
+                        let controller = new AbortController();
+                        let signal = controller.signal;
+                        init = Object.assign({signal}, init);
+                        let promise = fetch(input, init);
+                        promise.controller = controller;
+                        return promise;
+                    }
+
+                    source.downloadTileStart = function(imageJob) {
+
+                        let items = this._childSources.length,
+                            count = items,
+                            errors = 0;
+                        const context = imageJob.userData,
+                            finish = (error) => {
+                                if (error) {
+                                    imageJob.finish(null, context.promise, error);
+                                    return;
+                                }
+                                count--;
+                                if (count < 1) {
+                                    if (context.images.length < 1) context.images = null;
+                                    if (errors >= items) {
+                                        imageJob.finish(null, context.promise, "All images failed to load!");
+                                    } else {
+                                        imageJob.finish(context.images, context.promise);
+                                    }
+                                }
+                            },
+                            fallBack = (i) => {
+                                errors++;
+                                return blackImage(
+                                    source, //todo use this?
+                                    (image) => {
+                                        context.images[i] = image;
+                                        finish();
+                                    },
+                                    () => finish("Failed to create black image!")
+                                );
+                            };
+
+
+                        const coords = imageJob.postData,
+                            success = finish.bind(this, null);
+
+                        //todo let the child decide how to aggregate results, now it works for all images only
+                        if (imageJob.loadWithAjax) {
+                            context.images = new Array(count);
+                            for (let i = 0; i < count; i++) {
+                                const img = new Image();
+                                img.onerror = img.onabort = fallBack.bind(this, i);
+                                img.onload = success;
+                                context.images[i] = img;
+                            }
+
+                            context.promises = this._childSources.map((child, i) => {
+                                //re-contruct the data
+                                let furl = child?.getTileUrl(coords[0], coords[1], coords[2]),
+                                    postData = child?.getTilePostData(coords[0], coords[1], coords[2]);
+
+                                return afetch(furl, {
+                                    method: postData ? "POST" : "GET",
+                                    mode: 'cors',
+                                    cache: 'no-cache',
+                                    credentials: 'same-origin',
+                                    headers: imageJob.ajaxHeaders || {},
+                                    body: postData
+                                }).then(data => data.blob()).then(blob => {
+                                    if (imageJob.userData.didAbort) throw "Aborted!";
+                                    context.images[i].src = URL.createObjectURL(blob);
+                                }).catch((e) => {
+                                    console.log(e);
+                                    fallBack(i);
+                                });
+                            });
+
+                        } else {
+                            context.images = new Array(count);
+                            for (let i = 0; i < count; i++) {
+                                const img = new Image();
+                                img.onerror = img.onabort = fallBack.bind(this, i);
+                                img.onload = finish;
+                                context.images[i] = img;
+
+                                if (imageJob.crossOriginPolicy !== false) {
+                                    img.crossOrigin = imageJob.crossOriginPolicy;
+                                }
+                                img.src = this._childSources[i]?.getTileUrl(coords[0], coords[1], coords[2]);
+                            }
+                        }
+                    }
+                    source.downloadTileAbort = function(imageJob) {
+                        //todo images
+                        if (imageJob.loadWithAjax) {
+                            imageJob.userData.didAbort = true;
+                            imageJob.userData.promises?.forEach(p => p.controller.abort());
+                        }
+                    }
+                }
+            }
         }
     }
 })(window);

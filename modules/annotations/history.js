@@ -594,12 +594,8 @@ ${editIcon}
             this._addToBoard(toAdd, toRemove);
             this._context.raiseEvent('annotation-create', {object: toAdd});
 
-            //todo why commented out?
-            // if (toRemove) {
-            //     canvas.remove(toRemove);
-            //     this._removeFromBoard(toRemove);
-            // }
-            this._context.canvas.setActiveObject(toAdd);
+            if (toRemove) canvas.remove(toRemove);
+            canvas.setActiveObject(toAdd);
         } else if (toRemove) {
             this._focus(this._getFocusBBox(toRemove));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
