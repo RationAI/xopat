@@ -56,7 +56,7 @@ WebGLModule.DataLoader = {
             this._units = [];
 
             //todo more elegant
-            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
+            this.loadersByType["[object HTMLCanvasElement]"] = this.loadersByType["[object HTMLImageElement]"];
         }
 
         /**
@@ -91,7 +91,7 @@ WebGLModule.DataLoader = {
          * @param {WebGLRenderingContext} gl
          */
         toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
+            (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
                 this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
         }
@@ -146,10 +146,9 @@ WebGLModule.DataLoader = {
         }
 
         /**
-         * Loader strategy based on toString result
-         * @private
+         * Loader strategy based on toString result, extend with your type if necessary
          */
-        _loaders = {
+        loadersByType = {
             "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 if (!this._canvas) {
                     this._canvas = document.createElement('canvas');
@@ -283,7 +282,7 @@ WebGLModule.DataLoader = {
             this.textureId = gl.createTexture();
 
             //todo more elegant:
-            this._loaders["[object HTMLCanvasElement]"] = this._loaders["[object HTMLImageElement]"];
+            this.loadersByType["[object HTMLCanvasElement]"] = this.loadersByType["[object HTMLImageElement]"];
         }
 
         /**
@@ -314,7 +313,7 @@ WebGLModule.DataLoader = {
          * @param {WebGL2RenderingContext} gl
          */
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-            (this._loaders[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
+            (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
                     this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
         }
@@ -361,10 +360,9 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
         }
 
         /**
-         * Loader strategy based on toString result
-         * @private
+         * Loader strategy based on toString, extend with your type if necessary
          */
-        _loaders = {
+        loadersByType = {
             //Vertically Concatenated Images
             "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 const NUM_IMAGES = Math.round(data.height / tileBounds.height);

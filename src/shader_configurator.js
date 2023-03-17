@@ -368,9 +368,11 @@ onchange="${_this.REF}.refreshUserSwitched('${control}')" ${willRenderUi ? "chec
 
             return `<div id="${_this._uniqueId}interactive-container">
 ${renders.join("")}
+<style>.configurable-border.shader-input span{display: inline-block; margin: 5px 15px;}</style>
 <div class="m-2 p-2 border rounded-2">
-    <div id="${_this._uniqueId}interactive-shader-head" style="max-width: 500px; min-width: 400px;" class="d-inline-block configurable-border">
-        <div class="shader-part-name px-2">${title}</div>
+    <div id="${_this._uniqueId}interactive-shader-head" style="max-width: 500px; min-width: 400px;" class="d-inline-block configurable-border shader-input">
+        <div class="shader-part-name px-2 f3-light">${title}.</div>
+        <div class=" px-2 py-1">note: resets on config change, permanent changes perform above</div>
         ${html}
     </div>
 <div id="${_this._uniqueId}realtime-rendering-example" class="d-inline-block"></div>

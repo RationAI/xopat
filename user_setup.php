@@ -1,6 +1,15 @@
 <?php
 /**
- * TODO Describe how to use this
+ *  TODO Describe how to use this
+ *  const theWindow = window.open(this.interactiveShaderConfigUrl, 'config', "height=550,width=850"),
+        theDoc = theWindow.document;
+    const _this = this;
+    theWindow.onload = function () {
+        theWindow.runConfigurator(config => {
+            //do something with the configuration object the user has created
+            theWindow.close();
+        });
+    };
  */
 require_once "src/core.php";
 

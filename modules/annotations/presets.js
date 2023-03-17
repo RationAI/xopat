@@ -109,6 +109,7 @@ OSDAnnotations.PresetManager = class {
         //active presets for mouse buttons
         this.left = undefined;
         this.right = undefined;
+        //todo bad API use getOption on context
         this.modeOutline = APPLICATION_CONTEXT.getOption(`annotation_presets_mode_outline`, true);
         this._colorSteps = 8;
         this._colorStep = 0;
