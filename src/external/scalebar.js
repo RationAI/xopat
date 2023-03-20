@@ -58,6 +58,8 @@
      * @param {Integer} options.pixelsPerMeter The pixels per meter of the
      * zoomable image at the original image size. If null, the scale bar is not
      * displayed. default: null
+     * @param {Integer} options.pixelsPerMeterX The measurement in vertical units, need to specify both X, Y if general not given
+     * @param {Integer} options.pixelsPerMeterY The measurement in horizontal units, need to specify both X, Y if general not given
      * @param (String} options.minWidth The minimal width of the scale bar as a
      * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
      * @param {OpenSeadragon.ScalebarLocation} options.location The location
@@ -106,7 +108,9 @@
         this.fontSize = options.fontSize || "";
         this.fontFamily = options.fontFamily || "";
         this.barThickness = options.barThickness || 2;
-        this.pixelsPerMeter = options.pixelsPerMeter || null;
+
+        //todo reflect better in API, allow for distinct measures
+        this.pixelsPerMeter = options.pixelsPerMeter || (options.pixelsPerMeterX + options.pixelsPerMeterY)/2;
         this.location = options.location || $.ScalebarLocation.BOTTOM_LEFT;
         this.xOffset = options.xOffset || 5;
         this.yOffset = options.yOffset || 5;
@@ -115,11 +119,7 @@
         this.sizeAndTextRenderer = options.sizeAndTextRenderer ||
             $.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
 
-        var self = this;
-        this.refreshHandler = function() {
-            self.refresh();
-        };
-
+        this.refreshHandler = this.refresh.bind(this);
         if (options.destroy) {
             this._active = false;
         } else {
@@ -151,11 +151,20 @@
             let zoom = viewport.getZoom(true);
             if (this.__cachedZoom !== zoom) {
                 this.__cachedZoom = zoom;
-                let tileSource = this.getReferencedTiledImage() || viewport; //same API
-                this.__pixelRatio = tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(1, 0)).x -
-                    tileSource.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0)).x;
+
+                let tiledImage = this.getReferencedTiledImage() || viewport;
+                //todo proprietary func from before OSD 2.0, remove? search API
+                this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
             }
             return this.__pixelRatio;
+        },
+        /**
+         *
+         * @return {string}
+         */
+        imageLengthToGivenUnits: function (length) {
+            //todo what about flexibility in units?
+            return getWithUnitRounded(length / this.pixelsPerMeter, "m");
         },
 
         destroy: function() {
@@ -416,10 +425,6 @@
             newCtx.drawImage(scalebarCanvas, location.x, location.y);
             return newCanvas;
         },
-        //todo proprietary function, does not respect units, just metric
-        toMetricMeasurement: function (pixels, suffix) {
-            return getWithUnitRounded(pixels / this.pixelsPerMeter, suffix);
-        }
     };
 
     $.ScalebarSizeAndTextRenderer = {

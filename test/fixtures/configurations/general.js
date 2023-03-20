@@ -33,11 +33,12 @@ export default {
         }
     }),
     params: (overrides) => ({
+        "locale": "en",
         customBlending: false,
         debugMode: false,
         webglDebugMode: false,
         scaleBar: true,
-        microns: undefined,
+        statusBar: true,
         viewport: undefined,
         activeBackgroundIndex: 0,
         activeVisualizationIndex: 0,
@@ -51,6 +52,9 @@ export default {
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
         secureMode: false,
+        headers: {},
+        preferredFormat: "zip",
+        fetchAsync: false,
         ...overrides
     }),
     viewport: (key, index) => ({

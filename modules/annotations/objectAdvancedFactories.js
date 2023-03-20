@@ -209,11 +209,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     // }
 
     _updateText(line, text) {
-        const tiledImage = VIEWER.scalebar.getReferencedTiledImage(),
-            microns = tiledImage.getBackgroundConfig()?.microns || -1,
-            d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
-            strText = (microns > 0) ? VIEWER.scalebar.toMetricMeasurement(d, "m")
-                : Math.round(d) + " px";
+        const d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2));
+        const strText = VIEWER.scalebar.imageLengthToGivenUnits(d);
+        //todo update text should not recompute the text value on zoom, does not change
         text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
         return strText;
     }
