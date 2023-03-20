@@ -586,13 +586,24 @@ EOF;
             title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
         }
 
-        const microns = imageData?.microns;
+        let ppm = imageData?.microns, ppmX = imageData?.micronsX, ppmY = imageData?.micronsY,
+            lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
+        if (ppmX && ppmY) {
+            ppm = undefined; //if both specified, just prefer the specific values
+            ppmX = 1e6 / ppmX;
+            ppmY = 1e6 / ppmY;
+        } else if (!ppm) {
+            //else if not anything, just set 1 to measure as pixels
+            lengthFormatter = (ppm, minSize) => metricPx(ppm, minSize, "px", false);
+            ppm = 1;
+        } else ppm = 1e6 / ppm;
+
         const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
         VIEWER.makeScalebar({
-            pixelsPerMeter: microns * 1e6 || 1,
-            sizeAndTextRenderer: microns ?
-                OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH
-                : (ppm, minSize) => metricPx(ppm, minSize, "px", false),
+            pixelsPerMeter: ppm,
+            pixelsPerMeterX: ppmX,
+            pixelsPerMeterY: ppmY,
+            sizeAndTextRenderer: lengthFormatter,
             stayInsideImage: false,
             location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
             xOffset: 5,
