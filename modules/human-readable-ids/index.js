@@ -1,8 +1,8 @@
 //todo support translates
 window.HumanReadableIds = {
-    create: function(precision=1e3) {
-        return this.encode(Math.round((Date.now())/precision) %
-            (this.nouns.length*this.verbs.length*this.adjectives.length*this.adverbs.length));
+    create: function() {
+        return this.encode(Math.floor(Math.random() *
+            this.nouns.length*this.verbs.length*this.adjectives.length*this.adverbs.length));
     },
 
     encode: function (number) {
@@ -51,14 +51,14 @@ window.HumanReadableIds = {
     },
 
     // English adjectives
-    adjectives: ['cute', 'happy', 'sad', 'angry', 'calm', 'loud', 'quiet', 'fast', 'slow', 'big', 'small',
+    adjectives: ['cute', 'happy', 'unhappy', 'sad', 'angry', 'calm', 'loud', 'quiet', 'fast', 'slow', 'big', 'small',
         'tall', 'short', 'bright', 'dark', 'hot', 'cold', 'soft', 'hard', 'sweet', 'sour', 'dapper', 'large',
         'long', 'thick', 'narrow', 'deep', 'flat', 'whole', 'low', 'high', 'near', 'far', 'quick', 'early', 'late',
         'cloudy', 'warm', 'cool', 'windy', 'noisy', 'dry', 'clear', 'heavy', 'light', 'strong', 'weak', 'tidy',
         'clean', 'dirty', 'empty', 'full', 'close', 'thirsty', 'hungry', 'fat', 'old', 'fresh', 'dead', 'healthy',
         'bitter', 'salty', 'good', 'bad', 'great', 'important', 'useful', 'expensive', 'cheap', 'free', 'difficult',
         'able', 'rich', 'afraid', 'brave', 'fine', 'proud', 'comfortable', 'clever', 'interesting', 'famous',
-        'exciting', 'funny', 'kind', 'polite', 'fair', 'share', 'busy', 'lazy', 'lucky', 'careful', 'safe', 'dangerous'],
+        'exciting', 'funny', 'kind', 'polite', 'fair', 'shared', 'busy', 'lazy', 'lucky', 'careful', 'safe', 'dangerous'],
 
     // English plural nouns (all animals)
     nouns: ['rabbits', 'badgers', 'foxes', 'chickens', 'bats', 'deer', 'snakes', 'hares', 'hedgehogs',
