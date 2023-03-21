@@ -117,7 +117,7 @@ AnnotationsGUI.DataLoader = class {
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
         APPLICATION_CONTEXT.metadata.set("annotations-name", this.getMetaName(this.currentMeta));
-        APPLICATION_CONTEXT.metadata.set("annotations-format", this.getMetaFormat(this.currentMeta));
+        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context.exportOptions.format);
         this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
             onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
     }
@@ -146,7 +146,7 @@ AnnotationsGUI.DataLoader = class {
         //set metadata, no available active annotation meta
         const now = Date.now();
         APPLICATION_CONTEXT.metadata.set("annotations-name", `a${now}`);
-        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context._format);
+        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context.exportOptions.format);
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',
