@@ -78,7 +78,6 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 		});
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
-		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
 	}
 
 	setupFromParams() {
@@ -848,7 +847,7 @@ class="btn m-2">Set for left click </button>
 			$('#preset-modify-dialog').remove();
 
 			//todo test IO for different formats
-			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata), json);
 			_this.context.import(json.data, format).then(()=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
@@ -870,7 +869,7 @@ class="btn m-2">Set for left click </button>
 					_this.loadAnnotationsList();
 				},
 				e => {
-					Dialogs.show(`Failed to upload annotations. You can 
+					Dialogs.show(`Failed to upload annotations. Are you logged in? You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
 						7000, Dialogs.MSG_ERR);
 					console.error("Failed to update annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));

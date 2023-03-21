@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "A plugin for annotations creation, management and sharing.",
     "icon": "",
-    "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "advanced.js", "xmlToJSON.min.js"],
+    "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "xmlToJSON.min.js"],
     "modules": ["annotations"],
     "permaLoad": false,
     "server": "/iipsrv.fcgi",
