@@ -806,9 +806,10 @@ class="btn m-2">Set for left click </button>
 <span onclick="${this.THIS}.updateAnnotation('${id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
 <span onclick="${this.THIS}.removeAnnotation('${id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
-					title: _this.dataLoader.getMetaName(meta),
-					author: _this.dataLoader.getMetaAuthor(meta),
-					details: _this.dataLoader.getMetaDescription(meta), //todo date?
+					title: _this.dataLoader.getMetaName(meta, available),
+					author: _this.dataLoader.getMetaAuthor(meta, available),
+					details: _this.dataLoader.getMetaDescription(meta, available),
+					icon: _this.dataLoader.getIcon(meta, available),
 					contentAction:actionPart
 				});
 				count++;

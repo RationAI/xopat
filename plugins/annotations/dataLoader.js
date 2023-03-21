@@ -45,41 +45,56 @@ AnnotationsGUI.DataLoader = class {
     /**
      * Get author from meta
      * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaAuthor(metadata) {
+    getIcon(metadata, request) {
+        return false; //do not render
+    }
+
+    /**
+     * Get author from meta
+     * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
+     */
+    getMetaAuthor(metadata, request) {
         return metadata.getUser();
     }
 
     /**
      * Get date from the meta
      * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaDate(metadata) {
+    getMetaDate(metadata, request) {
         return new Date(metadata.getUTC()).toDateString();
     }
 
     /**
      * Get format of the export
      * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaFormat(metadata) {
+    getMetaFormat(metadata, request) {
         return metadata.get("annotations-format");
     }
 
     /**
      * Get export name from meta
      * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaName(metadata) {
+    getMetaName(metadata, request) {
         return metadata.get("annotations-name");
     }
 
     /**
      * Build description text
      * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaDescription(metadata) {
-        return 'Annotations export: ' + this.getMetaFormat(metadata) + ', uploaded ' + metadata.get("date");
+    getMetaDescription(metadata, request) {
+        //we send data as join of tables with users, so request.name = user.name
+        return 'Annotations export: ' + this.getMetaFormat(metadata) + ', created by ' + request.name;
     }
 
     /**
