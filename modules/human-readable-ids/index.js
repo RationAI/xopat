@@ -1,7 +1,7 @@
 //todo support translates
 window.HumanReadableIds = {
     create: function(precision=1e3) {
-        return this.encode(Math.round((1679436570103 - Date.now())/precision) %
+        return this.encode(Math.round((Date.now())/precision) %
             (this.nouns.length*this.verbs.length*this.adjectives.length*this.adverbs.length));
     },
 
@@ -77,17 +77,20 @@ window.HumanReadableIds = {
     ],
 
     // English verbs, past tense
-    verbs: ['sang', 'played', 'knitted', 'floundered', 'danced', 'listened', 'ran', 'talked',
-        'cuddled', 'sat', 'kissed', 'hugged', 'whimpered', 'hid', 'fought', 'whispered', 'cried',
-        'snuggled', 'walked', 'drove', 'loitered', 'felt', 'jumped', 'hopped', 'went', 'married', 'engaged',
-        'came', 'looked', 'watched', 'thought', 'slept', 'ate', 'drank', 'read', 'wrote', 'spoke',
-        'took', 'gave', 'made', 'found', 'lost', 'built', 'bought', 'sold', 'sent', 'received', 'kept', 'spent',
-        'broke', 'fixed', 'stood', 'grew', 'cut', 'drew', 'heard', 'told'],
+    verbs: ['sang', 'played', 'knitted', 'floundered', 'danced', 'listened', 'ran', 'talked', 'cuddled', 'sat', 'kissed',
+        'hugged', 'whimpered', 'hid', 'fought', 'whispered', 'cried', 'snuggled', 'walked', 'drove', 'loitered', 'felt',
+        'jumped', 'hopped', 'went', 'married', 'engaged', 'came', 'looked', 'watched', 'thought', 'slept', 'ate', 'drank',
+        'read', 'wrote', 'spoke', 'took', 'gave', 'made', 'found', 'lost', 'built', 'bought', 'sold', 'sent', 'received',
+        'kept', 'spent', 'broke', 'fixed', 'stood', 'grew', 'cut', 'drew', 'heard', 'told', 'smiled', 'laughed', 'screamed',
+        'yawned', 'waved', 'worked', 'studied', 'learned', 'taught'],
 
     // English adverbs
-    adverbs: ['jovially', 'merrily', 'cordially', 'carefully', 'correctly', 'eagerly', 'easily', 'fast',
-        'loudly', 'patiently', 'quietly', 'always', 'often', 'sometimes', 'rarely', 'usually', 'simply',
-        'quickly', 'happily', 'sadly', 'calmly', 'softly', 'gently', 'kindly', 'angrily', 'completely',
-        'nearly', 'now', 'then', 'there', 'here', 'soon', 'late', 'early', 'again', 'together', 'apart',
-        'already', 'naturally', 'perfectly', 'exactly', 'slowly', 'deeply'],
+    adverbs: ['jovially', 'merrily', 'cordially', 'carefully', 'correctly', 'eagerly', 'easily', 'fast', 'loudly',
+        'patiently', 'quietly', 'always', 'often', 'sometimes', 'rarely', 'usually', 'simply', 'quickly', 'happily',
+        'sadly', 'calmly', 'softly', 'gently', 'kindly', 'angrily', 'completely', 'nearly', 'now', 'then', 'there',
+        'here', 'soon', 'late', 'early', 'again', 'together', 'apart', 'already', 'naturally', 'perfectly', 'exactly',
+        'slowly', 'deeply', 'politely', 'generously', 'cheerfully', 'anxiously', 'excitedly', 'nervously', 'gracefully',
+        'awkwardly', 'honestly', 'sincerely', 'openly', 'boldly', 'shyly', 'noisily', 'steadily', 'firmly', 'roughly',
+        'directly', 'indirectly', 'certainly', 'definitely', 'absolutely', 'possibly', 'maybe', 'hopefully', 'truly',
+        'finally', 'recently'],
 }
