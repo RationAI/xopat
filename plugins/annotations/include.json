@@ -6,7 +6,7 @@
     "description": "A plugin for annotations creation, management and sharing.",
     "icon": "",
     "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "xmlToJSON.min.js"],
-    "modules": ["annotations"],
+    "modules": ["annotations", "human-readable-ids"],
     "permaLoad": false,
     "server": "/iipsrv.fcgi",
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],

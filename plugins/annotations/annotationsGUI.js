@@ -863,7 +863,7 @@ class="btn m-2">Set for left click </button>
 
 		//server IO only supports default format
 		this.context.export(this._defaultFormat).then(data => {
-			_this.dataLoader.updateAnnotation(_this._server, id, data,
+			_this.dataLoader.updateAnnotation(_this._server, id, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();
@@ -898,7 +898,7 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		//server IO only supports default format
 		this.context.export(this._defaultFormat).then(data => {
-			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
+			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();

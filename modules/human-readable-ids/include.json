@@ -1,0 +1,8 @@
+{
+    "id": "human-readable-ids",
+    "name": "Human-readable ID generator",
+    "includes" : [
+        "index.js"
+    ],
+    "requires": []
+}

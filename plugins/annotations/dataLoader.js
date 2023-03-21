@@ -124,15 +124,16 @@ AnnotationsGUI.DataLoader = class {
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {object} data annotations data, export from the module
+     * @param {string} format
      * @param {function} onSuccess  call with object - data from the response, in expected format
      * @param {function} onFailure  call on failure with the error object
      */
-    updateAnnotation(server, annotationId, data, onSuccess, onFailure) {
+    updateAnnotation(server, annotationId, data, format, onSuccess, onFailure) {
         //set the data according to the current metadata values
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
         APPLICATION_CONTEXT.metadata.set("annotations-name", this.getMetaName(this.currentMeta, null));
-        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context.exportOptions.format);
+        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
         this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
             onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
     }
@@ -153,15 +154,15 @@ AnnotationsGUI.DataLoader = class {
      * @param {string} server URL to the annotations server
      * @param {string} tissueId tissue ID, usually a path to the file
      * @param {object} data annotations data, export from the module
+     * @param {string} format
      * @param {function} onSuccess call with object - data from the response, in expected format
      * @param {function} onFailure call on failure with the error object
      */
-    uploadAnnotation(server, tissueId, data, onSuccess, onFailure) {
+    uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
 
         //set metadata, no available active annotation meta
-        const now = Date.now();
-        APPLICATION_CONTEXT.metadata.set("annotations-name", `a${now}`);
-        APPLICATION_CONTEXT.metadata.set("annotations-format", this.context.exportOptions.format);
+        APPLICATION_CONTEXT.metadata.set("annotations-name", HumanReadableIds.create());
+        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',
