@@ -452,28 +452,58 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     window.USER_INTERFACE = {
+        /**
+         * Run highlight animation on element
+         * @param id id of the element in DOM
+         * @param timeout highlight timeout in ms, default 2000
+         * @param animated default true
+         */
         highlightElementId(id, timeout=2000, animated=true) {
             let cls = animated ? "ui-highlight-animated" : "ui-highlight";
             $(`#${id}`).addClass(cls);
             setTimeout( () => $(`#${id}`).removeClass(cls), timeout);
         },
 
+        /**
+         * Highlight element in DOM ensuring given menus are open it is
+         * contained in
+         * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
+         * @param {string|[]} menuId id of the menu to focus, applicable for menus that can switch between
+         *   different contents, AdvancedMenu can specify both string (menuId to open) or array ([menuId, submenuId])
+         * @param id element ID to highlight
+         * @param timeout highlight timeout in ms, default 2000
+         * @param animated default true
+         */
         highlight(menuName, menuId, id, timeout=2000, animated=true) {
+            this.focusMenu(menuName, menuId);
+            this.highlightElementId(id, timeout, animated);
+        },
+
+        /**
+         * Highlight element in DOM ensuring given menus are open it is
+         * contained in
+         * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
+         * @param {string|[]} menuId id of the menu to focus, applicable for menus that can switch between
+         *   different contents, AdvancedMenu can specify both string (menuId to open) or array ([menuId, submenuId])
+         */
+        focusMenu(menuName, menuId) {
             switch (menuName) {
                 case "MainMenu":
                     this.MainMenu.open();
                     $("#main-panel-content").scrollTo("#" + id);
                     break;
                 case "Tools":
+                    this.AdvancedMenu.close();
                     this.Tools.open(menuId);
                     break;
                 case "AdvancedMenu":
-                    this.AdvancedMenu.openMenu(menuId);
+                    //todo add scroll ability?
+                    if (Array.isArray(menuId) && menuId.length > 1) this.AdvancedMenu.openSubmenu(menuId[0], menuId[1]);
+                    else this.AdvancedMenu.openMenu(menuId);
                     break;
                 default:
                     console.warn("Invalid menu name for USER_INTERFACE::highlight!");
             }
-            this.highlightElementId(id, timeout, animated);
         },
 
         /**

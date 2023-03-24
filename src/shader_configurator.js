@@ -834,6 +834,9 @@ Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.titl
         onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
         onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+Sample Mask or Uniformly (mask=false) <br>
+Read Mask: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.maskOnly,
+    onchange: PredefinedShaderControlParameters.__chngtml(name, 'maskOnly', 'this.checked')})}<br>
 Select starting positions (between min and max) <br>
 Breaks: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.breaks,
         onchange: PredefinedShaderControlParameters.__chngtml(name, 'breaks', 'this.values')})}<br>

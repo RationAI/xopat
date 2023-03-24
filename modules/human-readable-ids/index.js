@@ -60,7 +60,7 @@ window.HumanReadableIds = {
         'able', 'rich', 'afraid', 'brave', 'fine', 'proud', 'comfortable', 'clever', 'interesting', 'famous',
         'exciting', 'funny', 'kind', 'polite', 'fair', 'shared', 'busy', 'lazy', 'lucky', 'careful', 'safe', 'dangerous'],
 
-    // English plural nouns (all animals)
+    // English nouns (all animals)
     nouns: ['rabbits', 'badgers', 'foxes', 'chickens', 'bats', 'deer', 'snakes', 'hares', 'hedgehogs',
         'platypuses', 'moles', 'mice', 'otters', 'rats', 'squirrels', 'stoats', 'weasels', 'crows',
         'doves', 'ducks', 'geese', 'hawks', 'herons', 'kingfishers', 'owls', 'peafowl', 'pheasants',
@@ -68,12 +68,11 @@ window.HumanReadableIds = {
         'dragonflies', 'flies', 'moths', 'spiders', 'pikes', 'salmons', 'trouts', 'frogs', 'newts',
         'toads', 'crabs', 'lobsters', 'clams', 'cockles', 'mussles', 'oysters', 'snails', 'cattle',
         'dogs', 'donkeys', 'goats', 'horses', 'pigs', 'sheep', 'ferrets', 'gerbils',
-        "guinea pigs",'parrots', 'greg', 'cat', 'dog', 'fish', 'bird', 'hamster', 'rabbit',
+        'parrots', 'greg', 'cat', 'dog', 'fish', 'bird', 'hamster', 'rabbit',
         'turtle', 'mouse', 'rat', 'squirrel', 'horse', 'cow', 'pig', 'goat', 'chicken', 'duck',
         'goose', 'turkey', 'penguin', 'elephant', 'lion', 'tiger', 'leopard', 'zebra', 'giraffe',
         'monkey', 'ape', 'gorilla', 'kangaroo', 'koala', 'panda', 'bat', 'snake', 'lizard', 'crocodile',
-        'hippopotamus', 'rhinoceros', 'buffalo',
-        "octopus"
+        'rhinoceros', 'buffalo', 'octopus'
     ],
 
     // English verbs, past tense

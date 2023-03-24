@@ -447,22 +447,22 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         // }
         let color = this._context.getAnnotationColor(object);
         let name = this._context.getAnnotationDescription(object, "category", true);
-        // if (name) {
-        //     inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
-        //         name || this._context.getDefaultAnnotationName(object), '</span>');
-        // } else {
+        if (name) {
+            inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
+                name || this._context.getDefaultAnnotationName(object), '</span>');
+        } else {
             //with no meta name, object will receive 'category' on edit
             inputs.push('<label class="show-hint d-block" data-hint="Category">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
                 this._context.getDefaultAnnotationName(object), '" name="category"></label>');
-        // }
+        }
 
         const _this = this;
         const focusBox = this._getFocusBBoxAsString(object, factory);
         const editIcon = factory.isEditable() ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
-title="Edit annotation (disables navigation)" onclick="let self = $(this); if (self.html() === 'edit') {
-${_this._globalSelf}._boardItemEdit(self, ${focusBox}, ${object.incrementId}); } 
+title="Edit annotation (disables navigation)" onclick="if (this.html() === 'edit') {
+${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
 <div id="log-object-${object.incrementId}" class="rounded-2"

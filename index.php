@@ -594,11 +594,10 @@ EOF;
             ppmY = 1e6 / ppmY;
         } else if (!ppm) {
             //else if not anything, just set 1 to measure as pixels
-            lengthFormatter = (ppm, minSize) => metricPx(ppm, minSize, "px", false);
+            lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC.bind(null, "px");
             ppm = 1;
         } else ppm = 1e6 / ppm;
 
-        const metricPx = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC;
         VIEWER.makeScalebar({
             pixelsPerMeter: ppm,
             pixelsPerMeterX: ppmX,

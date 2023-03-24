@@ -23,6 +23,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		//Register used annotation object factories
 		this.context = OSDAnnotations.instance();
+		this.context.presets.setModeOutline(this.getOption('drawOutline', true));
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
@@ -101,6 +102,11 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 
 	 *****************************************************************************************************************/
 
+	setDrawOutline(drawOutline) {
+		this.setOption('drawOutline', drawOutline, true);
+		this.context.presets.setModeOutline(drawOutline);
+	}
+
 	initHTML() {
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
@@ -118,7 +124,7 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br>
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
-				onchange: `${this.THIS}.context.presets.setModeOutline(this.checked == true);`,
+				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
 				default: this.context.presets.getModeOutline()
 			})}</div>`,
 			"annotations-panel",
@@ -313,9 +319,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
+					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'W' key <br> instead of setting this manually."
 				}, {
-					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release Alt key)."
+					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
 					"next #annotations-left-click": "Rectangle and ellipse can be created by a drag."
 				}, {
@@ -329,13 +335,13 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
-					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
+					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'E' key <br> instead in the future."
 				}, {
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
 				}, {
-					"next #fft-add-annotation-mode + label": "Selected object can be appended to (Left Shift only) ..."
+					"next #fft-add-annotation-mode + label": "Selected object can be appended to ('E' key) ..."
 				}, {
-					"next #fft-remove-annotation-mode + label": "... or removed from (Left Shift + Left Alt)."
+					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
 				}, {
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{

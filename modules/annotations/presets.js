@@ -109,8 +109,6 @@ OSDAnnotations.PresetManager = class {
         //active presets for mouse buttons
         this.left = undefined;
         this.right = undefined;
-        //todo bad API use getOption on context
-        this.modeOutline = APPLICATION_CONTEXT.getOption(`annotation_presets_mode_outline`, true);
         this._colorSteps = 8;
         this._colorStep = 0;
         this._presetsImported = false;
@@ -140,7 +138,6 @@ OSDAnnotations.PresetManager = class {
     setModeOutline(isOutline) {
         if (this.modeOutline === isOutline) return;
         this.modeOutline = isOutline;
-        APPLICATION_CONTEXT.setOption(`annotation_presets_mode_outline`, isOutline, true);
         this.updateAllObjectsVisuals();
         this._context.canvas.requestRenderAll();
     }

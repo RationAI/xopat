@@ -572,6 +572,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         /**
          * Store the plugin configuration parameters
+         * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache
