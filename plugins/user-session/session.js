@@ -46,14 +46,14 @@ addPlugin("user-session", class extends XOpatPlugin {
         const theWindow = window.open(this.performAuthServer,
             'authenticate-user', "height=550,width=850");
         if (theWindow) {
-            theWindow.addEventListener('readystatechange',function(){
-                if(this.responseURL != _this.performAuthServer){
-                    theWindow.close();
-                }
+            theWindow.addEventListener('unload',function(){
+                setTimeout(() => {
+                    //continue only when closed
+                    if (!theWindow?.name) _this.authenticate(false);
+                }, 1000)
             });
-            theWindow.addEventListener('beforeunload',function(){
-                setTimeout(_this.authenticate.bind(_this, false), 1000)
-            });
+            theWindow.focus();
+            _this._finishAuthFail();
         } else if (ask) {
             this.requestAuth();
             _this._finishAuthFail();
