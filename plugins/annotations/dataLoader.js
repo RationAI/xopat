@@ -57,7 +57,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaAuthor(metadata, request) {
-        return metadata.getUser();
+        return metadata.getUserData()?.name;
     }
 
     /**

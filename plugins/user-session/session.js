@@ -1,57 +1,97 @@
 addPlugin("user-session", class extends XOpatPlugin {
     constructor(id, params) {
         super(id);
-        this.server = this.getStaticMeta('server');
+        this.authServer = this.getStaticMeta('authServer');
+        this.performAuthServer = this.getStaticMeta('performAuth');
+        this.storeSessionServer = this.getStaticMeta('sessionServer');
         this.headers = this.getStaticMeta('headers');
-        this.sessionReferenceFile = params.referenceFile || "";
-
-        this.enabled = this.sessionReferenceFile && this.server && true; //retype
+        this.authenticated = false;
     }
 
     pluginReady() {
-        if (this.enabled) {
-            USER_INTERFACE.MainMenu.append(
-                "Session Store",
-                `<span class="material-icons pointer" title="Save session" style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">save</span>`,
-                '',
-                "user-session-panel",
-                this.id
-            );
+        this.authenticate();
+    }
 
-            //record visiting to the endpoint
-            UTILITIES.fetchJSON(this.server, {
-                ajax: "setSeen", //todo not flexible :/
-                user: APPLICATION_CONTEXT.metadata.getUser(),
-                filename: this.sessionReferenceFile
-            }, this.headers, false).then(response => {
-                //ignore whatever response
-            }).catch(e => {
-                console.warn("Adding record of viewed tissue failed!", e);
+    authenticate(repeatedLogin=true) {
+        if (!this.authServer || this.authenticated) return; //todo message
+
+        const _this = this;
+        UTILITIES.fetchJSON(this.authServer, {}, this.headers,
+            [MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]).then(response => {
+                //todo not flexible:
+            if (response.status === "success") {
+                _this._finishAuthOk(response);
+                if (!repeatedLogin) Dialogs.show("Logged in!", 5000, Dialogs.MSG_OK);
+            } else if (repeatedLogin) {
+                _this.performAuth();
+            } else {
+                _this._finishAuthFail();
+            }
+        }).catch(e => {
+            if (repeatedLogin) _this.performAuth();
+            else _this._finishAuthFail();
+        });
+    }
+
+    requestAuth() {
+        Dialogs.show(`Your login has timed out. Please, <a class="pointer" onclick="plugin('${this.id}').performAuth(false);">login again.</a>`, 10000, Dialogs.MSG_WARN);
+    }
+
+    performAuth(ask=true) {
+        if (!this.performAuthServer || this.authenticated) {
+            Dialogs.show("Unable to log-in: the viewer is not able to do it.", 5000, Dialogs.MSG_ERR);
+            return;
+        }
+        const _this = this;
+        const theWindow = window.open(this.performAuthServer,
+            'authenticate-user', "height=550,width=850");
+        if (theWindow) {
+            theWindow.addEventListener('readystatechange',function(){
+                if(this.responseURL != _this.performAuthServer){
+                    theWindow.close();
+                }
             });
-
+            theWindow.addEventListener('beforeunload',function(){
+                setTimeout(_this.authenticate.bind(_this, false), 1000)
+            });
+        } else if (ask) {
+            this.requestAuth();
+            _this._finishAuthFail();
         } else {
-            USER_INTERFACE.MainMenu.append(
-                "Session Store",
-                `<span class="material-icons pointer" title="Not available" style="text-decoration: line-through; text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">save</span>`,
-                '',
-                "user-session-panel",
-                this.id
-            );
+            Dialogs.show("Unable to log-in: the viewer is not able to do it.", 5000, Dialogs.MSG_ERR);
+            _this._finishAuthFail();
         }
     }
 
+    _finishAuthOk(response) {
+        APPLICATION_CONTEXT.metadata.setUserData(response);
+        USER_INTERFACE.MainMenu.replace(
+            `User &nbsp;<span class="f3-light">${APPLICATION_CONTEXT.metadata.getUserData()?.name}</span>`,
+            `<span class="btn-pointer" title="Store your workplace on the server." style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">Save Session: <span class="material-icons">save</span></span>`,
+            '',
+            "user-session-panel",
+            this.id
+        );
+    }
+
+    _finishAuthFail() {
+        USER_INTERFACE.MainMenu.replace(
+            "Not logged in!",
+            `<span title="Session storing not available!." style="text-align:right; text-decoration: line-through; vertical-align:sub;float: right;">Save Session: <span class="material-icons">save</span></span>`,
+            `Some services might not work. <a class="pointer" onclick="plugin('${this.id}').performAuth(false);">Log-in.</a>`,
+            "user-session-panel",
+            this.id
+        );
+    }
+
     async export() {
-        if (!this.enabled) {
+        if (!this.storeSessionServer) {
             console.warn("Cannot save the session: no target WSI found.");
             Dialogs.show("Cannot save the session: no target WSI found.", 2500, Dialogs.MSG_WARN);
         } else {
-            UTILITIES.fetchJSON(this.server, {
-                ajax: "storeSession", //todo not flexible :/
-                user: APPLICATION_CONTEXT.metadata.getUser(),
-                filename: this.sessionReferenceFile,
-                session: await UTILITIES.getForm()
-            }, this.headers, false).then(response => {
-                //todo not flexible :/
+            UTILITIES.fetchJSON(this.storeSessionServer, {
+                data: await UTILITIES.serializeApp()
+            }, this.headers, [MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]).then(response => {
                 if (response?.status !== "success") throw new HTTPError(response.message, response, response.error);
                 Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);
             }).catch(e => {

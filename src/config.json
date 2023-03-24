@@ -10,7 +10,7 @@
     "client": {
         "localhost": {
             /* The Viewer Domain Full URL including protocol */
-            "domain": "http://localhost/",
+            "domain": "http://localhost:8080",
             /*
              The Path to the Viewer at given domain, so that 'domain+path+index.php' is the viewer index.
              Use null to let the system detect the path automatically.

@@ -8,8 +8,12 @@
     "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "xmlToJSON.min.js"],
     "modules": ["annotations", "human-readable-ids"],
     "permaLoad": false,
-    "server": "/iipsrv.fcgi",
+    //Annotation server to store annotations at
+    "server": "http://localhost:8080/tbrowser/ajax/annotations.php",
+    //Available annotation object types
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
+    //Default export and import format
     "ioFormat": "native",
+    //Windowed history?
     "modalHistoryWindow": true
 }

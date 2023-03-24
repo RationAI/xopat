@@ -803,7 +803,8 @@ class="btn m-2">Set for left click </button>
 			this._serverAnnotationList = Array.isArray(json) ? json : json.annotations;
 
 			for (let available of this._serverAnnotationList) {
-				available.metadata = new MetaStore(available.metadata);
+				//unsafe mode will parse all the metadata as one, so the user meta will be read from available.metadata
+				available.metadata = new MetaStore(available.metadata, false);
 				let id = available.id, meta = available.metadata;
 
 				let actionPart = `
@@ -832,7 +833,7 @@ class="btn m-2">Set for left click </button>
 			onSuccessLoad(json);
 		}, error => {
 			console.error(_this.dataLoader.getErrorResponseMessage(error))
-			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu("Could not load annotations list."));
+			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu(`Could not load annotations list. <a class="pointer" onclick="plugin('${_this.id}').loadAnnotationsList()">Retry.</a>`));
 		});
 	}
 
@@ -853,7 +854,7 @@ class="btn m-2">Set for left click </button>
 			$('#preset-modify-dialog').remove();
 
 			//todo test IO for different formats
-			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata), json);
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
 			_this.context.import(json.data, format).then(()=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
