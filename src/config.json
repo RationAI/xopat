@@ -24,7 +24,7 @@
                Available are 'path' (image server URL) and 'data' (image identifier such as image path).
                Server URL can be relative, if on the same server domain as the viewer.
              */
-            "image_group_server": "/iipsrv.fcgi",
+            "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
             /*
@@ -35,7 +35,7 @@
 
                In case of parameter fetchAsync = true, data is a single string, not an array!
              */
-            "data_group_server": "/iipsrv.fcgi",
+            "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
             /* TODO */
             "headers": {},
