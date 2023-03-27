@@ -325,7 +325,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             if (this.__ioInitialized) return false;
 
             const _this = this;
-            VIEWER.addHandler('export-data', async e =>  e.setSerializedData(this.id, await _this.exportData()));
+            VIEWER.addHandler('export-data', (e) => new Promise((resolve, reject) => {
+                try {
+                    _this.exportData().then(data => e.setSerializedData(_this.id, data)).then(resolve)
+                } catch (e) {
+                    reject(e);
+                }
+            }));
             this.setCache = async (key, value) => {
                 const store = APPLICATION_CONTEXT.metadata.persistent();
                 if (store) {
@@ -572,6 +578,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         /**
          * Store the plugin configuration parameters
+         * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache

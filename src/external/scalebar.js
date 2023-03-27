@@ -164,7 +164,8 @@
          */
         imageLengthToGivenUnits: function (length) {
             //todo what about flexibility in units?
-            return getWithUnitRounded(length / this.pixelsPerMeter, "m");
+            return getWithUnitRounded(length / this.pixelsPerMeter,
+                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
         },
 
         destroy: function() {
@@ -432,7 +433,7 @@
          * Metric length. From nano meters to kilometers.
          */
         METRIC_LENGTH: function(ppm, minSize) {
-            return getScalebarSizeAndTextForMetric(ppm, minSize, "m");
+            return getScalebarSizeAndTextForMetric("m", ppm, minSize);
         },
         /**
          * Imperial length. Choosing the best unit from thou, inch, foot and mile.
@@ -443,16 +444,16 @@
             if (maxSize < ppi * 12) {
                 if (maxSize < ppi) {
                     var ppt = ppi / 1000;
-                    return getScalebarSizeAndText(ppt, minSize, "th");
+                    return getScalebarSizeAndText("th", ppt, minSize);
                 }
-                return getScalebarSizeAndText(ppi, minSize, "in");
+                return getScalebarSizeAndText("in", ppi, minSize);
             }
             var ppf = ppi * 12;
             if (maxSize < ppf * 2000) {
-                return getScalebarSizeAndText(ppf, minSize, "ft");
+                return getScalebarSizeAndText("ft", ppf, minSize);
             }
             var ppmi = ppf * 5280;
-            return getScalebarSizeAndText(ppmi, minSize, "mi");
+            return getScalebarSizeAndText("mi", ppmi, minSize);
         },
         /**
          * Astronomy units. Choosing the best unit from arcsec, arcminute, and degree
@@ -460,14 +461,14 @@
         ASTRONOMY: function(ppa, minSize) {
             var maxSize = minSize * 2;
             if (maxSize < ppa * 60) {
-                return getScalebarSizeAndText(ppa, minSize, "\"", false, '');
+                return getScalebarSizeAndText("\"", ppa, minSize, false, '');
             }
             var ppminutes = ppa * 60;
             if (maxSize < ppminutes * 60) {
-                return getScalebarSizeAndText(ppminutes, minSize, "\'", false, '');
+                return getScalebarSizeAndText("\'", ppminutes, minSize, false, '');
             }
             var ppd = ppminutes * 60;
-            return getScalebarSizeAndText(ppd, minSize, "&#176", false, '');
+            return getScalebarSizeAndText("&#176", ppd, minSize, false, '');
         },
         /**
          * Standard time. Choosing the best unit from second (and metric divisions),
@@ -476,29 +477,28 @@
         STANDARD_TIME: function(pps, minSize) {
             var maxSize = minSize * 2;
             if (maxSize < pps * 60) {
-                return getScalebarSizeAndTextForMetric(pps, minSize, "s");
+                return getScalebarSizeAndTextForMetric("s", pps, minSize);
             }
             var ppminutes = pps * 60;
             if (maxSize < ppminutes * 60) {
-                return getScalebarSizeAndText(ppminutes, minSize, "minute", true);
+                return getScalebarSizeAndText("minute", ppminutes, minSize, true);
             }
             var pph = ppminutes * 60;
             if (maxSize < pph * 24) {
-                return getScalebarSizeAndText(pph, minSize, "hour", true);
+                return getScalebarSizeAndText("hour", pph, minSize, true);
             }
             var ppd = pph * 24;
             if (maxSize < ppd * 365.25) {
-                return getScalebarSizeAndText(ppd, minSize, "day", true);
+                return getScalebarSizeAndText("day", ppd, minSize, true);
             }
             var ppy = ppd * 365.25;
-            return getScalebarSizeAndText(ppy, minSize, "year", true);
+            return getScalebarSizeAndText("year", ppy, minSize, true);
         },
         /**
          * Generic metric unit. One can use this function to create a new metric
          * scale. For example, here is an implementation of energy levels:
          * function(ppeV, minSize) {
-         *   return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC(
-         *           ppeV, minSize, "eV");
+         *   return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC("eV", ppeV, minSize);
          * }
          */
         METRIC_GENERIC: getScalebarSizeAndTextForMetric
@@ -512,7 +512,7 @@
         return ratio * viewportZoom;
     }
 
-    function getScalebarSizeAndText(ppm, minSize, unitSuffix, handlePlural, spacer) {
+    function getScalebarSizeAndText(unitSuffix, ppm, minSize, handlePlural, spacer) {
         spacer = spacer === undefined ? ' ' : spacer;
         var value = normalize(ppm, minSize);
         var factor = roundSignificand(value / ppm * minSize, 3);
@@ -524,7 +524,7 @@
         };
     }
 
-    function getScalebarSizeAndTextForMetric(ppm, minSize, unitSuffix, shouldFactorizeUnit=true) {
+    function getScalebarSizeAndTextForMetric(unitSuffix, ppm, minSize, shouldFactorizeUnit=true) {
         var value = normalize(ppm, minSize);
         var factor = roundSignificand(value / ppm * minSize, 3);
         var size = value * minSize;
@@ -580,6 +580,9 @@
         if (value < 1) {
             return value * 1000 + " m" + unitSuffix;
         }
+        if (value < 1000) {
+            return value + unitSuffix;
+        }
         if (value >= 1000) {
             return value / 1000 + " k" + unitSuffix;
         }
@@ -596,10 +599,13 @@
         if (value < 1) {
             return (Math.round(value * 100000) / 100) + " m" + unitSuffix;
         }
+        if (value < 1000) {
+            return (Math.round(value * 100) / 100) + unitSuffix;
+        }
         if (value >= 1000) {
             return (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
-        return getWithSpaces(value / 1000, "k" + unitSuffix);
+        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }
 
     function getWithSpaces(value, unitSuffix) {

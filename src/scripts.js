@@ -150,67 +150,6 @@
         });
     }
 
-    /*---------------------------------------------------------*/
-    /*------------ EXPORTING ----------------------------------*/
-    /*---------------------------------------------------------*/
-
-    async function constructExportVisualisationForm(customAttributes="", includedPluginsList=undefined, withCookies=false) {
-        //reconstruct active plugins
-        let pluginsData = APPLICATION_CONTEXT.config.plugins;
-        let includeEvaluator = includedPluginsList ?
-            (p, o) => includedPluginsList.includes(p) :
-            (p, o) => o.loaded || o.permaLoad;
-
-        for (let pid of APPLICATION_CONTEXT.pluginIds()) {
-            const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
-
-            if (!includeEvaluator(pid, plugin)) {
-                delete pluginsData[pid];
-            } else if (!pluginsData.hasOwnProperty(pid)) {
-                pluginsData[pid] = {};
-            }
-        }
-
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
-
-        //by default ommit underscore
-        let exported = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
-
-        let form = `
-      <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
-        <input type="hidden" id="visualisation" name="visualisation">
-        ${customAttributes}
-        <input type="submit" value="">
-      </form>
-      <script type="text/javascript">
-        document.getElementById("visualisation").value = \`${exported.replaceAll("\\", "\\\\")}\`;
-        const form = document.getElementById("redirect");
-        let node;`;
-
-        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
-            setSerializedData: (uniqueKey, data) => {
-                if (typeof data !== "string") {
-                    console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
-                    return;
-                }
-                form += `node = document.createElement("input");
-node.setAttribute("type", "hidden");
-node.setAttribute("name", \`${uniqueKey}\`);
-node.setAttribute("value", \`${data.replaceAll("\\", "\\\\")}\`);
-form.appendChild(node);`;
-            }
-        });
-
-        return `${form}
-form.submit();
-<\/script>`;
-    }
-
-
     //Attempt to prevent re-submit, but now it fires two messages - POST resubmit and content..
     // function preventDirtyClose(e) {
     //     e.preventDefault();
@@ -265,7 +204,71 @@ form.submit();
         }
     };
 
-    window.UTILITIES.getForm = constructExportVisualisationForm;
+    window.UTILITIES.serializeApp = async function(includedPluginsList=undefined, withCookies=false) {
+        //reconstruct active plugins
+        let pluginsData = APPLICATION_CONTEXT.config.plugins;
+        let includeEvaluator = includedPluginsList ?
+            (p, o) => includedPluginsList.includes(p) :
+            (p, o) => o.loaded || o.permaLoad;
+
+        for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+            const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
+
+            if (!includeEvaluator(pid, plugin)) {
+                delete pluginsData[pid];
+            } else if (!pluginsData.hasOwnProperty(pid)) {
+                pluginsData[pid] = {};
+            }
+        }
+
+        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
+        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
+
+        //by default ommit underscore
+        let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
+            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
+        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
+
+        let exportData = {};
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
+            setSerializedData: (uniqueKey, data) => {
+                if (typeof data !== "string") {
+                    console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
+                    return;
+                }
+                exportData[uniqueKey] = data;
+            }
+        });
+        return {app, data: exportData};
+    };
+
+    window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
+        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
+
+        let form = `
+      <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
+        <input type="hidden" id="visualisation" name="visualisation">
+        ${customAttributes}
+        <input type="submit" value="">
+      </form>
+      <script type="text/javascript">
+        document.getElementById("visualisation").value = \`${app.replaceAll("\\", "\\\\")}\`;
+        const form = document.getElementById("redirect");
+        let node;`;
+
+        for (let id in data) {
+            form += `node = document.createElement("input");
+node.setAttribute("type", "hidden");
+node.setAttribute("name", \`${id}\`);
+node.setAttribute("value", \`${data[id].replaceAll("\\", "\\\\")}\`);
+form.appendChild(node);`;
+        }
+
+        return `${form}
+form.submit();
+<\/script>`;
+    }
 
     window.UTILITIES.copyUrlToClipboard = function () {
         let baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
@@ -305,7 +308,7 @@ form.submit();
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
-${await constructExportVisualisationForm()}
+${await UTILITIES.getForm()}
 </body></html>`;
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         UTILITIES.downloadAsFile("export.html", doc);
@@ -325,7 +328,7 @@ ${await constructExportVisualisationForm()}
         let x = window.innerWidth / 2, y = window.innerHeight;
         window.resizeTo(x, y);
         Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
-            await constructExportVisualisationForm(), `width=${x},height=${y}`);
+            await UTILITIES.getForm(), `width=${x},height=${y}`);
     };
 
     window.UTILITIES.setDirty = () => APPLICATION_CONTEXT.__cache.dirty = true;

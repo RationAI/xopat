@@ -10,13 +10,13 @@
     "client": {
         "localhost": {
             /* The Viewer Domain Full URL including protocol */
-            "domain": "http://localhost/",
+            "domain": "http://localhost:8080",
             /*
              The Path to the Viewer at given domain, so that 'domain+path+index.php' is the viewer index.
              Use null to let the system detect the path automatically.
             */
             "path": "",
-            /* TODO */
+            /* TODO: Not well tested */
             "metadata_server": "",
             /*
                Image Group Server for data not processed by visualizations, specifies the server and protocol
@@ -24,7 +24,7 @@
                Available are 'path' (image server URL) and 'data' (image identifier such as image path).
                Server URL can be relative, if on the same server domain as the viewer.
              */
-            "image_group_server": "/iipsrv.fcgi",
+            "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
             /*
@@ -35,15 +35,16 @@
 
                In case of parameter fetchAsync = true, data is a single string, not an array!
              */
-            "data_group_server": "/iipsrv.fcgi",
+            "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
-            /* TODO */
+            // Can be overridden by params.headers
             "headers": {},
             /* Cookie Setup */
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
             "js_cookie_same_site": "",
-            "js_cookie_secure": ""
+            "js_cookie_secure": "",
+            "secureMode": false
         },
         "prod": {
             "domain": "https://rationai-vis.ics.muni.cz/",
@@ -58,7 +59,8 @@
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
             "js_cookie_same_site": "None",
-            "js_cookie_secure": "false"
+            "js_cookie_secure": "false",
+            "secureMode": true
         }
     },
     /**
@@ -89,7 +91,6 @@
         "maxImageCacheCount": 1200,
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
-        "secureMode": false,
         // custom headers for image fetching
         "headers": {},
         // can be anything that supports the protocol of your choice,

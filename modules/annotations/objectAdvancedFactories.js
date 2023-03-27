@@ -112,6 +112,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     onZoom(ofObject, zoom) {
         if (ofObject._objects) {
+            //todo do not scale linearly let logZoom = Math.log(zoom);
             ofObject._objects[1].set({
                 scaleX: 1/zoom,
                 scaleY: 1/zoom
@@ -191,22 +192,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     _round(value) {
         return Math.round(value * 100) / 100;
     }
-
-    // _getWithUnit(value, unitSuffix) {
-    //     if (value < 0.000001) {
-    //         return this._round(value * 1000000000) + " n" + unitSuffix;
-    //     }
-    //     if (value < 0.001) {
-    //         return this._round(value * 1000000) + " μ" + unitSuffix;
-    //     }
-    //     if (value < 1) {
-    //         return this._round(value * 1000) + " m" + unitSuffix;
-    //     }
-    //     if (value >= 1000) {
-    //         return this._round(value / 1000) + " k" + unitSuffix;
-    //     }
-    //     return this._round(value) + " " + unitSuffix;
-    // }
 
     _updateText(line, text) {
         const d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2));

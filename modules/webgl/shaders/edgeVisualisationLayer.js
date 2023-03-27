@@ -37,7 +37,7 @@ WebGLModule.EdgeLayer = class extends WebGLModule.VisualisationLayer {
             accepts: (type, instance) => type === "vec3"
         },
         threshold: {
-            default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+            default: {type: "range_input", default: 50, min: 1, max: 100, step: 1, title: "Threshold: "},
             accepts: (type, instance) => type === "float"
         },
         edgeThickness: {
@@ -54,14 +54,16 @@ ${super.getFragmentShaderDefinition()}
 //todo try replace with step function
 float clipToThresholdf_${this.uid}(float value) {
     //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample('value', 'float')} || close(value, ${this.threshold.sample('value', 'float')}))) return 1.0;
+    if ((value > ${this.threshold.sample('value', 'float')} 
+        || close(value, ${this.threshold.sample('value', 'float')}))) return 1.0;
     return 0.0;
 }
 
 //todo try replace with step function
 int clipToThresholdi_${this.uid}(float value) {
      //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > 0.02 || close(value, 0.02)) && (value > ${this.threshold.sample('value', 'float')} || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
+    if ((value > ${this.threshold.sample('value', 'float')} 
+        || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
     return 0;
 }`;
     }
@@ -76,23 +78,23 @@ int clipToThresholdi_${this.uid}(float value) {
     float b = ${this.sampleChannel('vec2(tile_texture_coords.x + dist, tile_texture_coords.y)')}; 
     float l = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - dist)')}; 
     float r = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y + dist)')};
-
-    float u2 = ${this.sampleChannel('vec2(tile_texture_coords.x - 3.0*dist, tile_texture_coords.y)')};
-    float b2 = ${this.sampleChannel('vec2(tile_texture_coords.x + 3.0*dist, tile_texture_coords.y)')}; 
-    float l2 = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - 3.0*dist)')}; 
-    float r2 =  ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y + 3.0*dist)')};
-
-    float mid2 = clipToThresholdf_${this.uid}(mid);  
-    float dx = min(clipToThresholdf_${this.uid}(u2) - mid2, clipToThresholdf_${this.uid}(b2) - mid2);
-    float dy = min(clipToThresholdf_${this.uid}(l2) - mid2, clipToThresholdf_${this.uid}(r2) - mid2);
     int counter = clipToThresholdi_${this.uid}(u) + 
                 clipToThresholdi_${this.uid}(b) + 
                 clipToThresholdi_${this.uid}(l) + 
                 clipToThresholdi_${this.uid}(r);
-    
-    if(counter == 2 || counter == 3) {  //two or three points hit the region
+    if (counter == 2 || counter == 3) {  //two or three points hit the region
         return vec4(${this.color.sample()}, 1.0); //border
-    } else if ((dx < -0.5 || dy < -0.5)) {
+    }
+    
+    float u2 = ${this.sampleChannel('vec2(tile_texture_coords.x - 3.0*dist, tile_texture_coords.y)')};
+    float b2 = ${this.sampleChannel('vec2(tile_texture_coords.x + 3.0*dist, tile_texture_coords.y)')}; 
+    float l2 = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - 3.0*dist)')}; 
+    float r2 = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y + 3.0*dist)')};
+
+    float mid2 = clipToThresholdf_${this.uid}(mid);  
+    float dx = min(clipToThresholdf_${this.uid}(u2) - mid2, clipToThresholdf_${this.uid}(b2) - mid2);
+    float dy = min(clipToThresholdf_${this.uid}(l2) - mid2, clipToThresholdf_${this.uid}(r2) - mid2);
+    if ((dx < -0.5 || dy < -0.5)) {
         return vec4(${this.color.sample()} * 0.7, .7); //inner border
     } 
     return vec4(.0);

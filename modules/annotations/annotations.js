@@ -1486,7 +1486,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "navigate and create automatic annotations");
+		super(context, "auto", "open_with", "🆀 navigate / create automatic");
 		this.clickInBetweenDelta = 0;
 	}
 
@@ -1538,6 +1538,14 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 
 	customHtml() {
 		return "";
+	}
+
+	accepts(e) {
+		return e.key === "q" && !e.ctrlKey && !e.shiftKey;
+	}
+
+	rejects(e) {
+		return false;
 	}
 };
 
@@ -1658,7 +1666,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "draw annotations by hand (shift)");
+		super(context, "fft-add", "brush", "🅴 brush to create/edit");
 	}
 
 	setFromAuto() {
@@ -1667,23 +1675,18 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	}
 
 	accepts(e) {
-		if (this.context.mode === this.context.Modes.FREE_FORM_TOOL_REMOVE
-			&& e.key === "Alt" && e.shiftKey && !e.ctrlKey) {
-
-			return true;
-		}
-		return e.key === "Shift" && !e.altKey && !e.ctrlKey;
+		return e.key === "e" && !e.ctrlKey && !e.shiftKey;
 	}
 
 	rejects(e) {
-		return e.key === "Shift";
+		return e.key === "e";
 	}
 };
 
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "remove annotation parts by hand (shift + alt to switch)");
+		super(context, "fft-remove", "brush", "🆁 brush to remove");
 	}
 
 	setFromAuto() {
@@ -1692,19 +1695,17 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	}
 
 	accepts(e) {
-		return !e.ctrlKey
-			&& (this.context.mode === this.context.Modes.FREE_FORM_TOOL_ADD || e.shiftKey)
-			&& e.key === "Alt";
+		return e.key === "r" && !e.ctrlKey && !e.shiftKey;
 	}
 
 	rejects(e) {
-		return e.key === "Shift";
+		return e.key === "r";
 	}
 };
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "format_shapes","create annotations manually (alt)");
+		super(context, "custom", "format_shapes","🆆 create annotations manually");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1763,10 +1764,10 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.key === "Alt" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "w" && !e.ctrlKey && !e.shiftKey;
 	}
 
 	rejects(e) {
-		return e.key === "Alt";
+		return e.key === "w";
 	}
 };

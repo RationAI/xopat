@@ -23,6 +23,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		//Register used annotation object factories
 		this.context = OSDAnnotations.instance();
+		this.context.presets.setModeOutline(this.getOption('drawOutline', true));
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
@@ -78,7 +79,6 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 		});
 
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
-		this.advancedControls = new AnnotationsGUI.AdvancedControls("advancedControls", this);
 	}
 
 	setupFromParams() {
@@ -102,6 +102,11 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 
 	 *****************************************************************************************************************/
 
+	setDrawOutline(drawOutline) {
+		this.setOption('drawOutline', drawOutline, true);
+		this.context.presets.setModeOutline(drawOutline);
+	}
+
 	initHTML() {
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
@@ -119,7 +124,7 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 <input type="range" id="annotations-opacity" min="0" max="1" step="0.1"><br>
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
-				onchange: `${this.THIS}.context.presets.setModeOutline(this.checked == true);`,
+				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
 				default: this.context.presets.getModeOutline()
 			})}</div>`,
 			"annotations-panel",
@@ -314,9 +319,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'Left Alt' key <br> instead of setting this manually."
+					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'W' key <br> instead of setting this manually."
 				}, {
-					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release Alt key)."
+					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
 					"next #annotations-left-click": "Rectangle and ellipse can be created by a drag."
 				}, {
@@ -330,13 +335,13 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
-					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'Left Shift' key <br> instead in the future."
+					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'E' key <br> instead in the future."
 				}, {
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
 				}, {
-					"next #fft-add-annotation-mode + label": "Selected object can be appended to (Left Shift only) ..."
+					"next #fft-add-annotation-mode + label": "Selected object can be appended to ('E' key) ..."
 				}, {
-					"next #fft-remove-annotation-mode + label": "... or removed from (Left Shift + Left Alt)."
+					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
 				}, {
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{
@@ -798,7 +803,8 @@ class="btn m-2">Set for left click </button>
 			this._serverAnnotationList = Array.isArray(json) ? json : json.annotations;
 
 			for (let available of this._serverAnnotationList) {
-				available.metadata = new MetaStore(available.metadata);
+				//unsafe mode will parse all the metadata as one, so the user meta will be read from available.metadata
+				available.metadata = new MetaStore(available.metadata, false);
 				let id = available.id, meta = available.metadata;
 
 				let actionPart = `
@@ -806,9 +812,10 @@ class="btn m-2">Set for left click </button>
 <span onclick="${this.THIS}.updateAnnotation('${id}');return false;" title="Update" class="material-icons btn-pointer">update</span>&nbsp;
 <span onclick="${this.THIS}.removeAnnotation('${id}');return false;" title="Delete" class="material-icons btn-pointer">delete</span>`;
 				_this.annotationsMenuBuilder.addRow({
-					title: _this.dataLoader.getMetaName(meta),
-					author: _this.dataLoader.getMetaAuthor(meta),
-					details: _this.dataLoader.getMetaDescription(meta), //todo date?
+					title: _this.dataLoader.getMetaName(meta, available),
+					author: _this.dataLoader.getMetaAuthor(meta, available),
+					details: _this.dataLoader.getMetaDescription(meta, available),
+					icon: _this.dataLoader.getIcon(meta, available),
 					contentAction:actionPart
 				});
 				count++;
@@ -826,7 +833,7 @@ class="btn m-2">Set for left click </button>
 			onSuccessLoad(json);
 		}, error => {
 			console.error(_this.dataLoader.getErrorResponseMessage(error))
-			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu("Could not load annotations list."));
+			$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu(`Could not load annotations list. <a class="pointer" onclick="plugin('${_this.id}').loadAnnotationsList()">Retry.</a>`));
 		});
 	}
 
@@ -847,7 +854,7 @@ class="btn m-2">Set for left click </button>
 			$('#preset-modify-dialog').remove();
 
 			//todo test IO for different formats
-			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata));
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
 			_this.context.import(json.data, format).then(()=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
@@ -863,13 +870,13 @@ class="btn m-2">Set for left click </button>
 
 		//server IO only supports default format
 		this.context.export(this._defaultFormat).then(data => {
-			_this.dataLoader.updateAnnotation(_this._server, id, data,
+			_this.dataLoader.updateAnnotation(_this._server, id, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();
 				},
 				e => {
-					Dialogs.show(`Failed to upload annotations. You can 
+					Dialogs.show(`Failed to upload annotations. Are you logged in? You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
 						7000, Dialogs.MSG_ERR);
 					console.error("Failed to update annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
@@ -898,7 +905,7 @@ class="btn m-2">Set for left click </button>
 		const _this = this;
 		//server IO only supports default format
 		this.context.export(this._defaultFormat).then(data => {
-			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data,
+			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();

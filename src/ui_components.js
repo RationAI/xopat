@@ -293,7 +293,10 @@ Components: {
 
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon || (APPLICATION_CONTEXT.url + "src/assets/image.png");
+            let icon = options.icon;
+            if (options.icon === undefined) icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
+            if (icon) icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+            else icon = "";
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
@@ -301,7 +304,7 @@ Components: {
             return `<div id="${options.id}" class="image-row-container">
 <div>
 <div class="width-full d-flex image-row">
-<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">
+${icon}
 <div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div></div>`;

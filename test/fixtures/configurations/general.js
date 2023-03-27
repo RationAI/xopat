@@ -51,7 +51,6 @@ export default {
         stackedBackground: false,
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
-        secureMode: false,
         headers: {},
         preferredFormat: "zip",
         fetchAsync: false,

@@ -7,6 +7,12 @@
     "icon": "",
     "includes" : ["session.js"],
     "modules": [],
-    "permaLoad": false,
-    "server": ""
+    "permaLoad": true,
+    //API Url: auth prompt
+    "authServer": "http://localhost:8080/browser/ajax/auth.php",
+    //API Url: third party authentication
+    "performAuth": "http://localhost:8080/browser/login.php",
+    //API url: where to store session exports
+    "sessionServer": "http://localhost:8080/browser/ajax/session.php",
+    "headers": null
 }

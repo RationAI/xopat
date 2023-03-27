@@ -403,8 +403,8 @@ WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.ICo
 
         this.context.includeGlobalCode('advanced_slider', `
 #define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS} 
-float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN], in float mask[ADVANCED_SLIDER_LEN+1], in bool maskOnly) {
-    float bigger = .0, actualLength = .0, masked = .0;
+float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN], in float mask[ADVANCED_SLIDER_LEN+1], in bool maskOnly, in float minValue) {
+    float bigger = .0, actualLength = .0, masked = minValue;
     bool sampling = true;
     for (int i = 0; i < ADVANCED_SLIDER_LEN; i++) {
         if (breaks[i] < .0) {
@@ -480,7 +480,9 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 function clickOnPip() {
                     let idx = 0;
                     let value = Number(this.getAttribute('data-value'));
-                    let values = container.noUiSlider.get().map(v => Number.parseFloat(v));
+                    let encoded = container.noUiSlider.get();
+                    let values = encoded.map(v => Number.parseFloat(v));
+
                     if (Array.isArray(values)) {
                         let closest = Math.abs(values[0] - value);
                         for (let i = 1; i < values.length; i++) {
@@ -494,9 +496,11 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                     } else { //just one
                         container.noUiSlider.set(value);
                     }
+                    value = _this._normalize(value);
                     _this.value[idx] = value;
 
-                    _this.changed("mask", _this.mask, _this.mask, _this);
+                    _this.changed("breaks", _this.value, encoded, _this);
+                    _this.store(values, "breaks");
                     _this.context.invalidate();
                 }
 
@@ -580,6 +584,8 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
     }
 
     glLoaded(program, gl) {
+        this.min_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_min");
+        gl.uniform1f(this.min_gluint, this.params.min);
         this.breaks_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_breaks[0]");
         this.mask_gluint = gl.getUniformLocation(program, this.webGLVariableName + "_mask[0]");
     }
@@ -591,7 +597,8 @@ margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
     }
 
     define() {
-        return `uniform float ${this.webGLVariableName}_breaks[ADVANCED_SLIDER_LEN];
+        return `uniform float ${this.webGLVariableName}_min;
+uniform float ${this.webGLVariableName}_breaks[ADVANCED_SLIDER_LEN];
 uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
     }
 
@@ -603,7 +610,7 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
         if (!value || valueGlType !== 'float') {
             return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
         }
-        return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly})`;
+        return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly}, ${this.webGLVariableName}_min)`;
     }
 
     get supports() {
