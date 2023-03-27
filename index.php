@@ -346,7 +346,7 @@ EOF;
     const setup = <?php echo $visualisation ?>;
     const postData = <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>;
     const defaultSetup = ENV.setup;
-
+    const viewerSecureMode = ENV.client.secureMode && ENV.client.secureMode !== "false";
     const cookies = Cookies;
     Cookies.withAttributes({
         path: ENV.client.js_cookie_path,
@@ -391,7 +391,10 @@ EOF;
         },
         //here are all parameters supported by the core visualization
         get defaultConfig() {
-           return defaultSetup;
+            return defaultSetup;
+        },
+        get secure() {
+            return viewerSecureMode;
         },
         get env() {
             return ENV;
@@ -745,7 +748,7 @@ max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                 const image = confBackground[idx],
                     imagePath = confData[image.dataReference];
 
-                if (APPLICATION_CONTEXT.getOption("secureMode")) delete image.protocolPreview;
+                if (APPLICATION_CONTEXT.secure) delete image.protocolPreview;
 
                 const previewUrlmaker = new Function("path,data", "return " +
                     (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
@@ -888,7 +891,7 @@ class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style=
     ) {
         window.VIEWER.close();
 
-        const isSecureMode = APPLICATION_CONTEXT.getOption("secureMode");
+        const isSecureMode = APPLICATION_CONTEXT.secure;
         let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {

@@ -134,7 +134,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     VIEWER.raiseEvent('visualisation-used', visualisation);
                 },
                 visualisationChanged: function(oldVis, newVis) {
-                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.getOption("secureMode"));
+                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
                     let index = seaGL.getWorldIndex(),
                         sources = seaGL.dataImageSources();
 
@@ -177,7 +177,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
             //load shaders just once
 
-            if (!APPLICATION_CONTEXT.getOption("secureMode")) {
+            if (!APPLICATION_CONTEXT.secure) {
                 webglProcessing.addCustomShaderSources(...APPLICATION_CONTEXT.config.shaderSources);
             }
         }

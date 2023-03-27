@@ -45,7 +45,7 @@ Note that this is meant mainly for a viewer maintainer to set-up the plugin defa
     - especially, do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
-> respect the ``APPLICATION_CONTEXT.getOption('secureMode')`` parameter
+> respect the ``APPLICATION_CONTEXT.secure`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ### Interface XOpatPlugin

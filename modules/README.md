@@ -45,7 +45,7 @@ You should not pollute the global scope (`window`...) and follow the following:
  - do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
-> respect the ``APPLICATION_CONTEXT.getOption('secureMode')`` parameter
+> respect the ``APPLICATION_CONTEXT.secure`` flag parameter
 > and provide necessary steps to ensure secure execution if applicable.
     
 ## Modules: Extensions

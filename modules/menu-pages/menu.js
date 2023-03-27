@@ -72,7 +72,7 @@ window.AdvancedMenuPages = class {
                 UTILITIES.loadModules(function() {
                     //todo in case of failure e.g. integrity tag not verified, create error image
                     _this.loadVega(true);
-                }, APPLICATION_CONTEXT.getOption("secureMode") ? 'vega-secure' : 'vega');
+                }, APPLICATION_CONTEXT.secure ? 'vega-secure' : 'vega');
                 return;
             }
 
