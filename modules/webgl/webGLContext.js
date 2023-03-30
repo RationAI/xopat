@@ -3,24 +3,25 @@
  * provide your OWN rendering behaviour using a GPU.
  *
  * @typedef {{glContext: function, webGLImplementation: function}} GlContextMaker
+ * @class WebGLModule.GlContextFactory
  */
 WebGLModule.GlContextFactory = class {
 
     static _GL_MAKERS = {
         "1.0" : {
-            glContext: function (canvas) {
+            glContext: function(canvas) {
                 return canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
             },
-            webGLImplementation: function (wrapper, glContext) {
+            webGLImplementation: function(wrapper, glContext) {
                 return new WebGLModule.WebGL_1_0(wrapper, glContext);
             }
         },
         "2.0" : {
-            glContext: function (canvas) {
+            glContext: function(canvas) {
                 return canvas.getContext('webgl2', { premultipliedAlpha: false, alpha: true });
             },
-            webGLImplementation: function (wrapper, glContext) {
+            webGLImplementation: function(wrapper, glContext) {
                 return new WebGLModule.WebGL_2_0(wrapper, glContext);
             }
         }
@@ -50,7 +51,7 @@ WebGLModule.GlContextFactory = class {
      * @param {WebGLModule} wrapper
      * @param {string} versions considered versions in the preferred order
      *      currently supported "1.0", "2.0"
-     * @throws
+     * @throws Error
      */
     static init(wrapper, ...versions) {
         if (versions.length < 1) {
@@ -82,16 +83,14 @@ WebGLModule.GlContextFactory = class {
 };
 
 /**
- * @interface WebGLImplementation
+ * @interface WebGLModule.WebGLImplementation
  * Interface for the visualisation rendering implementation which can run
  * on various GLSL versions
  */
 WebGLModule.WebGLImplementation = class {
 
-    /**
-     * Set default blending to be MASK
-     */
     constructor() {
+        //Set default blending to be MASK
         this.glslBlendCode = "return background * (step(0.001, foreground.a));";
     }
 
@@ -124,7 +123,7 @@ WebGLModule.WebGLImplementation = class {
 
     /**
      * Create a visualisation from the given JSON params
-     * @param {[string]} order keys of visualisation.shader in which order to build the visualization
+     * @param {string[]} order keys of visualisation.shader in which order to build the visualization
      *   the order: painter's algorithm: the last drawn is the most visible
      * @param {object} visualisation
      * @param {boolean} withHtml whether html should be also created (false if no UI controls are desired)
@@ -133,7 +132,7 @@ WebGLModule.WebGLImplementation = class {
          {string} object.fragment_shader fragment shader code
          {string} object.html html for the UI
          {number} object.usableShaders how many layers are going to be visualised
-         {array[string]} object.dataUrls ID's of data in use (keys of visualisation.shaders object) in desired order
+         {(array|string[])} object.dataUrls ID's of data in use (keys of visualisation.shaders object) in desired order
                     the data is guaranteed to arrive in this order (images stacked below each other in imageElement)
      */
     generateVisualisation(order, visualisation, withHtml) {
@@ -152,7 +151,7 @@ WebGLModule.WebGLImplementation = class {
     /**
      * Draw on the canvas using given program
      * @param {WebGLProgram} program  used program
-     * @param {Visualization} currentVisualisation  JSON parameters used for this visualisation
+     * @param {WebGLModule.VisualizationConfig} currentVisualisation  JSON parameters used for this visualisation
      * @param {object} imageElement image data
      * @param {object} tileDimension
      * @param {number} tileDimension.width width of the result
@@ -178,33 +177,32 @@ WebGLModule.WebGLImplementation = class {
     /**
      * Blend equation sent from the outside, must be respected
      * @param glslCode code for blending, using two variables: 'foreground', 'background'
-     *
-     * The shader context must define the following:
+     * @example
+     * //The shader context must define the following:
      *
      * vec4 some_blending_name_etc(in vec4 background, in vec4 foreground) {
-     *     << glslCode >>
+     *     // << glslCode >>
      * }
      *
      * void blend_clip(vec4 input) {
      *     //for details on clipping mask approach see show() below
-     *     <<use some_blending_name_etc() to blend input onto output color of the shader using a clipping mask>>
+     *     // <<use some_blending_name_etc() to blend input onto output color of the shader using a clipping mask>>
      * }
      *
      * void blend(vec4 input) { //must be called blend, API
-     *     <<use some_blending_name_etc() to blend input onto output color of the shader>>
+     *     // <<use some_blending_name_etc() to blend input onto output color of the shader>>
      * }
      *
-     * Also, default alpha blending equation 'show' must be implemented:
+     * //Also, default alpha blending equation 'show' must be implemented:
      * void show(vec4 color) {
-     *    pseudocode
-     *    note that the blending output should not immediatelly work with 'color' but perform caching of the color,
-     *    render the color given in previous call and at the execution end of main call show(vec4(.0))
-     *    this way, the previous color is not yet blended for the next layer show/blend/blend_clip which can use it to create a clipping mask
+     *    //pseudocode
+     *    //note that the blending output should not immediatelly work with 'color' but perform caching of the color,
+     *    //render the color given in previous call and at the execution end of main call show(vec4(.0))
+     *    //this way, the previous color is not yet blended for the next layer show/blend/blend_clip which can use it to create a clipping mask
      *
      *    compute t = color.a + background.a - color.a*background.a;
      *    output vec4((color.rgb * color.a + background.rgb * background.a - background.rgb * (background.a * color.a)) / t, t)
      * }
-}
      */
     setBlendEquation(glslCode) {
         this.glslBlendCode = glslCode;
@@ -413,7 +411,7 @@ void main() {
         var count = 4;
 
         // Get attribute terms
-        this._att = [this.pos, this.tile_pos].map(function (name, number) {
+        this._att = [this.pos, this.tile_pos].map(function(name, number) {
             var index = Math.min(number, boxes.length - 1);
             var vec = Math.floor(boxes[index].length / count);
             var vertex = gl.getAttribLocation(program, name);
@@ -441,7 +439,7 @@ void main() {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         // Set Attributes for GLSL
-        this._att.map(function (x) {
+        this._att.map(function(x) {
             gl.enableVertexAttribArray(x.slice(0, 1));
             gl.vertexAttribPointer.apply(gl, x);
         });
@@ -702,7 +700,7 @@ void main() {
     }
 };
 
-/**Not yet a part of API, todo functionality to process polygons**/
+/*Not yet a part of API, todo functionality to process polygons**/
 // WebGLModule.RasterizerContext = class {
 //     constructor(context, gl) {
 //         this.context = context;

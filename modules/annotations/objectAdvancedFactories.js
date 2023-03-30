@@ -211,7 +211,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * A list of extra properties to export upon export event
-     * @return {[string]}
+     * @return {string[]}
      */
     exports() {
         return ["measure"];
@@ -567,7 +567,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * A list of extra properties to export upon export event
-     * @return {[string]}
+     * @return {string[]}
      */
     exports() {
         return ["scaleX", "scaleY"]; //"left", "top", "width", "height", "opacity",

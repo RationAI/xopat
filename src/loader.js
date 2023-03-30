@@ -1,7 +1,7 @@
 /**
  * Common Error thrown in JSON requests with failures (via fetchJSON(...)
  * The content is not guaranteed to be translated.
- * @type {Window.HTTPError}
+ * @class HTTPError
  */
 window.HTTPError = class extends Error {
     constructor(message, response, textData) {
@@ -13,6 +13,8 @@ window.HTTPError = class extends Error {
 };
 
 /**
+ * Init loading system in xOpat. Do not use in the viewer, use only if you
+ * manually want to reuse plugins/modules elsewhere.
  * IMPORTANT
  * Use:                 const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
  * call when all ready: initPlugins();
@@ -21,7 +23,7 @@ window.HTTPError = class extends Error {
  * @param PLUGINS_FOLDER
  * @param MODULES_FOLDER
  * @param version
- * @return {function(...[*]=)} initializer function to call once ready
+ * @return {function} initializer function to call once ready
  */
 function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, version) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
@@ -77,6 +79,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             plugin = new PluginClass(id, parameters);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
+            /**
+             * @property {string} id plugin id
+             * @property {string} message
+             * @memberOf VIEWER
+             * @event plugin-failed
+             */
             window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                 id: id,
                 message: $.t('messages.pluginLoadFailed'),
@@ -90,6 +98,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         let possiblyExisting = PLUGINS[id].instance;
         if (possiblyExisting) {
             console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
+            /**
+             * @property {string} id plugin id
+             * @property {string} message
+             * @memberOf VIEWER
+             * @event plugin-failed
+             */
             window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                 id: plugin.id,
                 message: $.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}),
@@ -125,9 +139,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
      * @param pluginId plugin that uses particular script
      * @param properties script attributes to set
      * @param onload function to call on success
+     * @global
      */
     window.attachScript = function(pluginId, properties, onload) {
-        let errHandler = function (e) {
+        let errHandler = function(e) {
             window.onerror = null;
             if (LOADING_PLUGIN) {
                 cleanUpPlugin(pluginId, e);
@@ -153,7 +168,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             script[key] = properties[key];
         }
         script.async = false;
-        script.onload = function () {
+        script.onload = function() {
             window.onerror = null;
             onload();
         };
@@ -167,15 +182,17 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     /**
      * Get plugin.
      * @param id plugin id, should be unique in the system and match the id value in includes.json
+     * @global
      */
     window.plugin = function(id) {
         return PLUGINS[id]?.instance;
     };
 
     /**
-     * Register plugin. Plugin is instantiated and embedded into the viewer.
+     * Register plugin. Plugin can be instantiated and embedded into the viewer.
      * @param id plugin id, should be unique in the system and match the id value in includes.json
      * @param PluginClass class/class-like-function to register (not an instance!)
+     * @global
      */
     window.addPlugin = function(id, PluginClass) {
         let plugin = instantiatePlugin(id, PluginClass);
@@ -262,6 +279,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
     }
 
+    /**
+     * Implements common interface for plugins and modules. Cannot
+     * be instantiated as it is hidden in closure. Private, but
+     * available in docs due to its API nature.
+     * @abstract
+     */
     class XOpatElement {
 
         constructor(id, executionContextName) {
@@ -292,28 +315,67 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Raise error event
+         * Raise error event. If the module did register as event source,
+         * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
          * todo make modules use this
          * @param e
          * @param e.code
          * @param e.message
          * @param e.error
+         * @param {boolean} notifyUser fires error-user if true, error-system otherwise.
          */
-        error(e) {
-            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent('error-user', $.extend(e,
-                {originType: this.xoContext, originId: this.id}));
+        error(e, notifyUser=true) {
+            /**
+             * Raise event from instance. Instances that register as event source fire on themselves.
+             * @property {string} originType `"module"`, `"plugin"` or other type of the source
+             * @property {string} originId
+             * @event error-user
+             * @event error-system
+             * @memberOf VIEWER
+             */
+
+            /**
+             * Raise event from instance. Instances that register as event source fire on themselves.
+             * @property {string} originType `"module"`, `"plugin"` or other type of the source
+             * @property {string} originId
+             * @event error-user
+             * @event error-system
+             * @memberOf XOpatElement
+             */
+            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'error-user' : 'error-system',
+                $.extend(e, {originType: this.xoContext, originId: this.id}));
         }
 
         /**
-         * Raise warning event
+         * Raise warning event. If the module did register as event source,
+         * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
          * todo make modules use this
          * @param e
          * @param e.code
          * @param e.message
          * @param e.error
+         * @param {boolean} notifyUser fires error-user if true, error-system otherwise.
          */
-        warn(e) {
-            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent('warn-user', $.extend(e,
+        warn(e, notifyUser) {
+            /**
+             * Raise event from instance. Instances that register as event source fire on themselves.
+             * @property {string} originType `"module"`, `"plugin"` or other type of the source
+             * @property {string} originId
+             * @event error-user
+             * @event error-system
+             * @memberOf VIEWER
+             */
+
+            /**
+             * Raise event from instance. Instances that register as event source fire on themselves.
+             * @property {string} originType `"module"`, `"plugin"` or other type of the source
+             * @property {string} originId
+             * @event warn-user
+             * @event warn-system
+             * @memberOf XOpatElement
+             */
+            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
+                $.extend(e,
                 {originType: this.xoContext, originId: this.id}));
         }
 
@@ -399,7 +461,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         /**
          * Called with this.initIO if data available
          *  note: parseImportData return value decides if data is parsed data or passed as raw string
-         * @param data {string|*} data
+         * @param data {(string|*)} data
          */
         async importData(data) {}
         /**
@@ -478,6 +540,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         removeHandler () {}
     }
 
+    /**
+     * Basic Module API. Modules do not have to inherit from XOpatModule, but
+     * they loose the integration support.
+     * @extends XOpatElement
+     * @inheritDoc
+     */
     window.XOpatModule = class extends XOpatElement {
 
         constructor(id) {
@@ -488,6 +556,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * Load localization data
          * @param locale the current locale if undefined
          * @param data possibly custom locale data if not fetched from a file
+         * @return {Promise}
          */
         async loadLocale(locale=undefined, data=undefined) {
             return await _getLocale(this.id, MODULES_FOLDER, MODULES[this.id]?.directory,
@@ -506,11 +575,16 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Root to the modules folder
+         * Root path - the modules folder
          */
         static ROOT = MODULES_FOLDER;
     }
 
+    /**
+     * Singleton Module API, ready to run as an instance
+     * offering its features to all equally.
+     * @class XOpatModuleSingleton
+     */
     window.XOpatModuleSingleton = class extends XOpatModule {
         /**
          * Get instance of the annotations manger, a singleton
@@ -543,6 +617,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
     }
 
+    /**
+     * xOpat Plugin API. Plugins must have a parent class that
+     * is registered and inherits from XOpatPlugin.
+     * JS String to use in DOM callbacks to access self instance.
+     * @inheritDoc
+     * @extends XOpatElement
+     */
     window.XOpatPlugin = class extends XOpatElement {
 
         constructor(id) {
@@ -610,8 +691,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         };
 
         /**
-         * Code for global-scope access to this instance
-         * @return {string}
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
          */
         get THIS() {
             if (!this.id) return "__undefined__";
@@ -624,9 +705,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         static ROOT = PLUGINS_FOLDER;
-    };
+    }
 
-    window.UTILITIES = {
+    /**
+     * @namespace UTILITIES
+     */
+    window.UTILITIES = /** @lends UTILITIES */ {
 
         /**
          * Send requests - both request and response format JSON
@@ -717,6 +801,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         loadModules: function(onload=_=>{}, ...ids) {
             LOADING_PLUGIN = false;
             chainLoadModules(ids, 0, () => {
+                /**
+                 * Module loaded event. Fired only with dynamic loading.
+                 * @property {string} id module id
+                 * @memberOf VIEWER
+                 * @event module-loaded
+                 */
                 window.VIEWER && ids.forEach(id => VIEWER.raiseEvent('module-loaded', {id: id}));
                 onload && onload();
             });
@@ -732,6 +822,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
             if (window.hasOwnProperty(id)) {
+                /**
+                 * @property {string} id plugin id
+                 * @property {string} message
+                 * @memberOf VIEWER
+                 * @event plugin-failed
+                 */
                 window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                     id: id,
                     message: $.t('messages.pluginLoadFailed'),
@@ -740,6 +836,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 return;
             }
             if (!Array.isArray(meta.includes)) {
+                /**
+                 * @property {string} id plugin id
+                 * @property {string} message
+                 * @memberOf VIEWER
+                 * @event plugin-failed
+                 */
                 window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                     id: id,
                     message: $.t('messages.pluginLoadFailed'),
@@ -753,6 +855,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
                 //loaded after page load
                 if (!initializePlugin(PLUGINS[id].instance)) {
+                    /**
+                     * @property {string} id plugin id
+                     * @property {string} message
+                     * @memberOf VIEWER
+                     * @event plugin-failed
+                     */
                     window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                         id: plugin.id,
                         message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}),
@@ -771,7 +879,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     }
                     APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
                 }
-
+                /**
+                 * Plugin was loaded dynamically at runtime.
+                 * @property {string} id plugin id
+                 * @memberOf VIEWER
+                 * @event plugin-loaded
+                 */
                 VIEWER.raiseEvent('plugin-loaded', {id: id});
                 onload();
             };

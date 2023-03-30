@@ -55,7 +55,14 @@ This might be natural on production servers, but localhost playgrounds such as
 WampServer needs to set up things explicitly (self-signed certificate etc).
 There are plenty of examples on the internet.
 
-#### CORS policy violation
+#### CORS policy violation with foreign servers
+In case you fetch data from servers that are not hosted on the same
+server as the viewer, you need to overcome this issue. You can try
+to set up correct header values for both client and server to mutually
+accept each other. The most stable and versatile solution that requires
+only client-side server modification is to set-up a reverse proxy to 
+trick browsers into thinking they access local server.
+
 To solve this issue, your viewer server needs to set up a reverse proxy.
 Setting up a reverse proxy to HTTP target is easier, the example for Apache
 sets up `/iipsrv.fcgi` URL as a proxy to a distant image server to avoid CORS
@@ -75,7 +82,7 @@ violation (config php file will use `/iipsrv.fcgi` image server URL(s)):
 ````
 For HTTPS:
 ````apacheconf
-<VirtualHost>
+<VirtualHost *:443>
     #Hints: for HTTPS external server, you probably need to avoid CORS policy violation using reverse proxy
     #as well SSL set up:
     #enable apache proxy_module, proxy_http_module

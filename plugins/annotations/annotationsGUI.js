@@ -793,6 +793,10 @@ class="btn m-2">Set for left click </button>
 	/*** HTTP API **/
 
 	loadAnnotationsList(onSuccessLoad=()=>{}) {
+		if (!this._server) {
+			$("#annotations-shared-head").html(thisZ.getAnnotationsHeadMenu(`This feature is not enabled.`));
+			return;
+		}
 		this.annotationsMenuBuilder.clear();
 		this._serverAnnotationList = null;
 		const _this = this;

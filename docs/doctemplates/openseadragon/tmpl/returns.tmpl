@@ -1,0 +1,14 @@
+<?js
+var data = obj || {};
+if (data.description) {
+?>
+<div class="param-desc">
+    <?js= description ?>
+</div>
+<?js } ?>
+
+<?js if (data.type && data.type.names) {?>
+<dt>
+    <dt class="meta d-inline-block mr-3"> Type </dt><dd class="d-inline-block"> <?js= this.partial('type.tmpl', data.type.names) ?></dd>
+</dt>
+<?js } ?>

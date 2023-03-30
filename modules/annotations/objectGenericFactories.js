@@ -462,7 +462,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * A list of extra properties to export upon export event
-     * @return {[string]}
+     * @return {string[]}
      */
     exports() {
         return ["autoScale"]; //"text", "left", "top", "fontSize"

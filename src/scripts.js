@@ -1,5 +1,4 @@
-(function (window) {
-
+function initXopatScripts() {
     $.extend($.scrollTo.defaults, {axis: 'y'});
 
     //https://github.com/mrdoob/stats.js
@@ -8,12 +7,12 @@
     }
 
     // opacity of general layer available everywhere
-    $("#global-opacity input").on("input", function () {
+    $("#global-opacity input").on("input", function() {
         let val = $(this).val();
         VIEWER.world.getItemAt(VIEWER.bridge.getWorldIndex()).setOpacity(val);
     });
 
-    $(VIEWER.element).on('contextmenu', function (event) {
+    $(VIEWER.element).on('contextmenu', function(event) {
         event.preventDefault();
     });
 
@@ -22,23 +21,35 @@
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
      */
     let focusOnViewer = true;
-    VIEWER.addHandler('canvas-enter', function () {
+    VIEWER.addHandler('canvas-enter', function() {
         focusOnViewer = true;
     });
-    VIEWER.addHandler('canvas-exit', function () {
+    VIEWER.addHandler('canvas-exit', function() {
         focusOnViewer = false;
     });
-    document.addEventListener('keydown', function (e) {
+    document.addEventListener('keydown', function(e) {
         e.focusCanvas = focusOnViewer;
+        /**
+         * @property {KeyboardEvent} e
+         * @property {boolean} e.focusCanvas
+         * @memberOf VIEWER
+         * @event keydown
+         */
         VIEWER.raiseEvent('key-down', e);
     });
-    document.addEventListener('keyup', function (e) {
+    document.addEventListener('keyup', function(e) {
         e.focusCanvas = focusOnViewer;
+        /**
+         * @property {KeyboardEvent} e
+         * @property {boolean} e.focusCanvas
+         * @memberOf VIEWER
+         * @event key-up
+         */
         VIEWER.raiseEvent('key-up', e);
     });
     //consider global mouseup/down events. or maybe not - clicking is
     // contextual and is enough to implement listeners on elements (unlike key hits)...
-    // document.addEventListener('mouseup', function (e) {
+    // document.addEventListener('mouseup', function(e) {
     //     e.focusCanvas = focusOnViewer;
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
@@ -62,6 +73,14 @@
                 e.tiledImage._failedCount = 1;
                 //to-docs
                 e.worldIndex = index;
+                /**
+                 * The Viewer might decide to remove faulty TiledImage automatically.
+                 * The removal is not done automatically, but this event is fired.
+                 * The owner is recommended to remove the tiled image instance.
+                 * @property {TiledImage} e
+                 * @memberOf VIEWER
+                 * @event tiled-image-problematic
+                 */
                 VIEWER.raiseEvent('tiled-image-problematic', e);
             }
         }
@@ -97,7 +116,7 @@
         this.lastScroll = this.currentScroll; //Set last scroll to now
     });
 
-    window.VIEWER.addHandler('navigator-scroll', function (e) {
+    window.VIEWER.addHandler('navigator-scroll', function(e) {
         VIEWER.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
         VIEWER.viewport.applyConstraints();
     });
@@ -165,6 +184,10 @@
     //     window.attachEvent('onbeforeunload', preventDirtyClose);
     // }
 
+    /**
+     * Get the date as ISO string
+     * @return {string}
+     */
     window.UTILITIES.todayISO = function() {
         return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
     };
@@ -180,8 +203,12 @@
         return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
     };
 
-    window.UTILITIES.updateTheme = function() {
-        let theme = APPLICATION_CONTEXT.getOption("theme");
+    /**
+     * Set the App theme
+     * @param {?string} theme primer_css theme
+     */
+    window.UTILITIES.updateTheme = function(theme=undefined) {
+        theme = theme || APPLICATION_CONTEXT.getOption("theme");
         if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultConfig.theme;
         if (theme === "dark_dimmed") {
             document.documentElement.dataset['darkTheme'] = "dark_dimmed";
@@ -192,18 +219,34 @@
         }
     };
 
-    window.UTILITIES.getUserMeta = function() {
-        return {
-            appCodeName: navigator["appCodeName"],
-            appName: navigator["appName"],
-            appMinorVersion: navigator["appMinorVersion"],
-            platform: navigator["platform"],
-            appVersion: navigator["appVersion"],
-            userAgent: navigator["userAgent"],
-            cookieEnabled: navigator["cookieEnabled"]
-        }
+    /**
+     * Create the viewer configuration serialized
+     */
+    window.UTILITIES.serializeAppConfig = function() {
+        let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
+        APPLICATION_CONTEXT.config.params.viewport = {
+            zoomLevel: VIEWER.viewport.getZoom(),
+            point: VIEWER.viewport.getCenter()
+        };
+
+        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
+        APPLICATION_CONTEXT.config.params.bypassCookies = true;
+
+        let postData = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
+            : JSON.stringify(APPLICATION_CONTEXT.config);
+
+        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
+        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
+        return postData;
     };
 
+    /**
+     * Serialize the Viewer
+     * @param includedPluginsList
+     * @param withCookies
+     * @return {Promise<{app: string, data: {}}>}
+     */
     window.UTILITIES.serializeApp = async function(includedPluginsList=undefined, withCookies=false) {
         //reconstruct active plugins
         let pluginsData = APPLICATION_CONTEXT.config.plugins;
@@ -231,6 +274,16 @@
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
 
         let exportData = {};
+
+        /**
+         * Event to export your data within the viewer lifecycle
+         * Event handler can by <i>asynchronous</i>, the event can wait.
+         *
+         * @property {function} setSerializedData callback to call,
+         *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
+         * @memberOf VIEWER
+         * @event export-data
+         */
         await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
             setSerializedData: (uniqueKey, data) => {
                 if (typeof data !== "string") {
@@ -243,6 +296,13 @@
         return {app, data: exportData};
     };
 
+    /**
+     * Get the viewer form that, when in HTML redirects to the viewer
+     * @param customAttributes
+     * @param includedPluginsList
+     * @param withCookies
+     * @return {Promise<string>}
+     */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
 
@@ -270,34 +330,33 @@ form.submit();
 <\/script>`;
     }
 
-    window.UTILITIES.copyUrlToClipboard = function () {
-        let baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
-
-        let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
-        APPLICATION_CONTEXT.config.params.viewport = {
-            zoomLevel: VIEWER.viewport.getZoom(),
-            point: VIEWER.viewport.getCenter()
-        };
-
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        APPLICATION_CONTEXT.config.params.bypassCookies = true;
-
-        let postData = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config);
-
-        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
-        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-
+    /**
+     * Copy content to the user clipboard
+     * @param {string} content
+     */
+    window.UTILITIES.copyToClipboard = function(content) {
         let $temp = $("<input>");
         $("body").append($temp);
-        $temp.val(baseUrl + encodeURIComponent(postData)).select();
+        $temp.val(content).select();
         document.execCommand("copy");
         $temp.remove();
+    };
+
+    /**
+     * Exports only the viewer direct link (without data) as a URL to the user clipboard
+     */
+    window.UTILITIES.copyUrlToClipboard = function() {
+        const baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
+        const data = UTILITIES.serializeAppConfig();
+        UTILITIES.copyToClipboard(baseUrl + encodeURIComponent(data));
         Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
-    window.UTILITIES.export = async function () {
+    /**
+     * Export the viewer as a HTML file that, when opened, loads the session
+     * @return {Promise<void>}
+     */
+    window.UTILITIES.export = async function() {
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
@@ -315,7 +374,11 @@ ${await UTILITIES.getForm()}
         APPLICATION_CONTEXT.__cache.dirty = false;
     };
 
-    window.UTILITIES.clone = async function () {
+    /**
+     * Clone the viewer to a new window, only two windows can be shown at the time.
+     * @return {Promise<void>}
+     */
+    window.UTILITIES.clone = async function() {
         if (window.opener) {
             return;
         }
@@ -375,7 +438,7 @@ ${await UTILITIES.getForm()}
      * @param onUploaded function to handle the result
      * @param accept file types to accept, e.g. "image/png, image/jpeg"
      *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
-     * @param mode {"text"|"bytes"|"url"} in what mode to read the data; text results in string, bytes in array buffer
+     * @param mode {("text"|"bytes"|"url")} in what mode to read the data; text results in string, bytes in array buffer
      * @returns {Promise<void>}
      */
     window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
@@ -392,7 +455,7 @@ ${await UTILITIES.getForm()}
     /**
      * File input text data loader handler, meant to be attached to input[type=file] onchange event
      * @param e event fired on an input (single) type file submit,
-     * @param mode {"text"|"bytes"|"url"} in what mode to read the data; text results in string, bytes in array buffer, url in the file path.
+     * @param mode {("text"|"bytes"|"url")} in what mode to read the data; text results in string, bytes in array buffer, url in the file path.
      * @returns {Promise<void>}
      */
     window.UTILITIES.readFileUploadEvent = function(e, mode="text") {
@@ -413,4 +476,4 @@ ${await UTILITIES.getForm()}
         .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
 
     UTILITIES.updateTheme();
-})(window);
+}

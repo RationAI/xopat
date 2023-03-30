@@ -1,9 +1,12 @@
 // noinspection JSUnresolvedVariable
 
 /**
+ * @typedef OpenSeadragon.TileSource
  * Empty tile source to render in place of faulty layer
+ * @memberof OpenSeadragon
+ * @extends OpenSeadragon.TileSource
  */
-class EmptyTileSource extends OpenSeadragon.TileSource {
+OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.TileSource {
 
     constructor(options) {
         super(options);
@@ -86,5 +89,5 @@ class EmptyTileSource extends OpenSeadragon.TileSource {
     getTileCacheDataAsContext2D(cache) {
         return cache._data;
     }
-}
+};
 

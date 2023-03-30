@@ -5,7 +5,7 @@
   <sup>A web based, REST API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</sup>
 </p>
 
-![The XOpat Viewer](src/assets/docs/xopat-banner.png)
+![The XOpat Viewer](docs/assets/xopat-banner.png)
 
 <hr>
 With the focus on flexibility, extensibility and modularity, the xOpat
@@ -31,11 +31,12 @@ your servers properly.
 ## Environment, Build & Test
 
 The visualization itself is not based on any framework, it is pure JavaScript application that integrates
-various libraries. That is true for the running deployed application. However, testing and building uses ``npm``, `grunt` and `cypress`.
+various libraries. That is true for the running deployed application. 
+However, testing and documentation uses ``npm``, `grunt` and `cypress`.
 
 > The build and test framework is still in development - for now, the viewer can be used AS-IS just add the OSD library and run from a PHP server.
 
-For more details, see ``test/``.
-
-
+For more details on components, see README files in respective directories.
 For details on integration, see ``INTEGRATION.md``.
+For documentation, you can run ``npm install && grunt docs && grunt connect watch``
+and open ``localhost:9000/``

@@ -78,7 +78,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     /**
      * Determine if the data and/or url imply the image service is supported by
      * this tile source.
-     * @param {Object|Array} data
+     * @param {(Object|Array)} data
      * @param {String} url
      */
     supports: function( data, url ){
@@ -99,7 +99,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      *    in TiledImage:
      *             options = $TileSource.prototype.configure.apply( _this, [ data, url, postData ]);
      * @function
-     * @param {Object|XMLDocument} data - the raw configuration
+     * @param {(Object|XMLDocument)} data - the raw configuration
      * @param {String} url - the url the data was retrieved from if any.
      * @param {String} postData - data for the post request or null
      * @return {Object} options - A dictionary of keyword arguments sufficient
@@ -174,7 +174,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param level
      * @param x
      * @param y
-     * @return {string || null} post data to send with tile configuration request
+     * @return {string|null} post data to send with tile configuration request
      */
     getTilePostData: function(level, x, y) {
         return this.getPostData(level, x, y, this.postData);
@@ -186,7 +186,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param x
      * @param y
      * @param data
-     * @return {string || null} post data to send with tile configuration request
+     * @return {string|null} post data to send with tile configuration request
      */
     getPostData: function(level, x, y, data) {
         return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
@@ -202,7 +202,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
 
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
-            this.downloadTileStart = function (context) {
+            this.downloadTileStart = function(context) {
                 const abort = context.finish.bind(context, null, undefined);
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");

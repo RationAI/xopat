@@ -1,4 +1,4 @@
-/**
+/*
  * GUI messaging system:
  *  show(...) and hide(...) to post announcement and notices
  *
@@ -9,15 +9,28 @@
  *      use context.opener to get reference to the original (parent) window
  */
 
-
+/**
+ * Queue
+ * @class xoQueue
+ */
 window.xoQueue = class {
     constructor(size) {
         this.SIZE = size;
         this._items = {};
     }
+
+    /**
+     * Add to queue
+     * @param {*} item
+     */
     add(item) {
         this._items[this._incr()] = item;
     }
+
+    /**
+     * Remove item that is present for the longest in queue
+     * @return {*}
+     */
     pop() {
         let item = this._items[this._i];
         delete this._items[this._i];
@@ -32,19 +45,23 @@ window.xoQueue = class {
     }
 }
 
-var UIComponents = {
-
 /**
- * Simplified input controls creation
+ * UI Components: Available Components and UI Element Builder API
+ * @namespace UIComponents
  */
-Elements: {
+var UIComponents = /** @lends UIComponents */ {
+/**
+ * Simplified JSON to HTML node builders for unified UI
+ * @namespace UIComponents.Elements
+ */
+Elements: /** @lends UIComponents.Elements */ {
     /**
      * Render TEXT input
      * @param options
      * @param {string} options.classes classes to assign, space-separated
      * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {*} options.default default value
      * @return {string} HTML for input TEXT field
      */
     textInput: function(options) {
@@ -58,8 +75,8 @@ placeholder="${options.placeholder}" value="${options.default}" ${options.onchan
      * @param options
      * @param {string} options.classes classes to assign, space-separated
      * @param {string} options.label
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {*} options.default default value
      * @return {string} HTML for checkbox
      */
     checkBox: function(options) {
@@ -75,8 +92,8 @@ ${options.label}</label>`;
      * @param options
      * @param {string} options.classes classes to assign, space-separated
      * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {*} options.default default value
      * @return {string} HTML for color input
      */
     colorInput: function(options) {
@@ -90,8 +107,8 @@ placeholder="${options.placeholder}" ${options.onchange}>`;
      * @param options
      * @param {string} options.classes classes to assign, space-separated
      * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {*} options.default default value
      * @param {number} options.min minimum value, default 0
      * @param {number} options.max maximum value, default 1
      * @param {number} options.step allowed increase, default 0.1
@@ -110,12 +127,12 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * @param options
      * @param {string} options.classes classes to assign, space-separated
      * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
      * @param {object} options.default default-selected opt_key
      * @param {object} options.options select options, opt_key: 'option text' map
      * @return {string} HTML for select input
      */
-    select: function (options) {
+    select: function(options) {
         options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
         options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
         let innerContent = [], optsArray = Array.isArray(options.options);
@@ -131,11 +148,11 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * note: the parsed content can be retrieved as this.values
      * @param options
      * @param {string} options.classes classes to assign, space-separated
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {number|array} options.default a list of default values or the desired array length
+     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {(number|array)} options.default a list of default values or the desired array length
      * @return {string} HTML for select input
      */
-    numberArray: function (options) {
+    numberArray: function(options) {
         options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
         options.onchange = typeof  options.onchange === "string" ? `onchange="
         try {
@@ -154,7 +171,7 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * @param {string} options.title
      * @return {string} HTML for header
      */
-    header: function (options) {
+    header: function(options) {
         options = $.extend({classes: "", title: "Title"}, options);
         return `<div class="${options.classes} header-sep">${options.title}</div>`;
     },
@@ -165,7 +182,7 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * @param {string} options.content
      * @return {string} HTML for content text
      */
-    text: function (options) {
+    text: function(options) {
         options = $.extend({classes: "", content: ""}, options);
         return `<p class="${options.classes}">${options.content}</p>`;
     },
@@ -177,7 +194,7 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * @param {string} options.action
      * @return {string} HTML for button
      */
-    button: function (options) {
+    button: function(options) {
         options = $.extend({classes: "", content: ""}, options);
         return `<button class="btn ${options.classes}" onclick="${options.action}">${options.title}</button>`;
     },
@@ -185,15 +202,15 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * Render newline
      * @param options no options supported as of now
      */
-    newline: function (options) {
+    newline: function(options) {
         return '<br style="clear: both">';
     }
 },
 
 /**
  * UI Actions
- *
  * functions that enable more complex UI interaction
+ * @namespace UIComponents.Actions
  */
 Actions: {
     /**
@@ -273,24 +290,38 @@ Actions: {
  * Single UI Components for re-use, styled and prepared
  * note they are not very flexible, but usefull if you need generic, simple UI
  *
+ * TODO: create interfaces
+ *
  * They all follow these rules:
  *  - options.id must be defined and is assigned to the very container of the output html
  *  - the same container also has class `[class-name]-container` if SingleComponents.ClassName used
  *  - the content has class `[class-name]`
+ * @namespace UIComponents.Components
  */
-Components: {
-
+Components: /** @lends UIComponents.Components */ {
+    /**
+     * Create a Row
+     */
     ImageRow: class {
         /**
          * Build rows UI, pluggable into a container
-         * @param contextId
-         * @param options
+         * @param {undefined} options unused
          */
-        constructor(contextId, options) {
-            this.contextId = contextId;
+        constructor(options=undefined) {
             this.options = options;
         }
 
+        /**
+         * Generates the HTML
+         * @param options.id
+         * @param options.title
+         * @param options.icon
+         * @param options.details
+         * @param options.contentAction
+         * @param options.customContent
+         * @return {string}
+         * @memberOf UIComponents.Components.ImageRow
+         */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let icon = options.icon;
@@ -310,24 +341,43 @@ ${contentAction}
 </div>${customContent}</div></div>`;
         };
 
+        /**
+         * Does not have any
+         * @return empty string
+         * @memberOf UIComponents.Components.ImageRow
+         */
         attachHeader() {
             return "";
         }
     },
 
+    /**
+     * todo: consider making selectable parent instead...
+     */
     SelectableImageRow: class {
         /**
          * Build rows UI, pluggable into a container
-         * @param contextId
          * @param options
          * @param options.id unique id for this builder
          * @param options.multiselect true if multiple rows can be selected
+         * @param options.containerId
          */
-        constructor(contextId, options) {
-            this.contextId = contextId;
+        constructor(options) {
+            this.contextId = options.containerId;
             this.options = options;
         }
 
+        /**
+         * Generates the HTML
+         * @param options.id
+         * @param options.title
+         * @param options.icon
+         * @param options.details
+         * @param options.contentAction
+         * @param options.customContent
+         * @return {string}
+         * @memberOf UIComponents.Components.SelectableImageRow
+         */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
@@ -381,8 +431,14 @@ ${contentAction}
     },
 },
 
-Containers: {
-
+/**
+ * Container Builders that auto-layout provided content
+ * @namespace UIComponents.Containers
+ */
+Containers: /** @lends UIComponents.Containers */ {
+    /**
+     *
+     */
     PanelMenu: class {
         constructor(containerId) {
             this.context = document.getElementById(containerId);
@@ -449,6 +505,12 @@ Containers: {
             this.context.style.display = 'block';
         }
 
+        /**
+         * Show tab notification
+         * @param {string} focus id of the focus
+         * @param {(string|undefined)} sign custom symbol to show, shows counter of calls if undefined
+         * @memberOf UIComponents.Containers.PanelMenu
+         */
         setNotify(focus, sign=undefined) {
             if (focus) {
                 let focused = document.getElementById(`${focus}-input-header`);
@@ -477,6 +539,7 @@ Containers: {
          * @param icon the icon name for button, default ""
          * @param bodyId unique container ID in the DOM context (can be the same as id if unique) ->
          *   this id can be accessed to further modify this container contents
+         * @memberOf UIComponents.Containers.PanelMenu
          */
         set(entityId, id, title, html, icon="", bodyId=id) {
             let existing = this.elements.find(x => x === id);
@@ -554,13 +617,16 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
         }
     },
 
-    //Enhancement: let creator own builder and just accept plain html
+    /**
+     * TODO unify: let creator own builder and just accept plain html
+     */
     RowPanel: class {
         constructor(containerId, builder=UIComponents.Components.ImageRow, builderOptions={}) {
             const context = document.getElementById(containerId);
             if (!context) throw "RowPanel(): invalid initialization: container does not exist!";
             this.containerId = containerId + "-content";
-            this.builder = new builder(this.containerId, builderOptions);
+            builderOptions.container = this.containerId;
+            this.builder = new builder(builderOptions);
             this.uid = containerId;
             context.innerHTML = `<div id="${this.containerId}"></div>`;
             this.rows = [];

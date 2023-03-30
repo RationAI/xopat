@@ -1,6 +1,10 @@
 (function(window) {
 
-    window.Dialogs = {
+    /**
+     * Window Dialogs: System Dialogs and Window Manager
+     * @namespace Dialogs
+     */
+    window.Dialogs = /**@lends Dialogs*/ {
         MSG_INFO: { class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' },
         MSG_OK: { class: "Toast--success", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' },
         MSG_WARN: { class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />' },
@@ -8,6 +12,9 @@
         _timer: null,
         _modals: {},
 
+        /**
+         * @private
+         */
         init: function() {
             $("body").append(`<div id="dialogs-container" class="popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
 <div class="Toast" style="margin: 16px 0 0 0;">
@@ -26,7 +33,7 @@
             const _this = this;
 
             //close all child modals if parent dies
-            window.onunload = function () {
+            window.onunload = function() {
                 for (let key in _this._modals) {
                     if (_this._modals.hasOwnProperty(key)) {
                         let context = _this._modals[key].context;
@@ -45,7 +52,7 @@
          * @param importance Dialogs.MSG_[INFO/WARN/ERR] object
          * @param queued this message is ignored if another is shown and queued=false
          */
-        show: function (text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
+        show: function(text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
             if (queued && this._timer) {
                 this._notifQueue.add({text, delayMS, importance});
             } else this._showImpl(text, delayMS, importance);
@@ -54,7 +61,7 @@
         /**
          * Hide notification
          */
-        hide: function () {
+        hide: function() {
             this._hideImpl(false);
         },
 
@@ -73,7 +80,7 @@
             }
         },
 
-        _showImpl: function (text, delayMS, importance) {
+        _showImpl: function(text, delayMS, importance) {
             this._board.html(text);
             this._icon.html(importance.icon);
             this._toast.removeClass(); //all
@@ -187,7 +194,7 @@ require(["vs/editor/editor.main"], () => {
   );
 });
 
-document.addEventListener('keydown', function (e) {
+document.addEventListener('keydown', function(e) {
     if (e.code === "KeyS" && e.ctrlKey) {
        save();
     }
@@ -207,7 +214,7 @@ window.addEventListener("beforeunload", (e) => {
          * TODO sometimes ctx.window valid but does not have getElementByID etc...
          *
          * @param id id used to create the window
-         * @returns {window || undefined || null} window context or undefined
+         * @returns {(Window|undefined|null)} window context or undefined
          */
         getModalContext: function(id) {
             let ctx = this._modals[id];
@@ -248,7 +255,7 @@ window.addEventListener("beforeunload", (e) => {
             return true;
         },
 
-        _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function () {}) {
+        _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function() {}) {
             //todo support modal redirection, opening in current browser instead (ID container OR this window modal)
 
             //can be called recursively from message popup, that's why we cache it
@@ -358,10 +365,16 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     Dialogs.init();
 
 
-    window.DropDown = {
+    /**
+     * @namespace DropDown
+     */
+    window.DropDown = /**@lends DropDown*/ {
 
         _calls: [],
 
+        /**
+         * @private
+         */
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
             $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
@@ -369,7 +382,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             this._body = $("#drop-down-menu");
         },
 
-        open: function (mouseEvent, optionsGetter) {
+        /**
+         * Open dialog from fired user input event
+         * @param {Event} mouseEvent
+         * @param {function} optionsGetter
+         */
+        open: function(mouseEvent, optionsGetter) {
              this._toggle(mouseEvent, optionsGetter);
              mouseEvent.preventDefault();
         },
@@ -452,7 +470,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
     let pluginsToolsBuilder, tissueMenuBuilder;
 
-    window.USER_INTERFACE = {
+    /**
+     * Definition of UI Namespaces driving menus and UI-ready utilities.
+     * @namespace USER_INTERFACE
+     */
+    window.USER_INTERFACE = /**@lends USER_INTERFACE */ {
         /**
          * Run highlight animation on element
          * @param id id of the element in DOM
@@ -469,7 +491,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * Highlight element in DOM ensuring given menus are open it is
          * contained in
          * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
-         * @param {string|[]} menuId id of the menu to focus, applicable for menus that can switch between
+         * @param {(string|string[])} menuId id of the menu to focus, applicable for menus that can switch between
          *   different contents, AdvancedMenu can specify both string (menuId to open) or array ([menuId, submenuId])
          * @param id element ID to highlight
          * @param timeout highlight timeout in ms, default 2000
@@ -484,7 +506,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * Highlight element in DOM ensuring given menus are open it is
          * contained in
          * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
-         * @param {string|[]} menuId id of the menu to focus, applicable for menus that can switch between
+         * @param {(string|string[])} menuId id of the menu to focus, applicable for menus that can switch between
          *   different contents, AdvancedMenu can specify both string (menuId to open) or array ([menuId, submenuId])
          */
         focusMenu(menuName, menuId) {
@@ -509,6 +531,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Workspace (canvas) margins
+         * @private
+         * @namespace USER_INTERFACE.Margins
          */
         Margins : {
             top: 0,
@@ -519,19 +543,32 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Dialog System
+         * @alias Dialogs
+         * @see Dialogs
+         * @memberOf USER_INTERFACE
          */
         Dialogs: Dialogs,
 
         /**
          * DropDown Handler
+         * @alias DropDown
+         * @see DropDown
+         * @memberOf USER_INTERFACE
          */
         DropDown: DropDown,
 
         /**
-         * Full screen Errors
+         * Full screen Errors for critical failures.
+         * @namespace USER_INTERFACE.Errors
          */
         Errors: {
             active: false,
+            /**
+             * Show viewport-covering error
+             * @param title
+             * @param description
+             * @param withHiddenMenu
+             */
             show: function(title, description, withHiddenMenu=false) {
                 USER_INTERFACE.Tutorials._hideImpl(false); //preventive
                 $("#system-message-title").html(title);
@@ -542,6 +579,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.Tools.close();
                 this.active = true;
             },
+            /**
+             * Hide system-wide error.
+             */
             hide: function() {
                 $("#system-message").addClass("d-none");
                 $("#viewer-container").removeClass("disabled");
@@ -551,26 +591,63 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
-         * Application Main Menu (left-side)
+         * Application Main Menu (right side)
+         * @namespace USER_INTERFACE.MainMenu
          */
         MainMenu: {
             context: $("#main-panel"),
             content: $("#main-panel-content"),
             navigator: $("#navigator-container"),
             opened: true,
+            /**
+             * Append to the menu
+             * @param title
+             * @param titleHtml
+             * @param html
+             * @param id
+             * @param pluginId
+             * @memberOf MainMenu
+             */
             append: function(title, titleHtml, html, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-simple"><div><h3 class="d-inline-block h3" style="padding-left: 15px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
             },
+            /**
+             * Replace in the menu
+             * @param title
+             * @param titleHtml
+             * @param html
+             * @param id
+             * @param pluginId
+             * @memberOf MainMenu
+             */
             replace: function(title, titleHtml, html, id, pluginId) {
                 $(`.${pluginId}-plugin-root`).remove();
                 this.append(title, titleHtml, html, id, pluginId);
             },
+            /**
+             * Append to the menu with toggle-able (hidden) content
+             * @param title
+             * @param titleHtml
+             * @param html
+             * @param hiddenHtml
+             * @param id
+             * @param pluginId
+             */
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
 <span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
 <h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
 </div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
             },
+            /**
+             * Replace in the menu with toggle-able (hidden) content
+             * @param title
+             * @param titleHtml
+             * @param html
+             * @param hiddenHtml
+             * @param id
+             * @param pluginId
+             */
             replaceExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 $(`.${pluginId}-plugin-root`).remove();
                 this.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
@@ -578,12 +655,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             appendRaw: function(html, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-visible">${html}</div>`);
             },
+            /**
+             * Open the menu
+             */
             open() {
                 this.context.css("right", "0");
                 this.opened = true;
                 USER_INTERFACE.Margins.right = 400;
                 this._sync();
             },
+            /**
+             * Close the menu
+             */
             close() {
                 this.context.css("right", "-400px");
                 this.opened = false;
@@ -604,8 +687,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Tools menu by default invisible (top)
+         * @namespace USER_INTERFACE.Tools
          */
         Tools: {
+            /**
+             * Add menu to the Tools
+             * @param {string} ownerPluginId
+             * @param {string} toolsMenuId unique menu id
+             * @param {string} title
+             * @param {string} html
+             * @param {string} icon
+             */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon="") {
                 if (!pluginsToolsBuilder) {
                     pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
@@ -619,7 +711,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             /**
              * Show desired toolBar menu. Also opens the toolbar if closed.
-             * @param {string|undefined} toolsId menu id to open at
+             * @param {(string|undefined)} toolsId menu id to open at
              */
             open(toolsId=undefined) {
                 if (pluginsToolsBuilder) {
@@ -647,10 +739,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Status bar
+         * @namespace USER_INTERFACE.Status
          */
         Status: {
             context: null,
             closed: false,
+            /**
+             * Show status bar with message
+             * @param {string} message
+             */
             show(message) {
                 if (this.closed) return;
                 if (!this.context)  {
@@ -689,6 +786,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Menu that covers most of the screen and hides more advanced UI elements and other features
+         * @namespace USER_INTERFACE.AdvancedMenu
          */
         AdvancedMenu: {
             self: $("#fullscreen-menu"),
@@ -714,7 +812,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             /**
              * Open the Menu UI at desired tab
-             * @param {string|undefined} atPluginId menu tab to open
+             * @param {(string|undefined)} atPluginId menu tab to open
              * @param {boolean} toggle whether to close if the menu is opened
              * @return {boolean} true if the menu was opened with this call
              */
@@ -737,7 +835,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             /**
              * Open the Menu UI at desired sub-menu tab
              * @param {string} atPluginId menu tab to open
-             * @param {string|undefined} atSubId sub-menu tab to open
+             * @param {(string|undefined)} atSubId sub-menu tab to open
              * @param {boolean} toggle whether to close if the menu is opened
              * @return {boolean} true if the submenu was opened by this call
              */
@@ -776,6 +874,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     USER_INTERFACE.MainMenu.open();
                 }
             },
+            refreshPageWithSelectedPlugins() {
+                let formData = [],
+                    plugins = pluginsMenuBuilder.builder.getSelected();
+
+                for (let plugin of plugins) {
+                    formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
+                }
+                let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
+                APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie); //todo local store? or persistent store?
+                UTILITIES.refreshPage(formData.join(""), plugins);
+            },
+            /**
+             * Add Separator to the menu header at current position (end) of the header labels
+             */
             addSeparator() {
                 $(this.selfContext.head).append('<span class="width-full" style="height: 1px; border: solid; opacity: 0.1;"></span>');
             },
@@ -826,12 +938,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Tutorial system
+         * @namespace USER_INTERFACE.Tutorials
          */
         Tutorials: {
             tutorials: $("#tutorials"),
             steps: [],
             prerequisites: [],
-
+            /**
+             * Open the tutorials selection screen
+             * @param {string} title title to show
+             * @param {string} description subtitle to show
+             */
             show: function(title=undefined, description=undefined) {
                 if (USER_INTERFACE.Errors.active || this.running) return;
 
@@ -848,6 +965,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.running = true;
             },
 
+            /**
+             * Hide Tutorials
+             */
             hide: function() {
                 this._hideImpl(true);
             },
@@ -885,7 +1005,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             /**
              * Run tutorial
-             * @param {number|[]} ctx index to the attached tutorials list (internal use) or tutorials data
+             * @param {(number|Array)} ctx index to the attached tutorials list (internal use) or tutorials data
              *  see add(..) steps parameter
              */
             run: function(ctx) {
@@ -947,6 +1067,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
+        /**
+         * Open/close Main Menu Item
+         * @param {JQuery} jQSelf
+         * @param {JQuery} jQTargetParent
+         * @private
+         */
         clickMenuHeader: function(jQSelf, jQTargetParent) {
             if (jQTargetParent.hasClass('force-visible')) {
                 jQTargetParent.removeClass('force-visible');
@@ -1055,16 +1181,4 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
             });
         }
     }
-
-    USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins = function() {
-        let formData = [],
-            plugins = pluginsMenuBuilder.builder.getSelected();
-
-        for (let plugin of plugins) {
-            formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
-        }
-        let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-        APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie); //todo local store? or persistent store?
-        UTILITIES.refreshPage(formData.join(""), plugins);
-    };
 })(window);

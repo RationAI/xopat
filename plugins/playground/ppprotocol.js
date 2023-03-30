@@ -89,7 +89,7 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
 
     /**
      * @function
-     * @param {Object|XMLDocument} data - the raw configuration
+     * @param {(Object|XMLDocument)} data - the raw configuration
      * @param {String} url - the url the data was retrieved from if any.
      * @param {String} postData - data for the post request or null
      * @return {Object} options - A dictionary of keyword arguments sufficient

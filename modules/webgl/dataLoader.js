@@ -10,8 +10,8 @@
  *  - working with <image*> object - image data chunks are vertically concatenated
  *  - working with [<image*>] object - images are in array
  *
- *
- * @type {{V2_0: WebGLModule.DataLoader.V2_0, V1_0: WebGLModule.DataLoader.V1_0}}
+ * @namespace DataLoader
+ * @memberOf WebGLModule
  */
 WebGLModule.DataLoader = {
     /**
@@ -20,12 +20,12 @@ WebGLModule.DataLoader = {
      * @param {*} data
      * @return {HTMLElement} Dom Element
      */
-    dataAsHtmlElement: function (data) {
+    dataAsHtmlElement: function(data) {
         return {
             "[object HTMLImageElement]": () => data,
             "[object HTMLCanvasElement]": () => data,
             //Image objects in Array, we assume image objects only
-            "[object Array]": function () {
+            "[object Array]": function() {
                 const node = document.createElement("div");
                 for (let image of data) {
                     node.append(image);
@@ -45,12 +45,13 @@ WebGLModule.DataLoader = {
      * since some access surrounding pixels -> requirement of MIRRORED_REPEAT not implementable
      *
      * For details, please, see the implementation.
-     * @type WebGLModule.DataLoader.V1_0
+     * @class WebGLModule.DataLoader.V1_0
      */
-    V1_0: class {
+    V1_0: class /**@lends WebGLModule.DataLoader.V1_0 */ {
         /**
          * Creation
          * @param {WebGLRenderingContext} gl
+         * @memberOf WebGLModule.DataLoader.V1_0
          */
         constructor(gl) {
             this._units = [];
@@ -67,8 +68,10 @@ WebGLModule.DataLoader = {
          * @param {GLint} wrap required texture GL wrap value
          * @param {GLint} filter required texture GL filter value
          * @param {object} visualisation reference to the visualization object
+         * @instance
+         * @memberOf WebGLModule.DataLoader.V1_0
          */
-        toBuffers (context, gl, program, wrap, filter, visualisation) {
+        toBuffers(context, gl, program, wrap, filter, visualisation) {
             this.wrap = wrap;
             this.filter = filter;
 
@@ -89,8 +92,10 @@ WebGLModule.DataLoader = {
          * @param {number} tileBounds.height tile height
          * @param {WebGLProgram} program current WebGLProgram
          * @param {WebGLRenderingContext} gl
+         * @memberOf WebGLModule.DataLoader.V1_0
+         * @instance
          */
-        toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+        toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
                 this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
@@ -106,6 +111,8 @@ WebGLModule.DataLoader = {
          * @param tileBounds
          * @param program
          * @param gl
+         * @memberOf WebGLModule.DataLoader.V1_0
+         * @instance
          */
         toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
 
@@ -115,6 +122,8 @@ WebGLModule.DataLoader = {
          * Measure texture size
          * @param {number} index index of the texture
          * @return {string} GLSL expression (unterminated) to obtain texture size - vec2
+         * @memberOf WebGLModule.DataLoader.V1_0
+         * @instance
          */
         measure(index) {
             return 'sampler_size';
@@ -125,6 +134,8 @@ WebGLModule.DataLoader = {
          * @param {number|string} index texture index, must respect index re-mapping (see declare())
          * @param {string} vec2coords GLSL expression that evaluates to vec2
          * @return {string} GLSL expression (unterminated) that evaluates to vec4
+         * @memberOf WebGLModule.DataLoader.V1_0
+         * @instance
          */
         sample(index, vec2coords) {
             return `texture2D(vis_data_sampler_${index}, ${vec2coords})`;
@@ -135,6 +146,8 @@ WebGLModule.DataLoader = {
          * @param {number[]} indicesOfImages mapping of shader to data index, i.e. if shader requests
          *  texture i, the texture is located in the data at indicesOfImages[i] index
          * @return {string} GLSL declaration (terminated with semicolon) of necessary elements for textures
+         * @memberOf WebGLModule.DataLoader.V1_0
+         * @instance
          */
         declare(indicesOfImages) {
             let samplers = 'uniform vec2 sampler_size;';
@@ -146,10 +159,12 @@ WebGLModule.DataLoader = {
         }
 
         /**
-         * Loader strategy based on toString result, extend with your type if necessary
+         * Loader strategy based on toString result, extend with your type if necessary.
+         * If your type cannot use the given version strategy (TEXTURE UNITS), you have
+         * to re-define the whole API.
          */
         loadersByType = {
-            "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 if (!this._canvas) {
                     this._canvas = document.createElement('canvas');
                     this._canvasReader = this._canvas.getContext('2d', {willReadFrequently: true});
@@ -222,7 +237,7 @@ WebGLModule.DataLoader = {
                 }
             },
             //Image objects in Array, we assume image objects only
-            "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object Array]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 let index = 0;
                 const NUM_IMAGES = data.length;
                 //just load all images and let shaders reference them...
@@ -269,14 +284,15 @@ WebGLModule.DataLoader = {
      * the z-stacking is defined in dataIndexMapping.
      *
      * For details, please, see the implementation.
-     * @type WebGLModule.DataLoader.V2_0
+     * @class WebGLModule.DataLoader.V2_0
      */
-    V2_0: class {
+    V2_0: class /**@lends WebGLModule.DataLoader.V2_0 */ {
         /**
          * Creation
          * @param {WebGL2RenderingContext} gl
          * @param {string} textureName texture name, must load the data as Texture2DArray
-         */
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * */
         constructor(gl, textureName) {
             this.textureName = textureName;
             this.textureId = gl.createTexture();
@@ -292,6 +308,7 @@ WebGLModule.DataLoader = {
          * @param {GLint} wrap required texture GL wrap value
          * @param {GLint} filter required texture GL filter value
          * @param {object} visualisation reference to the visualization object
+         * @memberOf WebGLModule.DataLoader.V2_0
          */
         toBuffers(context, gl, program, wrap, filter, visualisation) {
             this.wrap = wrap;
@@ -311,6 +328,8 @@ WebGLModule.DataLoader = {
          * @param {number} tileBounds.height tile height
          * @param {WebGLProgram} program current WebGLProgram
          * @param {WebGL2RenderingContext} gl
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * @instance
          */
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
@@ -318,6 +337,18 @@ WebGLModule.DataLoader = {
             );
         }
 
+        /**
+         *
+         * @param context
+         * @param dataIndexMapping
+         * @param visualisation
+         * @param data
+         * @param tileBounds
+         * @param program
+         * @param gl
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * @instance
+         */
         toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             if (Array.isArray(data)) {
                 //need to re-initialize the texture
@@ -331,6 +362,8 @@ WebGLModule.DataLoader = {
          * Measure texture size
          * @param {number} index index of the texture
          * @return {string} GLSL expression (unterminated) to obtain texture size - vec2
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * @instance
          */
         measure(index) {
             return 'vec2(textureSize(vis_data_sampler_array))';
@@ -341,6 +374,8 @@ WebGLModule.DataLoader = {
          * @param {number|string} index texture index, must respect index re-mapping (see declare())
          * @param {string} vec2coords GLSL expression that evaluates to vec2
          * @return {string} GLSL expression (unterminated) that evaluates to vec4
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * @instance
          */
         sample(index, vec2coords) {
             return `texture(vis_data_sampler_array, vec3(${vec2coords}, _vis_data_sampler_array_indices[${index}]))`;
@@ -351,6 +386,8 @@ WebGLModule.DataLoader = {
          * @param {number[]} indicesOfImages mapping of shader to data index, i.e. if shader requests
          *  texture i, the texture is located in the data at indicesOfImages[i] index
          * @return {string} GLSL declaration (terminated with semicolon) of necessary elements for textures
+         * @memberOf WebGLModule.DataLoader.V2_0
+         * @instance
          */
         declare(indicesOfImages) {
             return `uniform sampler2DArray vis_data_sampler_array;
@@ -360,11 +397,13 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
         }
 
         /**
-         * Loader strategy based on toString, extend with your type if necessary
+         * Loader strategy based on toString result, extend with your type if necessary.
+         * If your type cannot use the given version strategy (TEXTURE_2D_ARRAY UNIT), you have
+         * to re-define the whole API.
          */
         loadersByType = {
             //Vertically Concatenated Images
-            "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 const NUM_IMAGES = Math.round(data.height / tileBounds.height);
 
                 // Texture checking disabled due to performance reasons
@@ -395,7 +434,7 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
                 );
             },
             //Image objects in Array, we assume image objects only
-            "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object Array]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D_ARRAY, self.textureId);
                 gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, data[0].width, data[0].height, data.length+1);
