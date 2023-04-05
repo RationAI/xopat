@@ -794,7 +794,7 @@ class="btn m-2">Set for left click </button>
 
 	loadAnnotationsList(onSuccessLoad=()=>{}) {
 		if (!this._server) {
-			$("#annotations-shared-head").html(thisZ.getAnnotationsHeadMenu(`This feature is not enabled.`));
+			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(`This feature is not enabled.`));
 			return;
 		}
 		this.annotationsMenuBuilder.clear();
