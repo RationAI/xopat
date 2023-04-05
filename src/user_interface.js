@@ -1,4 +1,4 @@
-(function(window) {
+function initXopatUI() {
 
     /**
      * Window Dialogs: System Dialogs and Window Manager
@@ -543,7 +543,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Dialog System
-         * @alias Dialogs
          * @see Dialogs
          * @memberOf USER_INTERFACE
          */
@@ -551,7 +550,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * DropDown Handler
-         * @alias DropDown
          * @see DropDown
          * @memberOf USER_INTERFACE
          */
@@ -1181,4 +1179,4 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
             });
         }
     }
-})(window);
+}

@@ -27,6 +27,10 @@ function initXopatScripts() {
     VIEWER.addHandler('canvas-exit', function() {
         focusOnViewer = false;
     });
+    VIEWER.addHandler('canvas-key', function(e) {
+        focusOnViewer = true;
+        e.preventDefaultAction = true;
+    });
     document.addEventListener('keydown', function(e) {
         e.focusCanvas = focusOnViewer;
         /**

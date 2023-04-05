@@ -113,7 +113,15 @@ section
 .link-namespace {
     color: var(--color-text-tertiary);
 }
+.link-namespace-item {
+    color: var(--color-prettylights-syntax-constant-other-reference-link);
+}
+.link-hierarchy {
 
+}
+.link-hierarchy-item {
+    color: var(--color-prettylights-syntax-constant-other-reference-link);
+}
 nav
 {
     position: -webkit-sticky !important;
@@ -124,7 +132,7 @@ nav
 
     display: block;
     margin-top: 28px;
-    width: 220px;
+    width: 240px;
     border-left: 3px solid var(--color-border-secondary);
     padding-left: 9px;
 }
@@ -177,20 +185,20 @@ h4.name:before {
 }
 
 nav li {
-    margin-top: 6px;
+    padding: 3px 0;
     margin-left: 6px;
 }
 
 nav a {
-    color: var(--color-prettylights-syntax-constant-other-reference-link);
+    color: var(--color-text-link);
 }
 
 nav a:visited {
-    color: var(--color-prettylights-syntax-constant-other-reference-link);
+    color: var(--color-text-link);
 }
 
 nav a:active {
-    color: var(--color-prettylights-syntax-constant-other-reference-link);
+    color: var(--color-text-link);
 }
 
 img {
@@ -413,3 +421,11 @@ table {
 .disabled {
     color: #454545;
 }
+
+::-webkit-scrollbar {background: transparent;margin: 25px 0 25px 0;width: 14px;height: 14px; overflow: overlay}
+::-webkit-scrollbar-track {background: transparent;}
+::-webkit-scrollbar-thumb {height: 6px;border: 4px solid rgba(0, 0, 0, 0);background-clip: padding-box;
+    -webkit-border-radius: 7px;background-color: var(--color-icon-tertiary);
+    -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);}
+::-webkit-scrollbar-button {width: 0;height: 0;display: none;}
+::-webkit-scrollbar-corner {background-color: transparent;}

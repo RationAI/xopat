@@ -33,53 +33,13 @@ module.exports = function(grunt) {
         },
     });
 
-    grunt.registerTask('docs', 'Generate CLEAN theme API Documentation', function (file) {
+    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file', function (file) {
         const config = require(file || './docs/openseadragon.conf');
         grunt.file.write('./docs/build/docs.conf.json', JSON.stringify(config));
-        grunt.file.copy('./docs/assets/xopat-banner.png', './docs/build/docs/assets/xopat-banner.png')
-        const result = execAtPath('./node_modules/.bin/jsdoc', '-c ./docs/build/docs.conf.json');
+        grunt.file.copy('./docs/assets/xopat-banner.png', './docs/build/docs/assets/xopat-banner.png');
+        const result = execAtPath('./node_modules/.bin/jsdoc', '-c ./docs/build/docs.conf.json --verbose');
         grunt.log.writeln(result);
     });
-
-    // grunt.registerTask('docs-clean', 'Generate CLEAN theme API Documentation', function () {
-    //     const file = 'jsdoc-clean.config.js';
-    //     grunt.log.write(`Using theme ${file}...\n`);
-    //     const exec = require('child_process').execSync;
-    //     const result = exec(`jsdoc --configure ${file} --verbose`, { encoding: 'utf8' });
-    //     grunt.log.writeln(result);
-    // });
-    //
-    // grunt.registerTask('docs-ink', 'Generate INK theme API Documentation', function () {
-    //     let fileName = 'jsdoc-ink.config';
-    //     const conf = require(`./${fileName}`);
-    //     const file = fileName + '.json';
-    //     grunt.file.write('./docs-ink/' + file, JSON.stringify(conf));
-    //     grunt.log.write(`Using theme ${file}...\n`);
-    //     const result = exec(`jsdoc -c ./docs-ink/${file} -t ./node_modules/ink-docstrap/template -R README.md -r --verbose`, { encoding: 'utf8' });
-    //     grunt.log.writeln(result);
-    // });
-
-    // grunt.registerTask('docs', 'Generate API Documentation', function (file) {
-    //     if (arguments.length === 0) {
-    //         file = 'jsdoc-clean.config.js';
-    //         grunt.log.write(`Generating docs with the default clean theme configuration ${file}...\n`);
-    //     } else {
-    //         if (grunt.file.exists(file)) {
-    //             grunt.log.write(`Generating docs with custom configuration ${file}...\n`);
-    //         } else {
-    //             grunt.log.write(`Using theme ${file}...\n`);
-    //             switch (file) {
-    //                 case 'clean': file='jsdoc-clean.config.js';break;
-    //                 case 'ink': file='jsdoc-ink.config.js';break;
-    //                 default: throw `Invalid theme '${file}': use one of supported aliases or a path to the configuration file!`;
-    //             }
-    //         }
-    //     }
-    //
-    //     var exec = require('child_process').execSync;
-    //     var result = exec(`jsdoc --configure ${file} --verbose`, { encoding: 'utf8' });
-    //     grunt.log.writeln(result);
-    // });
 
     grunt.registerTask('env', 'Generate Env Configuration Example.', function() {
         grunt.log.write("Core configuration...\n");
@@ -107,7 +67,6 @@ module.exports = function(grunt) {
         const plugins = grunt.file.expand({filter: "isDirectory", cwd: "plugins"}, ["*"]);
         let pushed = false;
         for (let pluginFolder of plugins) {
-            //todo remove all development configuration data
             const file = `plugins/${pluginFolder}/include.json`;
             grunt.log.write(pluginFolder+"/include.json  ");
 
@@ -141,7 +100,6 @@ module.exports = function(grunt) {
         pushed = false;
         for (let moduleFolder of modules) {
             const file = `modules/${moduleFolder}/include.json`;
-            //todo remove all development configuration data
             if (grunt.file.isFile(file)) {
                 pushed = true;
                 grunt.log.write(moduleFolder+"/include.json  ");

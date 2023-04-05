@@ -10,8 +10,7 @@
  *  - working with <image*> object - image data chunks are vertically concatenated
  *  - working with [<image*>] object - images are in array
  *
- * @namespace DataLoader
- * @memberOf WebGLModule
+ * @namespace WebGLModule.DataLoader
  */
 WebGLModule.DataLoader = {
     /**

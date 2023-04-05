@@ -157,35 +157,49 @@ function updateItemName(item) {
     return itemName;
 }
 
-function linktoHierarchy(name, linkText) {
-    let text = linkText.split(".");
+
+function namespaceTextToHeading(inputText, css='font-size: 14px !important;',
+                                subnamespaceClasses='',
+                                separator='.', joinSeparator=separator,
+                                subnamespacePrefix='',
+                                subnamespaceSiffix=separator) {
+    let text = Array.isArray(inputText) ? inputText : inputText.split(separator);
     if (text.length > 1) {
         let final = text.pop();
+        return `<span style="${css}" class="link-namespace ${subnamespaceClasses}">${subnamespacePrefix}${text.join(joinSeparator)}${subnamespaceSiffix}</span><span style="${css}" class="link-namespace-item">${final}</span>`;
+    }
+    return `<span style="${css}">${inputText}</span>`;
+}
+
+function linktoNice(name, linkText, title='') {
+    return `<span title="${title}">` + linkto(name, namespaceTextToHeading(linkText, 'max-width: 100px;font-size: inherit !important;',
+            'f3-light left-ellipsis', '.', '.', '.', ''))
+        + '</span>';
+}
+
+let hNamespace = null;
+function linktoHierarchy(name, linkText) {
+    let text = linkText.split(".");
+
+    if (text.length > 1) {
+        if (text[0] !== hNamespace) {
+            hNamespace = null;
+            return linktoNice(name, text, linkText);
+        }
+        let final = text.pop();
         let fontSize = 14 - text.length;
-        linkText = `<style="font-size: ${fontSize}px">${text.map(x => '&emsp;').join("")}${final}</span>`;
+        // let margin = text.length * 2;
+        // linkText = `<span class="link-hierarchy" style="font-size: ${fontSize}px; margin-left: ${margin}px">${final}</span>`;
+        linkText = `<span class="link-hierarchy" style="font-size: ${fontSize}px" data-depth="${text.length}">${text.map(x => '&emsp;').join("")}</span>
+<span style="font-size: ${fontSize}px" class="link-hierarchy-item">${final}</span>`;
     } else {
+        hNamespace = linkText;
         linkText = `<span style="font-size: 14px">${linkText}</span>`;
     }
 
     return linkto(name, linkText);
 }
 
-function namespaceTextToHeading(inputText, css='font-size: 14px !important;',
-                                subnamespaceClasses='f3-light',
-                                separator='.', joinSeparator=separator,
-                                subnamespacePrefix='',
-                                subnamespaceSiffix=separator) {
-    let text = inputText.split(separator);
-    if (text.length > 1) {
-        let final = text.pop();
-        return `<span style="${css}" class="link-namespace ${subnamespaceClasses}">${subnamespacePrefix}${text.join(joinSeparator)}${subnamespaceSiffix}</span>${final}`;
-    }
-    return `<span style="${css}">${inputText}</span>`;
-}
-
-function linktoNice(name, linkText) {
-    return linkto(name, namespaceTextToHeading(linkText));
-}
 
 function addParamAttributes(params) {
     return params.filter(function(param) {
@@ -525,9 +539,9 @@ function buildEventsNav(events, seen, linkto) {
 }
 
 /**
-    @param {TAFFY} taffyData See <http://taffydb.com/>.
-    @param {object} opts
-    @param {Tutorial} tutorials
+ @param {TAFFY} taffyData See <http://taffydb.com/>.
+ @param {object} opts
+ @param {Tutorial} tutorials
  */
 exports.publish = function(taffyData, opts, tutorials) {
     data = taffyData;
@@ -562,7 +576,7 @@ exports.publish = function(taffyData, opts, tutorials) {
     var sourceFiles = {};
     var sourceFilePaths = [];
     data().each(function(doclet) {
-         doclet.attribs = '';
+        doclet.attribs = '';
 
         if (doclet.examples) {
             doclet.examples = doclet.examples.map(function(example) {
@@ -729,7 +743,7 @@ exports.publish = function(taffyData, opts, tutorials) {
         packages.concat(
             [{kind: 'mainpage', readme: opts.readme, longname: (opts.mainpagetitle) ? opts.mainpagetitle : 'Main Page'}]
         ).concat(files),
-    indexUrl);
+        indexUrl);
 
     // set up the lists that we'll use to generate pages
     var classes = taffy(members.classes);

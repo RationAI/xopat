@@ -1,36 +1,3 @@
-/**
-* @typedef {{
-*  name: string,
-*  lossless: boolean,
-*  shaders: Object.<string, WebGLModule.ShaderLayerConfig>
-* }} WebGLModule.VisualizationConfig
-*
-* //use_channel[X] name
-* @template {Object<string,any>} TUseChannel
-* //use_[fitler_name]
-* @template {Object<string,number>} TUseFilter
-* @template {Object<string,(string|any)>} TIControlConfig
-* @typedef WebGLModule.ShaderLayerParams
-* @type {{TUseChannel,TUseFilter,TIControlConfig}}
-*
-* @typedef {{
-*   name: string,
-*   type: string,
-*   visible: boolean,
-*   dataReferences: number[],
-*   params: WebGLModule.ShaderLayerParams
-*  }} WebGLModule.ShaderLayerConfig
-*
-*
-* @typedef WebGLModule.UIControlsRenderer
-* @type function
-* @param {string} title
-* @param {string} html
-* @param {string} dataId
-* @param {boolean} isVisible
-* @param {WebGLModule.VisualisationLayer} layer
-* @param {boolean} wasErrorWhenLoading
-*/
 
 /**
  * Wrapping the funcionality of WebGL to be suitable for the visualisation.
@@ -38,6 +5,40 @@
  * @class WebGLModule
  */
 window.WebGLModule = class {
+    /**
+     * @typedef {{
+     *  name: string,
+     *  lossless: boolean,
+     *  shaders: Object.<string, WebGLModule.ShaderLayerConfig>
+     * }} WebGLModule.VisualizationConfig
+     *
+     * //use_channel[X] name
+     * @template {Object<string,any>} TUseChannel
+     * //use_[fitler_name]
+     * @template {Object<string,number>} TUseFilter
+     * @template {Object<string,(string|any)>} TIControlConfig
+     * @typedef WebGLModule.ShaderLayerParams
+     * @type {{TUseChannel,TUseFilter,TIControlConfig}}
+     *
+     * @typedef {{
+     *   name: string,
+     *   type: string,
+     *   visible: boolean,
+     *   dataReferences: number[],
+     *   params: WebGLModule.ShaderLayerParams
+     *  }} WebGLModule.ShaderLayerConfig
+     *
+     *
+     * @typedef WebGLModule.UIControlsRenderer
+     * @type function
+     * @param {string} title
+     * @param {string} html
+     * @param {string} dataId
+     * @param {boolean} isVisible
+     * @param {WebGLModule.VisualisationLayer} layer
+     * @param {boolean} wasErrorWhenLoading
+     */
+
 
     /**
      * ID pattern allowed for module, ID's are used in GLSL
@@ -59,6 +60,7 @@ window.WebGLModule = class {
      *   signature f({Visualization} oldVisualisation,{Visualization} newVisualisation)
      * @param {function} incomingOptions.onFatalError called when this module is unable to run
      * @param {function} incomingOptions.onError called when a problem occurs, but other parts of the system still might work
+     * @constructor
      * @memberOf WebGLModule
      */
     constructor(incomingOptions) {
@@ -148,6 +150,8 @@ window.WebGLModule = class {
 
     /**
      * Reset the engine to the initial state
+     * @instance
+     * @memberOf WebGLModule
      */
     reset() {
         this._unloadCurrentProgram();
@@ -165,6 +169,8 @@ window.WebGLModule = class {
     /**
      * Check if prepare() was called.
      * @return {boolean}
+     * @instance
+     * @memberOf WebGLModule
      */
     get isPrepared() {
         return this._prepared;
@@ -173,6 +179,8 @@ window.WebGLModule = class {
     /**
      * Check if init() was called.
      * @return {boolean}
+     * @instance
+     * @memberOf WebGLModule
      */
     get isInitialized() {
         return this._initialized;
@@ -182,6 +190,8 @@ window.WebGLModule = class {
      * Set program shaders. Vertex shader is set by default a square.
      * @param {Visualization} visualisations - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
+     * @instance
+     * @memberOf WebGLModule
      */
     addVisualisation(...visualisations) {
           if (this._prepared) {
@@ -214,6 +224,8 @@ window.WebGLModule = class {
 
     /**
      * @param {object} shaderSources custom shaders
+     * @instance
+     * @memberOf WebGLModule
      */
     addCustomShaderSources(...shaderSources) {
         if (this._prepared) {
@@ -226,6 +238,8 @@ window.WebGLModule = class {
     /**
      * Runs a callback on each visualisation goal
      * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+     * @instance
+     * @memberOf WebGLModule
      */
     foreachVisualisation(call) {
         this._visualisations.forEach(vis => call(vis));
@@ -233,7 +247,10 @@ window.WebGLModule = class {
 
     /**
      * Rebuild visualisation and update scene
-     * @param {string[]|undefined} order of shaders, ID's of data as defined in setup JSON, last element is rendered last (top)
+     * @param {string[]|undefined} order of shaders, ID's of data as defined in setup JSON, last element
+     *   is rendered last (top)
+     * @instance
+     * @memberOf WebGLModule
      */
     rebuildVisualisation(order=undefined) {
         let vis = this._visualisations[this._program];
@@ -249,6 +266,8 @@ window.WebGLModule = class {
     /**
      * Get currently used visualisation
      * @return {object} current visualisation
+     * @instance
+     * @memberOf WebGLModule
      */
     visualization(index) {
         return this._visualisations[Math.min(index, this._visualisations.length-1)];
@@ -257,6 +276,8 @@ window.WebGLModule = class {
     /**
      * Get currently used visualisation ilayer.params,ndex
      * @return {number} index of the current visualization
+     * @instance
+     * @memberOf WebGLModule
      */
     currentVisualisationIndex() {
         return this._program;
@@ -267,6 +288,8 @@ window.WebGLModule = class {
      * setShaders(...) was called. If you want to switch to shader that
      * has been set with second setShaders(...) call, pass i=1.
      * @param {Number} i program index or null if you wish to re-initialize the current one
+     * @instance
+     * @memberOf WebGLModule
      */
     switchVisualisation(i) {
         if (!this._initialized) {
@@ -281,6 +304,8 @@ window.WebGLModule = class {
 
     /**
      * Change the dimensions, useful for borders, used by openSeadragonGL
+     * @instance
+     * @memberOf WebGLModule
      */
     setDimensions(width, height) {
         if (width === this.width && height === this.height) return;
@@ -294,6 +319,8 @@ window.WebGLModule = class {
 
     /**
      * Get a list of image pyramids used to compose the current visualisation goal
+     * @instance
+     * @memberOf WebGLModule
      */
     getSources() {
         //return this._visualisations[this._program].dziExtendedUrl;
@@ -308,6 +335,8 @@ window.WebGLModule = class {
      * @param pixelSize value passed to the shaders as pixel_size_in_fragments
      * @returns canvas (with transparency) with the data rendered based on current program
      *          null if willUseWebGL(imageElement, e) would return false
+     *          @instance
+     * @memberOf WebGLModule
      */
     processImage(data, tileDimension, zoom, pixelSize) {
         let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
@@ -320,6 +349,8 @@ window.WebGLModule = class {
     /**
      * Whether the webgl module renders UI
      * @return {boolean|boolean}
+     * @instance
+     * @memberOf WebGLModule
      */
     supportsHtmlControls() {
         return typeof this.htmlControlsId === "string" && this.htmlControlsId.length > 0;
@@ -331,6 +362,8 @@ window.WebGLModule = class {
      * @param {function} callback call to execute
      * @param {function} onFail handle exception during execition
      * @return {boolean} true if no exception occured
+     * @instance
+     * @memberOf WebGLModule
      */
     static eachValidVisualizationLayer(vis, callback,
                                        onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {
@@ -356,6 +389,8 @@ window.WebGLModule = class {
      * @param {function} callback call to execute
      * @param {function} onFail handle exception during execition
      * @return {boolean} true if no exception occured
+     * @instance
+     * @memberOf WebGLModule
      */
     static eachValidVisibleVisualizationLayer(vis, callback,
                                               onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {

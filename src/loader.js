@@ -31,8 +31,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     //dummy translation function in case of no translation available
     $.t = $.t || (x => x);
 
-    var registeredPlugins = [];
-    var LOADING_PLUGIN = false;
+    let REGISTERED_PLUGINS = [];
+    let LOADING_PLUGIN = false;
 
     function showPluginError(id, e) {
         if (!e) {
@@ -199,9 +199,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         if (!plugin) return;
 
-        if (registeredPlugins !== undefined) {
+        if (REGISTERED_PLUGINS !== undefined) {
             if (plugin && typeof plugin["pluginReady"] === "function") {
-                registeredPlugins.push(plugin);
+                REGISTERED_PLUGINS.push(plugin);
             }
         } //else do not initialize plugin, wait untill all files loaded dynamically
     };
@@ -543,6 +543,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     /**
      * Basic Module API. Modules do not have to inherit from XOpatModule, but
      * they loose the integration support.
+     * @class XOpatModule
      * @extends XOpatElement
      * @inheritDoc
      */
@@ -584,6 +585,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
      * Singleton Module API, ready to run as an instance
      * offering its features to all equally.
      * @class XOpatModuleSingleton
+     * @extends XOpatModule
+     * @inheritDoc
      */
     window.XOpatModuleSingleton = class extends XOpatModule {
         /**
@@ -621,8 +624,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
      * xOpat Plugin API. Plugins must have a parent class that
      * is registered and inherits from XOpatPlugin.
      * JS String to use in DOM callbacks to access self instance.
-     * @inheritDoc
+     * @class XOpatPlugin
      * @extends XOpatElement
+     * @inheritDoc
      */
     window.XOpatPlugin = class extends XOpatElement {
 
@@ -908,7 +912,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
     return function() {
         //Notify plugins OpenSeadragon is ready
-        registeredPlugins.forEach(plugin => initializePlugin(plugin));
-        registeredPlugins = undefined;
+        REGISTERED_PLUGINS.forEach(plugin => initializePlugin(plugin));
+        REGISTERED_PLUGINS = undefined;
     }
 }

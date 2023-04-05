@@ -200,6 +200,23 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     setFormat: function(format) {
         this.fileFormat = format;
 
+        let blackImage = (context, resolve, reject) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = context.getTileWidth();
+            canvas.height = context.getTileHeight();
+            const ctx = canvas.getContext('2d');
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const img = new Image(canvas.width, canvas.height);
+            img.onload = () => {
+                //next promise just returns the created object
+                blackImage = (context, ready, _) => ready(img);
+                resolve(img);
+            };
+            img.onerror = img.onabort = reject;
+            img.src = canvas.toDataURL();
+        };
+
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function(context) {
@@ -209,6 +226,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                 }
 
                 var dataStore = context.userData;
+                const _this = this;
                 dataStore.request = OpenSeadragon.makeAjaxRequest({
                     url: context.src,
                     withCredentials: context.ajaxWithCredentials,
@@ -247,7 +265,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                                             img.onload = () => resolve(img);
                                             img.onerror = img.onabort = reject;
                                             img.src = URL.createObjectURL(blob);
-                                        } else blackImage(resolve, reject);
+                                        } else blackImage(_this, resolve, reject);
                                     });
                                 });
                             })

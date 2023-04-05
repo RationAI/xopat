@@ -71,7 +71,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         config: {
             /**
              * Get parameters object of the viewer setup
-             * @return {*|{}|{}}
+             * @type {xoParams}
              */
             get params() { // getOption should be preferred over params access
                 return CONFIG.params || {};
@@ -79,28 +79,28 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             /**
              * Get meta data raw object from the viewer setup
              * todo: remove?
-             * @return {*|{}|{}}
+             * @type {Object}
              */
             get meta() {
                 return CONFIG.meta || {};
             },
             /**
              * Get all the data WSI identifiers list
-             * @return {Array}
+             * @type {Array<string>}
              */
             get data() {
                 return CONFIG.data || [];
             },
             /**
              * Configuration of the 'image group'
-             * @return {Array}
+             * @type {Array<BackgroundItem>}
              */
             get background() {
                 return CONFIG.background || [];
             },
             /**
              * Configuration of the 'data group'
-             * @return {Array}
+             * @type {Array<VisualizationItem>}
              */
             get visualizations() {
                 return CONFIG.visualizations || [];
@@ -108,14 +108,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             /**
              * Possible shader sources to download, disabled with secureMode=true
              * todo: change to any scripts to include realtime+
-             * @return {Array}
+             * @type {Array}
              */
             get shaderSources() {
                 return CONFIG.shaderSources || [];
             },
             /**
              * Startup configuration of plugins
-             * @return {{}}
+             * @type {{}}
              */
             get plugins() {
                 return CONFIG.plugins || {};
@@ -123,34 +123,35 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         },
         /**
          * The Metadata API
-         * @return {Window.MetaStore}
+         * @type {Window.MetaStore}
          */
         get metadata() {
             return metaStore;
         },
         /**
          * Default Viewer Configuration
+         * @type {xoParams}
          */
         get defaultConfig() {
             return defaultSetup;
         },
         /**
          * Check if viewer requires secure mode execution.
-         * @return {boolean}
+         * @type {boolean}
          */
         get secure() {
             return viewerSecureMode;
         },
         /**
          * Get the ENV configuration used to run the viewer.
-         * @return {Object}
+         * @type {xoEnv}
          */
         get env() {
             return ENV;
         },
         /**
          * Get the current URL (without data, just the index entry point).
-         * @return {*}
+         * @type {string}
          */
         get url() {
             return this.env.client.domain + this.env.client.path;
@@ -158,7 +159,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         /**
          * Get all the post data available to the current session
          * @deprecated
-         * @return {*}
+         * @type {Object}
          */
         get postData() {
             return POST_DATA;

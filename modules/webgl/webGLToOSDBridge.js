@@ -1,11 +1,11 @@
-/*
+/**
 * Bridge between WebGLModule and OSD. Registers appropriate callbacks.
 * Written by Jiří Horák, 2021
 *
 * Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
+* @class OpenSeadragon.BridgeGL
 */
-
 window.OpenSeadragon.BridgeGL = class {
 
     constructor(openSeaDragonInstance, webGLEngine, cachedMode=true) {

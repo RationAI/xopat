@@ -18,6 +18,7 @@ export default {
             'some-bad!-data1',
         ]
     }[key]),
+    //todo: fix: book fails because we parse it with deepzoom, try to have stable data to check, test instead raw image!
     background: (overrides, ...dataIndexes) => {
         return dataIndexes.map(i => ({
             "dataReference": i,

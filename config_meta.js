@@ -2,18 +2,36 @@
 //   global UTILITIES.fetchJSON automatically adds metadata provided to by the viewer in config
 //   this class defines how the metadata is parsed so that your system can easily use its own structure
 
-window.MetaStore = class {
+/**
+ * Common API for metadata interpreting in the viewer.
+ * Define what structure your metadata has, the system as of now
+ * wants to access 'session ID', 'user data' and 'date'
+ *
+ *  1) send ANY structure
+ *      - do not send any sensitive data
+ *  2) implement interpretation in MetaStore
+ *      - possibly
+ *  3) use UTILITIES.fetch[...](), by default it attaches all the meta, or select sub-set
+ * @class MetaStore
+ */
+class MetaStore {
     /**
-     * Define what structure your metadata has, the system as of now
-     * wants to access 'session ID', 'user data' and 'date'
+     * User data getter
+     * @param defaultValue
+     * @return {never}
      */
-
-    //anything we want, we set it as private: IO does not affect values here,
-    //these values must be set explicitly by some party /e.g. user session plugin/
-    // In the docker we use {name, email, id} object
     getUserData(defaultValue) {
+        //anything we want, we set it as private: IO does not affect values here,
+        //these values must be set explicitly by some party /e.g. user session plugin/
+        // In the docker we use {name, email, id} object
         return this.getPrivate(MetaStore.userKey, defaultValue);
     }
+
+    /**
+     * User data setter
+     * @param defaultValue
+     * @return {never}
+     */
     setUserData(defaultValue) {
         return this.setPrivate(MetaStore.userKey, defaultValue);
     }
@@ -46,6 +64,8 @@ window.MetaStore = class {
 
     /**
      * Implements both JSON Configuration and Persistent (see below) metadata service API
+     * @param {Object} data data to interpret
+     * @param {boolean} safe
      * @return {null}
      */
     constructor(data, safe=true) {
@@ -79,6 +99,24 @@ window.MetaStore = class {
     }
 
     /**
+     * Behaves as get(...) if secure=false.
+     * @param name
+     * @param defaultValue
+     */
+    getPrivate(name, defaultValue=undefined) {
+        throw "Need the constructor to initialize the behavior!";
+    }
+
+    /**
+     * Behaves as set(...) if secure=false.
+     * @param name
+     * @param value
+     */
+    setPrivate(name, value) {
+        throw "Need the constructor to initialize the behavior!";
+    }
+
+    /**
      * initializes 'persistent' getter
      * @param persistentServiceUrl
      */
@@ -98,14 +136,21 @@ window.MetaStore = class {
 
     /**
      * A Common API for system info to query their own metadata
+     * @param name
+     * @param defaultValue
+     * @return {*}
      */
-
     get(name, defaultValue=undefined) {
         let value = this._data[name] ?? defaultValue;
         if (value === "false") value = false; //true will eval to true anyway
         return value;
     }
 
+    /**
+     * A Common API for system info to query their own metadata
+     * @param name
+     * @param value
+     */
     set(name, value) {
         if (name === "date" || name === "tstamp" || name === "session") {
             throw "Invalid metadata key: already in use! " + name;

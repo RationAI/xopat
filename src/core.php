@@ -22,7 +22,6 @@ define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
 define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
-
 /**
  * array_merge_recursive duplicates values
  * @param array $array1
@@ -53,11 +52,36 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
 require_once PROJECT_ROOT . "comments.class.php";
 $CORE = (new Comment)->decode(file_get_contents(ABS_ROOT . "config.json"), true);
 
+function parse_env_config($data, $err) {
+    try {
+        $read_env = function($match) {
+            $env = getenv($match[1]);
+            //not specified returns false
+            return $env === false ? "" : $env;
+        };
+        $result = preg_replace_callback("/<%\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*%>/", $read_env, $data);
+        return (new Comment)->decode($result, true);
+    } catch (Exception $e) {
+        throw new Exception($err);
+    }
+}
+
 global $ENV;
 try {
     $ENV = [];
     if (file_exists(ABS_ROOT . "../env/env.json")) {
-        $ENV = (new Comment)->decode(file_get_contents(ABS_ROOT . "../env/env.json"), true);
+        $env = getenv('XOPAT_ENV');
+        if (is_readable($env)) {
+            $ENV = parse_env_config(file_get_contents($env),
+                "File $env is not a valid ENV configuration!");
+        } else if (is_string($env)) {
+            $ENV = parse_env_config($env,
+                "Variable XOPAT_ENV is not a readable file or a valid ENV configuration!");
+        } else {
+            $ENV = parse_env_config(file_get_contents(ABS_ROOT . "../env/env.json"),
+                "Configuration 'env/env.json' contains a syntactic error!");
+        }
+
         if (!is_array($ENV["core"])) $ENV["core"] = [];
         $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
     }

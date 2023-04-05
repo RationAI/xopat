@@ -21,13 +21,22 @@ const webglConfig = parseJsonFile('modules/webgl/include.json');
 
 //prepare source files, parse config
 const config = parseJsonFile('src/config.json');
+
+// add your extensions if necessary, by default all except 'js' have only extracted comments
+const allowedExtensions = ['js', 'json', 'css'];
 module.exports = {
+    //source javascript files and README
     files: [
         ...flatten(config.js.external).map(x => `src/external/${x}`),
         ...flatten(config.js.src).map(x => `src/${x}`),
         ...flatten(webglConfig.includes).map(x => `modules/webgl/${x}`),
         'config_meta.js',
-        'README.md'
+        'README.md',
+        //other things we want to keep in docs, need @fileoverview tag, input as opts: {include: X }
+        'src/assets/style.css',
+        'src/config.json',
     ],
-    destination: './docs/build'
+    allowedExtensions: allowedExtensions,
+    destination: './docs/build',
+    pattern: `\\.(${allowedExtensions.join('|')})$`
 };

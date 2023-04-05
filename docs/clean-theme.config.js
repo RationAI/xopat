@@ -9,7 +9,9 @@ module.exports = {
   "source": {
     "include": files
   },
-  "plugins": ["plugins/markdown"],
+  "plugins": [
+      "plugins/markdown",
+  ],
   "opts": {
     "encoding": "utf8",
     "destination": destination,

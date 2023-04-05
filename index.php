@@ -333,6 +333,8 @@ EOF;
         /*---------- APPLICATION_CONTEXT and viewer data ----------*/
         /*---------------------------------------------------------*/
 
+        initXopatUI();
+
         initXopat(
             <?php echo json_encode((object)$PLUGINS) ?>,
             <?php echo json_encode((object)$MODULES) ?>,

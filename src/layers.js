@@ -554,11 +554,23 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             /**
              * Generic Multiplexing for TileSources
-             * allows to use built-in protocols as multi tile sources,
-             * the image exchange must be in images - the tile response is interpreted as an Image object
+             * allows to use built-in protocols as multi tile sources for visualisation viewing.
+             * The image exchange must be in images - the tile response is interpreted as an Image object
+             * @param {OpenSeadragon.TiledImage} image
              *
-             * todo provide faulty error message
-             * @param image
+             * @example
+             *   //ENV configuration
+             *   ...
+             *   "client": {
+             *     "[...]": {
+             *       ...
+             *       "data_group_protocol": "`${path}?Deepzoom=${data}.dzi`"
+             *     }
+             *   },
+             *   "setup": {
+             *     "fetchAsync": true
+             *   },
+             *   ...
              */
             UTILITIES.multiplexSingleTileSource = function(image) {
                 const source = image.source,

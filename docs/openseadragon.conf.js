@@ -1,11 +1,14 @@
 'use strict';
 // !! Specify paths against the repository root !!
 
+//todo use custom plugin to add meta to plugins/modules etc: https://jsdoc.app/about-plugins.html
+
 //requires taffydb
-const {files, destination} = require("./include");
+const {files, destination, allowedExtensions, pattern} = require("./include");
 module.exports = {
     source: {
-        include: files
+        include: files,
+        includePattern: pattern,
     },
     options: {
         destination: './docs/build/',
@@ -16,7 +19,7 @@ module.exports = {
     tags: {
         allowUnknownTags: true
     },
-    plugins : [],
+    plugins: [ "./docs/plugins/include-as-comments-only.js"],
     templates : {
         cleverLinks : true,
         monospaceLinks : false,
@@ -37,5 +40,8 @@ module.exports = {
         "recurse": true,
         "linenumber": true,
         // "tutorials": "path/to/tutorials",
+        "include-as-comments-only": {
+            "extensions": allowedExtensions.filter(ext => ext !== "js")
+        }
     }
 }

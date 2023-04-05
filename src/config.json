@@ -1,4 +1,8 @@
-{
+/**
+ * @fileoverview xOpat Static configuration: 'ENV'
+ * @typedef xoEnv
+ */
+{ /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
     "version": "1.1.0",
@@ -65,6 +69,29 @@
     },
     /**
      * The Viewer Default Settings, all overrideable through params configuration.
+     * @typedef {{
+     *   locale: ?string,
+     *   customBlending: ?boolean,
+     *   debugMode: ?boolean,
+     *   webglDebugMode: ?boolean,
+     *   scaleBar: ?boolean,
+     *   statusBar: ?boolean,
+     *   viewport: ?Object,
+     *   activeBackgroundIndex: ?number,
+     *   activeVisualizationIndex: ?number,
+     *   grayscale: ?boolean,
+     *   tileCache: ?boolean,
+     *   preventNavigationShortcuts: ?boolean,
+     *   permaLoadPlugins: ?boolean,
+     *   bypassCookies: ?boolean,
+     *   theme: ?string,
+     *   stackedBackground: ?boolean,
+     *   maxImageCacheCount: ?number,
+     *   webGlPreferredVersion: ?string,
+     *   headers: ?Object,
+     *   preferredFormat: ?string,
+     *   fetchAsync: ?boolean
+     * }} xoParams
      */
     "setup": {
         // depends on available locales in locales/ folder
