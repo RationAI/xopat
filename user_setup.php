@@ -64,7 +64,7 @@ require_once "src/core.php";
         runLoader();
 
         UTILITIES.loadModules(()=>{
-            PredefinedShaderControlParameters.runShaderAndControlSelector("container", x => callback(x));
+            ShaderConfigurator.runShaderAndControlSelector("container", x => callback(x));
         },'webgl');
 
         window.runConfigurator = function(clbck) {

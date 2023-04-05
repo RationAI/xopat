@@ -1,6 +1,6 @@
 /**
  * Re-uses two compound components since they are fully compatible
- * @type {WebGLModule.UIControls.SliderWithInput}
+ * @class WebGLModule.UIControls.SliderWithInput
  */
 WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
@@ -16,12 +16,12 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         const _this = this;
         this._c1.init();
         this._c2.init();
-        this._c1.on("default", function (value, encoded, context) {
+        this._c1.on("default", function(value, encoded, context) {
             $(`#${_this._c2.id}`).val(encoded);
             _this._c2.value = value;
             _this.changed("default", value, encoded, context);
         }, true); //silently fail if registered
-        this._c2.on("default", function (value, encoded, context) {
+        this._c2.on("default", function(value, encoded, context) {
             $(`#${_this._c1.id}`).val(encoded);
             _this._c1.value = value;
             _this.changed("default", value, encoded, context);
@@ -75,7 +75,7 @@ WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.Slide
 
 /**
  * ColorMap Input
- * @type {WebGLModule.UIControls.ColorMap}
+ * @class WebGLModule.UIControls.ColorMap
  */
 WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
@@ -175,7 +175,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_S
 
     /**
      * Setup the pallete density, the value is trimmed with a cap of MAX_SAMPLES
-     * @param {number|[number]} steps - amount of sampling steps
+     * @param {(number|number[])} steps - amount of sampling steps
      *   number: input number of colors to use
      *   array: put number of colors + 1 values, example: for three color pallete,
      *      put 4 numbers: 2 separators and 2 bounds (min, max value)
@@ -393,7 +393,7 @@ style="width: 60%;"></span></div>`;
  * will be sampled with mask float[5], the result is
  * the percentage reached within this interval: e.g. if C <= ratio < D, then
  * the result is  4/5 * mask[3]   (4-th interval out of 5 reached, multiplied by 4th mask)
- * @type {WebGLModule.UIControls.AdvancedSlider}
+ * @class WebGLModule.UIControls.AdvancedSlider
  */
 WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
@@ -513,7 +513,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                 this._originalMask = this.mask.map(x => x > 0 ? x : 1);
                 let connects = container.querySelectorAll('.noUi-connect');
                 for (let i = 0; i < connects.length; i++) {
-                    connects[i].addEventListener('mouseup', function (e) {
+                    connects[i].addEventListener('mouseup', function(e) {
                         let d = Math.abs(Date.now() - _this._timer);
                         _this._timer = 0;
                         if (d >= 180) return;
@@ -529,7 +529,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                         _this.store(_this.mask, "mask");
                     });
 
-                    connects[i].addEventListener('mousedown', function (e) {
+                    connects[i].addEventListener('mousedown', function(e) {
                         _this._timer = Date.now();
                     });
 
@@ -652,7 +652,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 
 // /**
 //  * Kernel filter applied onto texture
-//  * @type {WebGLModule.UIControls.Kernel}
+//  * @class WebGLModule.UIControls.Kernel
 //  */
 // WebGLModule.UIControls.Kernel = class extends WebGLModule.UIControls.IControl {
 //     constructor(context, name, webGLVariableName, params) {
@@ -766,7 +766,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 
 /**
  * Text area input
- * @type {WebGLModule.UIControls.TextArea}
+ * @class WebGLModule.UIControls.TextArea
  */
 WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
@@ -846,7 +846,7 @@ WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextAre
 
 /**
  * Button Input
- * @type {WebGLModule.UIControls.Button}
+ * @class WebGLModule.UIControls.Button
  */
 WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {

@@ -1,0 +1,19 @@
+<?js
+var data = obj;
+var self = this;
+?>
+
+<?js if (data.kind === 'package') { ?>
+    <h3 class="f1-light"><?js= data.name ?> <?js= data.version ?></h3>
+<?js } ?>
+
+<?js if (data.readme) { ?>
+    <section class="markdown-body">
+        <article><?js= data.readme ?></article>
+    </section>
+<?js } ?>
+
+<?js if (data.kind === 'mainpage') { ?>
+<script src="scripts/highlight.pack.js"></script>
+<script>hljs.initHighlightingOnLoad();</script>
+<?js } ?>

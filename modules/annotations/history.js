@@ -141,7 +141,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
     /**
      * Get current board window context reference
-     * @return {window || undefined || null} current window if opened, or undefined/null otherwise
+     * @return {(Window|undefined|null)} current window if opened, or undefined/null otherwise
      */
     winContext() {
         return this._lastOpenedInDetachedWindow ? this._getDetachedWindow() : window;
@@ -218,8 +218,8 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
     /**
      * Add new event to the history, at least one object should be specified
-     * @param {object || undefined} newObject, if undefined it is deletion (no new object)
-     * @param {object || undefined} previous, if undefined it is creation (no old object)
+     * @param {object|undefined} newObject, if undefined it is deletion (no new object)
+     * @param {object|undefined} previous, if undefined it is creation (no old object)
      */
     push(newObject, previous = undefined) {
         UTILITIES.setDirty();
@@ -304,7 +304,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
     /**
      * Get modal window context reference
-     * @return {window || undefined || null} current window if opened, or undefined/null otherwise
+     * @return {(Window|undefined|null)} current window if opened, or undefined/null otherwise
      */
     _getDetachedWindow() {
         return Dialogs.getModalContext(this.containerId);
@@ -528,7 +528,7 @@ ${editIcon}
             }
 
         } else {
-            VIEWER.raiseEvent('warn-system', {
+            this._context.raiseEvent('warn-system', {
                 originType: "module",
                 originId: "annotations",
                 code: "E_NO_OBJECT_ON_EDIT",

@@ -30,14 +30,19 @@
   },
   "homepage": "https://github.com/RationAI/xopat#readme",
   "devDependencies": {
-    "@frsource/cypress-plugin-visual-regression-diff": "^2.3.5",
+    "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
     "comment-json": "^4.2.3",
     "cypress": "^10.9.0",
-    "cypress-plugin-snapshots": "^1.4.4",
     "cypress-real-events": "^1.7.1",
     "cypress-wait-until": "^1.7.2",
     "grunt": "^1.6.1",
+    "grunt-contrib-connect": "^3.0.0",
     "grunt-contrib-uglify": "^5.2.2",
-    "grunt-git-describe": "^2.4.4"
+    "grunt-contrib-watch": "^1.1.0",
+    "grunt-git-describe": "^2.4.4",
+    "highlight.js": "^11.7.0",
+    "jsdoc": "^4.0.2",
+    "jsdoc-class-hierarchy": "^1.1.2",
+    "taffydb": "^2.7.3"
   }
 }

@@ -8,8 +8,8 @@
     "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "xmlToJSON.min.js"],
     "modules": ["annotations", "human-readable-ids"],
     "permaLoad": false,
-    //Annotation server to store annotations at
-    "server": "http://localhost:8080/browser/ajax/annotations.php",
+    //Annotation server API endpoint to store annotations at
+    "server": null,
     //Available annotation object types
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
     //Default export and import format

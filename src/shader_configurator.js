@@ -4,8 +4,9 @@
  *
  * - build* methods render static pages
  * - run* methods accept callback and run an interactive selection
+ * @namespace ShaderConfigurator
  */
-var PredefinedShaderControlParameters = {
+var ShaderConfigurator = {
 
     /**
      * Prints info about shaders and controls available
@@ -40,7 +41,7 @@ var PredefinedShaderControlParameters = {
             if (src) {
                 const image = document.createElement('img');
                 image.onload = () => {
-                    PredefinedShaderControlParameters.setData(image);
+                    ShaderConfigurator.setData(image);
                     _this.runControlSelector(nodeId, shaderId, onFinish);
                 }
                 image.src = src;
@@ -66,9 +67,9 @@ var PredefinedShaderControlParameters = {
 
     /**
      * Set data for realtime data postprocessing - interactive selector can render 'how it looks'
-     * @param {Image|Canvas} data to process
+     * @param {(Image|Canvas)} data to process
      */
-    setData: function (data) {
+    setData: function(data) {
         const module = this._getModule(this._uniqueId + 'live-setup-interactive-controls');
         if (module) {
             module.setDimensions(data.width, data.height);
@@ -76,7 +77,7 @@ var PredefinedShaderControlParameters = {
         this._renderData = data;
     },
 
-    setUniqueId: function (id) {
+    setUniqueId: function(id) {
         this._uniqueId = id;
     },
 
@@ -135,11 +136,11 @@ var PredefinedShaderControlParameters = {
     /*** DYNAMIC RENDER ***/
     /**********************/
 
-    REF: 'PredefinedShaderControlParameters',
+    REF: 'ShaderConfigurator',
 
     //todo why this.REF not working
     __chngtml: (paramName, key, valueGetter) =>
-        `PredefinedShaderControlParameters.refreshUserUpdated(this, '${paramName}', '${key}', ${valueGetter})`,
+        `ShaderConfigurator.refreshUserUpdated(this, '${paramName}', '${key}', ${valueGetter})`,
 
     _onControlSelectFinish: undefined,
 
@@ -281,7 +282,7 @@ ${JSON.stringify(params, null, '\t')}
 
     active: {
         mod: function(id) {
-            let _this = window.PredefinedShaderControlParameters,
+            let _this = window.ShaderConfigurator,
                 module = _this._getModule(_this._uniqueId + id);
             if (module) return module;
             throw "Module not instantiated!";
@@ -608,7 +609,7 @@ ${renders.join("")}
 
         /**
          * Get current granularity data (context -> config KEY)
-         * @param context if not set, get selected map {type => true}, else config value of the selected value(s)
+         * @param {string} context if not set, get selected map {type => true}, else config value of the selected value(s)
          */
         granularity(context="") {
             return this.getSelected("granularity", context);
@@ -790,74 +791,74 @@ ${renders.join("")}
 /**
  * Definition of tailored setters for shader controls
  */
-PredefinedShaderControlParameters.uiRenderers.number = (name, params, onChange) => `
+ShaderConfigurator.uiRenderers.number = (name, params, onChange) => `
 Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.interactive,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'interactive', 'this.checked')})}<br>
 Value between min and max<br>
 Default value: &emsp; ${UIComponents.Elements.numberInput({...params,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'default', 'Number.parseFloat(this.value)')})}<br>
 Minimum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.min,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
 Maximum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.max,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
 Step: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.step,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'step', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'step', 'Number.parseFloat(this.value)')})}<br>
 `;
-PredefinedShaderControlParameters.uiRenderers.range = PredefinedShaderControlParameters.uiRenderers.number;
-PredefinedShaderControlParameters.uiRenderers.range_input = PredefinedShaderControlParameters.uiRenderers.number;
-PredefinedShaderControlParameters.uiRenderers.color = (name, params, onChange) => `
+ShaderConfigurator.uiRenderers.range = ShaderConfigurator.uiRenderers.number;
+ShaderConfigurator.uiRenderers.range_input = ShaderConfigurator.uiRenderers.number;
+ShaderConfigurator.uiRenderers.color = (name, params, onChange) => `
 Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.interactive,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'interactive', 'this.checked')})}<br>
 Default value: &emsp; ${UIComponents.Elements.colorInput({...params,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'default', 'this.value')})}<br>
 `;
-PredefinedShaderControlParameters.uiRenderers.colormap = (name, params, onChange) => `
+ShaderConfigurator.uiRenderers.colormap = (name, params, onChange) => `
 Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'interactive', 'this.checked')})}<br>
 Default value: &emsp; ${UIComponents.Elements.select({...params, options: ColorMaps.schemeGroups[params.mode],
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'default', 'this.value')})}<br>
 Continuous: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.continuous,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'continuous', 'this.checked')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'continuous', 'this.checked')})}<br>
 Mode: &emsp; ${UIComponents.Elements.select({...params, default: params.mode, options: Object.keys(ColorMaps.schemeGroups),
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'mode', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'mode', 'this.value')})}<br>
 Steps: &emsp; ${UIComponents.Elements.numberInput({...params, min: 0, max: 8, step: 1, default: params.steps,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'steps', 'Number.parseInt(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'steps', 'Number.parseInt(this.value)')})}<br>
 `;
-PredefinedShaderControlParameters.uiRenderers.advanced_slider = (name, params, onChange) => `
+ShaderConfigurator.uiRenderers.advanced_slider = (name, params, onChange) => `
 Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'interactive', 'this.checked')})}<br>
 Sample Mask or Uniformly (mask=false) <br>
 Read Mask: &emsp; ${UIComponents.Elements.checkBox({...params, default: params.maskOnly,
-    onchange: PredefinedShaderControlParameters.__chngtml(name, 'maskOnly', 'this.checked')})}<br>
+    onchange: ShaderConfigurator.__chngtml(name, 'maskOnly', 'this.checked')})}<br>
 Select starting positions (between min and max) <br>
 Breaks: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.breaks,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'breaks', 'this.values')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'breaks', 'this.values')})}<br>
 Minimum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.min,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'min', 'Number.parseFloat(this.value)')})}<br>
 Maximum value: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.max,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'max', 'Number.parseFloat(this.value)')})}<br>
 Step: &emsp; ${UIComponents.Elements.numberInput({...params, min: -1e+5, max: +1e+5, step: 1e-5, default: params.minGap,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'minGap', 'Number.parseFloat(this.value)')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'minGap', 'Number.parseFloat(this.value)')})}<br>
 Mask should have #Breaks+1 elements, either 0 or 1 depending on whether given range is enabled or disabled<br>
 Mask: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.mask,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'mask', 'this.values')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'mask', 'this.values')})}<br>
 Labels on scale, in %<br>
 Pips: &emsp; ${UIComponents.Elements.numberArray({...params, default: params.pips.values,
-        onchange: PredefinedShaderControlParameters.__chngtml(name, 'pips.values', 'this.values')})}<br>
+        onchange: ShaderConfigurator.__chngtml(name, 'pips.values', 'this.values')})}<br>
 `;
-PredefinedShaderControlParameters.uiRenderers.bool = (name, params, onChange) => `
+ShaderConfigurator.uiRenderers.bool = (name, params, onChange) => `
 Title: &emsp; ${UIComponents.Elements.textInput({...params, default: params.title,
-    onchange: PredefinedShaderControlParameters.__chngtml(name, 'title', 'this.value')})}<br>
+    onchange: ShaderConfigurator.__chngtml(name, 'title', 'this.value')})}<br>
 Interactive: &emsp;  ${UIComponents.Elements.checkBox({...params, default: params.interactive,
-    onchange: PredefinedShaderControlParameters.__chngtml(name, 'interactive', 'this.checked')})}<br>
+    onchange: ShaderConfigurator.__chngtml(name, 'interactive', 'this.checked')})}<br>
 Default value: &emsp; ${UIComponents.Elements.checkBox({...params,
-    onchange: PredefinedShaderControlParameters.__chngtml(name, 'default', 'this.checked')})}<br>
+    onchange: ShaderConfigurator.__chngtml(name, 'default', 'this.checked')})}<br>
 `;

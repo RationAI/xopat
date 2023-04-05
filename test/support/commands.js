@@ -24,11 +24,8 @@
 // -- This will overwrite an existing command --
 // Cypress.Commands.overwrite('visit', (originalFn, url, options) => { ... })
 
-
-//import "cypress-plugin-snapshots/commands" //not enabled, replaced by below
 import '@frsource/cypress-plugin-visual-regression-diff';
 import "cypress-real-events/support";
-
 
 /**
  * Remove OpenSeadragon XHR

@@ -1,11 +1,11 @@
-/*
+/**
 * Bridge between WebGLModule and OSD. Registers appropriate callbacks.
 * Written by Jiří Horák, 2021
 *
 * Originally based on OpenSeadragonGL plugin, but you would find little similarities by now.
 * NOTE: imagePixelSizeOnScreen needs to be assigned if custom OSD used... not very clean design
+* @class OpenSeadragon.BridgeGL
 */
-
 window.OpenSeadragon.BridgeGL = class {
 
     constructor(openSeaDragonInstance, webGLEngine, cachedMode=true) {
@@ -31,7 +31,7 @@ window.OpenSeadragon.BridgeGL = class {
     static getUniqueId() {
         return (Date.now()).toString(36);
     }
-    
+
     get isMultiplex() {
         return false;
     }
@@ -377,7 +377,7 @@ window.OpenSeadragon.BridgeGL = class {
             let tileLoaded = this._tileLoaded.bind(this);
             let tileDrawing = this._tileDrawing.bind(this);
 
-            this.enable = function () {
+            this.enable = function() {
                 if (!this._disabled) return;
                 this._disabled = false;
                 this.openSD.addHandler('tile-drawing', tileDrawing);
@@ -386,7 +386,7 @@ window.OpenSeadragon.BridgeGL = class {
                 this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
             };
 
-            this.disable = function () {
+            this.disable = function() {
                 if (this._disabled) return;
                 this._disabled = true;
                 this.openSD.removeHandler('tile-drawing', tileDrawing);
@@ -498,7 +498,7 @@ window.OpenSeadragon.BridgeGL = class {
         };
 
         source.__cached_tileDataToRenderedContext = source.getTileCacheDataAsContext2D;
-        source.getTileCacheDataAsContext2D = function (cache) {
+        source.getTileCacheDataAsContext2D = function(cache) {
             if (!cache._renderedContext) {
                 cache.webglRefresh = 0;
                 var canvas = document.createElement('canvas');
@@ -985,7 +985,7 @@ window.OpenSeadragon.BridgeGL = class {
 //             let tileLoaded = this._tileLoaded.bind(this);
 //             let tileDrawing = this._tileDrawing.bind(this);
 //
-//             this.enable = function () {
+//             this.enable = function() {
 //                 if (!this._disabled) return;
 //                 this._disabled = false;
 //                 this.openSD.addHandler('tile-drawing', tileDrawing);
@@ -994,7 +994,7 @@ window.OpenSeadragon.BridgeGL = class {
 //                 this.openSD.navigator.addHandler('tile-loaded', tileLoaded);
 //             };
 //
-//             this.disable = function () {
+//             this.disable = function() {
 //                 if (this._disabled) return;
 //                 this._disabled = true;
 //                 this.openSD.removeHandler('tile-drawing', tileDrawing);
@@ -1111,7 +1111,7 @@ window.OpenSeadragon.BridgeGL = class {
 //         };
 //
 //         source.__cached_tileDataToRenderedContext = source.getTileCacheDataAsContext2D;
-//         source.getTileCacheDataAsContext2D = function (cache) {
+//         source.getTileCacheDataAsContext2D = function(cache) {
 //             if (!cache._renderedContext) {
 //                 cache.webglRefresh = 0;
 //                 var canvas = document.createElement('canvas');

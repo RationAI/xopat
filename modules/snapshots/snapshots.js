@@ -273,7 +273,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
 
     /**
      * Sorts the steps by given array of step IDs
-     * @param {[string]} ids
+     * @param {string[]} ids
      * @param {boolean} removeMissing
      */
     sortWithIdList(ids, removeMissing=false) {

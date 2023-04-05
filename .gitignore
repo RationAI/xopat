@@ -12,6 +12,10 @@ coverage/
 env/
 !env/README.md
 
+#docs
+docs/build/
+!docs/doctemplates/openseadragon
+
 #test suite data
 test/downloads/
 test/screenshots/

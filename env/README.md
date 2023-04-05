@@ -11,7 +11,7 @@ To compile the `env.example.json`, run
 
 > grunt env
 
-Then, you can simply override values you need to change, simply follow the `env.example.json` file.
+Then, you can simply override values you need to change, simply follow the `env.example.json` file. It looks like this:
 ````json
 {
   "core": {
@@ -20,20 +20,10 @@ Then, you can simply override values you need to change, simply follow the `env.
       "active_client": "localhost",
       "client": {
           "localhost": {
-              // You have to also configure correct service URLs. This configuration
-              // will work for you if your localhost is runnig both viewer and image server
-              // that supports ExtendedDeepZoom protocol.
-              "domain": "http://localhost/",
-              "path": "",
-              "metadata_server": "",
-              "image_group_server": "/iipsrv.fcgi",
-              "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
-              "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
-              "data_group_server": "/iipsrv.fcgi",
-              "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
-              "headers": {}
+              ...
           }
-      }
+      },
+      ...
   },
   "plugins": [
       //here goes plugins configuration as a list of objects
@@ -43,3 +33,19 @@ Then, you can simply override values you need to change, simply follow the `env.
   ]
 }
 ````
+
+### Static configuration provided in a dynamic way
+You can use ``XOPAT_ENV`` environmental variable to specify
+ - a file path, if the file exists and _is readable_, it will try to parse its contents,
+ - a string data, its contents will be treated as a serialized JSON,
+ - otherwise, ``env/env.json`` is used (if exists)
+
+You can use custom environment variables as a string values like this: ``<% ENV_VAR_NAME %>``.
+If ``X=3`` then `"watch <%X%>"` will result in `"watch 3"`. The pattern used is
+> ``<%\s*[a-zA-Z_][a-zA-Z0-9_]*\s*%>``
+
+which basically says
+ - start with `<%`
+ - continue with any whitespace including newlines `\s*`
+ - allowed a single word, name of variable, that does not start with a number: `[a-zA-Z_][a-zA-Z0-9_]*`
+ - and backwards

@@ -1,6 +1,6 @@
 /**
  * Shader sharing point
- * @type {WebGLModule.ShaderMediator}
+ * @class WebGLModule.ShaderMediator
  */
 WebGLModule.ShaderMediator = class {
 
@@ -40,7 +40,7 @@ WebGLModule.ShaderMediator = class {
 
 /**
  * Abstract interface to any Shader.
- * @type {WebGLModule.VisualisationLayer}
+ * @abstract
  */
 WebGLModule.VisualisationLayer = class {
 
@@ -80,7 +80,7 @@ WebGLModule.VisualisationLayer = class {
 
     /**
      * Declare the number of data sources it reads from (how many dataSources indexes should the shader contain)
-     * @return {[{}]} array of source specifications:
+     * @return {Array.<Object>} array of source specifications:
      *  acceptsChannelCount: predicate that evaluates whether given number of channels (argument) is acceptable
      *  [optional] description: the description of the source - what it is being used for
      */
@@ -129,7 +129,7 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Global supported options
      * @param {string} id unique ID among all webgl instances and shaders
-     * @param {object} options
+     * @param {WebGLModule.ShaderLayerParams} options
      *  options.channel: "r", "g" or "b" channel to sample, default "r"
      *  options.use_mode: blending mode - default alpha ("show"), custom blending ("mask") and clipping mask blend ("mask_clip")
      *  options.use_[*]: filtering, gamma/exposure/logscale with a float filter parameter (e.g. "use_gamma" : 1.5)
@@ -194,7 +194,7 @@ WebGLModule.VisualisationLayer = class {
     /**
      * Called when an image is rendered
      * @param {WebGLProgram} program WebglProgram instance
-     * @param {object} dimension canvas dimension {width, height}
+     * @param {object} dimension canvas dimension
      * @param {number} dimension.width
      * @param {number} dimension.height
      * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
@@ -588,7 +588,7 @@ WebGLModule.VisualisationLayer = class {
 };
 
 /**
- * Factory for predefined UIControls
+ * Factory Manager for predefined UIControls
  *  - you can manage all your UI control logic within your shader implementation
  *  and not to touch this class at all, but here you will find some most common
  *  or some advanced controls ready to use, simple and powerful
@@ -596,7 +596,7 @@ WebGLModule.VisualisationLayer = class {
  *  among all the shaders (given the GLSL type, result of sample(...) matches).
  *  - UiElements are objects to create simple controls quickly and get rid of code duplicity,
  *  for more info @see WebGLModule.UIControls.register()
- * @type {WebGLModule.UIControls}
+ * @class WebGLModule.UIControls
  */
 WebGLModule.UIControls = class {
 
@@ -683,10 +683,10 @@ WebGLModule.UIControls = class {
     /**
      * Register simple UI element by providing necessary object
      * implementation:
-     *  { defaults: function () {...}, // object with all default values for all supported parameters
-          html: function (uniqueId, params, css="") {...}, //how the HTML UI controls look like
-          glUniformFunName: function () {...}, //what function webGL uses to pass this attribute to GPU
-          decode: function (fromValue) {...}, //parse value obtained from HTML controls into something
+     *  { defaults: function() {...}, // object with all default values for all supported parameters
+          html: function(uniqueId, params, css="") {...}, //how the HTML UI controls look like
+          glUniformFunName: function() {...}, //what function webGL uses to pass this attribute to GPU
+          decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
                                                 gl[glUniformFunName()](...) can pass to GPU
           glType: //what's the type of this parameter wrt. GLSL: int? vec3?
      * @param type the identifier under which is this control used: lookup made against params.type
@@ -750,18 +750,18 @@ WebGLModule.UIControls = class {
     //simple functionality
     static _items = {
         number: {
-            defaults: function () {
+            defaults: function() {
                 return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
-            html: function (uniqueId, params, css="") {
+            html: function(uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 return `${title}<input class="form-control input-sm" style="${css}" min="${params.min}" max="${params.max}" 
 step="${params.step}" type="number" id="${uniqueId}">`;
             },
-            glUniformFunName: function () {
+            glUniformFunName: function() {
                 return "uniform1f";
             },
-            decode: function (fromValue) {
+            decode: function(fromValue) {
                 return Number.parseFloat(fromValue);
             },
             normalize: function(value, params) {
@@ -775,18 +775,18 @@ step="${params.step}" type="number" id="${uniqueId}">`;
         },
 
         range: {
-            defaults: function () {
+            defaults: function() {
                 return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
-            html: function (uniqueId, params, css="") {
+            html: function(uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 return `${title}<input type="range" style="${css}" 
 class="with-direct-input" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
             },
-            glUniformFunName: function () {
+            glUniformFunName: function() {
                 return "uniform1f";
             },
-            decode: function (fromValue) {
+            decode: function(fromValue) {
                 return Number.parseFloat(fromValue);
             },
             normalize: function(value, params) {
@@ -800,17 +800,17 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
         },
 
         color: {
-            defaults: function () {
+            defaults: function() {
                 return { title: "Color", interactive: true, default: "#fff900" };
             },
-            html: function (uniqueId, params, css="") {
+            html: function(uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 return `${title}<input type="color" id="${uniqueId}" style="${css}" class="form-control input-sm">`;
             },
-            glUniformFunName: function () {
+            glUniformFunName: function() {
                 return "uniform3fv";
             },
-            decode: function (fromValue) {
+            decode: function(fromValue) {
                 try {
                     let index = fromValue.startsWith("#") ? 1 : 0;
                     return [
@@ -833,20 +833,20 @@ class="with-direct-input" min="${params.min}" max="${params.max}" step="${params
         },
 
         bool: {
-            defaults: function () {
+            defaults: function() {
                 return { title: "Checkbox", interactive: true, default: true };
             },
-            html: function (uniqueId, params, css="") {
+            html: function(uniqueId, params, css="") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 let value = this.decode(params.default) ? "checked" : "";
                 //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
                 return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
 class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
             },
-            glUniformFunName: function () {
+            glUniformFunName: function() {
                 return "uniform1i";
             },
-            decode: function (fromValue) {
+            decode: function(fromValue) {
                 return fromValue && fromValue !== "false" ? 1 : 0;
             },
             normalize: function(value, params) {
@@ -875,7 +875,9 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
     }
 };
 
-
+/**
+ * @interface
+ */
 WebGLModule.UIControls.IControl = class {
 
     /**
@@ -887,6 +889,8 @@ WebGLModule.UIControls.IControl = class {
      *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
      *
      * If extended (class-based definition, see registerCass) children should define constructor as
+     *
+     * @example
      *   constructor(context, name, webGLVariableName, params) {
      *       super(context, name, webGLVariableName);
      *       ...
@@ -1018,8 +1022,10 @@ WebGLModule.UIControls.IControl = class {
     /**
      * Called when an image is rendered
      * @param program WebglProgram instance
-     * @param dimension canvas dimension {width, height}
-     * @param gl WebGL Context
+     * @param dimension canvas dimension
+     * @param {number} dimension.width
+     * @param {number} dimension.height
+     * @param {(WebGLRenderingContext|WebGL2RenderingContext)} gl
      */
     glDrawing(program, dimension, gl) {
         //the control should send something to GPU
@@ -1059,7 +1065,7 @@ WebGLModule.UIControls.IControl = class {
      *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
      * NOTE: you can define your own global-scope functions to keep one-lined sampling,
      * see this.context.includeGlobalCode(...)
-     * @param {string||undefined} value openGL value/variable, used in a way that depends on the UI control currently active
+     * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active
      *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
      * @param {string} valueGlType GLSL type of the value
      * @return {string} valid GLSL oneliner (wihtout ';') for sampling the value, or invalid code (e.g. error message) to signal error
@@ -1236,9 +1242,9 @@ WebGLModule.UIControls.IControl = class {
  * of the input and the parametrization.
  *
  * Further parameters passed are dependent on the control type, see
- * @WebGLModule.UIControls
+ * @ WebGLModule.UIControls
  *
- * @type {WebGLModule.UIControls.SimpleUIControl}
+ * @class WebGLModule.UIControls.SimpleUIControl
  */
 WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IControl {
 

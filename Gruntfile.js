@@ -1,79 +1,55 @@
+const {parse} = require("comment-json");
+const {execSync: exec} = require("child_process");
+const path = require("path");
+//if command contains path to the bin file
+const execAtPath = (binPath, cmd, options=undefined) => {
+    return exec(`${path.relative("", binPath)} ${cmd}`, options);
+};
 module.exports = function(grunt) {
-
     // Project configuration.
-    // Todo implement uglification
 
-    //conf: grunt.file.readJSON('src/config.json'), //needs to strip comments first
-    //generate uglify task object based on paths from config, probably copy over
-    //all files of the project, delete minified ones and replace with unminified,
-    //override root as build?
+    //grunt.loadNpmTasks('grunt-contrib-uglify');
+    grunt.loadNpmTasks("grunt-contrib-connect");
+    grunt.loadNpmTasks("grunt-contrib-watch");
+    // grunt.loadNpmTasks("grunt-contrib-clean");
+    // grunt.loadNpmTasks('grunt-jsdoc');
+    // const files = require('./docs/include');
 
     grunt.initConfig({
         pkg: grunt.file.readJSON('package.json'),
+        // Todo implement uglification
 
-
-        // uglify: {
-        //     core: {
-        //         files: [
-        //             {
-        //                 expand: true,
-        //                 cwd: 'root/src/ui/',
-        //                 src: [
-        //                     'src/*.js',
-        //                     'src/external/*.js',
-        //                     //skip minified
-        //                     'src/external/!*.min.js',
-        //                 ],
-        //                 dest: 'build/',
-        //                 rename: function (dest, src) {
-        //                     return dest + src.substring(0, src.indexOf('/') + 1) + 'ui.min.js';
-        //                 }
-        //             }
-        //         ]
-        //     },
-        //     coreDeps: {
-        //         files: [
-        //             {
-        //                 expand: true,
-        //                 cwd: 'root/src/ui/',
-        //                 src: [
-        //                     'src/*.js',
-        //                     'src/external/*.js',
-        //                     //skip minified
-        //                     'src/external/!*.min.js',
-        //                 ],
-        //                 dest: 'build/',
-        //                 rename: function (dest, src) {
-        //                     return dest + src.substring(0, src.indexOf('/') + 1) + 'ui.min.js';
-        //                 }
-        //             }
-        //         ]
-        //     }
-        // }
-
-        // uglify: {
-        //     options: {
-        //         banner: '/*! <%= pkg.name %> <%= grunt.template.today("yyyy-mm-dd") %> */\n'
-        //     },
-        //     build: {
-        //         src: 'src/<%= pkg.name %>.js',
-        //         dest: 'build/<%= pkg.name %>.min.js'
-        //     }
-        // }
+        connect: {
+            server: {
+                options: {
+                    port: 9000,
+                    base: 'docs/build/'
+                }
+            }
+        },
+        watch: {
+            files: [],
+            tasks: ["docs"]
+        },
     });
 
-    grunt.registerTask('env', 'Create Env Files.', function() {
+    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file', function (file) {
+        const config = require(file || './docs/openseadragon.conf');
+        grunt.file.write('./docs/build/docs.conf.json', JSON.stringify(config));
+        grunt.file.copy('./docs/assets/xopat-banner.png', './docs/build/docs/assets/xopat-banner.png');
+        const result = execAtPath('./node_modules/.bin/jsdoc', '-c ./docs/build/docs.conf.json --verbose');
+        grunt.log.writeln(result);
+    });
+
+    grunt.registerTask('env', 'Generate Env Configuration Example.', function() {
         grunt.log.write("Core configuration...\n");
-        const {
-            parse, //parse, also can keep comments
-            stringify, //stringify, can re-add comments
-            assign //can carry over comments
-        } = require('comment-json')
         const output = [`
 {
     /*********************************************************************************
      *        Core viewer configuration, defaults located at 'src/config.json'       *
+     *                                                                               *
      *              To build example configuration file, run 'grunt env'             *
+     *        Values unchanged are better to left commented/removed (=defaults)      *
      *           Configuration is written in JSON with comments (JS style)           *
      ********************************************************************************/        
     "core": `];
@@ -91,7 +67,6 @@ module.exports = function(grunt) {
         const plugins = grunt.file.expand({filter: "isDirectory", cwd: "plugins"}, ["*"]);
         let pushed = false;
         for (let pluginFolder of plugins) {
-            //todo remove all development configuration data
             const file = `plugins/${pluginFolder}/include.json`;
             grunt.log.write(pluginFolder+"/include.json  ");
 
@@ -125,7 +100,6 @@ module.exports = function(grunt) {
         pushed = false;
         for (let moduleFolder of modules) {
             const file = `modules/${moduleFolder}/include.json`;
-            //todo remove all development configuration data
             if (grunt.file.isFile(file)) {
                 pushed = true;
                 grunt.log.write(moduleFolder+"/include.json  ");
@@ -147,9 +121,6 @@ module.exports = function(grunt) {
         grunt.file.write("env/env.example.json", output.join(""));
         grunt.log.write("Saved.\n");
     });
-
-    // Load the plugin that provides the "uglify" task.
-    grunt.loadNpmTasks('grunt-contrib-uglify');
 
     // Default task(s).
     grunt.registerTask('default', ['env']);

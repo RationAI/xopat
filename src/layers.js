@@ -1,11 +1,14 @@
-(function (window) {
-    window.APPLICATION_CONTEXT.disableRendering = function () {
+function initXopatLayers() {
+    /**
+     * Disables Visualisation Rendering (the data group)
+     */
+    window.APPLICATION_CONTEXT.disableVisualisation = function () {
         if (!VIEWER.bridge) return;
         const renderingIndex = VIEWER.bridge.getWorldIndex();
         if (renderingIndex || renderingIndex == 0) {
             VIEWER.bridge.removeLayer(renderingIndex);
         }
-        window.APPLICATION_CONTEXT.layersAvailable = false;
+        APPLICATION_CONTEXT.layersAvailable = false;
     }
 
     function parseStore(key) {
@@ -64,14 +67,18 @@
     const namedCookieCache = parseStore('_layers.namedCache');
     const orderedCookieCache = parseStore('_layers.orderedCache');
 
-    window.APPLICATION_CONTEXT.prepareRendering = function (atStartup=false) {
+    /**
+     * Initialize Visualisation (data group) from APPLICATION_CONTEXT.config setup
+     * @return {*}
+     */
+    window.APPLICATION_CONTEXT.prepareRendering = function () {
         const visualizations = parseVisualization();
         if (visualizations.length <= 0) {
-            return APPLICATION_CONTEXT.disableRendering();
+            return APPLICATION_CONTEXT.disableVisualisation();
         }
 
         //We are active!
-        window.APPLICATION_CONTEXT.layersAvailable = true;
+        APPLICATION_CONTEXT.layersAvailable = true;
 
         // Wrap WebGL module into bridge interface to bind to OpenSeadragon
         const firstTimeSetup = VIEWER.bridge === undefined;
@@ -130,7 +137,12 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     //         });
                     //     }
                     // }
-
+                    /**
+                     * Fired when visualisation goal is set up and run, but before first rendering occurs.
+                     * @property visualisation visualisation configuration used
+                     * @memberOf VIEWER
+                     * @event visualisation-used
+                     */
                     VIEWER.raiseEvent('visualisation-used', visualisation);
                 },
                 visualisationChanged: function(oldVis, newVis) {
@@ -144,7 +156,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
                             index: index,
                             opacity: $("#global-opacity input").val(),
-                            success: function (e) {
+                            success: function(e) {
                                 UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
@@ -156,7 +168,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                             index: index,
                             opacity: $("#global-opacity input").val(),
                             replace: true,
-                            success: function (e) {
+                            success: function(e) {
                                 UTILITIES.prepareTiledImage(index, e.item, newVis);
                                 seaGL.addLayer(index);
                                 seaGL.redraw();
@@ -317,7 +329,11 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
             };
 
-            UTILITIES.prepareTiledImage = function (index, image, visSetup) {
+            /**
+             * Prepares TiledImage for visualisation rendering after it has been instantiated
+             * @private
+             */
+            UTILITIES.prepareTiledImage = function(index, image, visSetup) {
                 //todo not flexible, propose format setting in OSD? depends on the protocol
 
                 const async = APPLICATION_CONTEXT.getOption("fetchAsync");
@@ -339,6 +355,10 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 seaGL.addLayer(index);
             };
 
+            /**
+             * Set visualisation parameters cache
+             * @param {boolean} named cache by layer name if true, position if false
+             */
             UTILITIES.makeCacheSnapshot = function(named=true) {
                 if (named) recordCache('_layers.namedCache', namedCookieCache, (shader, i) => shader.name, false);
                 else recordCache('_layers.orderedCache', orderedCookieCache, (shader, i) => i, true);
@@ -347,7 +367,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             // load desired shader upon selection
             let shadersMenu = document.getElementById("shaders");
-            shadersMenu.addEventListener("mousedown", function (e) {
+            shadersMenu.addEventListener("mousedown", function(e) {
                 if (this.childElementCount < 2) {
                     e.preventDefault();
                     $(this.previousElementSibling).click();
@@ -360,11 +380,11 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 seaGL.switchVisualisation(index);
             }
 
-            shadersMenu.addEventListener("change", function () {
+            shadersMenu.addEventListener("change", function() {
                 setNewDataGroup(Number.parseInt(this.value));
             });
 
-            VIEWER.addHandler('background-image-swap', function (e) {
+            VIEWER.addHandler('background-image-swap', function(e) {
                 const oldIndex = webglProcessing.currentVisualisationIndex();
                 e.prevBackgroundSetup.goalIndex = oldIndex;
 
@@ -380,6 +400,10 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
             });
 
+            /**
+             * @private
+             * @param layerId
+             */
             UTILITIES.clearShaderCache = function(layerId) {
                 const shader = seaGL.visualization().shaders[layerId];
                 if (!shader) return;
@@ -390,6 +414,9 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 seaGL.reorder();
             };
 
+            /**
+             * @private
+             */
             UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
                 if (self.checked) {
                     seaGL.visualization().shaders[layerId].visible = true;
@@ -488,7 +515,10 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
             };
 
-            UTILITIES.updateUIForMissingSources = function () {
+            /**
+             * @private
+             */
+            UTILITIES.updateUIForMissingSources = function() {
                 let layers = seaGL.visualization().shaders;
                 let sources = webglProcessing.getSources();
                 let allSources = APPLICATION_CONTEXT.config.data;
@@ -524,13 +554,25 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             /**
              * Generic Multiplexing for TileSources
-             * allows to use built-in protocols as multi tile sources,
-             * the image exchange must be in images - the tile response is interpreted as an Image object
+             * allows to use built-in protocols as multi tile sources for visualisation viewing.
+             * The image exchange must be in images - the tile response is interpreted as an Image object
+             * @param {OpenSeadragon.TiledImage} image
              *
-             * todo provide faulty error message
-             * @param image
+             * @example
+             *   //ENV configuration
+             *   ...
+             *   "client": {
+             *     "[...]": {
+             *       ...
+             *       "data_group_protocol": "`${path}?Deepzoom=${data}.dzi`"
+             *     }
+             *   },
+             *   "setup": {
+             *     "fetchAsync": true
+             *   },
+             *   ...
              */
-            UTILITIES.multiplexSingleTileSource = function (image) {
+            UTILITIES.multiplexSingleTileSource = function(image) {
                 const source = image.source,
                     isHash = image.splitHashDataForPost;
 
@@ -540,7 +582,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     return [level, x, y];
                 }
 
-                source.configureItem = source.configureItem || function (data, url, postData, options) {
+                source.configureItem = source.configureItem || function(data, url, postData, options) {
                     console.warn("The Tile Source has been automatically multiplexed to support async requests.", "Url", url);
                     console.info(`You can adjust the $TileSourceImplementation::configureItem function, we now assume all tiles just share the same metadata (e.g. maxLevel).`);
                     console.info(`The function is the same as configure() method except it has fourth argument 'options' that is the outcome of 'configure', it's called for each item, multiple times (similar to iterator).`);
@@ -548,7 +590,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                     return options;
                 }
 
-                source.multiConfigure = source.multiConfigure || function (dataList) {
+                source.multiConfigure = source.multiConfigure || function(dataList) {
                     let blackImage = (context, resolve, reject) => {
                         const canvas = document.createElement('canvas');
                         canvas.width = context.getTileWidth();
@@ -612,13 +654,13 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                                             data = ( xhr.responseXML && xhr.responseXML.documentElement ) ?
                                                 xhr.responseXML :
                                                 OpenSeadragon.parseXml( responseText );
-                                        } catch (e) {
+                                        } catch(e) {
                                             data = xhr.responseText;
                                         }
                                     }else if( responseText.match(/\s*[{[].*/) ){
                                         try {
                                             data = OpenSeadragon.parseJSON(responseText);
-                                        } catch(e) {
+                                        } catch (e) {
                                             data =  responseText;
                                         }
                                     } else data = responseText;
@@ -630,7 +672,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                                     const newOpts = source.configureItem(data, url, postData, options);
                                     source._childSources[index] = new $TileSource( newOpts || options );
                                 },
-                                error: function ( xhr, exc ) {
+                                error: function( xhr, exc ) {
                                     source._childSources[index] = null;
                                     console.warn();
                                 }
@@ -743,4 +785,4 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             }
         }
     }
-})(window);
+}

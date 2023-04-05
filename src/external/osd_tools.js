@@ -1,3 +1,9 @@
+/**
+ * Utilities for the OpenSeadragon Viewer.
+ * Available as OpenSeadragon.tools instance (attaches itself on creation).
+ * in xOpat: VIEWER.tools.[...]
+ * @type {OpenSeadragon.Tools}
+ */
 OpenSeadragon.Tools = class {
 
     /**
@@ -103,7 +109,7 @@ OpenSeadragon.Tools = class {
      * @param {object} size the output size
      * @param {number} size.width
      * @param {number} size.height
-     * @param {OpenSeadragon.Rect|object|undefined} [focus=undefined] screenshot
+     * @param {(OpenSeadragon.Rect|object|undefined)} [focus=undefined] screenshot
      *   focus area (screen coordinates), by default thw whole viewport
      * @return {CanvasRenderingContext2D|Image}
      */

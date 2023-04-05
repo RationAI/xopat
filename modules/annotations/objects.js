@@ -83,7 +83,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * What internal structure is kept by this annotation
-     * @returns {string|[string]|[[string]]} (possibly nested) list of types
+     * @returns {string|string[]|string[][]} (possibly nested) list of types
      */
     fabricStructure() {
         return "object";
@@ -163,7 +163,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * A list of extra custom properties to export upon export event
-     * @return {[string]}
+     * @return {string[]}
      */
     exports() {
         return [];
@@ -745,7 +745,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             uniqueId: "annot",
             onError: function(error) {
                 //potentially able to cope with it
-                VIEWER.raiseEvent('warn-system', {
+                context.raiseEvent('warn-system', {
                     originType: "module",
                     originId: "annotations",
                     code: "E_AUTO_OUTLINE_ENGINE_ERROR",

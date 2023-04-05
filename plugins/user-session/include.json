@@ -9,10 +9,10 @@
     "modules": [],
     "permaLoad": true,
     //API Url: auth prompt
-    "authServer": "http://localhost:8080/browser/ajax/auth.php",
+    "authServer": null,
     //API Url: third party authentication
-    "performAuth": "http://localhost:8080/browser/login.php",
+    "performAuth": null,
     //API url: where to store session exports
-    "sessionServer": "http://localhost:8080/browser/ajax/session.php",
+    "sessionServer": null,
     "headers": null
 }

@@ -70,12 +70,6 @@ Fired when plugin fails to load within a system (at runtime).
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 
-#### `warn-system` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
-System warning: it gives the opportunity to react upon, 
-unlike `console.warn`. Parameters same as above. The core does not handle this event anyhow.
-#### `error-system` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
-Same as above, an error event.
-
 ### User Input Events
 
 #### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`

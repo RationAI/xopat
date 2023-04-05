@@ -1,5 +1,6 @@
 /**
  * Code shader
+ * @class WebGLModule.CodingLayer
  */
 WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
 
@@ -101,7 +102,7 @@ float filtered = ${this.filter("0.123456")};
         });
 
         this.editor.init();
-        this.editor.on('default', function (raw, encoded, ctx) {
+        this.editor.on('default', function(raw, encoded, ctx) {
             if (window.Dialogs?.openEditor) {
                 Dialogs.openEditor(
                     'FS-editor',

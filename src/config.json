@@ -1,7 +1,11 @@
-{
+/**
+ * @fileoverview xOpat Static configuration: 'ENV'
+ * @typedef xoEnv
+ */
+{ /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version":" 1.1.0",
+    "version": "1.1.0",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -65,6 +69,29 @@
     },
     /**
      * The Viewer Default Settings, all overrideable through params configuration.
+     * @typedef {{
+     *   locale: ?string,
+     *   customBlending: ?boolean,
+     *   debugMode: ?boolean,
+     *   webglDebugMode: ?boolean,
+     *   scaleBar: ?boolean,
+     *   statusBar: ?boolean,
+     *   viewport: ?Object,
+     *   activeBackgroundIndex: ?number,
+     *   activeVisualizationIndex: ?number,
+     *   grayscale: ?boolean,
+     *   tileCache: ?boolean,
+     *   preventNavigationShortcuts: ?boolean,
+     *   permaLoadPlugins: ?boolean,
+     *   bypassCookies: ?boolean,
+     *   theme: ?string,
+     *   stackedBackground: ?boolean,
+     *   maxImageCacheCount: ?number,
+     *   webGlPreferredVersion: ?string,
+     *   headers: ?Object,
+     *   preferredFormat: ?string,
+     *   fetchAsync: ?boolean
+     * }} xoParams
      */
     "setup": {
         // depends on available locales in locales/ folder
@@ -109,14 +136,14 @@
      * JS Source files. Each group conforms to pre-determined folder path.
      */
     "js": {
-        // src/libs
+        // src/libs      key: source / [sources,list]
         "libs": {
             "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js"
         },
-        // src/external
+        // src/external  key: source / [sources,list]
         "external": {
             "common": [
                 "dziexttilesource.js",
@@ -133,12 +160,14 @@
          * "loader" is the core component module functionality, loaded as soon as possible.
          * "deps" are UI dependencies, loaded before JS index code.
          * "app" contains the core files, loaded after JS index code.
+         *
+         *  key: source / [sources,list]
          */
         "src": {
             //"env": "",
             "loader": "loader.js",
             "deps": ["ui_components.js", "shader_configurator.js"],
-            "app": ["user_interface.js", "scripts.js", "layers.js"]
+            "app": ["app.js", "user_interface.js", "scripts.js", "layers.js"]
         }
     },
 

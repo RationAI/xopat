@@ -60,16 +60,16 @@ describe('Annotations - User Controls', () => {
         cy.get("#preset-add-new").click();
         cy.get("#preset-add-new").click();
 
-        helpers.presetUiNewMetaName(0).type("My New Awesome Meta");
+        helpers.presetUiNewMetaName(0).focus().type("My New Awesome Meta");
         helpers.presetUiNewMetaButton(0).click();
-        helpers.presetUiNthMeta(0, 1).type("The AWESOME Value");
+        helpers.presetUiNthMeta(0, 1).focus().type("The AWESOME Value");
 
         helpers.presetUISelect(1).select(2);
-        helpers.presetUiNthMeta(1, 0).type("Ctverecek");
+        helpers.presetUiNthMeta(1, 0).focus().type("Ctverec");
 
-        helpers.presetUiNewMetaName(2).type("Empty meta");
+        helpers.presetUiNewMetaName(2).focus().type("Empty meta");
         helpers.presetUiNewMetaButton(2).click();
-        helpers.presetUiNewMetaName(2).type("Another Empty");
+        helpers.presetUiNewMetaName(2).focus().type("Another Empty");
         helpers.presetUiNewMetaButton(2).click();
         helpers.presetUISelect(2).select(1);
 
@@ -79,7 +79,7 @@ describe('Annotations - User Controls', () => {
         helpers.presetUiSelectRight().click();
 
         cy.get("#annotations-left-click").should('contain.text', 'Polygon');
-        cy.get("#annotations-right-click").should('contain.text', 'Ctverecek');
+        cy.get("#annotations-right-click").should('contain.text', 'Ctverec');
     });
 
     //preset index and factory index (factories array)
@@ -92,7 +92,7 @@ describe('Annotations - User Controls', () => {
 
 
     it ("Preset RightClick#1", function () {
-        helpers.ALTdown().draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+        cy.key("w").draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
         helpers.ALTup();
 

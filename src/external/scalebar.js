@@ -11,8 +11,35 @@
  */
 
 /**
- *
  * @author Antoine Vandecreme <antoine.vandecreme@nist.gov>
+ * @author Aiosa (modifications)
+ *
+ * @typedef ScaleBarConfig
+ * @type {object}
+ * @property {OpenSeadragon.Viewer} viewer The viewer to attach this Scalebar to.
+ * @property {OpenSeadragon.ScalebarType} type The scale bar type. Default: microscopy
+ * @property {Integer} pixelsPerMeter The pixels per meter of the
+ * zoomable image at the original image size. If null, the scale bar is not
+ * displayed. default: null
+ * @property {Integer} pixelsPerMeterX The measurement in vertical units, need to specify both X, Y if general not given
+ * @property {Integer} pixelsPerMeterY The measurement in horizontal units, need to specify both X, Y if general not given
+ * @property (String} minWidth The minimal width of the scale bar as a
+ * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
+ * @property {OpenSeadragon.ScalebarLocation} location The location
+ * of the scale bar inside the viewer. default: bottom left
+ * @property {Integer} xOffset Offset location of the scale bar along x. default: 5
+ * @property {Integer} yOffset Offset location of the scale bar along y. default: 5
+ * @property {Boolean} stayInsideImage When set to true, keep the
+ * scale bar inside the image when zooming out. default: true
+ * @property {String} color The color of the scale bar using a color
+ * name or the hexadecimal format (ex: black or #000000) default: black
+ * @property {String} fontColor The font color. default: black
+ * @property {String} backgroundColor The background color. default: none
+ * @property {String} fontSize The font size. default: not set
+ * @property {String} fontFamily The font-family. default: not set
+ * @property {String} barThickness The thickness of the scale bar in px. default: 2
+ * @property {function} sizeAndTextRenderer A function which will be
+ * @property {boolean} destroy
  */
 (function($) {
 
@@ -21,6 +48,11 @@
             'OpenSeadragon version 2.0.0+');
     }
 
+    /**
+     * @memberOf OpenSeadragon.Viewer
+     * @param {(ScaleBarConfig|undefined)} options
+     *
+     */
     $.Viewer.prototype.makeScalebar = function(options) {
         if (!this.scalebar) {
             options = options || {};
@@ -48,37 +80,9 @@
     };
 
     /**
-     *
-     * @class Scalebar
-     * @param {Object} options
-     * @param {OpenSeadragon.Viewer} options.viewer The viewer to attach this
-     * Scalebar to.
-     * @param {OpenSeadragon.ScalebarType} options.type The scale bar type.
-     * Default: microscopy
-     * @param {Integer} options.pixelsPerMeter The pixels per meter of the
-     * zoomable image at the original image size. If null, the scale bar is not
-     * displayed. default: null
-     * @param {Integer} options.pixelsPerMeterX The measurement in vertical units, need to specify both X, Y if general not given
-     * @param {Integer} options.pixelsPerMeterY The measurement in horizontal units, need to specify both X, Y if general not given
-     * @param (String} options.minWidth The minimal width of the scale bar as a
-     * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
-     * @param {OpenSeadragon.ScalebarLocation} options.location The location
-     * of the scale bar inside the viewer. default: bottom left
-     * @param {Integer} options.xOffset Offset location of the scale bar along x.
-     * default: 5
-     * @param {Integer} options.yOffset Offset location of the scale bar along y.
-     * default: 5
-     * @param {Boolean} options.stayInsideImage When set to true, keep the
-     * scale bar inside the image when zooming out. default: true
-     * @param {String} options.color The color of the scale bar using a color
-     * name or the hexadecimal format (ex: black or #000000) default: black
-     * @param {String} options.fontColor The font color. default: black
-     * @param {String} options.backgroundColor The background color. default: none
-     * @param {String} options.fontSize The font size. default: not set
-     * @param {String} options.fontFamily The font-family. default: not set
-     * @param {String} options.barThickness The thickness of the scale bar in px.
-     * default: 2
-     * @param {function} options.sizeAndTextRenderer A function which will be
+     * @private
+     * @class OpenSeadragon.Scalebar
+     * @param {(ScaleBarConfig|undefined)} options
      * called to determine the size of the scale bar and it's text content.
      * The function must have 2 parameters: the PPM at the current zoom level
      * and the minimum size of the scale bar. It must return an object containing
@@ -162,7 +166,7 @@
          *
          * @return {string}
          */
-        imageLengthToGivenUnits: function (length) {
+        imageLengthToGivenUnits: function(length) {
             //todo what about flexibility in units?
             return getWithUnitRounded(length / this.pixelsPerMeter,
                 this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
@@ -242,35 +246,8 @@
         },
         /**
          * Refresh the scalebar with the options submitted.
-         * @param {Object} options
+         * @param {ScaleBarConfig} options
          * @param {OpenSeadragon.ScalebarType} options.type The scale bar type.
-         * Default: microscopy
-         * @param {Integer} options.pixelsPerMeter The pixels per meter of the
-         * zoomable image at the original image size. If null, the scale bar is not
-         * displayed. default: null
-         * @param (String} options.minWidth The minimal width of the scale bar as a
-         * CSS string (ex: 100px, 1em, 1% etc...) default: 150px
-         * @param {OpenSeadragon.ScalebarLocation} options.location The location
-         * of the scale bar inside the viewer. default: bottom left
-         * @param {Integer} options.xOffset Offset location of the scale bar along x.
-         * default: 5
-         * @param {Integer} options.yOffset Offset location of the scale bar along y.
-         * default: 5
-         * @param {Boolean} options.stayInsideImage When set to true, keep the
-         * scale bar inside the image when zooming out. default: true
-         * @param {String} options.color The color of the scale bar using a color
-         * name or the hexadecimal format (ex: black or #000000) default: black
-         * @param {String} options.fontColor The font color. default: black
-         * @param {String} options.backgroundColor The background color. default: none
-         * @param {String} options.fontSize The font size. default: not set
-         * @param {String} options.barThickness The thickness of the scale bar in px.
-         * default: 2
-         * @param {function} options.sizeAndTextRenderer A function which will be
-         * called to determine the size of the scale bar and it's text content.
-         * The function must have 2 parameters: the PPM at the current zoom level
-         * and the minimum size of the scale bar. It must return an object containing
-         * 2 attributes: size and text containing the size of the scale bar and the text.
-         * default: $.ScalebarSizeAndTextRenderer.METRIC_LENGTH
          */
         refresh: function(options) {
             this.updateOptions(options);

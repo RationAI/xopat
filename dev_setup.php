@@ -42,7 +42,7 @@ include_once("src/core.php");
 
 </head>
 
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" style="max-widt">
+<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
 <div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
   <div class="Layout-main ">
@@ -108,7 +108,7 @@ include_once("src/core.php");
 
 <script type="text/javascript">
 
-    PredefinedShaderControlParameters.buildShadersAndControlsDocs("documentation");
+    ShaderConfigurator.buildShadersAndControlsDocs("documentation");
 
     $(document).off('submit');
 
