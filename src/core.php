@@ -69,22 +69,21 @@ function parse_env_config($data, $err) {
 global $ENV;
 try {
     $ENV = [];
-    if (file_exists(ABS_ROOT . "../env/env.json")) {
-        $env = getenv('XOPAT_ENV');
-        if (is_readable($env)) {
-            $ENV = parse_env_config(file_get_contents($env),
-                "File $env is not a valid ENV configuration!");
-        } else if (is_string($env)) {
-            $ENV = parse_env_config($env,
-                "Variable XOPAT_ENV is not a readable file or a valid ENV configuration!");
-        } else {
-            $ENV = parse_env_config(file_get_contents(ABS_ROOT . "../env/env.json"),
-                "Configuration 'env/env.json' contains a syntactic error!");
-        }
-
-        if (!is_array($ENV["core"])) $ENV["core"] = [];
-        $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
+    $env = getenv('XOPAT_ENV');
+    if (is_readable($env)) {
+        $ENV = parse_env_config(file_get_contents($env),
+            "File $env is not a valid ENV configuration!");
+    } else if (is_string($env)) {
+        $ENV = parse_env_config($env,
+            "Variable XOPAT_ENV is not a readable file or a valid ENV configuration!");
+    } else if (file_exists(ABS_ROOT . "../env/env.json")) {
+        $ENV = parse_env_config(file_get_contents(ABS_ROOT . "../env/env.json"),
+            "Configuration 'env/env.json' contains a syntactic error!");
     }
+
+    if (!is_array($ENV["core"])) $ENV["core"] = [];
+    $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
+
 } catch (Exception $e) {
     throw new Exception("Unable to parse ENV configuration file: is it a valid JSON?");
 }
@@ -164,7 +163,7 @@ function print_css_single($files, $path) {
 
 function require_openseadragon() {
     global $CORE;
-    echo "    <script src=\"{$CORE["openseadragon"]}\"></script>\n";
+    echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}\"></script>\n";
 }
 
 function require_libs() {

@@ -130,7 +130,8 @@
      * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.
      */
     "monaco": "src/libs/monaco/",
-    "openseadragon": "openseadragon/build/openseadragon/openseadragon.js",
+    "openSeadragonPrefix": "openseadragon/build/openseadragon/",
+    "openSeadragon": "openseadragon.js",
 
     /**
      * JS Source files. Each group conforms to pre-determined folder path.

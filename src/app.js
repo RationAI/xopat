@@ -299,7 +299,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
      */
     window.VIEWER = OpenSeadragon({
         id: "osd",
-        prefixUrl: "openseadragon/build/openseadragon/images",
+        prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
         maxZoomPixelRatio: 1,
         blendTime: 0,
