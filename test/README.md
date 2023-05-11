@@ -9,10 +9,9 @@ For now, you need to
  - run ``npx cypress open`` to run the interactive test framework
 
 ## Testing on localhost
-First, clone xopat-docker repository and build the docker compose system.
+First, clone xopat-docker repository and build and _run_ the docker compose system.
 > Recommended way of building is to set ``DOCKER_BUILDKIT=0`` env variable to prevent docker from
-> messing up the build process. This might help if you build the image, run it
-> but the components fail to start properly. For windows, use `set DOCKER_BUILDKIT=0`.
+> messing up the build process. For windows, use `set DOCKER_BUILDKIT=0`.
 ``cypress.env.json`` file needs the WSI slides to test with. These can be downloaded here:
 - tissue.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/tissue.php
 - annotation.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/annotation.php
@@ -24,9 +23,9 @@ to these files in the env file (relative to the data folder):
 
 ``````json
 {
-  "interceptDomain": "http://localhost/**",
-  "viewer": "http://localhost/index.php",
-  "imageServer": "http://localhost/iipsrv.fcgi",
+  "interceptDomain": "http://localhost:8080/**",
+  "viewer": "http://localhost:8080/xopat/index.php",
+  "imageServer": "http://localhost:8080/iipsrv/iipsrv.fcgi",
   "headers": {
   },
   "wsi_tissue": "tissue.tiff",
