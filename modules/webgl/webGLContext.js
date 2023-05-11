@@ -341,7 +341,7 @@ void show(vec4 color) {
     vec4 fg = _last_rendered_color;
     _last_rendered_color = color;
     vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
-    final_color = (pre_fg + gl_FragColor * (1.0-fg.a));
+    gl_FragColor = (pre_fg + gl_FragColor * (1.0-fg.a));
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
