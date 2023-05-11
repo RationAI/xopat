@@ -7,7 +7,7 @@
     "icon": "",
     "includes" : ["session.js"],
     "modules": [],
-    "permaLoad": true,
+    "permaLoad": false,
     //API Url: auth prompt
     "authServer": null,
     //API Url: third party authentication
