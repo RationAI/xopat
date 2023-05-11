@@ -2,19 +2,19 @@ export default {
     data: (key) => ({
         'book': ["https://libimages1.princeton.edu/loris/pudl0001%2F4609321%2Fs42%2F00000001.jp2/info.json"],
         'tissue': [
-            'cypress/tissue.tif',
-            'cypress/annotation.tif',
-            'cypress/probability.tif',
-            'cypress/explainability.tif',
+            Cypress.env('wsi_tissue'),
+            Cypress.env('wsi_annotation'),
+            Cypress.env('wsi_probability'),
+            Cypress.env('wsi_explainability'),
         ],
         'invalid': [
             'some-bad!-data1',
             'some-bad-data24&',
         ],
         'even-indexes-valid-only': [
-            'cypress/tissue.tif',
+            Cypress.env('wsi_tissue'),
             'some-bad-data24&',
-            'cypress/annotation.tif',
+            Cypress.env('wsi_annotation'),
             'some-bad!-data1',
         ]
     }[key]),
