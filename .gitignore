@@ -22,7 +22,7 @@ test/screenshots/
 test/videos/
 
 #sensitive data
-cypress.env.json
+cypress.env.*
 
 #image comparison test temp data
 *.diff.png
