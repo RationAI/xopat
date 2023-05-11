@@ -21,9 +21,9 @@ require_once "src/core.php";
     <meta charset="utf-8">
     <title>Visualisation Developer Setup</title>
 
-    <link rel="stylesheet" href="<?php echo EXTERNAL_SOURCES; ?>primer_css.css">
+    <link rel="stylesheet" href="<?php echo LIBS_ROOT; ?>primer_css.css">
     <script src="<?php echo PROJECT_SOURCES; ?>loader.js"></script>
-    <script src="<?php echo PROJECT_SOURCES; ?>shader_input_gui.js"></script>
+    <script src="<?php echo PROJECT_SOURCES; ?>shader_configurator.js"></script>
     <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
