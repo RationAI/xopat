@@ -1,8 +1,8 @@
 # WebGL Module
-Module for WebGL-based post-processing of images. Supports arrays of images concatenated into one image vertically.
+Module for WebGL-based post-processing of images. Supports arrays of images concatenated into one image vertically, or an
+array of images. Other input types can be supported by extending on data loader capabilities.
 Multiple images can be post-processed using various strategies (which can be dynamically changed) and the result is
 blended into one resulting image. It is highly customizable and allows for multiple contexts in use.
-
 
 Setting up:
 ``include.json`` specifies how to load the module as a series of JS files. `requires` specifies other module dependence.
