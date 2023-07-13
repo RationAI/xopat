@@ -71,7 +71,7 @@ OSDAnnotations.Convertor = class {
         const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
         const exportAll = parserCls.includeAllAnnotationProps;
-        return new parserCls().encode(
+        return await new parserCls().encode(
             (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : [],
             () => withPresets ? context.presets.toObject() : [],
             context
@@ -93,7 +93,7 @@ OSDAnnotations.Convertor = class {
     static async decode(format, data, context) {
         const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
-        return new parserCls().decode(data, context);
+        return await new parserCls().decode(data, context);
     }
 
 

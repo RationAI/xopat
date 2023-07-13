@@ -8,6 +8,7 @@
         "convert/convertor.js",
         "convert/asapXml.js",
         "convert/geoJSON.js",
+        "convert/qupath.js",
         "presets.js",
         "objects.js",
         "objectGenericFactories.js",

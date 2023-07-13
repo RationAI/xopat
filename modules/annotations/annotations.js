@@ -1272,7 +1272,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.toObject = function (_) {
 			return originalToObject.call(this, inclusionProps);
 		}
-		const reset = () => fabric.Object.prototype.toObject = originalToObject;
+		const resetToObjectCall = () => fabric.Object.prototype.toObject = originalToObject;
 
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
@@ -1304,8 +1304,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					return resolve();
 				});
 			}, reviver);
-		}).then(reset).catch(e => {
-			reset();
+		}).then(resetToObjectCall).catch(e => {
+			resetToObjectCall();
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
 	}

@@ -1333,6 +1333,18 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         return this.configure(new fabric.Group(parameters), options);
     }
 
+    configure(object, options) {
+        super.configure(object, options);
+
+        //or extend with all options?
+        object.forEachObject(o => {
+            o.fill = options.fill;
+            o.stroke = options.stroke;
+            o.color = options.color;
+            o.originalStrokeWidth = options.originalStrokeWidth;
+        });
+    }
+
     _eachChildAndFactory(ofObject, executor, method="map") {
         const self = this;
         return ofObject._objects[method](o => {
@@ -1427,6 +1439,31 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         // if (!this._current._objects.includes(active)) {
         //     this._current.add(active);
         // }
+    }
+
+    onZoom(ofObject, zoom) {
+        //todo try to use iterate method :D
+        ofObject.forEachObject(o => {
+            o.set({strokeWidth: ofObject.originalStrokeWidth/zoom});
+        });
+    }
+
+    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+        ofObject.forEachObject(o => {
+            if (typeof o.color === 'string') {
+                if (isTransparentFill) {
+                    o.set({
+                        fill: "",
+                        stroke: color
+                    });
+                } else {
+                    o.set({
+                        fill: color,
+                        stroke: defaultStroke
+                    });
+                }
+            }
+        });
     }
 
     isImplicit() {

@@ -34,9 +34,9 @@ OSDAnnotations.Convertor.GeoJSON = class {
         }
     }
 
-    //we use objects for points, we do not repeat the last point
-    _toNativeRing(list) {
-        list.splice(-1, 1);
+    //we use objects for points, we do not repeat the last point for closed items
+    _toNativeRing(list, isClosed=true) {
+        if (isClosed) list.splice(-1, 1);
         return list.map(o => ({x: o[0], y: o[1]}));
     }
 
@@ -95,7 +95,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         "polygon": (object) => this._getAsNativeObject(object,
             (object, geometry) => object.points = this._toNativeRing(geometry[0] || [])), //for now we support only outer ring
         "polyline": (object) => this._getAsNativeObject(object,
-            (object, geometry) => object.points = this._toNativeRing(geometry)),
+            (object, geometry) => object.points = this._toNativeRing(geometry, false)),
         "point": (object) => this._getAsNativeObject(object, (object, geometry) => {
             //todo not necessary? left/top are already probably present in props
             object.left = geometry[0];
@@ -116,6 +116,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         //for now we do not make use of Multi* so this has to be external GeoJSON
         result.objects = object.coordinates.map(g => this.decoders[type]({ coordinates: g, type: type }));
         result.factoryID = "group";
+        result.type = "group";
         return result;
     }
 
@@ -134,7 +135,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
             let props = {};
             props.factoryID = "polyline";
             props.type = "polyline";
-            props.points = this._toNativeRing(object.coordinates);
+            props.points = this._toNativeRing(object.coordinates, false);
             return props;
         },
         MultiLineString: (object) => this._decodeMulti(object, "LineString"),
@@ -156,7 +157,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         },
     }
 
-    encode(annotationsGetter, presetsGetter, annotationsModule) {
+    async encode(annotationsGetter, presetsGetter, annotationsModule) {
         this.context = annotationsModule;
 
         //https://github.com/computationalpathologygroup/ASAP/issues/167
@@ -195,7 +196,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         return JSON.stringify(output);
     }
 
-    decode(data, annotationsModule) {
+    async decode(data, annotationsModule) {
 
         data = JSON.parse(data);
 
