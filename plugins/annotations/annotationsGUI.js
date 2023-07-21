@@ -1,6 +1,6 @@
 class AnnotationsGUI extends XOpatPlugin {
 
-//todo test with multiple swap bgimages
+	//todo test with multiple swap bgimages
 	constructor(id) {
 		super(id);
 
@@ -48,7 +48,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
 		this.setupActiveTissue(bgImage); // if (!...) return...
 
-		//todo disable-able?
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
@@ -198,7 +197,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
 
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
-		this.annotationModeChanged({mode: this.context.mode}); //init manually
+		this.annotationModeChanged({mode: this.context.mode}); //force refresh manually
 
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		// this.context.addHandler('import', e => {
@@ -249,7 +248,6 @@ class="d-inline-block">${this.context.mode.customHtml()}</div></div>`, 'draw');
 		// this.context.addHandler('layer-added', e => {
 		// 	_this.insertLayer(e.layer, e.layer.name);
 		// });
-
 
 		let strategy = this.context.automaticCreationStrategy;
 		if (strategy && this.context.autoSelectionEnabled) {
@@ -589,7 +587,9 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 	importFromFile(e) {
 		const _this = this;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			await _this.context.import(data, _this.exportOptions.format, false);
+			await _this.context.import(data, {
+				format: _this.exportOptions.format
+			}, false);
 			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
 		}).catch(e => {
 			console.log(e);
@@ -602,7 +602,7 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 	 */
 	exportToFile() {
 		const toFormat = this.exportOptions.format || this._defaultFormat;
-		this.context.export(toFormat, ...this.exportOptions.flags).then(result => {
+		this.context.export({format: toFormat}, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
@@ -858,7 +858,9 @@ class="btn m-2">Set for left click </button>
 			$('#preset-modify-dialog').remove();
 
 			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
-			_this.context.import(json.data, format).then(()=>{
+			_this.context.import(json.data, {
+				format: format
+			}).then(()=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
 				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
@@ -872,7 +874,7 @@ class="btn m-2">Set for left click </button>
 		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		//server IO only supports default format
-		this.context.export(this._defaultFormat).then(data => {
+		this.context.export({format: this._defaultFormat}).then(data => {
 			_this.dataLoader.updateAnnotation(_this._server, id, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
@@ -907,7 +909,7 @@ class="btn m-2">Set for left click </button>
 	uploadAnnotation() {
 		const _this = this;
 		//server IO only supports default format
-		this.context.export(this._defaultFormat).then(data => {
+		this.context.export({format: this._defaultFormat}).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);

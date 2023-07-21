@@ -1,7 +1,7 @@
 OSDAnnotations.Convertor.GeoJSON = class {
     title = 'quPath Annotations';
     description = 'Annotations for quPath (GeoJSON format).';
-    offset = [0,0];
+    offset = undefined;
 
     static getFileName(context) {
         return 'qu_annotations_' + UTILITIES.todayISO() + '.geojson';
@@ -10,7 +10,8 @@ OSDAnnotations.Convertor.GeoJSON = class {
     //todo check polyline enabled, else show warn
     static includeAllAnnotationProps = false;
 
-    //linear ring has the first and last vertex equal, geojson uses arrays
+    //linear ring has the first and last vertex equal, geojson uses arrays, we only for now support arrays of points,
+    //no arrays of arrays of points
     _asGEOJsonFeature(object, preset, type="Polygon", deleteProps=[], asLinearRing=false) {
 
         //https://stackoverflow.com/questions/25831276/turn-array-hex-colors-into-array-rgb-colors
@@ -20,8 +21,9 @@ OSDAnnotations.Convertor.GeoJSON = class {
         }
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-        const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+        let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
         if (poly?.length > 0) {
+            if (this.offset) poly = poly.map(o => ({x: o[0]-offset.x, y: o[1]-offset.y}));
             if (asLinearRing) poly.push(poly[0]); //linear ring
             const props = {
                 "objectType": "annotation",
@@ -57,8 +59,11 @@ OSDAnnotations.Convertor.GeoJSON = class {
 
     //we use objects for points, we do not repeat the last point for closed items
     _toNativeRing(list, isClosed=true) {
+        const offset = this.offset;
         if (isClosed) list.splice(-1, 1);
-        return list.map(o => ({x: o[0]+this.offset[0], y: o[1]+this.offset[1]}));
+
+        if (offset) return list.map(o => ({x: o[0]+offset.x, y: o[1]+offset.y}));
+        return list.map(o => ({x: o[0], y: o[1]}));
     }
 
     //encode all supported factory types
@@ -135,7 +140,9 @@ OSDAnnotations.Convertor.GeoJSON = class {
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule) {
+    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
+        this.offset = options.bioformatsCroppingRect;
+
         this.context = annotationsModule;
 
         const annotations = annotationsGetter();
@@ -167,14 +174,16 @@ OSDAnnotations.Convertor.GeoJSON = class {
         return JSON.stringify(output);
     }
 
-    async decode(data, annotationsModule) {
+    async decode(data, annotationsModule, options) {
+        this.offset = options.bioformatsCroppingRect;
+
         data = JSON.parse(data);
 
         function asHexColor(arr) {
             return "#" + arr.map(x => x.toString(16).padStart(2, '0')).join('');
         }
 
-        const parseFeature = function (object, presets, annotations, offset) {
+        const parseFeature = function (object, presets, annotations) {
             if (object.geometry === null) {
                 throw "Invalid feature! ";
             }

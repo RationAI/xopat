@@ -8,7 +8,7 @@ OSDAnnotations.Convertor.AsapXml = class {
 
     static includeAllAnnotationProps = true;
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule) {
+    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
 
         const annotations = annotationsGetter();
@@ -98,7 +98,7 @@ OSDAnnotations.Convertor.AsapXml = class {
         return new XMLSerializer().serializeToString(doc);
     }
 
-    async decode(data, annotationsModule) {
+    async decode(data, annotationsModule, options) {
         let xmlDoc;
         if (window.DOMParser) {
             const parser = new DOMParser();

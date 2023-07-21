@@ -157,7 +157,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule) {
+    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
         this.context = annotationsModule;
 
         //https://github.com/computationalpathologygroup/ASAP/issues/167
@@ -196,7 +196,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
         return JSON.stringify(output);
     }
 
-    async decode(data, annotationsModule) {
+    async decode(data, annotationsModule, options) {
 
         data = JSON.parse(data);
 

@@ -42,6 +42,12 @@ window.xOpatSchema = {
  */
 class MetaStore {
 
+    static getStore(object, scheme) {
+        const m = new MetaStore({}, false);
+        m.set(scheme, object);
+        return m;
+    }
+
     static key(schemeKey) {
         return schemeKey._getter.split(".").pop();
     }
@@ -85,21 +91,48 @@ class MetaStore {
      * A Common API for system info to query their own metadata
      * @param schemeKey
      * @param defaultValue
+     * @param context
      * @return {*}
      */
-    get(schemeKey, defaultValue) {
-        return this._get(schemeKey, defaultValue);
+    get(schemeKey, defaultValue, context=this._data) {
+        let keys = this._getKey(schemeKey);
+        let value;
+
+        if (typeof keys === "string") {
+            value = this._privateData[keys];
+        } else {
+            const parent = this._find(context, keys, false);
+            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            const lastKey = keys.pop();
+            value = parent[lastKey];
+        }
+        if (value === undefined) return defaultValue;
+        if (value === "false") value = false;
+        if (value === "true") value = true;
+        return value;
     }
 
     /**
      * A Common API for system info to query their own metadata
      * @param schemeKey
      * @param value
+     * @param context
      */
-    set(schemeKey, value) {
+    set(schemeKey, value, context=this._data) {
         //todo possibly verify if setting object (e.g. user) of multiple values that the scheme fits
         // the description
-        return this._set(schemeKey, value);
+        let keys = this._getKey(schemeKey);
+        if (value === "false") value = false;
+        else if (value === "true") value = true;
+
+        if (typeof keys === "string") {
+            this._privateData[keys] = value;
+        } else {
+            const parent = this._find(context, keys, true);
+            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            const lastKey = keys.pop();
+            parent[lastKey] = value;
+        }
     }
 
     /**
@@ -125,52 +158,6 @@ class MetaStore {
         return result;
     }
 
-    /**
-     * Common getter
-     * @param schemeKey
-     * @param defaultValue
-     * @return {boolean}
-     * @private
-     */
-    _get(schemeKey, defaultValue) {
-        let keys = this._getKey(schemeKey);
-        let value;
-
-        if (typeof keys === "string") {
-            value = this._privateData[keys];
-        } else {
-            const parent = this._find(keys, false);
-            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
-            const lastKey = keys.pop();
-            value = parent[lastKey];
-        }
-        if (value === undefined) return defaultValue;
-        if (value === "false") value = false;
-        if (value === "true") value = true;
-        return value;
-    }
-
-    /**
-     * Common setter
-     * @param schemeKey
-     * @param value
-     * @private
-     */
-    _set(schemeKey, value) {
-        let keys = this._getKey(schemeKey);
-        if (value === "false") value = false;
-        else if (value === "true") value = true;
-
-        if (typeof keys === "string") {
-            this._privateData[keys] = value;
-        } else {
-            const parent = this._find(keys, true);
-            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
-            const lastKey = keys.pop();
-            parent[lastKey] = value;
-        }
-    }
-
     _getKey(schemeKey) {
         let privateData = this._safe && schemeKey._private;
         //private data stored in a flat array, public data keep the given structure
@@ -180,8 +167,8 @@ class MetaStore {
     /**
      * Find parent object in the meta context tree
      */
-    _find(keys, createMissing) {
-        return this.__find(this._data, keys.reverse());
+    _find(context, keys, createMissing) {
+        return this.__find(context, keys.reverse());
     }
     __find(context, keys, createMissing) {
         if (!context || keys.length < 2) {
