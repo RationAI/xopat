@@ -16,8 +16,7 @@ addPlugin("user-session", class extends XOpatPlugin {
         if (!this.authServer || this.authenticated) return; //todo message
 
         const _this = this;
-        UTILITIES.fetchJSON(this.authServer, {}, this.headers,
-            [MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]).then(response => {
+        UTILITIES.fetchJSON(this.authServer, {}, this.headers).then(response => {
                 //todo not flexible:
             if (response.status === "success") {
                 _this._finishAuthOk(response);
@@ -64,9 +63,10 @@ addPlugin("user-session", class extends XOpatPlugin {
     }
 
     _finishAuthOk(response) {
-        APPLICATION_CONTEXT.metadata.setUserData(response);
+        const meta = APPLICATION_CONTEXT.metadata;
+        meta.set(xOpatSchema.user, response);
         USER_INTERFACE.MainMenu.replace(
-            `User &nbsp;<span class="f3-light">${APPLICATION_CONTEXT.metadata.getUserData()?.name}</span>`,
+            `User &nbsp;<span class="f3-light">${meta.get(xOpatSchema.user.name, "unknown")}</span>`,
             `<span class="btn-pointer" title="Store your workplace on the server." style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">Save Session: <span class="material-icons">save</span></span>`,
             '',
             "user-session-panel",
@@ -91,7 +91,7 @@ addPlugin("user-session", class extends XOpatPlugin {
         } else {
             UTILITIES.fetchJSON(this.storeSessionServer, {
                 data: await UTILITIES.serializeApp()
-            }, this.headers, [MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]).then(response => {
+            }, this.headers).then(response => {
                 if (response?.status !== "success") throw new HTTPError(response.message, response, response.error);
                 Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);
             }).catch(e => {

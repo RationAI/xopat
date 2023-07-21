@@ -46,7 +46,7 @@ export default {
         grayscale: false,
         tileCache: true,
         preventNavigationShortcuts: false,
-        permaLoadPlugins: true,
+        permaLoadPlugins: false,
         bypassCookies: true, //by default tests do not work with cookies
         theme: "auto",
         stackedBackground: false,
@@ -66,5 +66,4 @@ export default {
             {"zoomLevel":9.072336450540966,"point":{"x":0.30969351493546343,"y":0.5272290789301906}}
         ]
     })[key][index],
-
 }

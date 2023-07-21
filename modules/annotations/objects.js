@@ -70,7 +70,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
-        "color"
+        "color",
+        "author",
+        "created"
     ];
 
     /**
@@ -358,6 +360,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param zoom
      */
     onZoom(ofObject, zoom) {
+        //todo try to use iterate method :D
+
         ofObject.set({
             strokeWidth: ofObject.originalStrokeWidth/zoom
         });

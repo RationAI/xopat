@@ -150,11 +150,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 *     use "native" or undefined for native export
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
-	 * @return Promise(string)
+	 * @return Promise(string) serialized data
 	 */
 	async export(format=undefined, withAnnotations=true, withPresets=true) {
 		if (!format || format === "native") {
 			const result = withAnnotations ? this.toObject(false) : {};
+			result.metadata = {
+				version: this.version,
+				created: Date.now()
+			};
 			if (result.objects) {
 				this.trimExportJSON(result);
 			}
@@ -639,6 +643,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionID = this.session;
+		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
+		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -1272,7 +1278,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.toObject = function (_) {
 			return originalToObject.call(this, inclusionProps);
 		}
-		const reset = () => fabric.Object.prototype.toObject = originalToObject;
+		const resetToObjectCall = () => fabric.Object.prototype.toObject = originalToObject;
 
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
@@ -1304,8 +1310,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					return resolve();
 				});
 			}, reviver);
-		}).then(reset).catch(e => {
-			reset();
+		}).then(resetToObjectCall).catch(e => {
+			resetToObjectCall();
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
 	}

@@ -857,7 +857,6 @@ class="btn m-2">Set for left click </button>
 		this.dataLoader.loadAnnotation(this._server, id, json => {
 			$('#preset-modify-dialog').remove();
 
-			//todo test IO for different formats
 			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
 			_this.context.import(json.data, format).then(()=>{
 				_this.updatePresetsHTML();

@@ -3,6 +3,33 @@
 //   this class defines how the metadata is parsed so that your system can easily use its own structure
 
 /**
+ * todo allow using arrays...
+ * todo include some WSI meta
+ * Metadata scheme supported by the viewer (and where to fetch them)
+ */
+window.xOpatSchema = {
+    user: {
+        _getter: "user",
+        _description: "User Data Object",
+
+        id: {
+            _getter: "user.name",
+            _description: "Unique user ID",
+        },
+
+        name: {
+            _getter: "user.name",
+            _description: "User Name",
+        },
+
+        password: {
+            _getter: "user.password",
+            _description: "User Password",
+            _private: true,
+        }
+    }
+};
+/**
  * Common API for metadata interpreting in the viewer.
  * Define what structure your metadata has, the system as of now
  * wants to access 'session ID', 'user data' and 'date'
@@ -10,52 +37,13 @@
  *  1) send ANY structure
  *      - do not send any sensitive data
  *  2) implement interpretation in MetaStore
- *      - possibly
  *  3) use UTILITIES.fetch[...](), by default it attaches all the meta, or select sub-set
  * @class MetaStore
  */
 class MetaStore {
-    /**
-     * User data getter
-     * @param defaultValue
-     * @return {never}
-     */
-    getUserData(defaultValue) {
-        //anything we want, we set it as private: IO does not affect values here,
-        //these values must be set explicitly by some party /e.g. user session plugin/
-        // In the docker we use {name, email, id} object
-        return this.getPrivate(MetaStore.userKey, defaultValue);
-    }
 
-    /**
-     * User data setter
-     * @param defaultValue
-     * @return {never}
-     */
-    setUserData(defaultValue) {
-        return this.setPrivate(MetaStore.userKey, defaultValue);
-    }
-
-    static get userKey() {
-        return "user";
-    }
-
-    //UTC timestamp, important consistence - if set, return set value else NOW
-    getUTC() {
-        return this.get(MetaStore.dateKey, Date.now());
-    }
-
-    static get dateKey() {
-        return "date";
-    }
-
-    //this session identifier
-    getSession(defaultValue) {
-        return this.get(MetaStore.sessionKey, defaultValue);
-    }
-
-    static get sessionKey() {
-        return "session";
+    static key(schemeKey) {
+        return schemeKey._getter.split(".").pop();
     }
 
     /*****************************************
@@ -73,47 +61,7 @@ class MetaStore {
         this._data = data;
         //values here are private to the session
         this._privateData = {};
-        if (safe) {
-            this.getPrivate = (name, defaultValue=undefined) => {
-                let value = this._privateData[name] ?? defaultValue;
-                if (value === "false") value = false; //true will eval to true anyway
-                return value;
-            };
-            this.setPrivate = (name, value) => {
-                if (value === "false") value = false;
-                else if (value === "true") value = true;
-                this._privateData[name] = value;
-            };
-        } else {
-            this.getPrivate = (name, defaultValue=undefined) => {
-                let value = this._data[name] ?? defaultValue;
-                if (value === "false") value = false; //true will eval to true anyway
-                return value;
-            };
-            this.setPrivate = (name, value)  => {
-                if (value === "false") value = false;
-                else if (value === "true") value = true;
-                this._privateData[name] = value;
-            };
-        }
-    }
-
-    /**
-     * Behaves as get(...) if secure=false.
-     * @param name
-     * @param defaultValue
-     */
-    getPrivate(name, defaultValue=undefined) {
-        throw "Need the constructor to initialize the behavior!";
-    }
-
-    /**
-     * Behaves as set(...) if secure=false.
-     * @param name
-     * @param value
-     */
-    setPrivate(name, value) {
-        throw "Need the constructor to initialize the behavior!";
+        this._safe = safe;
     }
 
     /**
@@ -122,11 +70,10 @@ class MetaStore {
      */
     initPersistentStore(persistentServiceUrl) {
         if (persistentServiceUrl) {
-            const user = this.getUser(undefined);
+            const user = this.get(xOpatSchema.user);
 
             if (user) { //todo authorization? user url can be hacked :/
-                const service = new MetaStore.Persistent(persistentServiceUrl,
-                    this.getUser(undefined));
+                const service = new MetaStore.Persistent(persistentServiceUrl, user);
                 this.persistent = function () {
                     return service.instance();
                 }
@@ -136,41 +83,34 @@ class MetaStore {
 
     /**
      * A Common API for system info to query their own metadata
-     * @param name
+     * @param schemeKey
      * @param defaultValue
      * @return {*}
      */
-    get(name, defaultValue=undefined) {
-        let value = this._data[name] ?? defaultValue;
-        if (value === "false") value = false; //true will eval to true anyway
-        return value;
+    get(schemeKey, defaultValue) {
+        return this._get(schemeKey, defaultValue);
     }
 
     /**
      * A Common API for system info to query their own metadata
-     * @param name
+     * @param schemeKey
      * @param value
      */
-    set(name, value) {
-        if (name === "date" || name === "tstamp" || name === "session") {
-            throw "Invalid metadata key: already in use! " + name;
-        }
-        if (value === "false") value = false;
-        else if (value === "true") value = true;
-        this._data[name] = value;
+    set(schemeKey, value) {
+        //todo possibly verify if setting object (e.g. user) of multiple values that the scheme fits
+        // the description
+        return this._set(schemeKey, value);
     }
 
     /**
-     * Exports all metadata except for timestamp
+     * Exports all top-level metadata
      */
     all(withSecureData=true) {
-        const data = {...this._data, ...(withSecureData ? this._privateData : {})};
-        data["date"] = this.getUTC();
-        return data;
+        return {...this._data, ...(withSecureData ? this._privateData : {})};
     }
 
     /**
-     * Exports all metadata with given key list
+     * Exports all top-level metadata with given key list
      */
     allWith(keys, withSecureData=true) {
         const result = {};
@@ -183,6 +123,78 @@ class MetaStore {
             }
         }
         return result;
+    }
+
+    /**
+     * Common getter
+     * @param schemeKey
+     * @param defaultValue
+     * @return {boolean}
+     * @private
+     */
+    _get(schemeKey, defaultValue) {
+        let keys = this._getKey(schemeKey);
+        let value;
+
+        if (typeof keys === "string") {
+            value = this._privateData[keys];
+        } else {
+            const parent = this._find(keys, false);
+            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            const lastKey = keys.pop();
+            value = parent[lastKey];
+        }
+        if (value === undefined) return defaultValue;
+        if (value === "false") value = false;
+        if (value === "true") value = true;
+        return value;
+    }
+
+    /**
+     * Common setter
+     * @param schemeKey
+     * @param value
+     * @private
+     */
+    _set(schemeKey, value) {
+        let keys = this._getKey(schemeKey);
+        if (value === "false") value = false;
+        else if (value === "true") value = true;
+
+        if (typeof keys === "string") {
+            this._privateData[keys] = value;
+        } else {
+            const parent = this._find(keys, true);
+            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            const lastKey = keys.pop();
+            parent[lastKey] = value;
+        }
+    }
+
+    _getKey(schemeKey) {
+        let privateData = this._safe && schemeKey._private;
+        //private data stored in a flat array, public data keep the given structure
+        return privateData ? schemeKey._getter : schemeKey._getter.split(".");
+    }
+
+    /**
+     * Find parent object in the meta context tree
+     */
+    _find(keys, createMissing) {
+        return this.__find(this._data, keys.reverse());
+    }
+    __find(context, keys, createMissing) {
+        if (!context || keys.length < 2) {
+            if (keys.length < 1) return undefined;
+            return context;
+        }
+        const key = keys.pop();
+        let child = context[key];
+        if (!child && createMissing) {
+            context[key] = {};
+            child = context[key];
+        }
+        return this.__find(child, keys);
     }
 
     /**

@@ -1,3 +1,29 @@
+AnnotationsGUI.MetaSchema = {
+    format: {
+        _getter: "format",
+        _description: "Annotation Export Format",
+    },
+    version: {
+        _getter: "version",
+        _description: "Annotation Module Version",
+    },
+    userId: {
+        _getter: "userId",
+        _description: "Author ID for the export",
+    },
+    username: {
+        _getter: "username",
+        _description: "Author ID for the export",
+    },
+    created: {
+        _getter: "created",
+        _description: "Creation UTC TimeStamp",
+    },
+    name: {
+        _getter: "name",
+        _description: "The export name",
+    }
+};
 /**
  * Data loader to the annotations interface, for annotations sharing
  * map received data to the expected data format
@@ -5,11 +31,7 @@
        (optional) annotations: object (see fabricJS canvas export structure)
 	   (optional) presets: object (see OSDAnnotations.PresetManager) export structure
 	   (required) metadata: {
-	                name: string
-				    exported: string
-				    userAgent: string
-				    format: string
-				    ...
+	      ... driven by the scheme
 	   }
  * }
  *
@@ -23,11 +45,6 @@ AnnotationsGUI.DataLoader = class {
 
     constructor(context) {
         this.context = context;
-
-        //register metadata use
-        const meta = APPLICATION_CONTEXT.metadata;
-        meta.set("annotations-format", "");
-        meta.set("annotations-name", "");
     }
 
     setActiveMetadata(metaData) {
@@ -57,16 +74,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaAuthor(metadata, request) {
-        return metadata.getUserData()?.name;
-    }
-
-    /**
-     * Get date from the meta
-     * @param {MetaStore} metadata
-     * @param {{}} request data retrieved from the list annotations call for each annotation
-     */
-    getMetaDate(metadata, request) {
-        return new Date(metadata.getUTC()).toDateString();
+        return metadata.get(AnnotationsGUI.MetaSchema.username, "unknown");
     }
 
     /**
@@ -75,7 +83,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaFormat(metadata, request) {
-        return metadata.get("annotations-format");
+        return metadata.get(AnnotationsGUI.MetaSchema.format, "native");
     }
 
     /**
@@ -84,7 +92,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaName(metadata, request) {
-        return metadata.get("annotations-name");
+        return metadata.get(AnnotationsGUI.MetaSchema.name);
     }
 
     /**
@@ -94,7 +102,7 @@ AnnotationsGUI.DataLoader = class {
      */
     getMetaDescription(metadata, request) {
         //we send data as join of tables with users, so request.name = user.name
-        return 'Annotations export: ' + this.getMetaFormat(metadata) + ', created by ' + request.name;
+        return 'Annotations created by ' + request.name;
     }
 
     /**
@@ -132,10 +140,16 @@ AnnotationsGUI.DataLoader = class {
         //set the data according to the current metadata values
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
-        APPLICATION_CONTEXT.metadata.set("annotations-name", this.getMetaName(this.currentMeta, null));
-        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
-        this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
-            onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
+
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
+        this._fetchWorker(server,
+            {protocol: 'Annotation',
+                command: 'update',
+                id: annotationId,
+                data: data,
+                metadata: this.currentMeta.all()
+            },
+            onSuccess, onFailure);
     }
 
     /**
@@ -160,26 +174,29 @@ AnnotationsGUI.DataLoader = class {
      */
     uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
 
-        //set metadata, no available active annotation meta
-        APPLICATION_CONTEXT.metadata.set("annotations-name", HumanReadableIds.create());
-        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
+        const appMeta = APPLICATION_CONTEXT.metadata;
+        this.currentMeta = new MetaStore({});
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.version, this.context.context.version);
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.userId, appMeta.get(xOpatSchema.user.id));
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.username, appMeta.get(xOpatSchema.user.name));
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.created, new Date().getUTCDate());
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',
                 command: 'save',
                 tissuePath: tissueId,
-                data: data
+                data: data,
+                metadata: this.currentMeta.all()
             },
-            onSuccess,
-            onFailure,
-            ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
+            onSuccess, onFailure);
     }
 
-    _fetchWorker(url, post, onSuccess, onFail, metaList=false) {
+    _fetchWorker(url, post, onSuccess, onFail) {
         if (this.context.context.disabledInteraction) {
             Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
             return;
         }
-        UTILITIES.fetchJSON(url, post, {}, metaList).then(onSuccess).catch(onFail);
+        UTILITIES.fetchJSON(url, post, {}).then(onSuccess).catch(onFail);
     }
 };

@@ -112,9 +112,12 @@ if (isset($parsedParams->visualizations)) {
  * Detect required presence of plugins, 'permaLoaded' is supported only by the APP, not the loader - detect here
  */
 $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
-$configPlugins = (object)$parsedParams->plugins;
+if (is_array($parsedParams->plugins)) {
+    $parsedParams->plugins = (object)$parsedParams->plugins;
+}
+
 foreach ($PLUGINS as $key => &$plugin) {
-    $hasParams = isset($configPlugins->{$plugin["id"]});
+    $hasParams = isset($parsedParams->plugins->{$plugin["id"]});
     $plugin["loaded"] = !isset($plugin["error"]) &&
         $hasParams
             || (isset($plugin["permaLoad"]) && $plugin["permaLoad"]) //param in the static config
