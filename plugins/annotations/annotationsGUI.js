@@ -550,7 +550,7 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 		this._allowedFactories.forEach(fId => {
 			let factory = _this.context.getAnnotationObjectFactory(fId);
 			if (factory && factory.factoryID !== preset.objectFactory.factoryID) {
-					changeHtml += `<div onclick="${this.THIS}.context.presets.updatePreset(${preset.presetID}, 
+					changeHtml += `<div onclick="${this.THIS}.context.presets.updatePreset('${preset.presetID}', 
 {objectFactory: ${this.THIS}.context.getAnnotationObjectFactory('${factory.factoryID}')}); 
 event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons" 
 style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}</div>`;
@@ -675,15 +675,15 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 
 		return `${html} style="cursor:pointer; margin: 5px;" 
 onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
-${this.THIS}._presetSelection = ${preset.presetID}"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
-onclick="${this.THIS}.removePreset(this, ${preset.presetID});">delete</span>
+${this.THIS}._presetSelection = '${preset.presetID}'"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
+onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>
 <span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
-${this.THIS}.context.presets.updatePreset(${preset.presetID}, {objectFactory: 
+${this.THIS}.context.presets.updatePreset('${preset.presetID}', {objectFactory: 
 ${this.THIS}.context.getAnnotationObjectFactory(this.value)});">${select}</select></span>
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
-onchange="${this.THIS}.context.presets.updatePreset(${preset.presetID}, {color: this.value});" value="${preset.color}"></span>
+onchange="${this.THIS}.context.presets.updatePreset('${preset.presetID}', {color: this.value});" value="${preset.color}"></span>
 <br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
-<span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, ${preset.presetID});">playlist_add</span></div></div>`;
+<span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');">playlist_add</span></div></div>`;
 	}
 
 	removePreset(buttonNode, presetId) {
