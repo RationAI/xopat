@@ -32,7 +32,7 @@
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
 
-##### import | ``{format: string, clear: boolean, data: object}``
+##### import | ``{options: object, clear: boolean, data: object}``
 
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

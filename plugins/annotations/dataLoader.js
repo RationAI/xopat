@@ -1,25 +1,25 @@
 AnnotationsGUI.MetaSchema = {
     format: {
-        _getter: "format",
+        _getter: "annotations-format",
         _description: "Annotation Export Format",
     },
     version: {
         _getter: "version",
         _description: "Annotation Module Version",
     },
-    userId: {
-        _getter: "userId",
-        _description: "Author ID for the export",
-    },
-    username: {
-        _getter: "username",
-        _description: "Author ID for the export",
+    user: {
+        _getter: "user",
+        _description: "User object as known to the system",
     },
     created: {
         _getter: "created",
         _description: "Creation UTC TimeStamp",
     },
     name: {
+        _getter: "annotations-name",
+        _description: "The export name",
+    },
+    session: {
         _getter: "name",
         _description: "The export name",
     }
@@ -74,7 +74,9 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaAuthor(metadata, request) {
-        return metadata.get(AnnotationsGUI.MetaSchema.username, "unknown");
+        //parse xOpatSchema from the object here
+        const user = metadata.get(AnnotationsGUI.MetaSchema.user, "unknown");
+        return MetaStore.getStore(user, xOpatSchema.user).get(xOpatSchema.user.name);
     }
 
     /**
@@ -178,9 +180,9 @@ AnnotationsGUI.DataLoader = class {
         this.currentMeta = new MetaStore({});
         this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
         this.currentMeta.set(AnnotationsGUI.MetaSchema.version, this.context.context.version);
-        this.currentMeta.set(AnnotationsGUI.MetaSchema.userId, appMeta.get(xOpatSchema.user.id));
-        this.currentMeta.set(AnnotationsGUI.MetaSchema.username, appMeta.get(xOpatSchema.user.name));
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.user, appMeta.get(xOpatSchema.user));
         this.currentMeta.set(AnnotationsGUI.MetaSchema.created, new Date().getUTCDate());
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.name, HumanReadableIds.create());
 
         this._fetchWorker(server, {
                 protocol: 'Annotation',

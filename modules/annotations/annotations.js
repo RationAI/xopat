@@ -146,14 +146,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Export annotations and presets
-	 * @param {string} format defines desired format ID as registered in OSDAnnotations.Convertor
-	 *     use "native" or undefined for native export
+	 * @param {{}} options options
+	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {object?} options.bioformatsCroppingRect
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
 	 * @return Promise(string) serialized data
 	 */
-	async export(format=undefined, withAnnotations=true, withPresets=true) {
-		if (!format || format === "native") {
+	async export(options={}, withAnnotations=true, withPresets=true) {
+		if (!options?.format || options.format === "native") {
 			const result = withAnnotations ? this.toObject(false) : {};
 			result.metadata = {
 				version: this.version,
@@ -165,7 +166,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (withPresets) result.presets = this.presets.toObject();
 			return JSON.stringify(result);
 		}
-		return OSDAnnotations.Convertor.encode(format, this, withAnnotations, withPresets);
+		return OSDAnnotations.Convertor.encode(options, this, withAnnotations, withPresets);
 	}
 
 	/**
@@ -174,18 +175,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {string} data serialized data of the given format
 	 * 	- either object with 'presets' and/or 'objects' data content - arrays
 	 * 	- or a plain array, treated as objects
-	 * @param {string} format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {{}} options options
+	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {object?} options.bioformatsCroppingRect
 	 * @param {boolean} clear erase state upon import
 	 * @return Promise(string)
 	 */
-	async import(data, format=undefined, clear=false) {
+	async import(data, options={}, clear=false) {
 		//todo allow for 'redo' history (once layers are introduced)
 
 		let toImport;
-		if (!format || format === "native") {
+		if (!options?.format || options.format === "native") {
 			toImport = JSON.parse(data);
 		} else {
-			toImport = await OSDAnnotations.Convertor.decode(format, data, this);
+			toImport = await OSDAnnotations.Convertor.decode(options, data, this);
 		}
 
 		// the import should happen in two stages, one that prepares the data and one that
@@ -205,7 +208,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 
 		this.raiseEvent('import', {
-			format: format,
+			options: options,
 			clear: clear,
 			data: toImport,
 		});

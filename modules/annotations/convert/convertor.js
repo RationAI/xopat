@@ -62,19 +62,21 @@ OSDAnnotations.Convertor = class {
 
     /**
      * Encodes the annotation data using asynchronous communication.
-     * @param format
+     * @param options
      * @param context
      * @param widthAnnotations
      * @param withPresets
      */
-    static async encode(format, context, widthAnnotations=true, withPresets=true) {
+    static async encode(options, context, widthAnnotations=true, withPresets=true) {
+        const format = options.format;
         const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
         const exportAll = parserCls.includeAllAnnotationProps;
         return await new parserCls().encode(
             (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : [],
             () => withPresets ? context.presets.toObject() : [],
-            context
+            context,
+            options
         );
     }
 
@@ -86,14 +88,15 @@ OSDAnnotations.Convertor = class {
 
     /**
      * Decodes the annotation data using asynchronous communication.
-     * @param format
+     * @param options
      * @param data
      * @param context
      */
-    static async decode(format, data, context) {
+    static async decode(options, data, context) {
+        const format = options.format;
         const parserCls = this.CONVERTERS[format];
         if (!parserCls) throw "Invalid format " + format;
-        return await new parserCls().decode(data, context);
+        return await new parserCls().decode(data, context, options);
     }
 
 
