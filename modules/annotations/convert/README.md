@@ -48,6 +48,8 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
+    author
+    created
 
 This does not list all the properties though.
 The geometric properties are directly dependent on `type` and `factoryID` used. The `factoryID` is HAS-A relationship

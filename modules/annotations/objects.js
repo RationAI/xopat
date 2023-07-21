@@ -70,7 +70,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
-        "color"
+        "color",
+        "author",
+        "created"
     ];
 
     /**

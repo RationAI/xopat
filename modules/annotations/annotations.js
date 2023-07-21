@@ -639,6 +639,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionID = this.session;
+		annotation.author = APPLICATION_CONTEXT.metadata.get(MetaStore.schema.user.id);
+		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 

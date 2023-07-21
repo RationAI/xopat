@@ -23,11 +23,6 @@ AnnotationsGUI.DataLoader = class {
 
     constructor(context) {
         this.context = context;
-
-        //register metadata use
-        const meta = APPLICATION_CONTEXT.metadata;
-        meta.set("annotations-format", "");
-        meta.set("annotations-name", "");
     }
 
     setActiveMetadata(metaData) {
@@ -57,25 +52,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaAuthor(metadata, request) {
-        return metadata.getUserData()?.name;
-    }
-
-    /**
-     * Get date from the meta
-     * @param {MetaStore} metadata
-     * @param {{}} request data retrieved from the list annotations call for each annotation
-     */
-    getMetaDate(metadata, request) {
-        return new Date(metadata.getUTC()).toDateString();
-    }
-
-    /**
-     * Get format of the export
-     * @param {MetaStore} metadata
-     * @param {{}} request data retrieved from the list annotations call for each annotation
-     */
-    getMetaFormat(metadata, request) {
-        return metadata.get("annotations-format");
+        return metadata.get(MetaStore.schema.user.name, "unknown");
     }
 
     /**
@@ -94,7 +71,7 @@ AnnotationsGUI.DataLoader = class {
      */
     getMetaDescription(metadata, request) {
         //we send data as join of tables with users, so request.name = user.name
-        return 'Annotations export: ' + this.getMetaFormat(metadata) + ', created by ' + request.name;
+        return 'Annotations created by ' + request.name;
     }
 
     /**
@@ -132,10 +109,17 @@ AnnotationsGUI.DataLoader = class {
         //set the data according to the current metadata values
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
-        APPLICATION_CONTEXT.metadata.set("annotations-name", this.getMetaName(this.currentMeta, null));
-        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
-        this._fetchWorker(server, {protocol: 'Annotation', command: 'update', id: annotationId, data: data},
-            onSuccess, onFailure, ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
+        this._fetchWorker(server,
+            {protocol: 'Annotation',
+                command: 'update',
+                id: annotationId,
+                data: data,
+                metadata: {
+                    "annotations-name": this.getMetaName(this.currentMeta, null),
+                    "annotations-format": format,
+                }
+            },
+            onSuccess, onFailure);
     }
 
     /**
@@ -159,27 +143,24 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure call on failure with the error object
      */
     uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
-
-        //set metadata, no available active annotation meta
-        APPLICATION_CONTEXT.metadata.set("annotations-name", HumanReadableIds.create());
-        APPLICATION_CONTEXT.metadata.set("annotations-format", format);
-
         this._fetchWorker(server, {
                 protocol: 'Annotation',
                 command: 'save',
                 tissuePath: tissueId,
-                data: data
+                data: data,
+                metadata: {
+                    "annotations-name": this.getMetaName(this.currentMeta, null),
+                    "annotations-format": format
+                }
             },
-            onSuccess,
-            onFailure,
-            ["annotations-format", "annotations-name", MetaStore.userKey, MetaStore.dateKey, MetaStore.sessionKey]);
+            onSuccess, onFailure);
     }
 
-    _fetchWorker(url, post, onSuccess, onFail, metaList=false) {
+    _fetchWorker(url, post, onSuccess, onFail) {
         if (this.context.context.disabledInteraction) {
             Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
             return;
         }
-        UTILITIES.fetchJSON(url, post, {}, metaList).then(onSuccess).catch(onFail);
+        UTILITIES.fetchJSON(url, post, {}).then(onSuccess).catch(onFail);
     }
 };

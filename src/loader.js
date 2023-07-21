@@ -723,26 +723,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param url
          * @param postData
          * @param headers
-         * @param metaKeys metadata key list to include
          * @throws HTTPError
          * @return {Promise<string|any>}
          */
-        fetch: async function(url, postData=null, headers={}, metaKeys=true) {
+        fetch: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
             headers = $.extend({
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             }, headers);
-
-            if (typeof postData === "object" && postData && metaKeys !== false) {
-                if (postData.metadata === undefined) {
-                    if (Array.isArray(metaKeys)) {
-                        postData.metadata = APPLICATION_CONTEXT.metadata.allWith(metaKeys);
-                    } else {
-                        postData.metadata = APPLICATION_CONTEXT.metadata.all();
-                    }
-                }
-            }
 
             const response = await fetch(url, {
                 method: method,
