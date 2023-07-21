@@ -3,6 +3,33 @@
 //   this class defines how the metadata is parsed so that your system can easily use its own structure
 
 /**
+ * todo allow using arrays...
+ * todo include some WSI meta
+ * Metadata scheme supported by the viewer (and where to fetch them)
+ */
+window.xOpatSchema = {
+    user: {
+        _getter: "user",
+        _description: "User Data Object",
+
+        id: {
+            _getter: "user.name",
+            _description: "Unique user ID",
+        },
+
+        name: {
+            _getter: "user.name",
+            _description: "User Name",
+        },
+
+        password: {
+            _getter: "user.password",
+            _description: "User Password",
+            _private: true,
+        }
+    }
+};
+/**
  * Common API for metadata interpreting in the viewer.
  * Define what structure your metadata has, the system as of now
  * wants to access 'session ID', 'user data' and 'date'
@@ -18,35 +45,6 @@ class MetaStore {
     static key(schemeKey) {
         return schemeKey._getter.split(".").pop();
     }
-
-    /**
-     * todo allow using arrays...
-     * todo include some WSI meta
-     * Metadata scheme supported by the viewer (and where to fetch them)
-     *
-     */
-    static schema = {
-        user: {
-            _getter: "user",
-            _description: "User Data Object",
-
-            id: {
-                _getter: "user.name",
-                _description: "Unique user ID",
-            },
-
-            name: {
-                _getter: "user.name",
-                _description: "User Name",
-            },
-
-            password: {
-                _getter: "user.password",
-                _description: "User Password",
-                _private: true,
-            }
-        }
-    };
 
     /*****************************************
      ******************* API *****************
@@ -72,7 +70,7 @@ class MetaStore {
      */
     initPersistentStore(persistentServiceUrl) {
         if (persistentServiceUrl) {
-            const user = this.get(MetaStore.schema.user);
+            const user = this.get(xOpatSchema.user);
 
             if (user) { //todo authorization? user url can be hacked :/
                 const service = new MetaStore.Persistent(persistentServiceUrl, user);
@@ -141,7 +139,7 @@ class MetaStore {
         if (typeof keys === "string") {
             value = this._privateData[keys];
         } else {
-            const parent = this._find(keys);
+            const parent = this._find(keys, false);
             if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
             const lastKey = keys.pop();
             value = parent[lastKey];
@@ -166,7 +164,7 @@ class MetaStore {
         if (typeof keys === "string") {
             this._privateData[keys] = value;
         } else {
-            const parent = this._find(keys);
+            const parent = this._find(keys, true);
             if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
             const lastKey = keys.pop();
             parent[lastKey] = value;
@@ -182,16 +180,21 @@ class MetaStore {
     /**
      * Find parent object in the meta context tree
      */
-    _find(keys) {
+    _find(keys, createMissing) {
         return this.__find(this._data, keys.reverse());
     }
-    __find(context, keys) {
-        if (keys.length < 2) {
+    __find(context, keys, createMissing) {
+        if (!context || keys.length < 2) {
             if (keys.length < 1) return undefined;
             return context;
         }
         const key = keys.pop();
-        return this.__find(context?.[key], keys);
+        let child = context[key];
+        if (!child && createMissing) {
+            context[key] = {};
+            child = context[key];
+        }
+        return this.__find(child, keys);
     }
 
     /**

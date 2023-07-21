@@ -150,11 +150,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 *     use "native" or undefined for native export
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
-	 * @return Promise(string)
+	 * @return Promise(string) serialized data
 	 */
 	async export(format=undefined, withAnnotations=true, withPresets=true) {
 		if (!format || format === "native") {
 			const result = withAnnotations ? this.toObject(false) : {};
+			result.metadata = {
+				version: this.version,
+				created: Date.now()
+			};
 			if (result.objects) {
 				this.trimExportJSON(result);
 			}
@@ -639,7 +643,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.sessionID = this.session;
-		annotation.author = APPLICATION_CONTEXT.metadata.get(MetaStore.schema.user.id);
+		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
 		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);

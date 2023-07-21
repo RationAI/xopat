@@ -1,3 +1,29 @@
+AnnotationsGUI.MetaSchema = {
+    format: {
+        _getter: "format",
+        _description: "Annotation Export Format",
+    },
+    version: {
+        _getter: "version",
+        _description: "Annotation Module Version",
+    },
+    userId: {
+        _getter: "userId",
+        _description: "Author ID for the export",
+    },
+    username: {
+        _getter: "username",
+        _description: "Author ID for the export",
+    },
+    created: {
+        _getter: "created",
+        _description: "Creation UTC TimeStamp",
+    },
+    name: {
+        _getter: "name",
+        _description: "The export name",
+    }
+};
 /**
  * Data loader to the annotations interface, for annotations sharing
  * map received data to the expected data format
@@ -5,11 +31,7 @@
        (optional) annotations: object (see fabricJS canvas export structure)
 	   (optional) presets: object (see OSDAnnotations.PresetManager) export structure
 	   (required) metadata: {
-	                name: string
-				    exported: string
-				    userAgent: string
-				    format: string
-				    ...
+	      ... driven by the scheme
 	   }
  * }
  *
@@ -52,7 +74,16 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaAuthor(metadata, request) {
-        return metadata.get(MetaStore.schema.user.name, "unknown");
+        return metadata.get(AnnotationsGUI.MetaSchema.username, "unknown");
+    }
+
+    /**
+     * Get format of the export
+     * @param {MetaStore} metadata
+     * @param {{}} request data retrieved from the list annotations call for each annotation
+     */
+    getMetaFormat(metadata, request) {
+        return metadata.get(AnnotationsGUI.MetaSchema.format, "native");
     }
 
     /**
@@ -61,7 +92,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
     getMetaName(metadata, request) {
-        return metadata.get("annotations-name");
+        return metadata.get(AnnotationsGUI.MetaSchema.name);
     }
 
     /**
@@ -109,15 +140,14 @@ AnnotationsGUI.DataLoader = class {
         //set the data according to the current metadata values
         //must have available active annotation meta
         if (!this.currentMeta) throw "Invalid use: currentMeta not set!";
+
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
         this._fetchWorker(server,
             {protocol: 'Annotation',
                 command: 'update',
                 id: annotationId,
                 data: data,
-                metadata: {
-                    "annotations-name": this.getMetaName(this.currentMeta, null),
-                    "annotations-format": format,
-                }
+                metadata: this.currentMeta.all()
             },
             onSuccess, onFailure);
     }
@@ -143,15 +173,21 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure call on failure with the error object
      */
     uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
+
+        const appMeta = APPLICATION_CONTEXT.metadata;
+        this.currentMeta = new MetaStore({});
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.version, this.context.context.version);
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.userId, appMeta.get(xOpatSchema.user.id));
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.username, appMeta.get(xOpatSchema.user.name));
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.created, new Date().getUTCDate());
+
         this._fetchWorker(server, {
                 protocol: 'Annotation',
                 command: 'save',
                 tissuePath: tissueId,
                 data: data,
-                metadata: {
-                    "annotations-name": this.getMetaName(this.currentMeta, null),
-                    "annotations-format": format
-                }
+                metadata: this.currentMeta.all()
             },
             onSuccess, onFailure);
     }

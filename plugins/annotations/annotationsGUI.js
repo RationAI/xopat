@@ -857,7 +857,8 @@ class="btn m-2">Set for left click </button>
 		this.dataLoader.loadAnnotation(this._server, id, json => {
 			$('#preset-modify-dialog').remove();
 
-			_this.context.import(json.data).then(()=>{
+			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
+			_this.context.import(json.data, format).then(()=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
 				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());

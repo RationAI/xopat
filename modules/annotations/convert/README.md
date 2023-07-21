@@ -5,13 +5,18 @@ In order to flexibly support many annotation formats, you can implement your own
 a list of active objects and a list of presets.
 
 ### Supported formats
-The default format is the native format. Build-in (lossy) convertors include **GeoJSON** and **ASAP XML** formats. 
+The default format is the native format. Build-in (lossy) convertors include 
+**GeoJSON** (with support for Qpath) and **ASAP XML** formats. 
 
 To register a new converter, register the converter class after its definition with:
 
 > ``OSDAnnotations.Convertor.register(name, convertorClass)``
 
 Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
+
+### Native Format
+The format includes the most verbose, detailed export option. The output is a JSON object with three
+major keys: ``metadata``, `objects` and `presets`. Metadata includes a timestamp and a version.
 
 ### Native Format: objects
 The objects build on fabricJS objects, extending them with multiple properties. You can use any fabricJS properties, 
