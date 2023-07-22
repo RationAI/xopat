@@ -572,7 +572,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getStaticMeta(metaKey, defaultValue) {
             if (metaKey === "instance") return undefined;
-            return MODULES[this.id]?.[metaKey] || defaultValue;
+            const value = MODULES[this.id]?.[metaKey];
+            if (value === undefined) return defaultValue;
+            return value;
         }
 
         /**
@@ -658,7 +660,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getStaticMeta(metaKey, defaultValue) {
             if (metaKey === "instance") return undefined;
-            return PLUGINS[this.id]?.[metaKey] || defaultValue;
+            const value = PLUGINS[this.id]?.[metaKey];
+            if (value === undefined) return defaultValue;
+            return value;
         }
 
         /**

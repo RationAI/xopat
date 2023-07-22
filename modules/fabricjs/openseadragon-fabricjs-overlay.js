@@ -123,7 +123,7 @@
             this._fabricCanvas.setDimensions({width: this._containerWidth, height: this._containerHeight});
             // this._fabricCanvas.setHeight(this._containerHeight);
             // this._fabricCanvas.setWidth(this._containerWidth);
-            let zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
+            const zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
             this._fabricCanvas._objects.forEach(x => {
