@@ -126,8 +126,9 @@
             const zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
+            const smallZoom = Math.sqrt(zoom) / 2;
             this._fabricCanvas._objects.forEach(x => {
-                x.zooming?.(zoom);
+                x.zooming?.(smallZoom);
             });
             this._lastZoomUpdate = zoom;
 
