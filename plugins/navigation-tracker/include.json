@@ -7,5 +7,6 @@
     "icon": "",
     "includes" : ["tracker.js"],
     "modules": ["webgl"],
-    "permaLoad": true
+    "permaLoad": true,
+    "animate": true
 }

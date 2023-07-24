@@ -12,8 +12,13 @@
     "server": null,
     //Available annotation object types
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
-    //Default export and import format
-    "ioFormat": "native",
     //Windowed history?
-    "modalHistoryWindow": true
+    "modalHistoryWindow": true,
+    //Arguments to format convertors
+    "convertors": {
+        "format": "native",
+        //Account for cropping done by BioFormats and OpenSlide
+        //can be overridden by convertors.bioFormatsOffset in plugin arguments
+        "bioFormatsOffset": [0,0]
+    }
 }

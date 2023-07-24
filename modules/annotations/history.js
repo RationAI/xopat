@@ -77,6 +77,15 @@ window.addEventListener('load', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+    // TODO: allow switching between annotations by keys
+    // if (e.code === "ArrowDown") {
+    //     ${this._globalSelf}._focus(${focusBox}, ${object.incrementId});
+    //     return;
+    // }
+    // if (e.code === "ArrowUp") {
+    //     return;
+    // }
+    
     const parentContext = opener.${this._globalContext};  
     opener.focus();
     e.focusCanvas = true; //fake focus
