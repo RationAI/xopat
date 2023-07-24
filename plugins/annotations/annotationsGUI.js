@@ -6,7 +6,8 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		this._server = this.getStaticMeta("server");
 		//todo parse validity on OSDAnnotations.Convertor.formats ?
-		this._defaultFormat = this.getStaticMeta("ioFormat") || "native";
+		this._ioArgs = this.getStaticMeta("convertors") || {};
+		this._defaultFormat = this._ioArgs.format || "native";
 	}
 
 	/*
@@ -29,6 +30,14 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.initIO();
+
+		const convertOpts = this.getOption('convertors');
+		this._ioArgs.bioFormatsOffset = convertOpts?.bioFormatsOffset || this._ioArgs.bioFormatsOffset;
+		if (Array.isArray(this._ioArgs.bioFormatsOffset)) {
+			this._ioArgs.bioFormatsOffset = {
+				x: this._ioArgs.bioFormatsOffset[0] || 0, y: this._ioArgs.bioFormatsOffset[1] || 0
+			};
+		}
 
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
@@ -586,11 +595,11 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 	 */
 	importFromFile(e) {
 		const _this = this;
+		this._ioArgs.format = _this.exportOptions.format;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			await _this.context.import(data, {
-				format: _this.exportOptions.format
-			}, false);
-			Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
+			await _this.context.import(data, this._ioArgs, false);
+		}).then(r => {
+			Dialogs.show(r ? "Loaded." : "Nothing to import!", 1500, Dialogs.MSG_INFO);
 		}).catch(e => {
 			console.log(e);
 			Dialogs.show("Failed to load the file. Is the selected file format correct and the file valid?", 5000, Dialogs.MSG_ERR);
@@ -602,7 +611,8 @@ style="color: ${preset.color};">${factory.getIcon()}</span>  ${factory.title()}<
 	 */
 	exportToFile() {
 		const toFormat = this.exportOptions.format || this._defaultFormat;
-		this.context.export({format: toFormat}, ...this.exportOptions.flags).then(result => {
+		this._ioArgs.format = toFormat;
+		this.context.export(this._ioArgs, ...this.exportOptions.flags).then(result => {
 			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
@@ -858,13 +868,12 @@ class="btn m-2">Set for left click </button>
 			$('#preset-modify-dialog').remove();
 
 			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
-			_this.context.import(json.data, {
-				format: format
-			}).then(()=>{
+			this._ioArgs.format = format;
+			_this.context.import(json.data, this._ioArgs).then(r=>{
 				_this.updatePresetsHTML();
 				_this._recordId(id);
 				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
-				Dialogs.show("Loaded.", 1000, Dialogs.MSG_INFO);
+				Dialogs.show(r ? "Loaded." : "Nothing to import!", 1000, Dialogs.MSG_INFO);
 			}).catch(onError);
 		}, onError);
 	}
@@ -874,7 +883,8 @@ class="btn m-2">Set for left click </button>
 		this.dataLoader.setActiveMetadata(this._serverAnnotationList.find(x => x.id == id)?.metadata);
 
 		//server IO only supports default format
-		this.context.export({format: this._defaultFormat}).then(data => {
+		this._ioArgs.format = this._defaultFormat;
+		this.context.export(this._ioArgs).then(data => {
 			_this.dataLoader.updateAnnotation(_this._server, id, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
@@ -909,7 +919,8 @@ class="btn m-2">Set for left click </button>
 	uploadAnnotation() {
 		const _this = this;
 		//server IO only supports default format
-		this.context.export({format: this._defaultFormat}).then(data => {
+		this._ioArgs.format = this._defaultFormat;
+		this.context.export(this._ioArgs).then(data => {
 			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, data, this._defaultFormat,
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);

@@ -23,7 +23,8 @@ OSDAnnotations.Convertor.GeoJSON = class {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
         if (poly?.length > 0) {
-            if (this.offset) poly = poly.map(o => ({x: o[0]-offset.x, y: o[1]-offset.y}));
+            const offset = this.offset;
+            if (offset) poly = poly.map(o => ([o[0]-offset.x, o[1]-offset.y]));
             if (asLinearRing) poly.push(poly[0]); //linear ring
             const props = {
                 "objectType": "annotation",
@@ -35,7 +36,8 @@ OSDAnnotations.Convertor.GeoJSON = class {
 
             //qupath ellipse flag
             if (factory.id === "ellipse") props.isEllipse = true;
-            if (object.fill && preset.color != object.fill) props.color = object.fill;
+            //allow only hex colors
+            if (object.fill && preset.color != object.fill && object.fill[0] == "#") props.color = hexToRgb(object.fill);
             if (object.meta?.category && preset.meta.category.value != object.meta.category) props.name = object.meta.category;
 
             for (let p of deleteProps) delete props[p];
@@ -69,8 +71,16 @@ OSDAnnotations.Convertor.GeoJSON = class {
     //encode all supported factory types
     //todo support default object by export strategy
     encoders = {
-        "rect": (object, preset) => this._asGEOJsonFeature(object, preset),
-        "ellipse": (object, preset) => this._asGEOJsonFeature(object, preset),
+        "rect": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+            res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
+            return res;
+        },
+        "ellipse": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+            res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
+            return res;
+        },
         "polygon": (object, preset) => {
             const res = this._asGEOJsonFeature(object, preset, "Polygon", ["points"], true);
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
@@ -141,7 +151,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
     }
 
     async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        this.offset = options.bioformatsCroppingRect;
+        this.offset = options.bioFormatsOffset;
 
         this.context = annotationsModule;
 
@@ -175,7 +185,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
     }
 
     async decode(data, annotationsModule, options) {
-        this.offset = options.bioformatsCroppingRect;
+        this.offset = options.bioFormatsOffset;
 
         data = JSON.parse(data);
 

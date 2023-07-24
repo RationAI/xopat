@@ -179,12 +179,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {object?} options.bioformatsCroppingRect
 	 * @param {boolean} clear erase state upon import
-	 * @return Promise(string)
+	 * @return Promise(boolean) true if something was imported
 	 */
 	async import(data, options={}, clear=false) {
 		//todo allow for 'redo' history (once layers are introduced)
 
-		let toImport;
+		let toImport, imported = false;
 		if (!options?.format || options.format === "native") {
 			toImport = JSON.parse(data);
 		} else {
@@ -195,14 +195,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// loads so that integrity is kept -> this is not probably a big issue since the only
 		// 'parsing' is done within preset import and it fails safely with exception in case of error
 
-		if (Array.isArray(toImport)) {
+		if (Array.isArray(toImport) && toImport.length > 0) {
+			imported = true;
 			//if no presets, maybe we are importing object array
 			await this._loadObjects({objects: toImport}, clear);
 		} else {
-			if (Array.isArray(toImport.presets)) {
+			if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
+				imported = true;
 				this.presets.import(toImport.presets, clear);
 			}
-			if (Array.isArray(toImport.objects)) {
+			if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
+				imported = true;
 				await this._loadObjects(toImport, clear);
 			}
 		}
@@ -210,8 +213,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.raiseEvent('import', {
 			options: options,
 			clear: clear,
-			data: toImport,
+			data: imported ? toImport : null,
 		});
+
+		return imported;
 	}
 
 	/**

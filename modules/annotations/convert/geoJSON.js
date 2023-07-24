@@ -49,8 +49,16 @@ OSDAnnotations.Convertor.GeoJSON = class {
     //encode all supported factory types
     //todo support default object by export strategy
     encoders = {
-        "rect": (object) => this._asGEOJsonFeature(object),
-        "ellipse": (object) => this._asGEOJsonFeature(object),
+        "rect": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+            res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
+            return res;
+        },
+        "ellipse": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+            res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
+            return res;
+        },
         "polygon": (object) => {
             const res = this._asGEOJsonFeature(object, "Polygon", ["points"], true);
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring

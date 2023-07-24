@@ -126,6 +126,7 @@
             const zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
+            //square root will make closer zoom a bit larger (wrt linear scale) -> nicer
             const smallZoom = Math.sqrt(zoom) / 2;
             this._fabricCanvas._objects.forEach(x => {
                 x.zooming?.(smallZoom);
@@ -140,7 +141,6 @@
                     canvasOffset.top - viewportOrigin.y + pageScroll.y
                 )
             );
-
 
             // Potential rotation logics implementaiton, together with fabric Layers could work....
             // {
@@ -162,8 +162,6 @@
             //     this._node.setAttribute('transform',
             //         'translate(' + p.x + ',' + p.y + ') scale(' + scaleX + ',' + scaleY + ') rotate(' + rotation + ')');
             // }
-
-
 
             this._fabricCanvas.renderAll();
             return zoom;
