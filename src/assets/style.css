@@ -181,6 +181,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     font-size: xx-small;
     top:-3px;
     display: inline-block;
+    z-index: 1;
 }
 .show-right-hint::before {
     content: attr(data-hint);
@@ -435,6 +436,20 @@ div {box-sizing: initial !important;}
 #cache-snapshot:hover + div, .cache-snapshot-visible:hover {
     display: flex !important;
 }
+
+/*TODO implement switch button
+  input.switch[type=checkbox]{height: 0;width: 0;visibility: hidden;}*/
+/*input.switch + label {cursor: pointer;text-indent: -9999px;*/
+/*    width: 200px;height: 100px;background: var(--color-bg-tertiary);*/
+/*    display: block;border-radius: 100px;position: relative;}*/
+/*input.switch + label:after {*/
+/*    content: '';position: absolute;top: 5px;*/
+/*    left: 5px;width: 90px;height: 90px;background: var(--color-bg-primary);*/
+/*    border-radius: 90px;transition: 0.3s;*/
+/*}*/
+/*input.switch:checked + label {background: var(--color-diff-blob-comment-button-bg);}*/
+/*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
+/*input.switch + label:active:after {width: 130px;}*/
 
 /** DIALOGS*/
 input.selectable-image-row-context:checked + div {

@@ -22,6 +22,20 @@ define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
 define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
+//fallback for php 7.1
+if (!function_exists("array_is_list")) {
+    function array_is_list(array $array): bool
+    {
+        $i = -1;
+        foreach ($array as $k => $v) {
+            ++$i;
+            if ($k !== $i) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
 /**
  * array_merge_recursive duplicates values
  * @param array $array1
@@ -35,10 +49,14 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
     $merged = $array1;
 
     foreach ($array2 as $key => &$value) {
-        if (is_array($value) && isset ($merged [$key]) && is_array($merged [$key])) {
-            $merged [$key] = array_merge_recursive_distinct($merged [$key], $value);
+        if (is_array($value) && isset($merged[$key]) && is_array($merged[$key])) {
+            if (array_is_list($merged[$key])) {
+                $merged[$key] = $value;
+            } else {
+                $merged[$key] = array_merge_recursive_distinct($merged[$key], $value);
+            }
         } else {
-            $merged [$key] = $value;
+            $merged[$key] = $value;
         }
     }
 

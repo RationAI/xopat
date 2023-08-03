@@ -2,11 +2,14 @@
  * Example for implementation of a convertor:
  * The convertor file must be included after this file.
  *
- * OSDAnnotations.Convertor.MyConvertor = class {
- *     title = 'My Custom Format';
- *     description = 'This is the best format in the universe.';
+ * OSDAnnotations.Convertor.register("my-format", class extends OSDAnnotations.Convertor.IConvertor {
+ *     static title = 'My Custom Format';
+ *     static description = 'This is the best format in the universe.';
  *
- *     static includeAllAnnotationProps = true | false; //select whether you want to get all or necessary props only
+ *     //override behaviour if needed, default true
+ *     static includeAllAnnotationProps = false;
+ *     static exportsObjects = false;
+ *     static exportsPresets = false;
  *
  *     static getFileName(context) {
  *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
@@ -32,9 +35,7 @@
  *          *\/
  *         return myParseData(data);
  *     }
- * }
- *
- * OSDAnnotations.Convertor.register("my-format", OSDAnnotations.Convertor.MyConvertor);
+ * });
  *
  */
 
@@ -45,7 +46,7 @@ OSDAnnotations.Convertor = class {
     /**
      * Register custom Annotation Converter
      * @param {string} format a format identifier
-     * @param {object} convertor a converter object main class (function) name from the provided file, it should have:
+     * @param {OSDAnnotations.Convertor.IConvertor} convertor a converter object main class (function) name from the provided file, it should have:
      * @param {string} convertor.title human readable title
      * @param {string} convertor.description optional
      * @param {function} convertor.encode encodes the annotations into desired format from the native one,
@@ -61,6 +62,16 @@ OSDAnnotations.Convertor = class {
     }
 
     /**
+     * Get a given convertor
+     * @param format
+     */
+    static get(format) {
+        const parserCls = this.CONVERTERS[format];
+        if (!parserCls) throw "Invalid format " + format;
+        return parserCls;
+    }
+
+    /**
      * Encodes the annotation data using asynchronous communication.
      * @param options
      * @param context
@@ -68,22 +79,18 @@ OSDAnnotations.Convertor = class {
      * @param withPresets
      */
     static async encode(options, context, widthAnnotations=true, withPresets=true) {
-        const format = options.format;
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
+        const parserCls = this.get(options.format);
         const exportAll = parserCls.includeAllAnnotationProps;
         return await new parserCls().encode(
-            (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : [],
-            () => withPresets ? context.presets.toObject() : [],
+            (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : undefined,
+            () => withPresets ? context.presets.toObject() : undefined,
             context,
             options
         );
     }
 
     static defaultFileName(format, context) {
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
-        return parserCls.getFileName(context);
+        return this.get(format).getFileName(context);
     }
 
     /**
@@ -93,18 +100,57 @@ OSDAnnotations.Convertor = class {
      * @param context
      */
     static async decode(options, data, context) {
-        const format = options.format;
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
+        const parserCls = this.get(options.format);
         return await new parserCls().decode(data, context, options);
     }
 
 
     static get formats() {
-        const result = Object.keys(this.CONVERTERS);
-        //todo generalize this to a module and add native as another converter?
-        result.push("native");
-        return result;
+        return Object.keys(this.CONVERTERS);
+    }
+};
+
+OSDAnnotations.Convertor.IConvertor = class {
+    static title = 'My Custom Format';
+    static description = undefined;
+
+    //select whether you want to get all or necessary props only
+    static includeAllAnnotationProps = true;
+
+    static exportsObjects = true;
+    static exportsPresets = true;
+
+    static getFileName(context) {
+        return 'annotations_' + UTILITIES.todayISO() + '.txt';
+    }
+
+    /**
+     *
+     * @param {function} annotationsGetter function that returns a list of objects to export or undefined if not desired
+     * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
+     * @param {OSDAnnotations} annotationsModule reference to the module
+     * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
+     * @return {string}
+     */
+    encode(annotationsGetter, presetsGetter, annotationsModule, options) {
+        throw("::encode must be implemented!");
+    }
+
+    /**
+     *
+     * @param {string} data serialized data (result of encode())
+     * @param {OSDAnnotations} annotationsModule  reference to the module
+     * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
+     * @return {object}
+     *  Must return
+     *    {
+     *        objects: [native export format JS objects] or undefined,
+     *        presets: [native export format JS presets] or undefined
+     *    }
+     *    for native format, check the readme. Deserialize the string data and parse.
+     */
+    decode(data, annotationsModule, options) {
+        throw("::decode must be implemented!");
     }
 };
 

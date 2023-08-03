@@ -130,7 +130,9 @@
     },
     "plugins": {
       "title": "Plugins",
-      "loadBtn": "Load with selected"
+      "loadBtn": "Load with selected",
+      "noPluginsAvailable": "It seems there are no plugins",
+      "noPluginsDetails": "Ask the system maintainer for more features"
     },
     "common": {
       "Load": "Load",

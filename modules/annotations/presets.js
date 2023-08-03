@@ -148,11 +148,13 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Add new preset with default values
+     * @param {string?} id to create, generates random otherwise
+     * @param {string?} categoryName custom name
      * @event preset-create
      * @returns {OSDAnnotations.Preset} newly created preset
      */
-    addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now().toString(), this._context.polygonFactory, "", this._randomColorHexString());
+    addPreset(id=undefined, categoryName="") {
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this._randomColorHexString());
         this._presets[preset.presetID] = preset;
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
@@ -198,6 +200,16 @@ OSDAnnotations.PresetManager = class {
      */
     get(id) {
         return this._presets[id];
+    }
+
+    /**
+     * Presets getter, creates if it does not exist
+     * @param {string} id preset id
+     * @param {string?} categoryName name to set
+     * @returns {OSDAnnotations.Preset} preset instance
+     */
+    getOrCreate(id, categoryName="") {
+        return this.get(id) || this.addPreset(id, categoryName);
     }
 
     /**
@@ -389,6 +401,9 @@ OSDAnnotations.PresetManager = class {
             this._presetsImported = true;
         } else {
             this._presetsImported = false;
+            if (!this.left) {
+                this.selectPreset(first?.presetID, true);
+            }
         }
         return first;
     }

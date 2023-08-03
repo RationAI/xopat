@@ -113,9 +113,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	defaultFileNameFor(format=undefined) {
-		if (!format || format === "native") {
-			return 'annotations_'+UTILITIES.todayISO()+'.json';
-		}
 		return OSDAnnotations.Convertor.defaultFileName(format);
 	}
 
@@ -154,18 +151,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise(string) serialized data
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
-		if (!options?.format || options.format === "native") {
-			const result = withAnnotations ? this.toObject(false) : {};
-			result.metadata = {
-				version: this.version,
-				created: Date.now()
-			};
-			if (result.objects) {
-				this.trimExportJSON(result);
-			}
-			if (withPresets) result.presets = this.presets.toObject();
-			return JSON.stringify(result);
-		}
+		if (!options?.format) options.format = "native";
 		return OSDAnnotations.Convertor.encode(options, this, withAnnotations, withPresets);
 	}
 
@@ -184,12 +170,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	async import(data, options={}, clear=false) {
 		//todo allow for 'redo' history (once layers are introduced)
 
-		let toImport, imported = false;
-		if (!options?.format || options.format === "native") {
-			toImport = JSON.parse(data);
-		} else {
-			toImport = await OSDAnnotations.Convertor.decode(options, data, this);
-		}
+		if (!options?.format) options.format = "native";
+		let toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+		let imported = false;
 
 		// the import should happen in two stages, one that prepares the data and one that
 		// loads so that integrity is kept -> this is not probably a big issue since the only
@@ -445,7 +428,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {OSDAnnotations.AnnotationState} mode
 	 */
 	setMode(mode) {
-		if (mode === this.mode) return;
+		if (this.disabledInteraction || mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
@@ -514,12 +497,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			preset = this.presets.get(object.presetID);
 			if (!preset) {
 				console.log("Object refers to an invalid preset: using default one.");
-				preset = this.presets.left;
+				preset = this.presets.left || this.presets.getOrCreate("__default__");
 				object.presetID = preset.presetID;
 			}
 		} else {
 			//todo maybe try to find a preset with the exact same color...
-			preset = this.presets.left;
+			preset = this.presets.left || this.presets.getOrCreate("__default__");
+			preset.set
 			object.presetID = preset.presetID;
 		}
 
@@ -1262,6 +1246,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_objectClicked(object) {
+		if (this.disabledInteraction) return;
 		object = object.target;
 		this.history.highlight(object);
 		if (this.history.isOngoingEditOf(object)) {

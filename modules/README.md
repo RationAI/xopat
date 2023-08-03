@@ -27,6 +27,15 @@ Using third party hosted scripts: an include array item should (instead of a str
     "crossOrigin": "anonymous"
 }
 ````
+Note that this is meant mainly for a module/deployment maintainer to set-up the plugin default, static configuration.
+Moreover, it is advised to use ENV setup (see `/env/README.md`) to override necessary configurations. 
+- `id` is a required value that defines module ID as well as it's variable name (everything is set-up automatically)
+- `name` is the module name
+- `description` is a text displayed to the user to let them know what the module does: it should be short and concise
+- `author` is the module author
+- `includes` is a list of JavaScript files relative to the module folder to include
+- `requires` array of id's of required modules (libraries)
+- `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 
 #### Basic DO's
 The integration to the global scope, application etc. is left to the module itself.

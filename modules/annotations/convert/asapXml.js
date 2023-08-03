@@ -1,12 +1,10 @@
-OSDAnnotations.Convertor.AsapXml = class {
-    title = 'ASAP-XML Annotations';
-    description = 'ASAP-compatible XML Annotations Format';
+OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Convertor.IConvertor {
+    static title = 'ASAP-XML Annotations';
+    static description = 'ASAP-compatible XML Annotations Format';
 
     static getFileName(context) {
         return 'annotations_' + UTILITIES.todayISO() + '.xml';
     }
-
-    static includeAllAnnotationProps = true;
 
     async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
@@ -23,7 +21,7 @@ OSDAnnotations.Convertor.AsapXml = class {
         const presetsIdSet = new Set();
 
         // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let i = 0; i < annotations.length; i++) {
+        for (let i = 0; i < annotations?.length; i++) {
             let obj = annotations[i];
             if (!obj.factoryID || obj.factoryID.startsWith("_")) {
                 continue;
@@ -181,6 +179,4 @@ OSDAnnotations.Convertor.AsapXml = class {
             presets: Object.values(presets)
         };
     }
-}
-
-OSDAnnotations.Convertor.register("asap-xml", OSDAnnotations.Convertor.AsapXml);
+});

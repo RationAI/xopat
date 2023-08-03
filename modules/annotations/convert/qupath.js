@@ -1,13 +1,13 @@
-OSDAnnotations.Convertor.GeoJSON = class {
-    title = 'quPath Annotations';
-    description = 'Annotations for quPath (GeoJSON format).';
+OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Convertor.IConvertor {
+    static title = 'QuPath Annotations';
+    static description = 'Annotations for quPath (GeoJSON format).';
     offset = undefined;
 
     static getFileName(context) {
         return 'qu_annotations_' + UTILITIES.todayISO() + '.geojson';
     }
 
-    //todo check polyline enabled, else show warn
+    static exportsPresets = false;
     static includeAllAnnotationProps = false;
 
     //linear ring has the first and last vertex equal, geojson uses arrays, we only for now support arrays of points,
@@ -250,6 +250,4 @@ OSDAnnotations.Convertor.GeoJSON = class {
              presets: Object.values(presets)
         };
     }
-}
-
-OSDAnnotations.Convertor.register("qu-path", OSDAnnotations.Convertor.GeoJSON);
+});

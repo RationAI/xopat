@@ -688,6 +688,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @event open
          */
         VIEWER.raiseEvent('open', opts);
+        APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
     }
 
     let _allowRecursionReload = true;

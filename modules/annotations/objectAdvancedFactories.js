@@ -7,7 +7,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "square_foot";
+        return "straighten";
     }
 
     getDescription(ofObject) {
@@ -235,7 +235,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _configureText(text, options) {
         $.extend(text, {
-            fontSize: 16,
+            fontSize: 22,
             selectable: false,
             hasControls: false,
             lockUniScaling: true,

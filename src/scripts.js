@@ -276,6 +276,7 @@ function initXopatScripts() {
             ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
 
         let exportData = {};
 
@@ -297,6 +298,7 @@ function initXopatScripts() {
                 exportData[uniqueKey] = data;
             }
         });
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
         return {app, data: exportData};
     };
 

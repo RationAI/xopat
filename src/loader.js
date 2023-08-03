@@ -394,44 +394,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     reject(e);
                 }
             }));
-            this.setCache = async (key, value) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        await store.set(_this.id + key, value);
-                        return true;
-                    } catch (e) {
-                        console.warn("Silent failure of cache setter -> delegate to local storage.");
-                    }
-                }
-
-                localStorage.setItem(this.id + key, value);
-                return true;
-            };
-            this.getCache = async (key, defaultValue=undefined, parse=true) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        return await store.get(_this.id + key, defaultValue);
-                    } catch (e) {
-                        console.warn("Silent failure of cache getter -> delegate to local storage.");
-                    }
-                }
-
-                let data = localStorage.getItem(key);
-                if (data === null) return defaultValue;
-                try {
-                    return parse && typeof data === "string" ? JSON.parse(data) : data;
-                } catch (e) {
-                    console.error(e);
-                    this.error({
-                        error: e, code: "W_CACHE_IMPORT_ERROR",
-                        message: $.t('error.cacheImportFail',
-                            {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
-                    });
-                    return defaultValue;
-                }
-            };
             this.__ioInitialized = true;
 
             try {
@@ -476,7 +438,21 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {string} key
          * @param {string} value
          */
-        async setCache(key, value) {}
+        async setCache(key, value) {
+            if (APPLICATION_CONTEXT.getOption("bypassCacheLoadTime")) return undefined;
+            key = `${this.xoContext}.${this.id}.${key}`;
+            const store = APPLICATION_CONTEXT.metadata.persistent();
+            if (store) {
+                try {
+                    await store.set(key, value);
+                    return true;
+                } catch (e) {
+                    console.warn("Silent failure of cache setter -> delegate to local storage.");
+                }
+            }
+            localStorage.setItem(key, value);
+            return true;
+        }
         /**
          * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
          * @param {string} key
@@ -484,8 +460,32 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {boolean} parse deserialize if true
          * @return {string|*} return serialized or unserialized data
          */
-        async getCache(key, defaultValue=undefined, parse=true) {}
+        async getCache(key, defaultValue=undefined, parse=true) {
+            if (APPLICATION_CONTEXT.getOption("bypassCacheLoadTime")) return undefined;
+            key = `${this.xoContext}.${this.id}.${key}`;
+            const store = APPLICATION_CONTEXT.metadata.persistent();
+            if (store) {
+                try {
+                    return await store.get(key, defaultValue);
+                } catch (e) {
+                    console.warn("Silent failure of cache getter -> delegate to local storage.");
+                }
+            }
 
+            let data = localStorage.getItem(key);
+            if (data === null) return defaultValue;
+            try {
+                return parse && typeof data === "string" ? JSON.parse(data) : data;
+            } catch (e) {
+                console.error(e);
+                this.error({
+                    error: e, code: "W_CACHE_IMPORT_ERROR",
+                    message: $.t('error.cacheImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+                return defaultValue;
+            }
+        }
         /**
          * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
          */
@@ -673,7 +673,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {boolean} cache
          */
         setOption(key, value, cache=true) {
-            if (cache) localStorage.setItem(this.id + key, value);
+            if (cache) localStorage.setItem(`${this.id}.${key}`, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
@@ -688,7 +688,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getOption(key, defaultValue=undefined, cache=true) {
             if (cache) {
-                let cached = localStorage.getItem(this.id + key);
+                let cached = localStorage.getItem(`${this.id}.${key}`);
                 if (cached !== null) return cached;
             }
             let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?

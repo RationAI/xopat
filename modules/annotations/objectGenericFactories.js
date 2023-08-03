@@ -1275,7 +1275,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "polyline";
+        return "line_start";
     }
 
     fabricStructure() {

@@ -1,6 +1,6 @@
-OSDAnnotations.Convertor.GeoJSON = class {
-    title = 'GeoJSON Annotations';
-    description = 'Annotations in GeoJSON format.';
+OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Convertor.IConvertor {
+    static title = 'GeoJSON Annotations';
+    static description = 'Annotations in GeoJSON format.';
 
     static getFileName(context) {
         return 'annotations_' + UTILITIES.todayISO() + '.json';
@@ -246,6 +246,4 @@ OSDAnnotations.Convertor.GeoJSON = class {
              presets: Object.values(presets)
         };
     }
-}
-
-OSDAnnotations.Convertor.register("geo-json", OSDAnnotations.Convertor.GeoJSON);
+});

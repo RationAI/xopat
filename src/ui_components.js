@@ -319,6 +319,7 @@ Components: /** @lends UIComponents.Components */ {
          * @param options.details
          * @param options.contentAction
          * @param options.customContent
+         * @param options.containerStyle
          * @return {string}
          * @memberOf UIComponents.Components.ImageRow
          */
@@ -326,17 +327,25 @@ Components: /** @lends UIComponents.Components */ {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let icon = options.icon;
             if (options.icon === undefined) icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
-            if (icon) icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
-            else icon = "";
+            if (icon) {
+                if (!icon.includes('<')) {
+                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+                }
+                //else HTML code - leave as is
+            } else {
+                icon = "";
+            }
+
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
+            let style = options.containerStyle ? `style="${options.containerStyle}"` : "";
 
-            return `<div id="${options.id}" class="image-row-container">
+            return `<div id="${options.id}" class="image-row-container" ${style}>
 <div>
 <div class="width-full d-flex image-row">
 ${icon}
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small">${details}</div></div>
+<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div></div>`;
         };
@@ -375,23 +384,34 @@ ${contentAction}
          * @param options.details
          * @param options.contentAction
          * @param options.customContent
+         * @param options.containerStyle
          * @return {string}
          * @memberOf UIComponents.Components.SelectableImageRow
          */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon || (APPLICATION_CONTEXT.url + "src/assets/image.png");
+            let icon = options.icon;
+            if (icon) {
+                if (!icon.includes('<')) {
+                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+                }
+                //else HTML code - leave as is
+            } else {
+                icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
+            }
+
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
             let selected = options.selected ? "checked" : "";
+            let style = options.containerStyle ? `style="${options.containerStyle}"` : "";
 
-            return `<div id="${options.id}" class="selectable-image-row-container">
+            return `<div id="${options.id}" class="selectable-image-row-container" ${style}>
 <input type="${input}" name="${this.options.id}" ${selected} class="d-none selectable-image-row-context" value="${options.value}">
 <div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
-<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small">${details}</div></div>
+${icon}
+<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div>`;
         }

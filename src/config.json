@@ -112,6 +112,7 @@
         "preventNavigationShortcuts": false,
         "permaLoadPlugins": true,
         "bypassCookies": false,
+        "bypassCacheLoadTime": false,
         // can be dimmed, dark, light, auto
         "theme": "auto",
         "stackedBackground": false,

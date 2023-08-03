@@ -6,6 +6,7 @@
         "ext/greiner-hormann.min.js",
         "annotations.js",
         "convert/convertor.js",
+        "convert/native.js",
         "convert/asapXml.js",
         "convert/geoJSON.js",
         "convert/qupath.js",

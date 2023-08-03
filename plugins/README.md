@@ -20,7 +20,8 @@ A `JSON` file is required that defines the plugin and it's inclusion:
 }
 ````
 
-Note that this is meant mainly for a viewer maintainer to set-up the plugin default, static configuration. 
+Note that this is meant mainly for a viewer maintainer to set-up the plugin default, static configuration.
+Moreover, it is advised to use ENV setup (see `/env/README.md`) to override necessary configurations.
 - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
 - `name` is the plugin name 
 - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
@@ -32,7 +33,7 @@ Note that this is meant mainly for a viewer maintainer to set-up the plugin defa
     - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
     instead of creating a module for it
 - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
-
+- `enabled` is an option to allow or disallow the plugin in the system, default `true`
 
 ### Must do's
 - A plugin must register itself using the name of its parent class. For more information see below.
