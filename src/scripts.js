@@ -31,6 +31,13 @@ function initXopatScripts() {
         focusOnViewer = true;
         e.preventDefaultAction = true;
     });
+    /**
+     * Allows changing focus state artificially
+     * @param {boolean} focused
+     */
+    UTILITIES.setIsCanvasFocused = function(focused) {
+        focusOnViewer = focused;
+    };
     document.addEventListener('keydown', function(e) {
         e.focusCanvas = focusOnViewer;
         /**

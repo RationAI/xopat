@@ -331,36 +331,38 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			}
 		);
 
-		USER_INTERFACE.Tutorials.add(
-			this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
-				{
-					"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click on the canvas allows you to<br>automatically annotate regions."
-				}, {
-					"next #mode-custom-items": "This select specifies which layer will be annotated.<br>For now, it is not possible in the tissue itself."
-				}, {
-					"next #panel-shaders": "When you double-click on the canvas,<br>all close parts of the selected layer will be outlined.<br>It is therefore a good idea to first izolate the region of interest <br> (e.g. apply threshold if available)."
-				}, {
-					"next #annotations-left-click": "If you use POLYGON, the outline will fit perfectly,<br>but click outside a region is ignored.<br>Creation might also fail - you can try adjusting ZOOM level<br>or clicking on a different spot."
-				}, {
-					"next #annotations-left-click": "Rectangle and ellipse will try to fit the data in layer you selected, <br> but if you click somewhere without data, a default-size object will be created."
-				}, {
-					"next #viewer-container": "Now you can try it out."
-				}
-			], () => {
-				USER_INTERFACE.Tools.open('annotations-tool-bar');
-			}
-		);
+		// USER_INTERFACE.Tutorials.add(
+		// 	this.id, "Automatic annotations", "learn how to let the computer do the job", "auto_fix_high", [
+		// 		{
+		// 			"next #auto-annotation-mode + label": "In the navigation mode,<br>double-click on the canvas allows you to<br>automatically annotate regions."
+		// 		}, {
+		// 			"next #mode-custom-items": "This select specifies which layer will be annotated.<br>For now, it is not possible in the tissue itself."
+		// 		}, {
+		// 			"next #panel-shaders": "When you double-click on the canvas,<br>all close parts of the selected layer will be outlined.<br>It is therefore a good idea to first izolate the region of interest <br> (e.g. apply threshold if available)."
+		// 		}, {
+		// 			"next #annotations-left-click": "If you use POLYGON, the outline will fit perfectly,<br>but click outside a region is ignored.<br>Creation might also fail - you can try adjusting ZOOM level<br>or clicking on a different spot."
+		// 		}, {
+		// 			"next #annotations-left-click": "Rectangle and ellipse will try to fit the data in layer you selected, <br> but if you click somewhere without data, a default-size object will be created."
+		// 		}, {
+		// 			"next #viewer-container": "Now you can try it out."
+		// 		}
+		// 	], () => {
+		// 		USER_INTERFACE.Tools.open('annotations-tool-bar');
+		// 	}
+		// );
 
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in custom mode. We recommend using 'W' key <br> instead of setting this manually."
+					"next #custom-annotation-mode + label": "You need to be in the manual creation mode. <br> We recommend using 'W' key instead of switching modes with a mouse."
 				}, {
-					"next #annotations-left-click": "With POLYGON you can click or drag to create its vertices.<br> Polygon creation will be finished if create a point <br> inside the red vertex, or when you change the mode<br> (e.g. release 'W' key)."
+					"next #polygon-annotation-factory-switch": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
-					"next #annotations-left-click": "Rectangle and ellipse can be created by a drag."
+					"next #polyline-annotation-factory-switch": "The same for a polyline."
 				}, {
-					"next #viewer-container": "Now you can try it out."
+					"next #text-annotation-factory-switch": "A text (and a point) can be created by clicking."
+				}, {
+					"next #viewer-container": "Most other objects (such as a rectangle)<br>can be created by mouse dragging (click+move).<br>Now you can try it out."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -380,7 +382,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 				}, {
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{
-					"next #viewer-container": "Now you can try it out.<br>Note that key shortcuts do not work<br>when the mode is selected manually."
+					"next #viewer-container": "Now you can try it out."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -393,7 +395,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 					"next #viewer-container": "There are much more features included."
 				},
 				{
-					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>The board opens in a separate window.<br>It allows you to edit annotations."
+					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>The board opens in a separate window.<br>It allows you to edit and manage annotations."
 				},
 				{
 					"next #viewer-container": "A history is also available.<br> Shortcut is undo:Ctrl+Z and redo:Ctrl+Shift+Z<br>(or use the annotation board)."
@@ -402,7 +404,13 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 					"click #annotations-cloud": "Click here to open export options."
 				},
 				{
-					"next #gui_annotations": "Apart from file exports/imports, you can also use shared annotations if available."
+					"next #annotations-shared": "You can export or import different annotation formats. <br>"
+				},
+				{
+					"next #annotations-local-export-panel": "Importing is dependent on the active format!<br>It is possible to export annotations themselves;<br> some formats allow also exporting presets only."
+				},
+				{
+					"next #available-annotations": "If configured, it is possible to also upload annotations to the server."
 				},
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -963,12 +971,14 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 				json => {
 					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
 					_this.loadAnnotationsList();
+					_this._recordId(id);
 				},
 				e => {
 					Dialogs.show(`Failed to upload annotations. Are you logged in? You can 
 <a onclick="${_this.id}.exportToFile()">Export them instead</a>, and upload later.`,
 						7000, Dialogs.MSG_ERR);
-					console.error("Failed to update annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
+					console.error("Failed to update annotation: " + this.dataLoader.getMetaName(), "ID", id,
+						_this.dataLoader.getErrorResponseMessage(e));
 				}
 			);
 		})
@@ -981,12 +991,14 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 
 		this.dataLoader.removeAnnotation(this._server, id,
 			json => {
-				Dialogs.show(`Annotation id '${id}' removed.`, 2000, Dialogs.MSG_INFO);
+				Dialogs.show(`Annotation '${this.dataLoader.getMetaName()}' removed.`, 2000, Dialogs.MSG_INFO);
 				_this.loadAnnotationsList();
 			},
 			e => {
-				Dialogs.show(`Failed to delete annotation id '${id}'.`, 7000, Dialogs.MSG_ERR);
-				console.error("Failed to delete annotation id " + id, _this.dataLoader.getErrorResponseMessage(e));
+				Dialogs.show(`Failed to delete annotation '${this.dataLoader.getMetaName()}'.`,
+					7000, Dialogs.MSG_ERR);
+				console.error("Failed to delete annotation: " + this.dataLoader.getMetaName(),
+					_this.dataLoader.getErrorResponseMessage(e));
 			}
 		);
 	}
@@ -1003,6 +1015,9 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 
 					if (json.id) {
 						_this._recordId(json.id);
+					} else if (Array.isArray(json)) {
+						_this._recordId(json[json.length-1].id);
+
 					} else {
 						//todo err
 					}

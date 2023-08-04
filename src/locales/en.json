@@ -88,6 +88,11 @@
       "saveError": "Could not save the code."
     },
     "tutorials": {
+      "enjoyhint": {
+        "next": "NEXT",
+        "finish": "FINISH",
+        "back": "BACK"
+      },
       "menu": {
         "title": "Select a tutorial",
         "description": "The visualisation is still under development: components and features are changing. The tutorials might not work, missing or be outdated."

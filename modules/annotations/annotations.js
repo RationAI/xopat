@@ -1021,7 +1021,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_setListeners() {
 		const _this = this;
 		VIEWER.addHandler('key-down', function (e) {
-			if (!e.focusCanvas) return;
 			_this._keyDownHandler(e);
 		});
 		VIEWER.addHandler('key-up', function (e) {
@@ -1183,6 +1182,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_setModeFromAuto(mode) {
+		UTILITIES.setIsCanvasFocused(true);
 		if (mode.setFromAuto()) {
 			this.raiseEvent('mode-changed', {mode: mode});
 
