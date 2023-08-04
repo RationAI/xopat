@@ -31,10 +31,9 @@ OSDAnnotations.FreeFormTool = class {
      *    not copied (unless it is an implicit object)
      */
     init(object, created=false) {
-
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         if (objectFactory !== undefined) {
-            if (!objectFactory.isImplicit()) {  //object can be used immedietaly
+            if (objectFactory.factoryID === "polygon") {  //object can be used immedietaly
                 let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
                 this._setupPolygon(newPolygon, object);
             } else {
@@ -378,6 +377,4 @@ OSDAnnotations.FreeFormTool = class {
     _toDistancePointsAsObjects(pointA, pointB) {
         return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
     }
-
-
 };

@@ -24,7 +24,6 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		//Register used annotation object factories
 		this.context = OSDAnnotations.instance();
-		this.context.presets.setModeOutline(this.getOption('drawOutline', true));
 		this.context.setModeUsed("AUTO");
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
@@ -155,28 +154,29 @@ title="${factory.title()}">${factory.getIcon()}</span></span>`);
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
 			`<div class="px-3 py-2" id="annotations-tool-bar-content">${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
-vertical-align: middle; opacity: 0.3;" class="d-inline-block mx-1"></span>&nbsp;<div id="mode-custom-items" 
-class="d-inline-block">${this.context.mode.customHtml()}</div>
-<div class="px-2 mx-2 border-sm rounded-2 d-inline-block" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
+vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&nbsp;<div id="mode-custom-items" class="d-inline-block">${this.context.mode.customHtml()}</div>
+<div class="px-2 mx-2 border-sm rounded-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
 
 		if (!this.isModalHistory) this._createHistoryInAdvancedMenu();
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
+<div id="annotation-convertor-options"></div>
 <br><br>
 <h4 class="f3-light header-sep">Download / Upload</h4><br>
 <div id="annotations-local-export-panel">
-	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
-	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
+	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn"></button>
 	&emsp;&emsp;
-	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn">Import file: format '${this.exportOptions.format}'</button>
+	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
+	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
 	<input type='file' style="visibility:hidden; width: 0; height: 0;" 
 	onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
 </div>
 <br>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
+		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
 	}
 
 	getIOFormatRadioButton(format) {
@@ -194,6 +194,9 @@ class="d-inline-block">${this.context.mode.customHtml()}</div>
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
 		this.setOption('defaultIOFormat', format);
+		$("#annotation-convertor-options").html(
+			Object.values(convertor.options).map(option => UIComponents.Elements[option.type]?.(option)).join("<br>")
+		);
 	}
 
 	openHistoryWindow() {
@@ -241,6 +244,7 @@ class="d-inline-block">${this.context.mode.customHtml()}</div>
 			if (e.preset === this.context.getPreset(true)) {
 				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
+			this.context.createPresetsCookieSnapshot();
 		});
 
 		//allways select primary button preset since context menu shows only on non-primary
@@ -299,23 +303,29 @@ class="d-inline-block">${this.context.mode.customHtml()}</div>
 				{
 					"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
 				},{
-					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
+					"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some class (<b>preset</b>) and start annotating!"
 				},{
-					"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some pre-set and start annotating!<br>Shape change can be done quickly by mouse hover."
-				},{
-					"click #annotations-right-click": "Click on one of these buttons<br>to open <b>Presets dialog window</b>."
+					"click #annotations-right-click": "To open <b>Presets dialog window</b>, click on one of these buttons<br>."
 				},{
 					"next #preset-no-0": "This is an example of an annotation preset."
 				},{
-					"click #preset-add-new": "We want to keep the old preset,<br>so create a new one. Click on 'New'."
+					"next #preset-add-new": "Here you create a new class."
 				},{
-					"next #preset-no-1": "Click anywhere on the preset. This will select it for the right mouse button."
+					"click #preset-no-0": "Click anywhere on the preset. This will select it for the right mouse button."
 				},{
 					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
 				}, {
 					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 				},{
 					"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
+				},{
+					"next #annotations-fast-factory-switch": "To change current annotation object type, <br>select it with (and for) left or right mouse button. <br> The button needs to have a preset assigned."
+				},{
+					"click #annotations-panel-pin": "Open additional configuration options."
+				}, {
+					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
+				}, {
+					"next #enable-disable-annotations": "This tutorial is finished.<br>To learn more, follow other annotation tutorials!"
 				}], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
 			}
@@ -880,8 +890,8 @@ class="btn m-2">Set for left click </button>
 			this.annotationsMenuBuilder.addRow({
 				title: "Upload new annotations",
 				details: `Upload current annotations in the viewer as a new dataset (as ${APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.name, "")}).`,
-				icon: '<span class="py-2 mr-2 material-icons">upload</span>',
-				contentAction: `<button class="btn float-right" onclick="${this.THIS}.uploadAnnotation()" title="Upload"><span class="pr-1 pl-0 material-icons btn-pointer">upload</span> Upload</button>`,
+				icon: `<button class="btn mr-3 px-2 py-1" onclick="${this.THIS}.uploadAnnotation()" title="Upload"><span class="pr-1 pl-0 material-icons btn-pointer">upload</span> Upload</button>`,
+				contentAction: '',
 				containerStyle: 'margin: 0 0 10px 0;'
 			});
 

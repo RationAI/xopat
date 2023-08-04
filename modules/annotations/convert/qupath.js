@@ -7,8 +7,38 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
         return 'qu_annotations_' + UTILITIES.todayISO() + '.geojson';
     }
 
+    static _enableBioFormatsOffset = true;
+    static _enableTrimToDefaultPresets = true;
+    static options = {
+        //todo support this for each convertor
+        "bioFormatsOffset": {
+            type: "checkBox",
+            label: "Export with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
+            onchange: "OSDAnnotations.Convertor.get('qu-path')._enableBioFormatsOffset = this.checked",
+            default: this._enableBioFormatsOffset
+        },
+        "trimToDefaultPresets": {
+            type: "checkBox",
+            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes.</span>",
+            onchange: "OSDAnnotations.Convertor.get('qu-path')._enableTrimToDefaultPresets = this.checked",
+            default: this._enableTrimToDefaultPresets
+        },
+    };
+
     static exportsPresets = false;
     static includeAllAnnotationProps = false;
+
+    //default presets in quPath that are safe to export
+    _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
+        {"name":"Category","value":"Ignore*"}}},{"color":"#c80000","factoryID":"polygon","presetID":"Tumor",
+        "meta":{"category":{"name":"Category","value":"Tumor"}}},{"color":"#96c896","factoryID":"polygon",
+        "presetID":"Stroma","meta":{"category":{"name":"Category","value":"Stroma"}}},{"color":"#a05aa0",
+        "factoryID":"polygon","presetID":"Immune cells","meta":{"category":{"name":"Category","value":"Immune cells"}}},
+        {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Category",
+        "value":"Necrosis"}}},{"color":"#0000b4","factoryID":"polygon","presetID":"Region*","meta":{"category":
+        {"name":"Category","value":"Region*"}}},{"color":"#fa3e3e","factoryID":"polygon","presetID":"Positive","meta":
+        {"category":{"name":"Category","value":"Positive"}}},{"color":"#7070e1","factoryID":"polygon","presetID":
+        "Negative","meta":{"category":{"name":"Category","value":"Negative"}}}];
 
     //linear ring has the first and last vertex equal, geojson uses arrays, we only for now support arrays of points,
     //no arrays of arrays of points
@@ -18,6 +48,10 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
         function hexToRgb(hex) {
             var res = hex.match(/[a-f0-9]{2}/gi);
             return res && res.length === 3 ? res.map(v => parseInt(v, 16)) : null;
+        }
+
+        if (this._presetReplacer && !this._validPresets.includes(preset.presetID)) {
+            preset = this._presetReplacer;
         }
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
@@ -151,12 +185,17 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
     }
 
     async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        this.offset = options.bioFormatsOffset;
+        this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
+            options.bioFormatsOffset : undefined;
 
         this.context = annotationsModule;
 
         const annotations = annotationsGetter();
         const presets = presetsGetter();
+        this._presetReplacer = this.constructor._enableTrimToDefaultPresets
+            && this.constructor._enableTrimToDefaultPresets !== "false" ?
+            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], annotationsModule) : false;
+        this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
         let output = {
             type: "FeatureCollection",
@@ -185,7 +224,8 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
     }
 
     async decode(data, annotationsModule, options) {
-        this.offset = options.bioFormatsOffset;
+        this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
+            options.bioFormatsOffset : undefined;
 
         data = JSON.parse(data);
 

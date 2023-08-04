@@ -193,6 +193,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 
+		if (imported) {
+			this.history.refresh();
+		}
+
 		this.raiseEvent('import', {
 			options: options,
 			clear: clear,
@@ -810,7 +814,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 
 		let objects = this.canvas.getObjects();
-		if (!objects || objects.length === 0 || !confirm("Do you really want to delete all annotations?")) return;
+		if (!objects || objects.length === 0) return;
 
 		let objectsLength = objects.length;
 		for (let i = 0; i < objectsLength; i++) {
@@ -903,15 +907,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 			return factory;
 		}
-		fabric.Object.prototype.zooming = function(zoom) {
-			this._factory()?.onZoom(this, zoom);
+		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
+			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
 
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
-		this.opacity = 0.6;
+		this.opacity = 1.0;
 		this.disabledInteraction = false;
 		this.presetCookieKey = '-presets-cache';
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
@@ -1485,8 +1489,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "🆀 navigate / create automatic");
-		this.clickInBetweenDelta = 0;
+		super(context, "auto", "open_with", "🆀 navigate / select annotations");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1510,28 +1513,36 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		let clickTime = Date.now();
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
-			finishDelta = clickTime - this.clickInBetweenDelta;
-		this.clickInBetweenDelta = clickTime;
+			canvas = this.context.canvas;
 
 		// just navigate if click longer than 100ms or other conds not met, fire if double click
-		if (clickDelta > 100 || !updater || !this.context.autoSelectionEnabled || finishDelta > 450) return false;
+		if (clickDelta > 100) return false;
 
-		if (!updater) {
-			this.abortClick(isLeftClick, true);
-			return false;
+		//instead of auto-creation, select underneath
+		const active = canvas.getActiveObject();
+		if (active) {
+			active.sendToBack();
 		}
+		const object = canvas.findNextObjectUnderMouse(event, active);
+		if (object) canvas.setActiveObject(object, event);
 
-		//instant create wants screen pixels as we approximate based on zoom level
-		const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
-		if (created === false) {
-			VIEWER.raiseEvent('warn-user', {
-				originType: "module",
-				originId: "annotations",
-				code: "W_AUTO_CREATION_FAIL",
-				message: "Automatic annotation creation failed!",
-				isLeftClick: isLeftClick
-			});
-		}
+		//todo implement elsewhere
+		// if (!updater || !this.autoSelectionEnabled) {
+		// 	this.abortClick(isLeftClick, true);
+		// 	return false;
+		// }
+		//
+		// //instant create wants screen pixels as we approximate based on zoom level
+		// const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
+		// if (created === false) {
+		// 	VIEWER.raiseEvent('warn-user', {
+		// 		originType: "module",
+		// 		originId: "annotations",
+		// 		code: "W_AUTO_CREATION_FAIL",
+		// 		message: "Automatic annotation creation failed!",
+		// 		isLeftClick: isLeftClick
+		// 	});
+		// }
 		return true;
 	}
 

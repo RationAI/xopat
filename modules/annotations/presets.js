@@ -23,15 +23,15 @@ OSDAnnotations.Preset = class {
     /**
      * Create the object from JSON representation
      * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
-     * @param {function} factoryGetter function able to get object factory from id
+     * @param {OSDAnnotations} context function able to get object factory from id
      * @return {OSDAnnotations.Preset} instantiated preset
      */
-    static fromJSONFriendlyObject(parsedObject, factoryGetter) {
-        let factory = factoryGetter(parsedObject.factoryID);
+    static fromJSONFriendlyObject(parsedObject, context) {
+        let factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
         if (factory === undefined) {
             console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
                 "No factory for such object available.");
-            factory = factoryGetter("polygon"); //rely on polygon presence
+            factory = context.getAnnotationObjectFactory("polygon"); //rely on polygon presence
         }
 
         const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
@@ -112,6 +112,7 @@ OSDAnnotations.PresetManager = class {
         this._colorSteps = 8;
         this._colorStep = 0;
         this._presetsImported = false;
+        this.modeOutline = this._context.getCache('drawOutline', true);
     }
 
     getActivePreset(isLeftClick) {
@@ -137,6 +138,7 @@ OSDAnnotations.PresetManager = class {
      */
     setModeOutline(isOutline) {
         if (this.modeOutline === isOutline) return;
+        this._context.setCache('drawOutline', isOutline);
         this.modeOutline = isOutline;
         this.updateAllObjectsVisuals();
         this._context.canvas.requestRenderAll();
@@ -381,9 +383,7 @@ OSDAnnotations.PresetManager = class {
         }
 
         if (Array.isArray(presets)) {
-            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(
-                p, _this._context.getAnnotationObjectFactory.bind(_this._context)
-            )).forEach(p => {
+            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
                 if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;

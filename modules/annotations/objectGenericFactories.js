@@ -171,7 +171,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "lens";
+        return "circle";
     }
 
     fabricStructure() {
@@ -434,14 +434,14 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         //do nothing - a text has no area
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject.autoScale) {
             ofObject.set({
-                scaleX: 1/zoom,
-                scaleY: 1/zoom
+                scaleX: 1/realZoom,
+                scaleY: 1/realZoom
             });
         }
-        ofObject.isAtZoom = zoom;
+        ofObject.isAtZoom = realZoom;
     }
 
     // /**
@@ -626,9 +626,11 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return object;
     }
 
-    onZoom(ofObject, zoom) {
-        ofObject.scaleX = 1/zoom;
-        ofObject.scaleY = 1/zoom;
+    onZoom(ofObject, graphicZoom, realZoom) {
+        //todo temporary minifier
+        graphicZoom = Math.sqrt(graphicZoom) / 2;
+        ofObject.scaleX = 1/graphicZoom;
+        ofObject.scaleY = 1/graphicZoom;
     }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
@@ -1275,7 +1277,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "line_start";
+        return "timeline";
     }
 
     fabricStructure() {
@@ -1441,10 +1443,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         // }
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
         ofObject.forEachObject(o => {
-            o.set({strokeWidth: ofObject.originalStrokeWidth/zoom});
+            o.set({strokeWidth: ofObject.originalStrokeWidth/graphicZoom});
         });
     }
 

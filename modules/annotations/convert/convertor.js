@@ -110,16 +110,56 @@ OSDAnnotations.Convertor = class {
     }
 };
 
+/**
+ *
+ * @type {OSDAnnotations.Convertor.IConvertor}
+ */
 OSDAnnotations.Convertor.IConvertor = class {
+    /**
+     * Title, used in GUI
+     * @type {string}
+     */
     static title = 'My Custom Format';
+    /**
+     * Description, used in GUI
+     * @type {*}
+     */
     static description = undefined;
+    /**
+     * Options map, supported parameters, each option must be an object
+     * that has:
+     * {
+     *     type: "checkBox" //what GUI input type it maps to, see available in UIComponents.Elements
+     *     ...other...      //provide custom props based on the GUI type chosen, do not forget to provide
+     *                        'onchange' property, code that reacts to the value change
+     * }
+     * @type {{}}
+     */
+    static options = {};
 
-    //select whether you want to get all or necessary props only
+    /**
+     * Declare whether supplied annotations come with
+     * all options (in native format ready for encoding) or with
+     * required set only
+     * @type {boolean}
+     */
     static includeAllAnnotationProps = true;
-
+    /**
+     * Declare whether this convertor can export annotation objects
+     * @type {boolean}
+     */
     static exportsObjects = true;
+    /**
+     * Declare whether this convertor can export annotation presets
+     * @type {boolean}
+     */
     static exportsPresets = true;
 
+    /**
+     * Describe what filename has the exported file
+     * @param {OSDAnnotations} context
+     * @return {string}
+     */
     static getFileName(context) {
         return 'annotations_' + UTILITIES.todayISO() + '.txt';
     }

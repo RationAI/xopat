@@ -356,14 +356,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
-     * @param ofObject
-     * @param zoom
+     * @param {fabric.Object} ofObject
+     * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
+     * @param {number} realZoom real zoom value of the viewer (real zoom, linearly keep scale consistent, for example text)
      */
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
         ofObject.set({
-            strokeWidth: ofObject.originalStrokeWidth/zoom
+            strokeWidth: ofObject.originalStrokeWidth/graphicZoom
         });
         // // Update object properties to reflect zoom
         // var updater = function(x) {

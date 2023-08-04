@@ -110,14 +110,14 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         //do nothing - always same 'transparent'
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject._objects) {
-            //todo do not scale linearly let logZoom = Math.log(zoom);
             ofObject._objects[1].set({
-                scaleX: 1/zoom,
-                scaleY: 1/zoom
+                scaleX: 1/realZoom,
+                scaleY: 1/realZoom,
+                opacity: realZoom / ofObject.zoomAtCreation
             });
-            super.onZoom( ofObject._objects[0], zoom);
+            super.onZoom(ofObject._objects[0], graphicZoom, realZoom);
         }
     }
 
@@ -175,6 +175,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
         this._context.addAnnotation(obj);
         this._current = undefined;
+        this._context.canvas.renderAll();
     }
 
     finishIndirect() {
@@ -235,7 +236,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _configureText(text, options) {
         $.extend(text, {
-            fontSize: 22,
+            fontSize: 18,
             selectable: false,
             hasControls: false,
             lockUniScaling: true,
@@ -620,7 +621,7 @@ OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         //nothing
     }
 
