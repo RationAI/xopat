@@ -167,11 +167,11 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 <h4 class="f3-light header-sep">Download / Upload</h4><br>
 <div id="annotations-local-export-panel">
 	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn"></button>
+	<input type='file' style="visibility:hidden; width: 0; height: 0;" 
+	onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
 	&emsp;&emsp;
 	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
-	<input type='file' style="visibility:hidden; width: 0; height: 0;" 
-	onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
 </div>
 <br>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>`);
