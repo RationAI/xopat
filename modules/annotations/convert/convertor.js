@@ -15,16 +15,33 @@
  *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
  *     }
  *
- *     encode(annotationsGetter, presetsGetter, annotationsModule) {*
+ *     async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {*
  *         const objects = annotationsGetter("keepThisProperty", "keepAlsoThis");
  *         const presets = presetsGetter();
  *         /**
- *          * Must return a string - serialized format.
+ *          * It gives a third party the power to work with each object and preset individually.
+ *          * Note that partial output must not necessarily be a valid output of the given format.
+ *          * In the case of unsupported format flexibility on this granularity, simply return
+ *          * an unfinished list ob objects that can be later finalized into a full valid format output.
+ *          *
+ *          * Must return the following object:
  *          *\/
- *         return mySerializeData(objects, presets);
+ *         return {
+ *             objects: [serialized or unserialized list - depends on options.serialize, possibly undefined],
+ *             presets: [serialized or unserialized list - depends on options.serialize, possibly undefined]
+ *         };
  *     }
  *
- *     decode(data, annotationsModule) {
+ *     async encodeFinalize(data) {
+ *         /**
+ *          * Finishes encodePartial() output to a string serialized content.
+ *          * encodeFinalize(encodePartial(...)) is therefore a full exporting routine.
+ *          * This flexibility is meant for third party SW to work on arbitrary granularity.
+ *          *\/
+ *          return myFinalize(data);
+ *     }
+ *
+ *     async decode(data, annotationsModule) {
  *         /**
  *          * Must return
  *            {
@@ -46,13 +63,8 @@ OSDAnnotations.Convertor = class {
     /**
      * Register custom Annotation Converter
      * @param {string} format a format identifier
-     * @param {OSDAnnotations.Convertor.IConvertor} convertor a converter object main class (function) name from the provided file, it should have:
-     * @param {string} convertor.title human readable title
-     * @param {string} convertor.description optional
-     * @param {function} convertor.encode encodes the annotations into desired format from the native one,
-     *  receives annotations and presets _getters_, should return a string - serialized object
-     * @param {function} convertor.decode decodes the format into native format, receives a string, returns
-     *  on objects {annotations: [], presets: []}
+     * @param {OSDAnnotations.Convertor.IConvertor} convertor a converter object main class (function) name
+     *   from the provided file, it should have:
      */
     static register(format, convertor) {
         if (typeof this.CONVERTERS[format] === "object") {
@@ -78,17 +90,37 @@ OSDAnnotations.Convertor = class {
      * @param widthAnnotations
      * @param withPresets
      */
-    static async encode(options, context, widthAnnotations=true, withPresets=true) {
+    static async encodePartial(options, context, widthAnnotations=true, withPresets=true) {
         const parserCls = this.get(options.format);
         const exportAll = parserCls.includeAllAnnotationProps;
-        return await new parserCls().encode(
+        const encoded = await new parserCls().encodePartial(
             (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : undefined,
             () => withPresets ? context.presets.toObject() : undefined,
             context,
             options
         );
+        encoded.format = options.format;
+        return encoded;
     }
 
+    /**
+     * Finalize encoding to a string
+     * @param {string} format
+     * @param {object} data
+     * @param {object} data.objects
+     * @param {object} data.presets
+     * @return {string}
+     */
+    static encodeFinalize(format, data) {
+        return this.get(format).encodeFinalize(data);
+    }
+
+    /**
+     * Filename getter for a given format
+     * @param format format to use
+     * @param context annotations module reference
+     * @return {string}
+     */
     static defaultFileName(format, context) {
         return this.get(format).getFileName(context);
     }
@@ -104,7 +136,10 @@ OSDAnnotations.Convertor = class {
         return await new parserCls().decode(data, context, options);
     }
 
-
+    /**
+     * Read the list of available format IDs
+     * @return {string[]}
+     */
     static get formats() {
         return Object.keys(this.CONVERTERS);
     }
@@ -165,31 +200,54 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
+     * Annotation export into a selected format. For flexibility, the output must be a serialized object list,
+     * and array of serialized exported presets. The encoding must be flexible enough: it is a two-step procedure.
+     * For optimization, options.serialize=true means the output arrays can contain arbitrary data to avoid expensive
+     * re-encoding. encodeFinalize() must then implicitly recognize whether the arrays come with serialized items.
      *
      * @param {function} annotationsGetter function that returns a list of objects to export or undefined if not desired
      * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
      * @param {OSDAnnotations} annotationsModule reference to the module
      * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
+     * @param {object} options.serialize build-in parameter for optimization
+     * @param {boolean} options.
+     * @return {object} must return the following structure:
+     *    {
+     *        objects: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
+     *        presets: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
+     *    }
+     */
+    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+        throw("::encodePartial must be implemented!");
+    }
+
+    /**
+     * Finalize the encoding to a serialized string. If objects/presets
+     * are strings, the data comes in pre-serialized, otherwise the serialization
+     * was delayed and it is ready for serialization.
+     * @param {object} output result of encodePartial(...)
+     * @param {[(string|any)]} output.objects
+     * @param {[(string|any)]} output.presets
      * @return {string}
      */
-    encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        throw("::encode must be implemented!");
+    static encodeFinalize(output) {
+        throw("::merge must be implemented!");
     }
 
     /**
      *
-     * @param {string} data serialized data (result of encode())
+     * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
      * @param {OSDAnnotations} annotationsModule  reference to the module
-     * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
-     * @return {object}
-     *  Must return
+     * @param {object} options any options your converter wants, must be documented, passed from the
+     *   module convertor options
+     * @return {object} must return the following structure:
      *    {
      *        objects: [native export format JS objects] or undefined,
      *        presets: [native export format JS presets] or undefined
      *    }
-     *    for native format, check the readme. Deserialize the string data and parse.
+     *    for native format specs, check the readme. Deserialize the string data and parse.
      */
-    decode(data, annotationsModule, options) {
+    async decode(data, annotationsModule, options) {
         throw("::decode must be implemented!");
     }
 };

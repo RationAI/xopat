@@ -43,7 +43,8 @@ class AnnotationsGUI extends XOpatPlugin {
 			format: this.getOption('defaultIOFormat', this._defaultFormat),
 		};
 
-		this.isModalHistory = this.getOption('modalHistoryWindow', this.getStaticMeta("modalHistoryWindow"));
+		this.isModalHistory = this.getOptionOrConfiguration('modalHistoryWindow', 'modalHistoryWindow', true);
+		this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 		this.setupFromParams();
 
@@ -590,25 +591,11 @@ ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	getPresetControlHTML(preset, isLeftClick) {
 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
 		let icon = preset.objectFactory.getIcon();
-
-		let changeHtml = "";
-
-		const _this = this;
-// 		this._allowedFactories.forEach(fId => {
-// 			let factory = _this.context.getAnnotationObjectFactory(fId);
-// 			if (factory && factory.factoryID !== preset.objectFactory.factoryID) {
-// 					changeHtml += `<div onclick="${this.THIS}.updatePresetWith('${preset.presetID}',
-// 'objectFactory', '${fId}'); event.stopPropagation(); window.event.cancelBubble = true;"><span class="material-icons"
-// style="color: ${preset.color};">${factory.getIcon()}</span>${factory.title()}</div>`;
-// 			}
-// 		});
-
 		return `<div class="position-relative p-1" onclick="${this.THIS}.showPresets(${isLeftClick});">
 <span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
  onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});">close</span>
 <span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
 <span class="one-liner d-inline-block v-align-middle" style="width: 115px;">${category}</span>
-<!--<div class="quick_selection color-bg-primary border-md p-1 rounded-3">${changeHtml}</div>-->
 </div>`;
 	}
 
@@ -713,7 +700,8 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 	 */
 	getPresetHTML(preset, isLeftClick, index = undefined) {
 		let select = "",
-			currentPreset = this.context.getPreset(isLeftClick);
+			currentPreset = this.context.getPreset(isLeftClick),
+			disabled = this.enablePresetModify ? "" : " disabled ";
 
 		const _this = this;
 		this._allowedFactories.forEach(fId => {
@@ -729,30 +717,39 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 
 		let id = index === undefined ? "" : `id="preset-no-${index}"`;
 
-		let html = `<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `;
-		if (preset === currentPreset) {
-			html += `highlighted-preset"`;
+		let html = [`<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `];
+		if (preset.presetID === currentPreset?.presetID) {
+			html.push('highlighted-preset');
 			this._presetSelection = preset.presetID;
-		} else html += `"`;
-
-		let inputs = [];
-		for (let key in preset.meta) {
-			inputs.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], key !== 'category'));
 		}
-
-		return `${html} style="cursor:pointer; margin: 5px;" 
+		html.push(`"style="cursor:pointer; margin: 5px;" 
 onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
-${this.THIS}._presetSelection = '${preset.presetID}'"><span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
-onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>
-<span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
+${this.THIS}._presetSelection = '${preset.presetID}'">`);
+
+		if (this.enablePresetModify) {
+			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
+onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>`);
+		}
+		html.push(`<span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
 ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value);">${select}</select></span>
-<span class="show-hint d-inline-block my-1" data-hint="Color"><input class="form-control" type="color" style="height:33px;" 
-onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.value);" value="${preset.color}"></span>
-<br>${inputs.join("")}<div> <input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
-<span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');">playlist_add</span></div></div>`;
+<span class="show-hint d-inline-block my-1" data-hint="Color"><input ${disabled} class="form-control" type="color" style="height:33px;" 
+onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.value);" value="${preset.color}"></span><br>`);
+
+		for (let key in preset.meta) {
+			html.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], key !== 'category'));
+		}
+		html.push('<div>');
+		if (this.enablePresetModify) {
+			html.push(`<input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
+<span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');">playlist_add</span>`);
+		}
+		html.push('</div></div>');
+		return html.join("");
 	}
 
 	updatePresetWith(idOrBoolean, propName, value) {
+		//object factory can be changed, it does not change the semantic meaning
+		if (!this.enablePresetModify && propName !== 'objectFactory') return;
 		let preset = idOrBoolean;
 		if (typeof idOrBoolean === "boolean") {
 			//left = true, right = false
@@ -777,6 +774,7 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 	}
 
 	removePreset(buttonNode, presetId) {
+		if (!this.enablePresetModify) return;
 		let removed = this.context.presets.removePreset(presetId);
 		if (removed) {
 			$(buttonNode).parent().remove();
@@ -784,6 +782,7 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 	}
 
 	insertPresetMeta(buttonNode, presetId) {
+		if (!this.enablePresetModify) return;
 		let input = buttonNode.previousElementSibling,
 			name = input.value;
 		if (!name) {
@@ -802,6 +801,7 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 	}
 
 	deletePresetMeta(inputNode, presetId, key) {
+		if (!this.enablePresetModify) return;
 		if (this.context.presets.deleteCustomMeta(presetId, key)) {
 			$(inputNode.parentElement).remove();
 			return;
@@ -810,12 +810,13 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 	}
 
 	_metaFieldHtml(presetId, key, metaObject, allowDelete=true) {
-		let delButton = allowDelete ? `<span 
+		const disabled = this.enablePresetModify ? "" : " disabled ";
+		let delButton = allowDelete && this.enablePresetModify ? `<span 
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')">delete</span>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
-${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}">${delButton}</div>`;
+${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}" ${disabled}>${delButton}</div>`;
 	}
 
 	/**
@@ -830,7 +831,7 @@ ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${me
 		}
 		this._presetSelection = undefined;
 
-		let html = [],
+		let html = ['<div style="min-width: 270px">'],
 			counter = 0,
 			_this = this;
 
@@ -839,9 +840,12 @@ ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${me
 			counter++;
 		});
 
-		html.push(`<div id="preset-add-new" class="border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
-${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer; border-color: var(--color-text-primary);" onclick="
-${this.THIS}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">add</span> New</div>`);
+		if (this.enablePresetModify) {
+			html.push(`<div id="preset-add-new" class="border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
+${this.id}-plugin-root" style="vertical-align:top; width:150px; cursor:pointer; border-color: var(--color-border-secondary);" 
+onclick="${this.THIS}.createNewPreset(this, ${isLeftClick});"><span class="material-icons">add</span> New</div>`);
+		}
+		html.push('</div>');
 
 		Dialogs.showCustom("preset-modify-dialog",
 			"<b>Annotations presets</b>",

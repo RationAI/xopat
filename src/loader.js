@@ -666,7 +666,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Store the plugin configuration parameters
+         * Store the plugin online configuration parameters/options
          * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
@@ -680,13 +680,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Read the plugin configuration parameters
+         * Read the plugin online configuration parameters/options
          * @param {string} key
          * @param {*} defaultValue
          * @param {boolean} cache
          * @return {*}
          */
         getOption(key, defaultValue=undefined, cache=true) {
+            //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
             if (cache) {
                 let cached = localStorage.getItem(`${this.id}.${key}`);
                 if (cached !== null) return cached;
@@ -696,7 +697,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
-        };
+        }
+
+        /**
+         * Read plugin configuration value - either from a static configuration or dynamic one.
+         * More generic function that reads any option available (configurable via dynamic JSON or include.json)
+         * @param {string} optKey dynamic param key, overrides anything
+         * @param {string} staticKey static param key, used if dynamic value is undefined
+         * @param {any} defaultValue
+         * @param {boolean} cache
+         */
+        getOptionOrConfiguration(optKey, staticKey, defaultValue=undefined, cache=true) {
+            const value = this.getOption(optKey, undefined, cache);
+            return value === undefined ? this.getStaticMeta(staticKey, defaultValue) : value;
+        }
 
         /**
          * JS String to use in DOM callbacks to access self instance.

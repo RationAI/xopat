@@ -184,7 +184,23 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
+    static encodeFinalize(output) {
+        let result = {
+            type: "FeatureCollection",
+            features: []
+        };
+        let list = result.features;
+
+        if (Array.isArray(output.objects)) {
+            for (let obj of output.objects) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
+            }
+        }
+        return JSON.stringify(result);
+    }
+
+    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
         this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
             options.bioFormatsOffset : undefined;
 
@@ -197,15 +213,9 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
             OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], annotationsModule) : false;
         this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
-        let output = {
-            type: "FeatureCollection",
-            features: []
-        };
-        let list = output.features;
-
+        const result = {};
         // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let i = 0; i < annotations.length; i++) {
-            let obj = annotations[i];
+        for (let obj of annotations) {
             if (!obj.factoryID || obj.factoryID.startsWith("_")) {
                 continue;
             }
@@ -215,12 +225,12 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
                 let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
                 if (encoded) {
                     encoded.type = "Feature";
-                    list.push(encoded);
+                    if (options.serialize) encoded = JSON.stringify(encoded);
+                    result.objects.push(encoded);
                 }
             }
         }
-
-        return JSON.stringify(output);
+        return result;
     }
 
     async decode(data, annotationsModule, options) {

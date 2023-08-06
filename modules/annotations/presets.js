@@ -338,18 +338,19 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Export presets
-     * todo rename to asJSON(...)
-     * @param serialized whether to return serialized string or not
+     * @param usedOnly whether to return only subset for which exist annotations
      * @returns {string|[object]} JSON-friendly representation
      */
-    toObject(serialized=false) {
+    toObject(usedOnly=false) {
         let exported = [];
         for (let preset in this._presets) {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
-            exported.push(preset.toJSONFriendlyObject());
+
+            if (!usedOnly || this._context.canvas._objects.some(x => x.presetID === preset.presetID)) {
+                exported.push(preset.toJSONFriendlyObject());
+            }
         }
-        if (serialized) return JSON.stringify(exported);
         return exported;
     }
 

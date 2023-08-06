@@ -462,7 +462,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         const _this = this;
         const focusBox = this._getFocusBBoxAsString(object, factory);
         const editIcon = factory.isEditable() ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
-title="Edit annotation (disables navigation)" onclick="if (this.html() === 'edit') {
+title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `

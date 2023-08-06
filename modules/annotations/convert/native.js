@@ -6,26 +6,28 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
         return 'annotations_' + UTILITIES.todayISO() + '.json';
     }
 
-    static exports() {
-        return ['objects', 'presets'];
+    static encodeFinalize(output) {
+        return JSON.stringify({
+            metadata: {
+                version: OSDAnnotations.instance().version,
+                created: Date.now(),
+            },
+            ...output
+        });
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        const presets = presetsGetter();
-        const annotations = annotationsGetter();
+    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+        let presets = presetsGetter();
+        let annotations = annotationsGetter();
+        if (options.serialize) {
+            presets = presets ? JSON.stringify(presets) : undefined;
+            annotations = annotations ? JSON.stringify(annotations) : undefined;
+        }
 
-        const result = {};
-        result.metadata = {
-            version: annotationsModule.version,
-            created: Date.now(),
+        return {
+            objects: annotations,
+            presets: presets
         };
-        if (annotations) {
-            result.objects = annotations;
-        }
-        if (presets) {
-            result.presets = presets;
-        }
-        return JSON.stringify(result);
     }
 
     async decode(data, annotationsModule, options) {

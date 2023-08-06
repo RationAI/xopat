@@ -165,7 +165,30 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
+    static encodeFinalize(output) {
+        let result = {
+            type: "FeatureCollection",
+            features: []
+        };
+        let list = result.features;
+
+        if (Array.isArray(output.objects)) {
+            for (let obj of output.objects) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
+            }
+        }
+
+        if (Array.isArray(output.presets)) {
+            for (let obj of output.presets) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
+            }
+        }
+        return JSON.stringify(result);
+    }
+
+    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
         this.context = annotationsModule;
 
         //https://github.com/computationalpathologygroup/ASAP/issues/167
@@ -173,39 +196,42 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         const annotations = annotationsGetter();
         const presets = presetsGetter();
 
-        let output = {
-            type: "FeatureCollection",
-            features: []
-        };
-        let list = output.features;
+        const result = {};
+        if (Array.isArray(annotations)) {
+            result.objects = [];
+            // for each object (annotation) create new annotation element with coresponding coordinates
+            for (let obj of annotations) {
+                if (!obj.factoryID || obj.factoryID.startsWith("_")) {
+                    continue;
+                }
 
-        // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let i = 0; i < annotations.length; i++) {
-            let obj = annotations[i];
-            if (!obj.factoryID || obj.factoryID.startsWith("_")) {
-                continue;
-            }
-
-            // noinspection JSUnresolvedVariable
-            if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                let encoded = this.encoders[obj.factoryID]?.(obj);
-                if (encoded) {
-                    encoded.type = "Feature";
-                    list.push(encoded);
+                // noinspection JSUnresolvedVariable
+                if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
+                    let encoded = this.encoders[obj.factoryID]?.(obj);
+                    if (encoded) {
+                        encoded.type = "Feature";
+                        if (options.serialize) encoded = JSON.stringify(encoded);
+                        result.objects.push(encoded);
+                    }
                 }
             }
         }
 
-        list.push(...presets.map(p => ({
-            type: "Feature",
-            geometry: null,
-            properties: p
-        })));
-        return JSON.stringify(output);
+        if (Array.isArray(presets)) {
+            result.presets = presets.map(p => options.serialize ? JSON.stringify({
+                type: "Feature",
+                geometry: null,
+                properties: p
+            }) : {
+                type: "Feature",
+                geometry: null,
+                properties: p
+            });
+        }
+        return result;
     }
 
     async decode(data, annotationsModule, options) {
-
         data = JSON.parse(data);
 
         const parseFeature = function (object, presets, annotations) {

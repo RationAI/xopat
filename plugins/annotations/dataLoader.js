@@ -122,7 +122,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Read
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {function} onSuccess  call with object - data from the response, in expected format
@@ -133,7 +133,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Update
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {object} data annotations data, export from the module
@@ -158,7 +158,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Delete
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {function} onSuccess  call with object - data from the response, in expected format
@@ -169,7 +169,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Create
      * @param {string} server URL to the annotations server
      * @param {string} tissueId tissue ID, usually a path to the file
      * @param {object} data annotations data, export from the module
@@ -178,7 +178,6 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure call on failure with the error object
      */
     uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
-
         const appMeta = APPLICATION_CONTEXT.metadata;
         this.currentMeta = new MetaStore({});
         this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);

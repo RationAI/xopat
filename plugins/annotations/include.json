@@ -12,8 +12,10 @@
     "server": null,
     //Available annotation object types
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
-    //Windowed history?
+    //Windowed history + annotation list
     "modalHistoryWindow": true,
+    //Enable adjustment of presets
+    "enablePresetModify": true,
     //Arguments to format convertors
     "convertors": {
         "format": "native",

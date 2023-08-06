@@ -144,15 +144,49 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Export annotations and presets
 	 * @param {{}} options options
+	 * @param {string?} options.format a string that defines desired format ID as registered
+	 *   in OSDAnnotations.Convertor, default 'native'
+	 * @param {object?} options.bioformatsCroppingRect
+	 * @param {boolean?} options.serialize true to serialize the output
+	 * @param {boolean} withAnnotations
+	 * @param {boolean} withPresets
+	 * @return Promise(object) partially serialized data, ready to be finished with exportFinalize:
+	 *   objects: [(string|any)] serialized or un
+	 */
+	async exportPartial(options={}, withAnnotations=true, withPresets=true) {
+		if (!options?.format) options.format = "native";
+		return OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+	}
+
+	/**
+	 * Export annotations and presets
+	 * @param {object} data output of exportPartial(...) with a correct format!
+	 * @param {string?} format default 'native'
+	 */
+	exportFinalize(data, format='native') {
+		return OSDAnnotations.Convertor.encodeFinalize(format, data);
+	}
+
+	/**
+	 * Export annotations and presets
+	 * @param {{}} options options
 	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {object?} options.bioformatsCroppingRect
+	 * @param {boolean?} options.serialize true to serialize the output, default true
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
 	 * @return Promise(string) serialized data
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
 		if (!options?.format) options.format = "native";
-		return OSDAnnotations.Convertor.encode(options, this, withAnnotations, withPresets);
+
+		if (options.serialize === false) {
+			return OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		}
+		//prevent immediate serialization as we feed it to a merge
+		options.serialize = false;
+		let output = OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		return OSDAnnotations.Convertor.encodeFinalize(options.format, output);
 	}
 
 	/**
@@ -827,7 +861,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {
-		return await this.setCache(this.presetCookieKey, this.presets.toObject(true));
+		return await this.setCache(this.presetCookieKey, JSON.stringify(this.presets.toObject()));
 	}
 
 	/**
@@ -836,6 +870,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	async loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
 		const presetCookiesData = await this.getCache(this.presetCookieKey);
+
+		console.log("Cached preset data:", presetCookiesData);
+
 		if (presetCookiesData) {
 			if (ask && this.presets._presetsImported) {
 				this.warn({
