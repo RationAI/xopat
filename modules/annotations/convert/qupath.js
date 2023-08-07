@@ -1,10 +1,10 @@
-OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Convertor.IConvertor {
+OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'QuPath Annotations';
     static description = 'Annotations for quPath (GeoJSON format).';
     offset = undefined;
 
     static getFileName(context) {
-        return 'qu_annotations_' + UTILITIES.todayISO() + '.geojson';
+        return 'geojson_qupath_' + UTILITIES.todayISO("_") + '.json';
     }
 
     static _enableBioFormatsOffset = true;
@@ -14,13 +14,13 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
         "bioFormatsOffset": {
             type: "checkBox",
             label: "Export with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
-            onchange: "OSDAnnotations.Convertor.get('qu-path')._enableBioFormatsOffset = this.checked",
+            onchange: "OSDAnnotations.Convertor.get('qupath')._enableBioFormatsOffset = this.checked",
             default: this._enableBioFormatsOffset
         },
         "trimToDefaultPresets": {
             type: "checkBox",
             label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes.</span>",
-            onchange: "OSDAnnotations.Convertor.get('qu-path')._enableTrimToDefaultPresets = this.checked",
+            onchange: "OSDAnnotations.Convertor.get('qupath')._enableTrimToDefaultPresets = this.checked",
             default: this._enableTrimToDefaultPresets
         },
     };
@@ -188,6 +188,11 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
 
         this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
             options.bioFormatsOffset : undefined;
+
+        //todo ugly, just use options only
+        if (options.trimToDefaultPresets !== undefined) {
+            this.constructor._enableTrimToDefaultPresets = options.trimToDefaultPresets;
+        }
 
         this.context = annotationsModule;
 

@@ -43,6 +43,9 @@ class AnnotationsGUI extends XOpatPlugin {
 			availableFormats: OSDAnnotations.Convertor.formats,
 			format: this.getOption('defaultIOFormat', this._defaultFormat),
 		};
+		const formats = OSDAnnotations.Convertor.formats;
+		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
+		if (!formats.includes(this._defaultFormat)) this._defaultFormat = "native";
 
 		this.isModalHistory = this.getOptionOrConfiguration('modalHistoryWindow', 'modalHistoryWindow', true);
 		this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);

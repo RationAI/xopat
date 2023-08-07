@@ -113,7 +113,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	defaultFileNameFor(format=undefined) {
-		return OSDAnnotations.Convertor.defaultFileName(format);
+		return OSDAnnotations.Convertor.defaultFileName(format, this);
 	}
 
 	/**

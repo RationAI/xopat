@@ -43,12 +43,12 @@ describe('Annotations - User Controls', () => {
         elements.closeDialog(); //preventive
     });
 
-    function testSameContent(x) {
+    function testSameContent(imageName, x) {
         cy.wait(500);
 
         cy.get("#advanced-menu-close-button").click();
 
-        cy.canvas().matchImage({title: "IO Test - should be all same images."});
+        cy.canvas().matchImage({title: imageName});
 
         cy.get("#annotations-right-click").click();
 
@@ -107,7 +107,7 @@ describe('Annotations - User Controls', () => {
         cy.get("#importAnnotation").next("input").selectFile(
             "test/fixtures/plugins/annotations/native.all.json", {force: true});
 
-        cy.then(x => testSameContent(x));
+        cy.then(x => testSameContent("1-import-all-native", x));
         cy.then(x => testSameObjects(x));
     });
 
@@ -120,7 +120,37 @@ describe('Annotations - User Controls', () => {
 
         cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/native.objects.json", {force: true});
 
-        cy.then(x => testSameContent(x));
+        cy.then(x => testSameContent("1-import-separate-native", x));
+        cy.then(x => testSameObjects(x));
+    });
+
+    it ('Test cyclic re-import - native format', () => {
+        cy.get("#annotations-cloud").click();
+        cy.get("#native-export-format + label").click();
+        cy.get("#importAnnotation").next("input").selectFile(
+            "test/fixtures/plugins/annotations/native.all.json", {force: true});
+
+        //download files disabled, not reliably working in cypress
+        // cy.get("#geo-json-export-format + label").click();
+        // cy.get("#downloadAnnotation").click();
+        //refresh
+        cy.then(async x => {
+            const data = await ANNOTATIONS.export({format: "native"});
+
+            ANNOTATIONS.deleteAllAnnotations();
+            ANNOTATIONS.presets.foreach(p => {
+                ANNOTATIONS.presets.removePreset(p.presetID);
+            });
+
+            ANNOTATIONS.import(data, {format: "native"});
+
+            return x;
+        })
+        //import
+        // cy.get("#importAnnotation").next("input").selectFile(
+        //     "test/downloads/" + ANNOTATIONS.defaultFileNameFor("geo-json"), {force: true});
+
+        cy.then(x => testSameContent("1-import-export-native", x));
         cy.then(x => testSameObjects(x));
     });
 
@@ -134,7 +164,7 @@ describe('Annotations - User Controls', () => {
         cy.get("#importAnnotation").next("input").selectFile(
             "test/fixtures/plugins/annotations/geojson.all.json", {force: true});
 
-        cy.then(x => testSameContent(x));
+        cy.then(x => testSameContent("2-import-all-geojson", x));
         //avoid testing layer ID, not preserved
         cy.then(x => testSameObjects(x, false, ['layerID']));
     });
@@ -146,28 +176,39 @@ describe('Annotations - User Controls', () => {
 
         cy.get("#importAnnotation").next("input").selectFile("test/fixtures/plugins/annotations/geojson.presets.json", {force: true});
 
-        cy.then(x => testSameContent(x));
+        cy.then(x => testSameContent("2-import-presets-geojson", x));
         //avoid testing layer ID, not preserved
         cy.then(x => testSameObjects(x, true, ['layerID']));
     });
 
-    it ('Test Import All - QuPath', () => {
-        //images not tested yet  - export and import does not work
-
+    it ('Test cyclic re-import - GeoJSON', () => {
         cy.get("#annotations-cloud").click();
-
-        cy.get("#qu-path-export-format + label").click();
-
+        cy.get("#native-export-format + label").click();
         cy.get("#importAnnotation").next("input").selectFile(
-            "test/fixtures/plugins/annotations/qupath.all.json", {force: true});
+            "test/fixtures/plugins/annotations/native.all.json", {force: true});
 
-        //A bit different test since it does not update all meta and props, it is a lossy conversion
+        //test
+        cy.then(async x => {
+            const data = await ANNOTATIONS.export({format: "geo-json"});
+
+            ANNOTATIONS.deleteAllAnnotations();
+            ANNOTATIONS.presets.foreach(p => {
+                ANNOTATIONS.presets.removePreset(p.presetID);
+            });
+
+            ANNOTATIONS.import(data, {format: "geo-json"});
+
+            return x;
+        })
+
+        cy.then(x => testSameContent("2-import-export-geojson", x));
+        cy.then(x => testSameObjects(x));
+    });
+
+    function testQuPath(imageName, x) {
         cy.wait(500);
-
         cy.get("#advanced-menu-close-button").click();
-        cy.canvas().matchImage({title: "IO Test - should be all same images."});
         cy.get("#annotations-right-click").click();
-
         //preset #2 is on position 1 and vice versa (object loaded in this order, presets created on objects)
         helpers.presetUiNthMetaContainer(1, 0).should('contain.html', 'はじめまして');
         //only category names are preserved
@@ -188,9 +229,53 @@ describe('Annotations - User Controls', () => {
 
         //avoid testing manually, too different
         //cy.then(x => testSameObjects(x, false, ['layerID', 'presetID'], ['text', 'ruler', 'rect', 'ellipse']));
+        return x;
+    }
+
+    it ('Test Import All - QuPath', () => {
+        //images not tested yet  - export and import does not work
+
+        cy.get("#annotations-cloud").click();
+
+        cy.get("#qupath-export-format + label").click();
+
+        cy.get("#importAnnotation").next("input").selectFile(
+            "test/fixtures/plugins/annotations/qupath.all.json", {force: true});
+
+        cy.then(x => testQuPath("3-import-all-qupath", x));
     });
 
     // Presets alone not tested, not possible
     // it ('Test Import Separate Import - QuPath', () => {
     // });
+
+    it ('Test cyclic re-import - QuPath', () => {
+        cy.get("#annotations-cloud").click();
+
+        cy.get("#native-export-format + label").click();
+
+        //import
+        cy.get("#importAnnotation").next("input").selectFile(
+            "test/fixtures/plugins/annotations/native.all.json", {force: true});
+
+
+        cy.get("#qupath-export-format + label").click();
+        cy.get("#downloadAnnotation").click();
+
+        //test
+        cy.then(async x => {
+            const data = await ANNOTATIONS.export({format: "qupath",
+                bioFormatsOffset: [0, 0], trimToDefaultPresets: false});
+
+            ANNOTATIONS.deleteAllAnnotations();
+            ANNOTATIONS.presets.foreach(p => {
+                ANNOTATIONS.presets.removePreset(p.presetID);
+            });
+
+            ANNOTATIONS.import(data, {format: "qupath"});
+            return x;
+        })
+
+        cy.then(x => testQuPath("3-import-export-qupath", x));
+    });
 });

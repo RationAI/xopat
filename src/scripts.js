@@ -199,8 +199,8 @@ function initXopatScripts() {
      * Get the date as ISO string
      * @return {string}
      */
-    window.UTILITIES.todayISO = function() {
-        return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
+    window.UTILITIES.todayISO = function(separator="/") {
+        return new Date().toJSON().slice(0,10).split('-').reverse().join(separator);
     };
 
     /**

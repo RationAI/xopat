@@ -12,7 +12,7 @@
  *     static exportsPresets = false;
  *
  *     static getFileName(context) {
- *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
+ *         return 'annotations_' + UTILITIES.todayISO("_") + '.awesome';
  *     }
  *
  *     async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {*
@@ -199,7 +199,7 @@ OSDAnnotations.Convertor.IConvertor = class {
      * @return {string}
      */
     static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO() + '.txt';
+        return 'annotations_' + UTILITIES.todayISO("_") + '.txt';
     }
 
     /**
