@@ -1,3 +1,4 @@
+//ASAP XML not yet fully tested, does not render well all objects, problem with hierarchies
 OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'ASAP-XML Annotations';
     static description = 'ASAP-compatible XML Annotations Format';
@@ -9,12 +10,12 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
     static parse(string) {
         if (window.DOMParser) {
             const parser = new DOMParser();
-            return parser.parseFromString(data, "text/xml");
+            return parser.parseFromString(string, "text/xml");
         }
         // Internet Explorer
         let xmlDoc = new ActiveXObject("Microsoft.XMLDOM");
         xmlDoc.async = false;
-        xmlDoc.loadXML(data);
+        xmlDoc.loadXML(string);
         return xmlDoc;
     }
 
@@ -53,10 +54,11 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         let doc = document.implementation.createDocument("", "", null);
         const presetsIdSet = new Set();
 
-        if (Array.isArray(annotations)) {
+        if (options.exportsObjects && Array.isArray(annotations)) {
             result.objects = [];
             // for each object (annotation) create new annotation element with coresponding coordinates
-            for (let obj of annotations) {
+            for (let i = 0; i < annotations.length; i++) {
+                let obj = annotations[i];
                 if (!obj.factoryID || obj.factoryID.startsWith("_")) {
                     continue;
                 }
@@ -107,7 +109,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             }
         }
 
-        if (Array.isArray(presets)) {
+        if (options.exportsPresets && Array.isArray(presets)) {
             result.presets = [];
 
             for (let preset of presets) {

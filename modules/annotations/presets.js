@@ -426,12 +426,15 @@ OSDAnnotations.PresetManager = class {
     }
 
     _withDynamicOptions(options) {
-        let zoom = this._context.canvas.getZoom();
+        const canvas = this._context.canvas,
+            zoom = canvas.getZoom(),
+            gZoom = canvas.computeGraphicZoom(zoom);
+
         return $.extend(options, {
             layerID: this._context.getLayer().id,
             opacity: this._context.getOpacity(),
             zoomAtCreation: zoom,
-            strokeWidth: 3 / zoom
+            strokeWidth: 3 / gZoom
         });
     }
 
@@ -488,17 +491,14 @@ OSDAnnotations.Layer = class {
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context
-     * @param {number} id
+     * @param {string} id
      */
-    constructor(context, id=Date.now()) {
+    constructor(context, id=String(Date.now())) {
         this._context = context;
         this.id = id;
-
         this.position = -1;
-        for (let id in context._layers) {
-            this.position = Math.max(this.position, context._layers[id]);
-        }
-        this.position++;
+        this.position = Object.values(this._context._layers)
+            .reduce((result, current) => Math.max(result, current.position), 0) + 1;
     }
 
     /**

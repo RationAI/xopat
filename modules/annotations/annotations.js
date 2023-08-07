@@ -61,7 +61,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw `The mode ${ModeClass} conflicts with another mode: ${this.Modes[id]}`;
 		}
 		if (!OSDAnnotations.AnnotationState.isPrototypeOf(ModeClass)) {
-			throw `The mode ${ModeClass} does not inherit from ${OSDAnnotations.AnnotationState}`;
+			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
 		}
 		this.Modes[id] = new ModeClass(this);
 	}
@@ -74,7 +74,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	static registerAnnotationFactory(FactoryClass, atRuntime=true) {
 		if (!OSDAnnotations.AnnotationObjectFactory.isPrototypeOf(FactoryClass)) {
-			throw `The factory ${FactoryClass} does not inherit from ${OSDAnnotations.AnnotationObjectFactory}`;
+			throw `The factory ${FactoryClass} does not inherit from OSDAnnotations.AnnotationObjectFactory`;
 		}
 
 		if (! this.instantiated()) {
@@ -147,7 +147,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {string?} options.format a string that defines desired format ID as registered
 	 *   in OSDAnnotations.Convertor, default 'native'
 	 * @param {object?} options.bioformatsCroppingRect
-	 * @param {boolean?} options.serialize true to serialize the output
+	 * @param {boolean?} options.serialize rather internally used, true to serialize the output, false to optimize
+	 *   encoding, ready for exportFinalize()
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
 	 * @return Promise(object) partially serialized data, ready to be finished with exportFinalize:
@@ -155,7 +156,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	async exportPartial(options={}, withAnnotations=true, withPresets=true) {
 		if (!options?.format) options.format = "native";
-		return OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		return await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
 	}
 
 	/**
@@ -170,22 +171,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Export annotations and presets
 	 * @param {{}} options options
-	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
+	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor,
+	 *    note that serialize option is ignored, as export() serializes always
 	 * @param {object?} options.bioformatsCroppingRect
-	 * @param {boolean?} options.serialize true to serialize the output, default true
 	 * @param {boolean} withAnnotations
 	 * @param {boolean} withPresets
-	 * @return Promise(string) serialized data
+	 * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
 		if (!options?.format) options.format = "native";
-
-		if (options.serialize === false) {
-			return OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
-		}
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
-		let output = OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
 		return OSDAnnotations.Convertor.encodeFinalize(options.format, output);
 	}
 
@@ -251,28 +248,37 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Export only annotation objects in a fabricjs manner (actually just forwards the export command)
 	 * for exporting presets, see this.presets.export(...)
-	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones, string counts as one of withProperties
+	 *
+	 * The idea behind fabric exporting is to use _exportedPropertiesGlobal to ensure all properties
+	 * we want are included. Fabric's toObject will include plethora of properties. To trim down these,
+	 * trimExportJSON() is used to keep only necessary properties.
+	 *
+	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones,
+	 *   string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
 	 * @return {object} exported canvas content in {objects:[object]} format
 	 */
 	toObject(withAllProps=false, ...withProperties) {
 		let props;
 		if (typeof withAllProps === "boolean") {
-			props = this.exportedPropertiesGlobal(withAllProps);
+			props = this._exportedPropertiesGlobal(withAllProps);
 		} else if (typeof withAllProps === "string") {
-			props = this.exportedPropertiesGlobal(true);
+			props = this._exportedPropertiesGlobal(true);
 			props.push(withAllProps);
 		}
 		props.push(...withProperties);
 		props.push(...this._extraProps);
-		return this.canvas.toObject(props);
+		props = Array.from(new Set(props));
+		const data = this.canvas.toObject(props);
+		if (withAllProps) return data;
+		return this.trimExportJSON(data);
 	}
 
 	/**
-	 * Compute properties registered for export
-	 * @return {*[]}
+	 * Returns additional properties to copy (beside all properties generated by fabricjs)
+	 * @private
 	 */
-	exportedPropertiesGlobal(all=true) {
+	_exportedPropertiesGlobal(all=true) {
 		const props = new Set(
 			all ? OSDAnnotations.AnnotationObjectFactory.copiedProperties :
 				OSDAnnotations.AnnotationObjectFactory.necessaryProperties
@@ -541,12 +547,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		} else {
 			//todo maybe try to find a preset with the exact same color...
 			preset = this.presets.left || this.presets.getOrCreate("__default__");
-			preset.set
 			object.presetID = preset.presetID;
 		}
 
 		const props = this.presets.getCommonProperties(preset);
-		if (!isNaN(object.zoomAtCreation)) props.zoomAtCreation = object.zoomAtCreation;
+		if (!isNaN(object.zoomAtCreation)) {
+			props.zoomAtCreation = object.zoomAtCreation;
+		}
+		if (object.layerID !== undefined) {
+			props.layerID = String(object.layerID);
+		}
 
 		let factory = object._factory();
 		if (!factory) {
@@ -558,7 +568,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 		factory.configure(object, props);
-		object.zooming(this.canvas.getZoom());
+
+		//todo make sure cached zoom value
+		const zoom = this.canvas.getZoom();
+		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
 	}
 
 	/************************ Layers *******************************/
@@ -572,7 +585,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (!ofObject.hasOwnProperty("layerID")) {
 			if (this._layer) ofObject.layerID = this._layer.id;
 		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
-			return this.createLayer(ofObject.layerID);
+			this.createLayer(ofObject.layerID);
 		}
 	}
 
@@ -607,6 +620,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {OSDAnnotations.Layer}
 	 */
 	createLayer(id=Date.now()) {
+		id = String(id);
 		let layer = new OSDAnnotations.Layer(this, id);
 		if (!this._layer) this._layer = layer;
 		this._layers[id] = layer;
@@ -661,6 +675,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {fabric.Object} annotation
 	 */
 	addHelperAnnotation(annotation) {
+		annotation.excludeFromExport = true;
 		this.canvas.add(annotation);
 	}
 
@@ -672,6 +687,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
+		delete annotation.excludeFromExport;
 		annotation.sessionID = this.session;
 		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
 		annotation.created = Date.now();
@@ -1005,7 +1021,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Line, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Point, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Text, false);
-		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Image, false);
+		// OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Image, false);
 
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
@@ -1306,7 +1322,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	_loadObjects(input, clear, reviver) {
 		const originalToObject = fabric.Object.prototype.toObject;
-		const inclusionProps = this.exportedPropertiesGlobal();
+		const inclusionProps = this._exportedPropertiesGlobal();
 
 		//we ignore incoming props as we later reset the override
 		fabric.Object.prototype.toObject = function (_) {
@@ -1789,7 +1805,14 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 		// if click too short, user probably did not want to create such object, discard
 		if (delta < updater.getCreationRequiredMouseDragDurationMS()) {
-			this.context.canvas.remove(updater.getCurrentObject());
+			const helper = updater.getCurrentObject();
+			if (Array.isArray(updater.getCurrentObject())) {
+				for (let item of helper) {
+					this.context.deleteHelperAnnotation(item);
+				}
+			} else {
+				this.context.deleteHelperAnnotation(helper);
+			}
 			return;
 		}
 		updater.finishDirect();

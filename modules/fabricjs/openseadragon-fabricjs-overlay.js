@@ -32,8 +32,29 @@
     //     }
     // };
 
+
+
     fabric.Object.prototype.objectCaching = false;
+    fabric.Object.NUM_FRACTION_DIGITS = 2;
     fabric.Group.prototype.objectCaching = false;
+    //fabric cannot minify points in IO, replace
+    fabric.Polygon.prototype.toObject =
+        fabric.Polyline.prototype.toObject = function(propertiesToInclude) {
+        const digits = fabric.Object.NUM_FRACTION_DIGITS;
+        const data = this.callSuper('toObject', propertiesToInclude);
+        data.points = this.points.concat().map(p => ({
+            x: parseFloat(Number(p.x).toFixed(digits)),
+            y: parseFloat(Number(p.y).toFixed(digits))
+        }));
+        return data;
+    };
+    /**
+     * Find object under mouse by iterating
+     * @param e mouse event
+     * @param objectToAvoid (usually active) object to avoid
+     * @return {number}
+     * @memberOf fabric.Canvas
+     */
     fabric.Canvas.prototype.findNextObjectUnderMouse = function(e, objectToAvoid) {
         const pointer = this.getPointer(e, true);
         //necessary only for groups
@@ -47,7 +68,17 @@
             }
         }
         return null;
-    }
+    };
+
+    /**
+     * Compute more visually-pleasing zoom value for rendering.
+     * @memberOf fabric.Canvas
+     * @param zoom
+     * @return {number}
+     */
+    fabric.Canvas.prototype.computeGraphicZoom = function (zoom) {
+        return Math.sqrt(zoom) / 2
+    };
 
     if (!window.OpenSeadragon) {
         console.error('[openseadragon-canvas-overlay] requires OpenSeadragon');

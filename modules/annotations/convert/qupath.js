@@ -55,7 +55,7 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
         }
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-        let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+        let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
         if (poly?.length > 0) {
             const offset = this.offset;
             if (offset) poly = poly.map(o => ([o[0]-offset.x, o[1]-offset.y]));
@@ -120,7 +120,7 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
-        "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], true),
+        "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], false),
         "point": (object, preset) => {
             object = this._asGEOJsonFeature(object, preset, "Point");
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
@@ -131,25 +131,7 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "ruler": (object, preset) => {
-            const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-            const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
-            const line = object.objects[0];
-            //todo bounding box should be exported as well so that coords are not negative without sense
-            //todo reimport is imprecise
-
-            //todo preset data
-            return {
-                geometry: {
-                    type: "LineString",
-                    coordinates: [
-                        converter(line.x1, line.y1),
-                        converter(line.x2, line.y2),
-                    ]
-                },
-                properties: factory.copyNecessaryProperties(object, [], true)
-            };
-        },
+        "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
     _decodeMulti(object, type) {
@@ -201,6 +183,9 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
     }
 
     async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+        const result = {}
+        if (!options.exportsObjects) return result;
+
         this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
             options.bioFormatsOffset : undefined;
 
@@ -213,20 +198,22 @@ OSDAnnotations.Convertor.register("qu-path", class extends OSDAnnotations.Conver
             OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], annotationsModule) : false;
         this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
-        const result = {};
         // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let obj of annotations) {
-            if (!obj.factoryID || obj.factoryID.startsWith("_")) {
-                continue;
-            }
+        if (annotations) {
+            result.objects = [];
+            for (let obj of annotations) {
+                if (!obj.factoryID || obj.factoryID.startsWith("_")) {
+                    continue;
+                }
 
-            // noinspection JSUnresolvedVariable
-            if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
-                if (encoded) {
-                    encoded.type = "Feature";
-                    if (options.serialize) encoded = JSON.stringify(encoded);
-                    result.objects.push(encoded);
+                // noinspection JSUnresolvedVariable
+                if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
+                    let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
+                    if (encoded) {
+                        encoded.type = "Feature";
+                        if (options.serialize) encoded = JSON.stringify(encoded);
+                        result.objects.push(encoded);
+                    }
                 }
             }
         }

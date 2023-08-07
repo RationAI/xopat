@@ -160,11 +160,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             text = obj[1],
             pid = line.presetID;
 
+        if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
+            return;
+        }
+
         const props = this._presets.getCommonProperties();
-        // this._configureParts(obj[0], obj[1], props);
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
-
         text.set({
             scaleX: 1,
             scaleY: 1,
@@ -172,10 +174,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             left: line.left + line.width / 2
         });
         text.calcOCoords();
-
         this._context.addAnnotation(obj);
         this._current = undefined;
-        this._context.canvas.renderAll();
     }
 
     finishIndirect() {
@@ -210,16 +210,23 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     import(object) {
     }
 
-    /**
-     * A list of extra properties to export upon export event
-     * @return {string[]}
-     */
-    exports() {
-        return ["measure"];
+    exportsGeometry() {
+        return ["x1", "x2", "y1", "y2", "text"];
     }
 
-    exportsGeometry() {
-        return ["x1", "x2", "y1", "y2", "text"]; //todo test
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        //fallback to line
+        //todo problem: can be used (by converters) for exported or active objects, one has the list underscored, other not
+        // probably ban using toPointArray on exported native format..
+        const line = obj._objects ? obj._objects[0] : obj.objects[0];
+        let x1 = obj.left + line.x1 + obj.width/2, x2 = obj.left + line.x2 + obj.width/2;
+        let y1 = obj.top + line.y1 + obj.height/2, y2 = obj.top + line.y2 + obj.height/2;
+
+        if (digits !== undefined) {
+            x1 = parseFloat(Number(x1).toFixed(digits)); y1 = parseFloat(Number(y1).toFixed(digits));
+            x2 = parseFloat(Number(x2).toFixed(digits)); y2 = parseFloat(Number(y2).toFixed(digits));
+        }
+        return [converter(x1, y1), converter(x2, y2)];
     }
 
     _configureLine(line, options) {
@@ -263,6 +270,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             measure: this._updateText(line, text),
             selectable: false,
             hasBorders: false,
+            originX: 'left',
+            originY: 'top'
         });
     }
 
@@ -279,8 +288,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return wrap;
     }
 };
-
-
 
 // OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //     constructor(context, autoCreationStrategy, presetManager) {
@@ -502,162 +509,163 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //     }
 // };
 
-OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "image", "image");
-        this._origX = null;
-        this._origY = null;
-        this._current = null;
-    }
-
-    getIcon() {
-        return "image";
-    }
-
-    fabricStructure() {
-        return "image";
-    }
-
-    getDescription(ofObject) {
-        return `Image [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
-    }
-
-    getCurrentObject() {
-        return this._current;
-    }
-
-    /**
-     * @param {Object} parameters object of the following properties:
-     *              - img: <img> element.
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - width: optional image width
-     *              - height: optional image height
-     *              - opacity: opacity
-     * @param {Object} options see parent class
-     */
-    create(parameters, options) {
-        const img = parameters.img;
-        delete parameters.img;
-        const instance = new fabric.Image(img, parameters);
-        return this.configure(instance, options);
-    }
-
-    configure(object, options) {
-        $.extend(object, options, {
-            strokeWidth: 1,
-            originalStrokeWidth: 1,
-            type: this.type,
-            factoryID: this.factoryID,
-        });
-        return object;
-    }
-
-    /**
-     * @param {Object} ofObject fabricjs.Rect object that is being copied
-     * @param {Object} parameters object of the following properties:
-     *              - left: offset in the image dimension
-     *              - top: offset in the image dimension
-     *              - width: rect width
-     *              - height: rect height
-     */
-    copy(ofObject, parameters=undefined) {
-        //todo defalt implementation like this?
-        return $.extend(fabric.util.object.clone(ofObject), parameters);
-    }
-
-    /**
-     * A list of extra properties to export upon export event
-     * @return {string[]}
-     */
-    exports() {
-        return ["scaleX", "scaleY"]; //"left", "top", "width", "height", "opacity",
-    }
-
-    edit(theObject) {
-        this._left = theObject.left;
-        this._top = theObject.top;
-        theObject.set({
-            hasControls: true,
-            lockMovementX: false,
-            lockMovementY: false
-        });
-    }
-
-    recalculate(theObject) {
-        let left = theObject.left,
-            top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, hasControls: false,
-            lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {left: left, top: top});
-        delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
-        theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        return false;
-    }
-
-    initCreate(x, y, isLeftClick) {
-        this._origX = x;
-        this._origY = y;
-        this._current = new fabric.Rect($.extend({
-            left: x,
-            top: y,
-            width: 1,
-            height: 1
-        }, this._presets.getAnnotationOptions(isLeftClick)));
-        this._context.addHelperAnnotation(this._current);
-    }
-
-    updateCreate(x, y) {
-        if (!this._current) return;
-        if (this._origX > x) this._current.set({ left: x });
-        if (this._origY > y) this._current.set({ top: y });
-
-        let width = Math.abs(x - this._origX);
-        let height = Math.abs(y - this._origY);
-        this._current.set({ width: width, height: height });
-    }
-
-    onZoom(ofObject, graphicZoom, realZoom) {
-        //nothing
-    }
-
-    finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return;
-
-        const self = this;
-        UTILITIES.uploadFile(url => {
-            const image = document.createElement('img');
-            image.onload = () => {
-                self._context.deleteHelperAnnotation(obj);
-                self._context.addAnnotation(self.create({
-                        top: obj.top,
-                        left: obj.left,
-                        scaleX: obj.width / image.width,
-                        scaleY: obj.height / image.height,
-                        img: image
-                }, this._presets.getAnnotationOptions(obj.isLeftClick)));
-            };
-            image.onerror = () => {
-                self._context.deleteHelperAnnotation(obj);
-            };
-            image.onabort = () => {
-                self._context.deleteHelperAnnotation(obj);
-            }
-            image.setAttribute('src', url);
-        }, "image/*", "url");
-        this._current = undefined;
-    }
-
-    finishIndirect() {
-        this.finishDirect();
-    }
-
-    title() {
-        return "Image";
-    }
-};
+// OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
+//     constructor(context, autoCreationStrategy, presetManager) {
+//         super(context, autoCreationStrategy, presetManager, "image", "image");
+//         this._origX = null;
+//         this._origY = null;
+//         this._current = null;
+//     }
+//
+//     getIcon() {
+//         return "image";
+//     }
+//
+//     fabricStructure() {
+//         return "image";
+//     }
+//
+//     getDescription(ofObject) {
+//         return `Image [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
+//     }
+//
+//     getCurrentObject() {
+//         return this._current;
+//     }
+//
+//     /**
+//      * @param {Object} parameters object of the following properties:
+//      *              - img: <img> element.
+//      *              - left: offset in the image dimension
+//      *              - top: offset in the image dimension
+//      *              - width: optional image width
+//      *              - height: optional image height
+//      *              - opacity: opacity
+//      * @param {Object} options see parent class
+//      */
+//     create(parameters, options) {
+//         const img = parameters.img;
+//         delete parameters.img;
+//         const instance = new fabric.Image(img, parameters);
+//         return this.configure(instance, options);
+//     }
+//
+//     configure(object, options) {
+//         $.extend(object, options, {
+//             strokeWidth: 1,
+//             originalStrokeWidth: 1,
+//             type: this.type,
+//             factoryID: this.factoryID,
+//         });
+//         return object;
+//     }
+//
+//     /**
+//      * @param {Object} ofObject fabricjs.Rect object that is being copied
+//      * @param {Object} parameters object of the following properties:
+//      *              - left: offset in the image dimension
+//      *              - top: offset in the image dimension
+//      *              - width: rect width
+//      *              - height: rect height
+//      */
+//     copy(ofObject, parameters=undefined) {
+//         //to do defalt implementation like this?
+//         return $.extend(fabric.util.object.clone(ofObject), parameters);
+//     }
+//
+//     /**
+//      * A list of extra properties to export upon export event
+//      * @return {string[]}
+//      */
+//     exports() {
+//        to do: with these all objects now export (in native format), iterate to remove from other
+//         return ["scaleX", "scaleY"]; //"left", "top", "width", "height", "opacity",
+//     }
+//
+//     edit(theObject) {
+//         this._left = theObject.left;
+//         this._top = theObject.top;
+//         theObject.set({
+//             hasControls: true,
+//             lockMovementX: false,
+//             lockMovementY: false
+//         });
+//     }
+//
+//     recalculate(theObject) {
+//         let left = theObject.left,
+//             top = theObject.top;
+//         theObject.set({ left: this._left, top: this._top, hasControls: false,
+//             lockMovementX: true, lockMovementY: true});
+//         let newObject = this.copy(theObject, {left: left, top: top});
+//         delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
+//         theObject.calcACoords();
+//         this._context.replaceAnnotation(theObject, newObject, true);
+//     }
+//
+//     instantCreate(screenPoint, isLeftClick = true) {
+//         return false;
+//     }
+//
+//     initCreate(x, y, isLeftClick) {
+//         this._origX = x;
+//         this._origY = y;
+//         this._current = new fabric.Rect($.extend({
+//             left: x,
+//             top: y,
+//             width: 1,
+//             height: 1
+//         }, this._presets.getAnnotationOptions(isLeftClick)));
+//         this._context.addHelperAnnotation(this._current);
+//     }
+//
+//     updateCreate(x, y) {
+//         if (!this._current) return;
+//         if (this._origX > x) this._current.set({ left: x });
+//         if (this._origY > y) this._current.set({ top: y });
+//
+//         let width = Math.abs(x - this._origX);
+//         let height = Math.abs(y - this._origY);
+//         this._current.set({ width: width, height: height });
+//     }
+//
+//     onZoom(ofObject, graphicZoom, realZoom) {
+//         //nothing
+//     }
+//
+//     finishDirect() {
+//         let obj = this.getCurrentObject();
+//         if (!obj) return;
+//
+//         const self = this;
+//         UTILITIES.uploadFile(url => {
+//             const image = document.createElement('img');
+//             image.onload = () => {
+//                 self._context.deleteHelperAnnotation(obj);
+//                 self._context.addAnnotation(self.create({
+//                         top: obj.top,
+//                         left: obj.left,
+//                         scaleX: obj.width / image.width,
+//                         scaleY: obj.height / image.height,
+//                         img: image
+//                 }, this._presets.getAnnotationOptions(obj.isLeftClick)));
+//             };
+//             image.onerror = () => {
+//                 self._context.deleteHelperAnnotation(obj);
+//             };
+//             image.onabort = () => {
+//                 self._context.deleteHelperAnnotation(obj);
+//             }
+//             image.setAttribute('src', url);
+//         }, "image/*", "url");
+//         this._current = undefined;
+//     }
+//
+//     finishIndirect() {
+//         this.finishDirect();
+//     }
+//
+//     title() {
+//         return "Image";
+//     }
+// };

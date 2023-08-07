@@ -198,7 +198,8 @@ AnnotationsGUI.DataLoader = class {
 
     _fetchWorker(url, post, onSuccess, onFail) {
         if (this.context.context.disabledInteraction) {
-            Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
+            Dialogs.show('Annotations are disabled. <a onclick="$(\'#enable-disable-annotations\').click();">Enable.</a>',
+                2500, Dialogs.MSG_WARN);
             return;
         }
         UTILITIES.fetchJSON(url, post, {}).then(onSuccess).catch(onFail);

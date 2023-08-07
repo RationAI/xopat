@@ -31,6 +31,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.initIO();
 
 		const convertOpts = this.getOption('convertors');
+		this._ioArgs.serialize = true;
 		this._ioArgs.bioFormatsOffset = convertOpts?.bioFormatsOffset || this._ioArgs.bioFormatsOffset;
 		if (Array.isArray(this._ioArgs.bioFormatsOffset)) {
 			this._ioArgs.bioFormatsOffset = {
@@ -951,8 +952,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 		this.dataLoader.loadAnnotation(this._server, id, json => {
 			$('#preset-modify-dialog').remove();
 
-			const format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
-			this._ioArgs.format = format;
+			this._ioArgs.format = _this.dataLoader.getMetaFormat(new MetaStore(json.metadata, false), json);
 			_this.context.import(json.data, this._ioArgs).then(r => {
 				_this.updatePresetsHTML();
 				_this._recordId(id);

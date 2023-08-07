@@ -2,6 +2,8 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
     static title = 'xOpat Annotations';
     static description = 'Native Annotations Format';
 
+    static includeAllAnnotationProps = false;
+
     static getFileName(context) {
         return 'annotations_' + UTILITIES.todayISO() + '.json';
     }
@@ -17,8 +19,8 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
     }
 
     async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
-        let presets = presetsGetter();
-        let annotations = annotationsGetter();
+        let presets = options.exportsPresets ? presetsGetter() : undefined;
+        let annotations = options.exportsObjects ? annotationsGetter() : undefined;
         if (options.serialize) {
             presets = presets ? JSON.stringify(presets) : undefined;
             annotations = annotations ? JSON.stringify(annotations) : undefined;

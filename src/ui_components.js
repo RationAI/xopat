@@ -325,16 +325,11 @@ Components: /** @lends UIComponents.Components */ {
          */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon;
-            if (options.icon === undefined) icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
-            if (icon) {
-                if (!icon.includes('<')) {
-                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
-                }
-                //else HTML code - leave as is
-            } else {
-                icon = "";
+            let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
+            if (icon && !icon.includes('<')) {
+                icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
             }
+            //else HTML code - leave as is
 
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
@@ -391,15 +386,11 @@ ${contentAction}
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon;
-            if (icon) {
-                if (!icon.includes('<')) {
-                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
-                }
-                //else HTML code - leave as is
-            } else {
-                icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
+            let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
+            if (icon && !icon.includes('<')) {
+                icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
             }
+            //else HTML code - leave as is
 
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";

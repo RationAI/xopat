@@ -87,15 +87,18 @@ OSDAnnotations.Convertor = class {
      * Encodes the annotation data using asynchronous communication.
      * @param options
      * @param context
-     * @param widthAnnotations
+     * @param withAnnotations
      * @param withPresets
      */
-    static async encodePartial(options, context, widthAnnotations=true, withPresets=true) {
+    static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
         const parserCls = this.get(options.format);
         const exportAll = parserCls.includeAllAnnotationProps;
+
+        options.exportsObjects = withAnnotations && parserCls.exportsObjects;
+        options.exportsPresets = withPresets && parserCls.exportsPresets;
         const encoded = await new parserCls().encodePartial(
-            (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : undefined,
-            () => withPresets ? context.presets.toObject() : undefined,
+            (...exportedProps) => context.toObject(exportAll, ...exportedProps).objects,
+            () => context.presets.toObject(),
             context,
             options
         );
@@ -209,7 +212,9 @@ OSDAnnotations.Convertor.IConvertor = class {
      * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
      * @param {OSDAnnotations} annotationsModule reference to the module
      * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
-     * @param {object} options.serialize build-in parameter for optimization
+     * @param {boolean} options.serialize build-in parameter for optimization
+     * @param {boolean} options.exportsObjects true if annotations requested, always false if static set to false
+     * @param {boolean} options.exportsPresets true if presets requested, always false if static set to false
      * @param {boolean} options.
      * @return {object} must return the following structure:
      *    {

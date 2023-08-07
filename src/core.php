@@ -153,12 +153,13 @@ function print_js($conf, $path) {
 }
 
 function print_js_single($files, $path) {
+    $version = VERSION;
     if (is_array($files)) {
         foreach ($files as $file) {
-            echo "    <script src=\"$path$file\"></script>\n";
+            echo "    <script src=\"$path$file?v=$version\"></script>\n";
         }
     } else {
-        echo "    <script src=\"$path$files\"></script>\n";
+        echo "    <script src=\"$path$files?v=$version\"></script>\n";
     }
 }
 
@@ -170,12 +171,13 @@ function print_css($conf, $path) {
 }
 
 function print_css_single($files, $path) {
+    $version = VERSION;
     if (is_array($files)) {
         foreach ($files as $file) {
-            echo "    <link rel=\"stylesheet\" href=\"$path$file\">\n";
+            echo "    <link rel=\"stylesheet\" href=\"$path$file?v=$version\">\n";
         }
     } else {
-        echo "    <link rel=\"stylesheet\" href=\"$path$files\">\n";
+        echo "    <link rel=\"stylesheet\" href=\"$path$files?v=$version\">\n";
     }
 }
 
