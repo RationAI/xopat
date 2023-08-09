@@ -1,32 +1,30 @@
 OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'QuPath Annotations';
     static description = 'Annotations for quPath (GeoJSON format).';
-    offset = undefined;
+    static exportsPresets = false;
+    static includeAllAnnotationProps = false;
 
     static getFileName(context) {
         return 'geojson_qupath_' + UTILITIES.todayISO("_") + '.json';
     }
 
-    static _enableBioFormatsOffset = true;
-    static _enableTrimToDefaultPresets = true;
     static options = {
-        //todo support this for each convertor
-        "bioFormatsOffset": {
+        "_title": {
+            type: "text",
+            content: "Note: QuPath is a lossy format, since some annotations (like text) cannot be preserved."
+        },
+        "addOffset": {
             type: "checkBox",
             label: "Export with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
-            onchange: "OSDAnnotations.Convertor.get('qupath')._enableBioFormatsOffset = this.checked",
-            default: this._enableBioFormatsOffset
+            default: true
         },
         "trimToDefaultPresets": {
             type: "checkBox",
             label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes.</span>",
-            onchange: "OSDAnnotations.Convertor.get('qupath')._enableTrimToDefaultPresets = this.checked",
-            default: this._enableTrimToDefaultPresets
+            default: true
         },
     };
 
-    static exportsPresets = false;
-    static includeAllAnnotationProps = false;
 
     //default presets in quPath that are safe to export
     _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
@@ -182,26 +180,16 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         return JSON.stringify(result);
     }
 
-    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+    async encodePartial(annotationsGetter, presetsGetter) {
         const result = {}
-        if (!options.exportsObjects) return result;
-
-        this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
-            options.bioFormatsOffset : undefined;
-
-        //todo ugly, just use options only
-        if (options.trimToDefaultPresets !== undefined) {
-            this.constructor._enableTrimToDefaultPresets = options.trimToDefaultPresets;
-        }
-
-        this.context = annotationsModule;
+        if (!this.options.exportsObjects) return result;
+        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
+        this._presetReplacer = this.options.trimToDefaultPresets ?
+            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context) : false;
+        this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
         const annotations = annotationsGetter();
         const presets = presetsGetter();
-        this._presetReplacer = this.constructor._enableTrimToDefaultPresets
-            && this.constructor._enableTrimToDefaultPresets !== "false" ?
-            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], annotationsModule) : false;
-        this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
         // for each object (annotation) create new annotation element with coresponding coordinates
         if (annotations) {
@@ -216,7 +204,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                     let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
                     if (encoded) {
                         encoded.type = "Feature";
-                        if (options.serialize) encoded = JSON.stringify(encoded);
+                        if (this.options.serialize) encoded = JSON.stringify(encoded);
                         result.objects.push(encoded);
                     }
                 }
@@ -225,9 +213,8 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         return result;
     }
 
-    async decode(data, annotationsModule, options) {
-        this.offset = this.constructor._enableBioFormatsOffset && this.constructor._enableBioFormatsOffset !== "false" ?
-            options.bioFormatsOffset : undefined;
+    async decode(data) {
+        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
 
         data = JSON.parse(data);
 

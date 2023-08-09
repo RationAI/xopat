@@ -54,6 +54,7 @@ module.exports = function(grunt) {
      ********************************************************************************/        
     "core": `];
         const core = grunt.file.read("src/config.json");
+        delete core.version;
         output.push(core.toString().trim().replaceAll(/\n/g, '\n    '));
         grunt.log.write("Plugins configuration...\n");
         output.push(`,

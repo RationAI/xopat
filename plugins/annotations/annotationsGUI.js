@@ -28,29 +28,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
-		this.context.initIO();
 
-		const convertOpts = this.getOption('convertors');
-		this._ioArgs.serialize = true;
-		this._ioArgs.bioFormatsOffset = convertOpts?.bioFormatsOffset || this._ioArgs.bioFormatsOffset;
-		if (Array.isArray(this._ioArgs.bioFormatsOffset)) {
-			this._ioArgs.bioFormatsOffset = {
-				x: this._ioArgs.bioFormatsOffset[0] || 0, y: this._ioArgs.bioFormatsOffset[1] || 0
-			};
-		}
-
-		this.exportOptions = {
-			availableFormats: OSDAnnotations.Convertor.formats,
-			format: this.getOption('defaultIOFormat', this._defaultFormat),
-		};
-		const formats = OSDAnnotations.Convertor.formats;
-		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
-		if (!formats.includes(this._defaultFormat)) this._defaultFormat = "native";
-
-		this.isModalHistory = this.getOptionOrConfiguration('modalHistoryWindow', 'modalHistoryWindow', true);
-		this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
-		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 		this.setupFromParams();
+
+		this.context.initIO();
+		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 
 		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
 		this.setupActiveTissue(bgImage); // if (!...) return...
@@ -90,6 +72,35 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 	setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.getStaticMeta("factories") || ["polygon"];
 		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+		const convertOpts = this.getOption('convertors');
+		this._ioArgs.serialize = true;
+		this._ioArgs.imageCoordinatesOffset = convertOpts?.imageCoordinatesOffset || this._ioArgs.imageCoordinatesOffset;
+		if (Array.isArray(this._ioArgs.imageCoordinatesOffset)) {
+			this._ioArgs.imageCoordinatesOffset = {
+				x: this._ioArgs.imageCoordinatesOffset[0] || 0, y: this._ioArgs.imageCoordinatesOffset[1] || 0
+			};
+		}
+
+		this.exportOptions = {
+			availableFormats: OSDAnnotations.Convertor.formats,
+			//defaultIOFormat not docummented, as it is not meant to be used
+			format: this.getOption('defaultIOFormat', this._defaultFormat),
+		};
+		const formats = OSDAnnotations.Convertor.formats;
+		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
+		if (!formats.includes(this._defaultFormat)) this._defaultFormat = "native";
+
+		this.isModalHistory = this.getOptionOrConfiguration('modalHistoryWindow', 'modalHistoryWindow', true);
+		const staticPresetList = this.getOption("staticPresets", undefined, false);
+		if (staticPresetList) {
+			try {
+				this.context.presets.import(staticPresetList, true);
+			} catch (e) {
+				console.warn(e);
+			}
+		}
+
+		this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
 	}
 
 	setupActiveTissue(bgImageConfigObject) {
@@ -117,7 +128,7 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`
-<button class="btn-pointer btn btn-sm mx-1 px-1" title="Export annotations" style="float: right;" id="annotations-cloud" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');"><span class="material-icons px-1 text-small">cloud_upload</span><span class="text-small">Export/Import</span></button>
+<button class="btn-pointer btn btn-sm mx-1 px-1" title="Export annotations" style="float: right;" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${this.id}', 'annotations-shared');"><span class="material-icons px-1 text-small">cloud_upload</span><span class="text-small">Export/Import</span></button>
 <button class="btn-pointer btn btn-sm mx-1 px-1" id="show-annotation-board" title="${this.t('showBoard')}" style="float: right;" onclick="${this.THIS}.openHistoryWindow();"><span class="material-icons px-1 text-small">assignment</span><span class="text-small">Show list</span></button>`,
 			this.presetControls(),
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
@@ -198,7 +209,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
-		this.setOption('defaultIOFormat', format);
+		this.setLocalOption('defaultIOFormat', format);
 		$("#annotation-convertor-options").html(
 			Object.values(convertor.options).map(option => UIComponents.Elements[option.type]?.(option)).join("<br>")
 		);
@@ -406,7 +417,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 					"next #viewer-container": "A history is also available.<br> Shortcut is undo:Ctrl+Z and redo:Ctrl+Shift+Z<br>(or use the annotation board)."
 				},
 				{
-					"click #annotations-cloud": "Click here to open export options."
+					"click #show-annotation-export": "Click here to open export options."
 				},
 				{
 					"next #annotations-shared": "You can export or import different annotation formats. <br>"
@@ -560,12 +571,13 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	}
 
 	getAutoCreationStrategyControls() {
-		let strategy = this.context.automaticCreationStrategy;
-		if (!strategy || !strategy.running) return "";
-		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic 
-annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
-type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.THIS}.setAutoTargetLayer(this);">
-${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
+		return "";
+// 		let strategy = this.context.automaticCreationStrategy;
+// 		if (!strategy || !strategy.running) return "";
+// 		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic
+// annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
+// type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.THIS}.setAutoTargetLayer(this);">
+// ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
 	}
 
 	setAutoTargetLayer(self) {

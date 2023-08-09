@@ -181,11 +181,9 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         return JSON.stringify(result);
     }
 
-    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
-        this.context = annotationsModule;
-
+    async encodePartial(annotationsGetter, presetsGetter) {
         const result = {};
-        if (options.exportsObjects) {
+        if (this.options.exportsObjects) {
             const annotations = annotationsGetter();
             if (Array.isArray(annotations)) {
                 result.objects = [];
@@ -200,7 +198,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                         let encoded = this.encoders[obj.factoryID]?.(obj);
                         if (encoded) {
                             encoded.type = "Feature";
-                            if (options.serialize) encoded = JSON.stringify(encoded);
+                            if (this.options.serialize) encoded = JSON.stringify(encoded);
                             result.objects.push(encoded);
                         }
                     }
@@ -208,10 +206,10 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             }
         }
 
-        if (options.exportsPresets) {
+        if (this.options.exportsPresets) {
             const presets = presetsGetter();
             if (Array.isArray(presets)) {
-                result.presets = presets.map(p => options.serialize ? JSON.stringify({
+                result.presets = presets.map(p => this.options.serialize ? JSON.stringify({
                     type: "Feature",
                     geometry: null,
                     properties: p
@@ -225,7 +223,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         return result;
     }
 
-    async decode(data, annotationsModule, options) {
+    async decode(data) {
         data = JSON.parse(data);
 
         const parseFeature = function (object, presets, annotations) {

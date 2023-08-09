@@ -15,7 +15,7 @@
  *         return 'annotations_' + UTILITIES.todayISO("_") + '.awesome';
  *     }
  *
- *     async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {*
+ *     async encodePartial(annotationsGetter, presetsGetter) {*
  *         const objects = annotationsGetter("keepThisProperty", "keepAlsoThis");
  *         const presets = presetsGetter();
  *         /**
@@ -23,6 +23,8 @@
  *          * Note that partial output must not necessarily be a valid output of the given format.
  *          * In the case of unsupported format flexibility on this granularity, simply return
  *          * an unfinished list ob objects that can be later finalized into a full valid format output.
+ *          *
+ *          * Options are in this.options, reference to the annotation module as this.context
  *          *
  *          * Must return the following object:
  *          *\/
@@ -41,7 +43,7 @@
  *          return myFinalize(data);
  *     }
  *
- *     async decode(data, annotationsModule) {
+ *     async decode(data) {
  *         /**
  *          * Must return
  *            {
@@ -63,12 +65,27 @@ OSDAnnotations.Convertor = class {
     /**
      * Register custom Annotation Converter
      * @param {string} format a format identifier
-     * @param {OSDAnnotations.Convertor.IConvertor} convertor a converter object main class (function) name
-     *   from the provided file, it should have:
+     * @param {typeof OSDAnnotations.Convertor.IConvertor} convertor a converter object class (not an instance)
      */
     static register(format, convertor) {
         if (typeof this.CONVERTERS[format] === "object") {
             console.warn(`Registered annotations convertor ${format} overrides existing convertor!`);
+        }
+        for (let opt in convertor.options) {
+            if (opt.startsWith("_")) continue;
+            const option = convertor.options[opt];
+            if (!option.type) {
+                console.warn("Invalid convertor option: does not have 'type' field!");
+                delete convertor.options[opt];
+                continue;
+            }
+            if (opt in convertor) {
+                console.warn("Invalid convertor option: overriding existing properties is not allowed!", opt, option);
+                delete convertor.options[opt];
+                continue;
+            }
+            option.changed = `OSDAnnotations.Convertor.get('qupath').${opt} = value;`;
+            convertor[opt] = option.default;
         }
         this.CONVERTERS[format] = convertor;
     }
@@ -96,11 +113,9 @@ OSDAnnotations.Convertor = class {
 
         options.exportsObjects = withAnnotations && parserCls.exportsObjects;
         options.exportsPresets = withPresets && parserCls.exportsPresets;
-        const encoded = await new parserCls().encodePartial(
+        const encoded = await new parserCls(context, options).encodePartial(
             (...exportedProps) => context.toObject(exportAll, ...exportedProps).objects,
-            () => context.presets.toObject(),
-            context,
-            options
+            () => context.presets.toObject()
         );
         encoded.format = options.format;
         return encoded;
@@ -136,7 +151,7 @@ OSDAnnotations.Convertor = class {
      */
     static async decode(options, data, context) {
         const parserCls = this.get(options.format);
-        return await new parserCls().decode(data, context, options);
+        return await new parserCls(context, options).decode(data, context, options);
     }
 
     /**
@@ -168,10 +183,16 @@ OSDAnnotations.Convertor.IConvertor = class {
      * that has:
      * {
      *     type: "checkBox" //what GUI input type it maps to, see available in UIComponents.Elements
-     *     ...other...      //provide custom props based on the GUI type chosen, do not forget to provide
-     *                        'onchange' property, code that reacts to the value change
+     *     default: default value
+     *     ...possibly provide other properties, note that 'changed' property is handled automatically
      * }
-     * @type {{}}
+     * Properties defined here are automatically attached as a static properties of the given class.
+     * E.g.: option
+     * myValue: {type:"checkBox", default: false} will create
+     *    - this.constructor.myValue object with default 'false' value
+     *    - this.options.myVaue object with default value this.constructor.myValue, possibly overridden
+     *    from the constructor.
+     * Note. options starting with underscore are ignored, these can be used for custom HTML content (e.g. a text)
      */
     static options = {};
 
@@ -194,6 +215,35 @@ OSDAnnotations.Convertor.IConvertor = class {
     static exportsPresets = true;
 
     /**
+     * @param {OSDAnnotations} annotationsModule  reference to the module
+     * @param {object} options any options your converter wants,
+     *   must be documented, passed from the module convertor options
+     * @param {boolean} options.serialize build-in parameter for optimization
+     * @param {boolean} options.exportsObjects true if annotations requested, always false if static set to false
+     * @param {boolean} options.exportsPresets true if presets requested, always false if static set to false
+     * @param options
+     */
+    constructor(annotationsModule, options) {
+        /**
+         * Reference to the annotations module.
+         * @type {OSDAnnotations}
+         * @memberOf OSDAnnotations.Convertor.IConvertor
+         */
+        this.context = annotationsModule;
+        /**
+         * Options object enriched by values from static options (if undefined).
+         * @memberOf OSDAnnotations.Convertor.IConvertor
+         */
+        this.options = {...options};
+        for (let opt in this.constructor.options) {
+            if (opt.startsWith("_")) continue;
+            if (this.options[opt] === undefined) {
+                this.options[opt] = this.constructor[opt];
+            }
+        }
+    }
+
+    /**
      * Describe what filename has the exported file
      * @param {OSDAnnotations} context
      * @return {string}
@@ -210,19 +260,13 @@ OSDAnnotations.Convertor.IConvertor = class {
      *
      * @param {function} annotationsGetter function that returns a list of objects to export or undefined if not desired
      * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
-     * @param {OSDAnnotations} annotationsModule reference to the module
-     * @param {object} options any options your converter wants, must be documented, passed from the module convertor options
-     * @param {boolean} options.serialize build-in parameter for optimization
-     * @param {boolean} options.exportsObjects true if annotations requested, always false if static set to false
-     * @param {boolean} options.exportsPresets true if presets requested, always false if static set to false
-     * @param {boolean} options.
      * @return {object} must return the following structure:
      *    {
      *        objects: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
      *        presets: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
      *    }
      */
-    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+    async encodePartial(annotationsGetter, presetsGetter) {
         throw("::encodePartial must be implemented!");
     }
 
@@ -242,9 +286,6 @@ OSDAnnotations.Convertor.IConvertor = class {
     /**
      *
      * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
-     * @param {OSDAnnotations} annotationsModule  reference to the module
-     * @param {object} options any options your converter wants, must be documented, passed from the
-     *   module convertor options
      * @return {object} must return the following structure:
      *    {
      *        objects: [native export format JS objects] or undefined,
@@ -252,7 +293,7 @@ OSDAnnotations.Convertor.IConvertor = class {
      *    }
      *    for native format specs, check the readme. Deserialize the string data and parse.
      */
-    async decode(data, annotationsModule, options) {
+    async decode(data) {
         throw("::decode must be implemented!");
     }
 };

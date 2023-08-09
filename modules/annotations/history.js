@@ -473,7 +473,7 @@ onclick="${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
 ${editIcon}
 </div>`;
 
-        if (typeof replaced === "object" && replaced?.incrementId) {
+        if (typeof replaced === "object" && !isNaN(replaced?.incrementId)) {
             this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
                 if (node.length) {
                     node.replaceWith(html);

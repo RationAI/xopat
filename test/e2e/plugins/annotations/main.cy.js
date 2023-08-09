@@ -7,7 +7,7 @@ describe('Annotations - User Controls', () => {
 
     //tested: ["polygon", "rect", "ellipse", "ruler"]
 
-    let ANNOTATIONS;
+    let ANNOTATIONS, UTILITIES;
 
     it('Get reference', () => {
 
@@ -35,6 +35,7 @@ describe('Annotations - User Controls', () => {
 
         utils.waitForViewer().then(w => {
             ANNOTATIONS = w.OSDAnnotations.instance();
+            UTILITIES = w.UTILITIES;
         });
     });
 
@@ -43,16 +44,15 @@ describe('Annotations - User Controls', () => {
         elements.closeDialog(); //preventive
 
         expect(ANNOTATIONS.mode, "Annotations are in Auto Mode").eq(ANNOTATIONS.Modes.AUTO);
-        helpers.ALTdown().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
-        helpers.ALTup().then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
+        cy.keyDown("w", {focusCanvas: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
+        cy.keyUp("w", {focusCanvas: true}).then(() => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
     });
 
     it ('Setup Presets', () => {
         elements.openMenuArrow("#shaders-pin", false);
 
-        cy.get("#annotations-cloud").should('be.visible')
+        cy.get("#show-annotation-export").should('be.visible')
         cy.get("#show-annotation-board").should('be.visible')
-        cy.get("#enable-disable-annotations").should('be.visible')
 
         cy.get("#annotations-left-click").click();
         cy.get("#preset-add-new").click();
@@ -60,16 +60,20 @@ describe('Annotations - User Controls', () => {
         cy.get("#preset-add-new").click();
         cy.get("#preset-add-new").click();
 
-        helpers.presetUiNewMetaName(0).focus().type("My New Awesome Meta");
+        cy.then(x => {
+            //normally we do this via mouse, here no mouse movement unfocused the canvas
+            UTILITIES.setIsCanvasFocused(false);
+        })
+        helpers.presetUiNewMetaName(0).focus().type("My New Awesome Meta", {focusCanvas: true});
         helpers.presetUiNewMetaButton(0).click();
-        helpers.presetUiNthMeta(0, 1).focus().type("The AWESOME Value");
+        helpers.presetUiNthMeta(0, 1).focus().type("The AWESOME Value", {focusCanvas: true});
 
         helpers.presetUISelect(1).select(2);
-        helpers.presetUiNthMeta(1, 0).focus().type("Ctverec");
+        helpers.presetUiNthMeta(1, 0).focus().type("Ctverec", {focusCanvas: true});
 
-        helpers.presetUiNewMetaName(2).focus().type("Empty meta");
+        helpers.presetUiNewMetaName(2).focus().type("Empty meta", {focusCanvas: true});
         helpers.presetUiNewMetaButton(2).click();
-        helpers.presetUiNewMetaName(2).focus().type("Another Empty");
+        helpers.presetUiNewMetaName(2).focus().type("Another Empty", {focusCanvas: true});
         helpers.presetUiNewMetaButton(2).click();
         helpers.presetUISelect(2).select(1);
 
@@ -77,7 +81,10 @@ describe('Annotations - User Controls', () => {
 
         helpers.presetUi(1).click();
         helpers.presetUiSelectRight().click();
-
+        cy.then(x => {
+            //normally we do this via mouse, here no mouse movement refocused the canvas
+            UTILITIES.setIsCanvasFocused(true);
+        })
         cy.get("#annotations-left-click").should('contain.text', 'Polygon');
         cy.get("#annotations-right-click").should('contain.text', 'Ctverec');
     });
@@ -92,9 +99,9 @@ describe('Annotations - User Controls', () => {
 
 
     it ("Preset RightClick#1", function () {
-        cy.key("w").draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
+        cy.keyDown("w", {focusCanvas: true}).draw(cy.get('#osd'), {x: 100, y: 100}, {x: 80, y: 120},{x: 220, y: 140},{x: 120, y: 70},{x: 80, y: 130});
         cy.canvas().matchImage({title: "S1 - polygon"});
-        helpers.ALTup();
+        cy.keyUp("w", {focusCratianvas: true})
 
         cy.canvas().matchImage({title: "S1 - polygon finished"});
         cy.wrap(ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO)

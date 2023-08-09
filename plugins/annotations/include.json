@@ -20,7 +20,7 @@
     "convertors": {
         "format": "native",
         //Account for cropping done by BioFormats and OpenSlide
-        //can be overridden by convertors.bioFormatsOffset in plugin arguments
-        "bioFormatsOffset": [0,0]
+        //can be overridden by convertors.imageCoordinatesOffset in plugin arguments
+        "imageCoordinatesOffset": [0,0]
     }
 }

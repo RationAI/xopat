@@ -1,3 +1,11 @@
+let error = 0.1;
+function checkPointError(tp, ap, details) {
+    if (Math.abs(tp.x - ap.x) > error || Math.abs(tp.y - ap.y) > error) {
+        return `Pointwise comparison: differs at ${details} - template: [${Object.values(tp).join(",")}] | actual: [${Object.values(ap).join(",")}]. Threshold ${error}.`;
+    }
+    return 0;
+}
+
 export default {
     presetUi: (presetIndex) => cy.get("#preset-no-" + presetIndex),
     presetUiColor: (presetIndex) =>
@@ -16,9 +24,11 @@ export default {
     presetUiSelectRight: () => cy.get("#select-annotation-preset-right"),
     presetUiLeft: () => cy.get("#annotations-left-click"),
     presetUiRight: () => cy.get("#annotations-right-click"),
+    selectAnnotationObjectLeft: (type) => cy.get(`#${type}-annotation-factory-switch`).click(),
+    selectAnnotationObjectRight: (type) => cy.get(`#${type}-annotation-factory-switch`).rightclick(),
 
-    ALTdown: () => cy.keyDown("Alt", {altKey: true, focusCanvas: true}),
-    ALTup: () => cy.keyUp("Alt", {altKey: true, focusCanvas: true}),
+    // KeyDown: (name, focus=true) => cy.keyDown(name, {altKey: true, focusCanvas: true}),
+    // KeyUp: (name, focus=true) => cy.keyUp(name, {altKey: true, focusCanvas: true}),
 
     /*
      * Compare methods return error message in case of issue
@@ -41,74 +51,75 @@ differ in type from actual ${name} '${actual[name]}' (${typeof actual[name]})`;
             `Template ${name} '${template[name]}' differs from actual ${name} '${actual[name]}'` : 0;
     },
 
-    checkPointError(tp, ap, details) {
-        if (Math.abs(tp.x - ap.x) > 0.1 || Math.abs(tp.y - ap.y) > 0.1) {
-            return `Pointwise comparison: differs at ${details} - template: [${Object.values(tp).join(",")}] | actual: [${Object.values(ap).join(",")}]`;
-        }
-        return 0;
+    setGeometryErrorThreshold(value) {
+      error = value || 0.1;
     },
 
-    checkObjectGeometryError(template, actual, ignoreTextual=false) {
+    checkObjectGeometryError(template, actual, ignoreTextual=false, ignoreProps=[]) {
         if (template.type === "group") {
             for (let i = 0; i < template.objects.length; i++) {
                 //ignore textual data comparison, which get updated based on the project
                 const message = this.checkObjectGeometryError(template.objects[i], actual._objects[i],
-                    template.factoryID === "ruler");
+                    ignoreTextual || template.factoryID === "ruler", ignoreProps);
                 if (message) return "Group child objects are not equal: " + message;
             }
             return 0;
         }
 
-        if (template.points) {
+        if (template.points && !ignoreProps.includes('points')) {
             if (template.points.length !== actual.points.length) {
                 return "Template has points array, but its length differs from rendered object points length!";
             }
 
             for (let i = 0; i < template.points.length; i++) {
-                const msg = this.checkPointError(template.points[i], actual.points[i], `position ${i}`);
+                const msg = checkPointError(template.points[i], actual.points[i], `position ${i}`);
                 if (msg) return msg;
             }
         }
 
-        if (!ignoreTextual && template.text && template.text !== actual.text) {
+        if (template.type && template.type !== actual.type && !ignoreProps.includes('type')) {
+            return `Template type '${template.type}' differs from actual type '${actual.type}'`;
+        }
+
+        if (!ignoreTextual && template.text && template.text !== actual.text && !ignoreProps.includes('text')) {
             return `Template text '${template.text}' differs from actual text '${actual.text}'`;
         }
 
-        if (!ignoreTextual && template.measure && template.measure !== actual.measure) {
+        if (!ignoreTextual && template.measure && template.measure !== actual.measure  && !ignoreProps.includes('measure')) {
             return `Template measure '${template.measure}' differs from actual measure '${actual.measure}'`;
         }
 
-        if (template.autoScale !== undefined && template.autoScale
-                && Math.round(template.fontSize) !== Math.round(actual.fontSize)) {
+        if (template.autoScale !== undefined && template.fontSize  && !ignoreProps.includes('fontSize') &&
+            template.autoScale && Math.round(template.fontSize) !== Math.round(actual.fontSize)) {
             return `Template measure '${template.measure}' differs from actual measure '${actual.measure}'`;
         }
 
-        if (template.left) {
-            const msg = this.checkPointError({x:template.left, y:template.top},
+        if (template.left  && !ignoreProps.includes('left')  && !ignoreProps.includes('top')) {
+            const msg = checkPointError({x:template.left, y:template.top},
                 {x:actual.left, y:actual.top}, `[left, top] coords`);
             if (msg) return msg;
         }
 
-        if (template.width) {
-            const msg = this.checkPointError({x:template.width, y:template.height},
+        if (template.width  && !ignoreProps.includes('width')  && !ignoreProps.includes('height')) {
+            const msg = checkPointError({x:template.width, y:template.height},
                 {x:actual.width, y:actual.height}, `[width, height] dims`);
             if (msg) return msg;
         }
 
-        if (template.rx) {
-            const msg = this.checkPointError({x:template.rx, y:template.ry},
+        if (template.rx  && !ignoreProps.includes('rx')  && !ignoreProps.includes('ry')) {
+            const msg = checkPointError({x:template.rx, y:template.ry},
                 {x:actual.rx, y:actual.ry}, `[rx, ry] dims`);
             if (msg) return msg;
         }
 
-        if (template.x1) {
-            const msg = this.checkPointError({x:template.x1, y:template.y1},
+        if (template.x1  && !ignoreProps.includes('x1')  && !ignoreProps.includes('y1')) {
+            const msg = checkPointError({x:template.x1, y:template.y1},
                 {x:actual.x1, y:actual.y1}, `[x1, y1] position`);
             if (msg) return msg;
         }
 
-        if (template.x2) {
-            const msg = this.checkPointError({x:template.x2, y:template.y2},
+        if (template.x2  && !ignoreProps.includes('x2')  && !ignoreProps.includes('y2')) {
+            const msg = checkPointError({x:template.x2, y:template.y2},
                 {x:actual.x2, y:actual.y2}, `[x2, y2] position`);
             if (msg) return msg;
         }

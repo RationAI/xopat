@@ -455,6 +455,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
         /**
          * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
+         * !! If you read a string value, parse=false must be set
+         * TODO: avoid parsing strings
          * @param {string} key
          * @param {*} defaultValue value to return in case no value is available
          * @param {boolean} parse deserialize if true
@@ -673,7 +675,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {boolean} cache
          */
         setOption(key, value, cache=true) {
-            if (cache) localStorage.setItem(`${this.id}.${key}`, value);
+            if (cache) this.setLocalOption(key, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
@@ -688,15 +690,27 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getOption(key, defaultValue=undefined, cache=true) {
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
-            if (cache) {
-                let cached = localStorage.getItem(`${this.id}.${key}`);
-                if (cached !== null) return cached;
+
+            //todo make invalid IDs: module and plugin
+            //options are stored only for plugins, so we store them at the lowest level
+            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            if (value === null) {
+                value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
+                    APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             }
-            let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
+        }
+
+        /**
+         * Ability to cache a value locally into the browser,
+         * the value can be retrieved using this.getOption(...)
+         * @param key
+         * @param value
+         */
+        setLocalOption(key, value) {
+            localStorage.setItem(`${this.id}.${key}`, value);
         }
 
         /**

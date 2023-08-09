@@ -18,10 +18,10 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
         });
     }
 
-    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
-        let presets = options.exportsPresets ? presetsGetter() : undefined;
-        let annotations = options.exportsObjects ? annotationsGetter() : undefined;
-        if (options.serialize) {
+    async encodePartial(annotationsGetter, presetsGetter) {
+        let presets = this.options.exportsPresets ? presetsGetter() : undefined;
+        let annotations = this.options.exportsObjects ? annotationsGetter() : undefined;
+        if (this.options.serialize) {
             presets = presets ? JSON.stringify(presets) : undefined;
             annotations = annotations ? JSON.stringify(annotations) : undefined;
         }
@@ -32,7 +32,7 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
         };
     }
 
-    async decode(data, annotationsModule, options) {
+    async decode(data) {
         return JSON.parse(data);
     }
 });

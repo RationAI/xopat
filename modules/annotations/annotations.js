@@ -877,7 +877,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {
-		return await this.setCache(this.presetCookieKey, JSON.stringify(this.presets.toObject()));
+		return await this.setCache('presets.cache', JSON.stringify(this.presets.toObject()));
 	}
 
 	/**
@@ -885,9 +885,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	async loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
-		const presetCookiesData = await this.getCache(this.presetCookieKey);
-
-		console.log("Cached preset data:", presetCookiesData);
+		const presetCookiesData = await this.getCache('presets.cache');
 
 		if (presetCookiesData) {
 			if (ask && this.presets._presetsImported) {
@@ -970,7 +968,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.mode = this.Modes.AUTO;
 		this.opacity = 1.0;
 		this.disabledInteraction = false;
-		this.presetCookieKey = '-presets-cache';
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = [];
@@ -1613,12 +1610,15 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 };
 
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
-	constructor(context, id, icon, description) {
+	constructor(context, id, icon, description, actsWhenNotIntersecting) {
 		super(context, id, icon, description);
+		this.actsWhenNotIntersecting = actsWhenNotIntersecting;;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		this._finish();
+		console.log(this.__temp);
+		this.__temp = undefined;
 		return true;
 	}
 
@@ -1628,6 +1628,9 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	handleMouseMove(point) {
 		this.context.freeFormTool.update(point);
+
+		const p = VIEWER.viewport.imageToWindowCoordinates(point);
+		this.__temp.push(p)
 	}
 
 	_init(o, point, isLeftClick, objectFactory) {
@@ -1659,9 +1662,8 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
 			} else {
 				newPolygonPoints = this._geCirclePoints(point);
-				willModify = OSDAnnotations.PolygonUtilities.polygonsIntersect(
-					{points: newPolygonPoints}, currentObject
-				);
+				willModify = this.actsWhenNotIntersecting ||
+					OSDAnnotations.PolygonUtilities.polygonsIntersect({points: newPolygonPoints}, currentObject);
 			}
 
 			if (!willModify) {
@@ -1680,6 +1682,12 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		if (currentObject) {
 			this.context.freeFormTool.init(currentObject, created);
 			this.context.freeFormTool.update(point);
+
+			if (!this.__temp) this.__temp = [];
+
+			const p = VIEWER.viewport.imageToWindowCoordinates(point);
+			p.click = true;
+			this.__temp.push(p)
 		}
 	}
 
@@ -1729,7 +1737,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "🅴 brush to create/edit");
+		super(context, "fft-add", "brush", "🅴 brush to create/edit", false);
 	}
 
 	setFromAuto() {
@@ -1749,7 +1757,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "🆁 brush to remove");
+		super(context, "fft-remove", "brush", "🆁 brush to remove", true);
 	}
 
 	setFromAuto() {

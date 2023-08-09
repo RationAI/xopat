@@ -493,9 +493,7 @@ OSDAnnotations.PolygonUtilities = {
 
         let tolerance = 7 / VIEWER.scalebar.imagePixelSizeOnScreen();
         points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
-        points = this._simplifyDouglasPeucker(points, tolerance);
-
-        return points;
+        return this._simplifyDouglasPeucker(points, tolerance);
     },
 
     simplifyQuality: function (points, quality) {

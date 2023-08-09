@@ -45,7 +45,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         return new XMLSerializer().serializeToString(doc);
     }
 
-    async encodePartial(annotationsGetter, presetsGetter, annotationsModule, options) {
+    async encodePartial(annotationsGetter, presetsGetter) {
         //https://github.com/computationalpathologygroup/ASAP/issues/167
         const annotations = annotationsGetter();
         const presets = presetsGetter();
@@ -54,7 +54,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         let doc = document.implementation.createDocument("", "", null);
         const presetsIdSet = new Set();
 
-        if (options.exportsObjects && Array.isArray(annotations)) {
+        if (this.options.exportsObjects && Array.isArray(annotations)) {
             result.objects = [];
             // for each object (annotation) create new annotation element with coresponding coordinates
             for (let i = 0; i < annotations.length; i++) {
@@ -66,7 +66,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                 const xml_annotation = doc.createElement("Annotation");
                 let coordinates=[];
 
-                let factory = annotationsModule.getAnnotationObjectFactory(obj.factoryID);
+                let factory = this.context.getAnnotationObjectFactory(obj.factoryID);
                 if (factory) {
                     coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
                     if (!Array.isArray(coordinates)) {
@@ -101,7 +101,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                 }
                 xml_annotation.appendChild(xml_coordinates);
 
-                if (options.serialize) {
+                if (this.options.serialize) {
                     result.objects.push(new XMLSerializer().serializeToString(xml_annotation));
                 } else {
                     result.objects.push(xml_annotation);
@@ -109,7 +109,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             }
         }
 
-        if (options.exportsPresets && Array.isArray(presets)) {
+        if (this.options.exportsPresets && Array.isArray(presets)) {
             result.presets = [];
 
             for (let preset of presets) {
@@ -130,7 +130,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
 
                 xml_preset.appendChild(preset_attributes);
 
-                if (options.serialize) {
+                if (this.options.serialize) {
                     result.presets.push(new XMLSerializer().serializeToString(xml_preset));
                 } else {
                     result.presets.push(xml_preset);
@@ -142,7 +142,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         return result;
     }
 
-    async decode(data, annotationsModule, options) {
+    async decode(data ) {
         let xmlDoc = this.constructor.parse(data);
 
         const presets = {}, annotations = [];

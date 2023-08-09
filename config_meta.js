@@ -103,7 +103,8 @@ class MetaStore {
         } else {
             const parent = this._find(context, keys, false);
             if (!parent) {
-                console.warn("Invalid MetaStore::set() with key list '[" + keys.join(",") + "']");
+                console.warn("Invalid MetaStore::get() with path '"+keys.join(".")+"'");
+                this.set(schemeKey, undefined, context); //store undefined to avoid next errors
                 return undefined;
             }
             const lastKey = keys.pop();
@@ -133,7 +134,7 @@ class MetaStore {
         } else {
             const parent = this._find(context, keys, true);
             if (!parent) {
-                console.warn("Invalid MetaStore::set() with key list '[" + keys.join(",") + "']");
+                console.warn("Invalid MetaStore::set() with path '"+keys.join(".")+"'");
                 return undefined;
             }
             const lastKey = keys.pop();
@@ -174,7 +175,7 @@ class MetaStore {
      * Find parent object in the meta context tree
      */
     _find(context, keys, createMissing) {
-        return this.__find(context, keys.reverse());
+        return this.__find(context, keys.reverse(), createMissing);
     }
     __find(context, keys, createMissing) {
         if (!context || keys.length < 2) {
