@@ -5,6 +5,8 @@
 Thumbs.db
 
 #builds and binaries
+*.min.js
+*.min.js.map
 openseadragon/
 node_modules/
 build/

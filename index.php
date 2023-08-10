@@ -393,7 +393,6 @@ EOF;
 require_modules();
 ?>
 
-    <!--Plugins Loading-->
     <script type="text/javascript">
 
 (function (window) {
@@ -446,6 +445,7 @@ require_modules();
 })(window);
     </script>
 
+    <!--Plugins Loading-->
 <?php
 require_plugins();
 ?>

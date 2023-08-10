@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "A plugin for annotations creation, management and sharing.",
     "icon": null,
-    "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js", "xmlToJSON.min.js"],
+    "includes" : ["annotationsGUI.js", "dataLoader.js", "preview.js"],
     "modules": ["annotations", "human-readable-ids"],
     "permaLoad": false,
     //Annotation server API endpoint to store annotations at

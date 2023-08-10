@@ -120,6 +120,12 @@ function printDependencies($directory, $item) {
     if (isset($item["styleSheet"])) {
         echo "<link rel=\"stylesheet\" href=\"{$item["styleSheet"]}?v=$version\" type='text/css'>\n";
     }
+
+    if (file_exists("$directory{$item["directory"]}/index.min.js")) {
+        echo "    <script src=\"$directory{$item["directory"]}/index.min.js?v=$version\"></script>\n";
+        return;
+    }
+
     foreach ($item["includes"] as $__ => $file) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item["directory"]}/$file?v=$version\"></script>\n";

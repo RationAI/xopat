@@ -33,6 +33,11 @@ Then, you can simply override values you need to change, simply follow the `env.
   ]
 }
 ````
+To generate minimal configuration file, run
+
+> grunt env --minimal
+
+which strips built-in options for plugins, modules, and removes empty configuration module objects.
 
 ### Static configuration provided in a dynamic way
 To provide a configuration file path, you can set 
