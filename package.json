@@ -4,6 +4,9 @@
   "description": "A flexible multipurose browser-based WSI viewer.",
   "main": "index.php",
   "scripts": {
+    "build": "grunt all",
+    "env": "grunt env",
+    "docs": "grunt docs",
     "test": "npx cypress run --browser chrome --e2e"
   },
   "repository": {
