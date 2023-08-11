@@ -10,6 +10,18 @@ addPlugin("user-session", class extends XOpatPlugin {
 
     pluginReady() {
         this.authenticate();
+
+        //todo this code is duplicated
+        this.setupActiveTissue(APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)]);
+        const _this = this;
+        VIEWER.addHandler('background-image-swap', e => {
+            _this.setupActiveTissue(e.backgroundSetup);
+        });
+    }
+
+    setupActiveTissue(bgImageConfigObject) {
+        if (!bgImageConfigObject) this.activeTissue = null;
+        this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
     }
 
     authenticate(repeatedLogin=true) {
@@ -65,9 +77,12 @@ addPlugin("user-session", class extends XOpatPlugin {
     _finishAuthOk(response) {
         const meta = APPLICATION_CONTEXT.metadata;
         meta.set(xOpatSchema.user, response);
+
         USER_INTERFACE.MainMenu.replace(
             `User &nbsp;<span class="f3-light">${meta.get(xOpatSchema.user.name, "unknown")}</span>`,
-            `<span class="btn-pointer" title="Store your workplace on the server." style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">Save Session: <span class="material-icons">save</span></span>`,
+            this.activeTissue ? `<span class="btn-pointer" title="Store your workplace on the server." 
+style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">
+Save Session: <span class="material-icons">save</span></span>` : "",
             '',
             "user-session-panel",
             this.id
@@ -90,7 +105,8 @@ addPlugin("user-session", class extends XOpatPlugin {
             Dialogs.show("Cannot save the session: no target WSI found.", 2500, Dialogs.MSG_WARN);
         } else {
             UTILITIES.fetchJSON(this.storeSessionServer, {
-                data: await UTILITIES.serializeApp()
+                data: await UTILITIES.serializeApp(),
+                tissue: this.activeTissue
             }, this.headers).then(response => {
                 if (response?.status !== "success") throw new HTTPError(response.message, response, response.error);
                 Dialogs.show("Saved", 1500, Dialogs.MSG_INFO);

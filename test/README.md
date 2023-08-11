@@ -47,3 +47,10 @@ Inherited from the cypress default hierarchy, you can
  - find custom command and utility definitions in ``support/``
  
 The best approach is to copy and modify existing tests.
+
+## Todo
+Testing is very dependent on the deployed instance configuration, 
+some even cannot be changed by the test suite (e.g., `secureMode` since
+it would be insecure to allow changing it). Also, testing is dependent
+on a remote image server. In the future, the goal is to create
+a localhost version of the viewer to test internally, on a local-hosted data.
