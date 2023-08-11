@@ -394,44 +394,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     reject(e);
                 }
             }));
-            this.setCache = async (key, value) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        await store.set(_this.id + key, value);
-                        return true;
-                    } catch (e) {
-                        console.warn("Silent failure of cache setter -> delegate to local storage.");
-                    }
-                }
-
-                localStorage.setItem(this.id + key, value);
-                return true;
-            };
-            this.getCache = async (key, defaultValue=undefined, parse=true) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        return await store.get(_this.id + key, defaultValue);
-                    } catch (e) {
-                        console.warn("Silent failure of cache getter -> delegate to local storage.");
-                    }
-                }
-
-                let data = localStorage.getItem(key);
-                if (data === null) return defaultValue;
-                try {
-                    return parse && typeof data === "string" ? JSON.parse(data) : data;
-                } catch (e) {
-                    console.error(e);
-                    this.error({
-                        error: e, code: "W_CACHE_IMPORT_ERROR",
-                        message: $.t('error.cacheImportFail',
-                            {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
-                    });
-                    return defaultValue;
-                }
-            };
             this.__ioInitialized = true;
 
             try {
@@ -476,16 +438,56 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param {string} key
          * @param {string} value
          */
-        async setCache(key, value) {}
+        async setCache(key, value) {
+            if (APPLICATION_CONTEXT.getOption("bypassCacheLoadTime")) return undefined;
+            key = `${this.xoContext}.${this.id}.${key}`;
+            const store = APPLICATION_CONTEXT.metadata.persistent();
+            if (store) {
+                try {
+                    await store.set(key, value);
+                    return true;
+                } catch (e) {
+                    console.warn("Silent failure of cache setter -> delegate to local storage.");
+                }
+            }
+            localStorage.setItem(key, value);
+            return true;
+        }
         /**
          * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
+         * !! If you read a string value, parse=false must be set
+         * TODO: avoid parsing strings
          * @param {string} key
          * @param {*} defaultValue value to return in case no value is available
          * @param {boolean} parse deserialize if true
          * @return {string|*} return serialized or unserialized data
          */
-        async getCache(key, defaultValue=undefined, parse=true) {}
+        async getCache(key, defaultValue=undefined, parse=true) {
+            if (APPLICATION_CONTEXT.getOption("bypassCacheLoadTime")) return undefined;
+            key = `${this.xoContext}.${this.id}.${key}`;
+            const store = APPLICATION_CONTEXT.metadata.persistent();
+            if (store) {
+                try {
+                    return await store.get(key, defaultValue);
+                } catch (e) {
+                    console.warn("Silent failure of cache getter -> delegate to local storage.");
+                }
+            }
 
+            let data = localStorage.getItem(key);
+            if (data === null) return defaultValue;
+            try {
+                return parse && typeof data === "string" ? JSON.parse(data) : data;
+            } catch (e) {
+                console.error(e);
+                this.error({
+                    error: e, code: "W_CACHE_IMPORT_ERROR",
+                    message: $.t('error.cacheImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+                return defaultValue;
+            }
+        }
         /**
          * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
          */
@@ -666,37 +668,63 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Store the plugin configuration parameters
+         * Store the plugin online configuration parameters/options
          * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache
          */
         setOption(key, value, cache=true) {
-            if (cache) localStorage.setItem(this.id + key, value);
+            if (cache) this.setLocalOption(key, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
         }
 
         /**
-         * Read the plugin configuration parameters
+         * Read the plugin online configuration parameters/options
          * @param {string} key
          * @param {*} defaultValue
          * @param {boolean} cache
          * @return {*}
          */
         getOption(key, defaultValue=undefined, cache=true) {
-            if (cache) {
-                let cached = localStorage.getItem(this.id + key);
-                if (cached !== null) return cached;
+            //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
+
+            //todo make invalid IDs: module and plugin
+            //options are stored only for plugins, so we store them at the lowest level
+            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            if (value === null) {
+                value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
+                    APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             }
-            let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
-        };
+        }
+
+        /**
+         * Ability to cache a value locally into the browser,
+         * the value can be retrieved using this.getOption(...)
+         * @param key
+         * @param value
+         */
+        setLocalOption(key, value) {
+            localStorage.setItem(`${this.id}.${key}`, value);
+        }
+
+        /**
+         * Read plugin configuration value - either from a static configuration or dynamic one.
+         * More generic function that reads any option available (configurable via dynamic JSON or include.json)
+         * @param {string} optKey dynamic param key, overrides anything
+         * @param {string} staticKey static param key, used if dynamic value is undefined
+         * @param {any} defaultValue
+         * @param {boolean} cache
+         */
+        getOptionOrConfiguration(optKey, staticKey, defaultValue=undefined, cache=true) {
+            const value = this.getOption(optKey, undefined, cache);
+            return value === undefined ? this.getStaticMeta(staticKey, defaultValue) : value;
+        }
 
         /**
          * JS String to use in DOM callbacks to access self instance.

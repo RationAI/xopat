@@ -4,7 +4,7 @@
     "author": "Jirka Horák",
     "description": "TODO",
     "version": "1.0.0",
-    "icon": "",
+    "icon": null,
     "includes" : [
         "histoviso_explain.js",
         "histoviso_explain_annotation_factory_extension.js"

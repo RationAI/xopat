@@ -1,9 +1,9 @@
-OSDAnnotations.Convertor.GeoJSON = class {
-    title = 'GeoJSON Annotations';
-    description = 'Annotations in GeoJSON format.';
+OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Convertor.IConvertor {
+    static title = 'GeoJSON Annotations';
+    static description = 'Annotations in GeoJSON format.';
 
     static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO() + '.json';
+        return 'geojson_xopat_' + UTILITIES.todayISO("_") + '.json';
     }
 
     static includeAllAnnotationProps = false;
@@ -11,7 +11,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
     //linear ring has the first and last vertex equal, geojson uses arrays
     _asGEOJsonFeature(object, type="Polygon", deleteProps=[], asLinearRing=false) {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-        const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint)
+        const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS)
         if (poly?.length > 0) {
             if (asLinearRing) poly.push(poly[0]); //linear ring
             const props = factory.copyNecessaryProperties(object);
@@ -64,7 +64,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
-        "polyline": (object) => this._asGEOJsonFeature(object, "LineString", ["points"]),
+        "polyline": (object) => this._asGEOJsonFeature(object, "LineString", ["points"], false),
         "point": (object) => {
             object = this._asGEOJsonFeature(object, "Point");
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
@@ -78,17 +78,10 @@ OSDAnnotations.Convertor.GeoJSON = class {
         "ruler": (object) => {
             const factory = this.context.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
-            const line = object.objects[0];
-            //todo bounding box should be exported as well so that coords are not negative without sense
-            //todo reimport is imprecise
-
             return {
                 geometry: {
                     type: "LineString",
-                    coordinates: [
-                        converter(line.x1, line.y1),
-                        converter(line.x2, line.y2),
-                    ]
+                    coordinates: factory?.toPointArray(object, converter, fabric.Object.NUM_FRACTION_DIGITS)
                 },
                 properties: factory.copyNecessaryProperties(object, [], true)
             };
@@ -165,47 +158,72 @@ OSDAnnotations.Convertor.GeoJSON = class {
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        this.context = annotationsModule;
-
-        //https://github.com/computationalpathologygroup/ASAP/issues/167
-
-        const annotations = annotationsGetter();
-        const presets = presetsGetter();
-
-        let output = {
+    static encodeFinalize(output) {
+        let result = {
             type: "FeatureCollection",
             features: []
         };
-        let list = output.features;
+        let list = result.features;
 
-        // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let i = 0; i < annotations.length; i++) {
-            let obj = annotations[i];
-            if (!obj.factoryID || obj.factoryID.startsWith("_")) {
-                continue;
+        if (Array.isArray(output.objects)) {
+            for (let obj of output.objects) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
             }
+        }
 
-            // noinspection JSUnresolvedVariable
-            if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                let encoded = this.encoders[obj.factoryID]?.(obj);
-                if (encoded) {
-                    encoded.type = "Feature";
-                    list.push(encoded);
+        if (Array.isArray(output.presets)) {
+            for (let obj of output.presets) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
+            }
+        }
+        return JSON.stringify(result);
+    }
+
+    async encodePartial(annotationsGetter, presetsGetter) {
+        const result = {};
+        if (this.options.exportsObjects) {
+            const annotations = annotationsGetter();
+            if (Array.isArray(annotations)) {
+                result.objects = [];
+                // for each object (annotation) create new annotation element with coresponding coordinates
+                for (let obj of annotations) {
+                    if (!obj.factoryID || obj.factoryID.startsWith("_")) {
+                        continue;
+                    }
+
+                    // noinspection JSUnresolvedVariable
+                    if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
+                        let encoded = this.encoders[obj.factoryID]?.(obj);
+                        if (encoded) {
+                            encoded.type = "Feature";
+                            if (this.options.serialize) encoded = JSON.stringify(encoded);
+                            result.objects.push(encoded);
+                        }
+                    }
                 }
             }
         }
 
-        list.push(...presets.map(p => ({
-            type: "Feature",
-            geometry: null,
-            properties: p
-        })));
-        return JSON.stringify(output);
+        if (this.options.exportsPresets) {
+            const presets = presetsGetter();
+            if (Array.isArray(presets)) {
+                result.presets = presets.map(p => this.options.serialize ? JSON.stringify({
+                    type: "Feature",
+                    geometry: null,
+                    properties: p
+                }) : {
+                    type: "Feature",
+                    geometry: null,
+                    properties: p
+                });
+            }
+        }
+        return result;
     }
 
-    async decode(data, annotationsModule, options) {
-
+    async decode(data) {
         data = JSON.parse(data);
 
         const parseFeature = function (object, presets, annotations) {
@@ -246,6 +264,4 @@ OSDAnnotations.Convertor.GeoJSON = class {
              presets: Object.values(presets)
         };
     }
-}
-
-OSDAnnotations.Convertor.register("geo-json", OSDAnnotations.Convertor.GeoJSON);
+});

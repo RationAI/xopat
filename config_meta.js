@@ -102,7 +102,11 @@ class MetaStore {
             value = this._privateData[keys];
         } else {
             const parent = this._find(context, keys, false);
-            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            if (!parent) {
+                console.warn("Invalid MetaStore::get() with path '"+keys.join(".")+"'");
+                this.set(schemeKey, undefined, context); //store undefined to avoid next errors
+                return undefined;
+            }
             const lastKey = keys.pop();
             value = parent[lastKey];
         }
@@ -129,7 +133,10 @@ class MetaStore {
             this._privateData[keys] = value;
         } else {
             const parent = this._find(context, keys, true);
-            if (!parent) throw "Invalid metadata set() with key list " + keys.join(",");
+            if (!parent) {
+                console.warn("Invalid MetaStore::set() with path '"+keys.join(".")+"'");
+                return undefined;
+            }
             const lastKey = keys.pop();
             parent[lastKey] = value;
         }
@@ -168,7 +175,7 @@ class MetaStore {
      * Find parent object in the meta context tree
      */
     _find(context, keys, createMissing) {
-        return this.__find(context, keys.reverse());
+        return this.__find(context, keys.reverse(), createMissing);
     }
     __find(context, keys, createMissing) {
         if (!context || keys.length < 2) {

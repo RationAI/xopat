@@ -22,6 +22,20 @@ define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
 define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
 define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 
+//fallback for php 7.1
+if (!function_exists("array_is_list")) {
+    function array_is_list(array $array): bool
+    {
+        $i = -1;
+        foreach ($array as $k => $v) {
+            ++$i;
+            if ($k !== $i) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
 /**
  * array_merge_recursive duplicates values
  * @param array $array1
@@ -35,10 +49,14 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
     $merged = $array1;
 
     foreach ($array2 as $key => &$value) {
-        if (is_array($value) && isset ($merged [$key]) && is_array($merged [$key])) {
-            $merged [$key] = array_merge_recursive_distinct($merged [$key], $value);
+        if (is_array($value) && isset($merged[$key]) && is_array($merged[$key])) {
+            if (array_is_list($merged[$key])) {
+                $merged[$key] = $value;
+            } else {
+                $merged[$key] = array_merge_recursive_distinct($merged[$key], $value);
+            }
         } else {
-            $merged [$key] = $value;
+            $merged[$key] = $value;
         }
     }
 
@@ -135,12 +153,13 @@ function print_js($conf, $path) {
 }
 
 function print_js_single($files, $path) {
+    $version = VERSION;
     if (is_array($files)) {
         foreach ($files as $file) {
-            echo "    <script src=\"$path$file\"></script>\n";
+            echo "    <script src=\"$path$file?v=$version\"></script>\n";
         }
     } else {
-        echo "    <script src=\"$path$files\"></script>\n";
+        echo "    <script src=\"$path$files?v=$version\"></script>\n";
     }
 }
 
@@ -152,12 +171,13 @@ function print_css($conf, $path) {
 }
 
 function print_css_single($files, $path) {
+    $version = VERSION;
     if (is_array($files)) {
         foreach ($files as $file) {
-            echo "    <link rel=\"stylesheet\" href=\"$path$file\">\n";
+            echo "    <link rel=\"stylesheet\" href=\"$path$file?v=$version\">\n";
         }
     } else {
-        echo "    <link rel=\"stylesheet\" href=\"$path$files\">\n";
+        echo "    <link rel=\"stylesheet\" href=\"$path$files?v=$version\">\n";
     }
 }
 

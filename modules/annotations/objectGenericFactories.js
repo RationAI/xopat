@@ -144,11 +144,20 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * Create array of points - approximation of the object shape
      * @param {Object} obj fabricJS.Rect obj object that is being approximated
      * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
         let w = obj.width, h = obj.height;
+        if (digits !== undefined) {
+            return [
+                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
+                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
+                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits))),
+                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits)))
+            ];
+        }
         return [
             converter(obj.left, obj.top),
             converter(obj.left + w, obj.top),
@@ -171,7 +180,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "lens";
+        return "circle";
     }
 
     fabricStructure() {
@@ -311,10 +320,11 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * Create array of points - approximation of the object shape
      * @param {fabric.Ellipse} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
         //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
         //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
         let reversed = obj.rx < obj.ry, //since I am using sqrt, need rx > ry
@@ -331,12 +341,18 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         for (let t = 0; t < 2 * Math.PI; t += step) {
             let param = t - (pow2e / 8 + pow4e / 16 + 71 * pow6e / 2048) * Math.sin(2 * t)
                 + ((5 * pow4e + 5 * pow6e) / 256) * Math.sin(4 * t)
-                + (29 * pow6e / 6144) * Math.sin(6 * t);
+                + (29 * pow6e / 6144) * Math.sin(6 * t),
+                x,y;
             if (reversed) {
-                points.push(converter(ry * Math.sin(param) + obj.left + ry, rx * Math.cos(param) + obj.top + rx));
+                x = ry * Math.sin(param) + obj.left + ry;
+                y = rx * Math.cos(param) + obj.top + rx;
             } else {
-                points.push(converter(rx * Math.cos(param) + obj.left + rx, ry * Math.sin(param) + obj.top + ry));
+                x = rx * Math.cos(param) + obj.left + rx;
+                y = ry * Math.sin(param) + obj.top + ry;
             }
+
+            points.push(digits === undefined ? converter(x, y) :
+                converter(parseFloat(Number(x).toFixed(digits)), parseFloat(Number(y).toFixed(digits))));
         }
         return points;
     }
@@ -366,7 +382,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return (this._current);
+        return this._current;
     }
 
     /**
@@ -434,14 +450,14 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         //do nothing - a text has no area
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject.autoScale) {
             ofObject.set({
-                scaleX: 1/zoom,
-                scaleY: 1/zoom
+                scaleX: 1/realZoom,
+                scaleY: 1/realZoom
             });
         }
-        ofObject.isAtZoom = zoom;
+        ofObject.isAtZoom = realZoom;
     }
 
     // /**
@@ -553,7 +569,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return "Text";
     }
 
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        if (digits !== undefined) {
+            return [converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits)))];
+        }
         return [converter(obj.left, obj.top)];
     }
 };
@@ -626,9 +645,9 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return object;
     }
 
-    onZoom(ofObject, zoom) {
-        ofObject.scaleX = 1/zoom;
-        ofObject.scaleY = 1/zoom;
+    onZoom(ofObject, graphicZoom, realZoom) {
+        ofObject.scaleX = 1/graphicZoom;
+        ofObject.scaleY = 1/graphicZoom;
     }
 
     updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
@@ -682,7 +701,10 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return false;
     }
 
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        if (digits !== undefined) {
+            return [converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits)))];
+        }
         return [converter(obj.left, obj.top)];
     }
 
@@ -701,7 +723,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     getCurrentObject() {
-        return (this._current /*|| this._edited*/);
+        return this._current;
     }
 
     /**
@@ -923,16 +945,24 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      * Create array of points - approximation of the object shape
      * @param {Object} obj fabricjs.Polygon object that is being approximated
      * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
         let points = obj.points;
         if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, quality);
 
         //we already have object points, convert only if necessary
         if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
+            if (digits !== undefined) {
+                return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
+                    parseFloat(Number(p.y).toFixed(digits))));
+            }
             return points.map(p => converter(p.x, p.y));
+        } else if (digits !== undefined) {
+            return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
+                parseFloat(Number(p.y).toFixed(digits))));
         }
         return points;
     }
@@ -983,7 +1013,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return (this._current);
+        return this._current;
     }
 
     /**
@@ -1212,10 +1242,17 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * Create array of points - approximation of the object shape
      * @param {Object} obj fabricjs.Polygon object that is being approximated
      * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        if (digits !== undefined) {
+            return [
+                converter(parseFloat(Number(obj.x1).toFixed(digits)), parseFloat(Number(obj.y1).toFixed(digits))),
+                converter(parseFloat(Number(obj.x2).toFixed(digits)), parseFloat(Number(obj.y2).toFixed(digits))),
+            ];
+        }
         return [
             converter(obj.x1, obj.y1),
             converter(obj.x2, obj.y2),
@@ -1275,7 +1312,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "polyline";
+        return "timeline";
     }
 
     fabricStructure() {
@@ -1322,7 +1359,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getCurrentObject() {
-        return (this._current);
+        return this._current;
     }
 
     /**
@@ -1441,10 +1478,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         // }
     }
 
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
         ofObject.forEachObject(o => {
-            o.set({strokeWidth: ofObject.originalStrokeWidth/zoom});
+            o.set({strokeWidth: ofObject.originalStrokeWidth/graphicZoom});
         });
     }
 
@@ -1480,10 +1517,12 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
      * Create array of points - approximation of the object shape
      * @param {Object} obj fabricjs.Polygon object that is being approximated
      * @param {function} converter take two elements and convert and return item
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        //todo
         return undefined;
         // let result = this._eachChildAndFactory(
         //     obj,

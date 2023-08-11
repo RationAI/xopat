@@ -36,6 +36,21 @@ However, testing and documentation uses ``npm``, `grunt` and `cypress`.
 
 > The build and test framework is still in development - for now, the viewer can be used AS-IS just add the OSD library and run from a PHP server.
 
+To minify (build) the viewer, you can run
+
+> grunt all
+
+and for plugins only
+
+> grunt plugins
+
+or modules only
+
+> grunt modules
+
+This will create ``index.min.js`` files in respective directories. The viewer core recognizes
+existence of these files and loads them instead of all the source scripts.
+
 For more details on components, see README files in respective directories.
 For details on integration, see ``INTEGRATION.md``.
 For documentation, you can run ``npm install && grunt docs && grunt connect watch``

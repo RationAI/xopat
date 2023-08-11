@@ -4,7 +4,7 @@
   "description": "A flexible multipurose browser-based WSI viewer.",
   "main": "index.php",
   "scripts": {
-    "test": "test"
+    "test": "npx cypress run --browser chrome --e2e"
   },
   "repository": {
     "type": "git",

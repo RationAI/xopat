@@ -53,35 +53,51 @@ var UIComponents = /** @lends UIComponents */ {
 /**
  * Simplified JSON to HTML node builders for unified UI
  * @namespace UIComponents.Elements
+ *
+ * TODO: build unique changed method that would allways receive a string / parsed value
+ *   regardless of the type
  */
 Elements: /** @lends UIComponents.Elements */ {
     /**
      * Render TEXT input
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
-     * @param {*} options.default default value
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.placeholder hint
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable.
+     * @param {*?} options.default default value
      * @return {string} HTML for input TEXT field
      */
     textInput: function(options) {
+        //todo remove onchange in the future
         options = $.extend({classes: "",  placeholder: "", onchange: undefined, default: ""}, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.changed) {
+            options.onchange = `onchange="let value=this.value;${options.changed}"`;
+        } else {
+            options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        }
         return `<input type="text" class="${options.classes} form-control" 
 placeholder="${options.placeholder}" value="${options.default}" ${options.onchange}>`;
     },
     /**
      * Render Checkbox button
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.label
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
-     * @param {*} options.default default value
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.label
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable.
+     * @param {*?} options.default default value
      * @return {string} HTML for checkbox
      */
     checkBox: function(options) {
         options = $.extend({classes: "",  label: "", onchange: undefined, default: true}, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.changed) {
+            options.onchange = `onchange="let value=!!this.checked;${options.changed}"`;
+        } else {
+            options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        }
         if (options.default === "false") options.default = false;
         return `<label style="font-weight: initial;"><input type="checkbox" 
 class="${options.classes} form-control v-align-middle" ${options.default ? "checked" : ""} ${options.onchange}>&nbsp; 
@@ -90,51 +106,70 @@ ${options.label}</label>`;
     /**
      * Render color input
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
-     * @param {*} options.default default value
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.placeholder hint
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable (string, not an array).
+     * @param {*?} options.default default value
      * @return {string} HTML for color input
      */
     colorInput: function(options) {
         options = $.extend({classes: "",  placeholder: "", onchange: undefined, default: "#ffffff"}, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.changed) {
+            options.onchange = `onchange="let value=this.value;${options.changed}"`;
+        } else {
+            options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        }
         return `<input type="color" class="${options.classes} form-control" value="${options.default}" 
 placeholder="${options.placeholder}" ${options.onchange}>`;
     },
     /**
      * Render number input
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
-     * @param {*} options.default default value
-     * @param {number} options.min minimum value, default 0
-     * @param {number} options.max maximum value, default 1
-     * @param {number} options.step allowed increase, default 0.1
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.placeholder hint
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable.
+     * @param {*?} options.default default value
+     * @param {number?} options.min minimum value, default 0
+     * @param {number?} options.max maximum value, default 1
+     * @param {number?} options.step allowed increase, default 0.1
      * @return {string} HTML for number input
      */
     numberInput: function(options) {
         options = $.extend({
             classes: "",  placeholder: "", onchange: undefined, default: 0, min: 0, max: 1, step: 0.1
         }, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.changed) {
+            let parser = Number.isInteger(options.step) ? "parseInt" : "parseFloat";
+            options.onchange = `onchange="let value=Number.${parser}(this.value);${options.changed}"`;
+        } else {
+            options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        }
         return `<input type="number" class="${options.classes} form-control" placeholder="${options.placeholder}" 
 min="${options.min}" max="${options.max}" value="${options.default}" step="${options.step}" ${options.onchange}>`;
     },
     /**
      * Render select input
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
-     * @param {object} options.default default-selected opt_key
-     * @param {object} options.options select options, opt_key: 'option text' map
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.placeholder hint
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable.
+     * @param {object?} options.default default-selected opt_key
+     * @param {object?} options.options select options, opt_key: 'option text' map
      * @return {string} HTML for select input
      */
     select: function(options) {
         options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        if (options.changed) {
+            options.onchange = `onchange="let value=this.value;${options.changed}"`;
+        } else {
+            options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
+        }
         let innerContent = [], optsArray = Array.isArray(options.options);
         for (let key in options.options) {
             const name = options.options[key], val = optsArray ? name : key;
@@ -147,28 +182,41 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
      * Render number array
      * note: the parsed content can be retrieved as this.values
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {(string|undefined)} options.onchange string to evaluate on input change
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {(string|undefined)} options.onchange Deprecated: string to evaluate on input change
+     * @param {string?} options.changed JS code (string) to evaluate on change, the parsed value is available
+     *   as a local 'value' variable.
      * @param {(number|array)} options.default a list of default values or the desired array length
      * @return {string} HTML for select input
      */
     numberArray: function(options) {
         options = $.extend({classes: "",  onchange: undefined, options: {}, default: undefined}, options);
-        options.onchange = typeof  options.onchange === "string" ? `onchange="
-        try {
-            let values = JSON.parse(this.value);
-            if (!Array.isArray(values)) throw 'Cannot parse number array!';
-            else this.values = values.map(Number.parseFloat);
-            ${options.onchange}
-        } catch(e) { console.warn(e); this.style.background = 'var(--color-bg-danger-inverse)'; }"` : "disabled";
+        if (options.changed) {
+            options.onchange = `onchange="
+try {
+    let value = JSON.parse(this.value);
+    if (!Array.isArray(value)) throw 'Cannot parse number array!';
+    else value = values.map(Number.parseFloat);
+    ${options.changed}
+} catch(e) { console.warn(e); this.style.background = 'var(--color-bg-danger-inverse)'; }"`;
+        } else {
+            options.onchange = typeof  options.onchange === "string" ? `onchange="
+try {
+    let values = JSON.parse(this.value);
+    if (!Array.isArray(values)) throw 'Cannot parse number array!';
+    else this.values = values.map(Number.parseFloat);
+    ${options.onchange}
+} catch(e) { console.warn(e); this.style.background = 'var(--color-bg-danger-inverse)'; }"` : "disabled";
+        }
+
         return `<textarea placeholder="[1,2,3]" rows="1" class="${options.classes} form-control" ${options.onchange}>${
             JSON.stringify(Array.isArray(options.default) ? options.default : new Array(options.default))}</textarea>`;
     },
     /**
      * Render header
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.title
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.title
      * @return {string} HTML for header
      */
     header: function(options) {
@@ -178,8 +226,8 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
     /**
      * Render text
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.content
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.content
      * @return {string} HTML for content text
      */
     text: function(options) {
@@ -189,9 +237,9 @@ min="${options.min}" max="${options.max}" value="${options.default}" step="${opt
     /**
      * Render button
      * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.title
-     * @param {string} options.action
+     * @param {string?} options.classes classes to assign, space-separated
+     * @param {string?} options.title
+     * @param {string?} options.action
      * @return {string} HTML for button
      */
     button: function(options) {
@@ -319,24 +367,28 @@ Components: /** @lends UIComponents.Components */ {
          * @param options.details
          * @param options.contentAction
          * @param options.customContent
+         * @param options.containerStyle
          * @return {string}
          * @memberOf UIComponents.Components.ImageRow
          */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
-            let icon = options.icon;
-            if (options.icon === undefined) icon = APPLICATION_CONTEXT.url + "src/assets/image.png";
-            if (icon) icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
-            else icon = "";
+            let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
+            if (icon && !icon.includes('<')) {
+                icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+            }
+            //else HTML code - leave as is
+
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
+            let style = options.containerStyle ? `style="${options.containerStyle}"` : "";
 
-            return `<div id="${options.id}" class="image-row-container">
+            return `<div id="${options.id}" class="image-row-container" ${style}>
 <div>
 <div class="width-full d-flex image-row">
 ${icon}
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small">${details}</div></div>
+<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div></div>`;
         };
@@ -375,23 +427,30 @@ ${contentAction}
          * @param options.details
          * @param options.contentAction
          * @param options.customContent
+         * @param options.containerStyle
          * @return {string}
          * @memberOf UIComponents.Components.SelectableImageRow
          */
         build(options) {
             if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
             let input = this.options.multiselect ? "checkbox" : "radio";
-            let icon = options.icon || (APPLICATION_CONTEXT.url + "src/assets/image.png");
+            let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
+            if (icon && !icon.includes('<')) {
+                icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+            }
+            //else HTML code - leave as is
+
             let details = options.details || "";
             let contentAction = options.contentAction ? `<div>${options.contentAction}</div>` : "";
             let customContent = options.customContent || "";
             let selected = options.selected ? "checked" : "";
+            let style = options.containerStyle ? `style="${options.containerStyle}"` : "";
 
-            return `<div id="${options.id}" class="selectable-image-row-container">
+            return `<div id="${options.id}" class="selectable-image-row-container" ${style}>
 <input type="${input}" name="${this.options.id}" ${selected} class="d-none selectable-image-row-context" value="${options.value}">
 <div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
-<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small">${details}</div></div>
+${icon}
+<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div>`;
         }

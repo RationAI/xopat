@@ -31,6 +31,13 @@ function initXopatScripts() {
         focusOnViewer = true;
         e.preventDefaultAction = true;
     });
+    /**
+     * Allows changing focus state artificially
+     * @param {boolean} focused
+     */
+    UTILITIES.setIsCanvasFocused = function(focused) {
+        focusOnViewer = focused;
+    };
     document.addEventListener('keydown', function(e) {
         e.focusCanvas = focusOnViewer;
         /**
@@ -192,8 +199,8 @@ function initXopatScripts() {
      * Get the date as ISO string
      * @return {string}
      */
-    window.UTILITIES.todayISO = function() {
-        return new Date().toJSON().slice(0,10).split('-').reverse().join('/');
+    window.UTILITIES.todayISO = function(separator="/") {
+        return new Date().toJSON().slice(0,10).split('-').reverse().join(separator);
     };
 
     /**
@@ -276,6 +283,7 @@ function initXopatScripts() {
             ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
 
         let exportData = {};
 
@@ -297,6 +305,7 @@ function initXopatScripts() {
                 exportData[uniqueKey] = data;
             }
         });
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
         return {app, data: exportData};
     };
 

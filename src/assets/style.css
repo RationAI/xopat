@@ -181,6 +181,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     font-size: xx-small;
     top:-3px;
     display: inline-block;
+    z-index: 1;
 }
 .show-right-hint::before {
     content: attr(data-hint);
@@ -338,7 +339,7 @@ div {box-sizing: initial !important;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .material-icons {color: var(--color-border-inverse);}
-#main-panel {z-index: 90;right: 0;transition: right 0.3s;user-select: none;}
+#main-panel {z-index: 90;right: 0;transition: right 0.3s;user-select: none;background: var(--color-bg-primary); }
 #main-panel-hide {cursor: pointer;margin-left: -12px;}
 #main-panel-show {position: fixed;z-index: 89;top: 5px;right: 5px;cursor: pointer;text-shadow: 0 0 20px #ffffff;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
@@ -435,6 +436,20 @@ div {box-sizing: initial !important;}
 #cache-snapshot:hover + div, .cache-snapshot-visible:hover {
     display: flex !important;
 }
+
+/*TODO implement switch button
+  input.switch[type=checkbox]{height: 0;width: 0;visibility: hidden;}*/
+/*input.switch + label {cursor: pointer;text-indent: -9999px;*/
+/*    width: 200px;height: 100px;background: var(--color-bg-tertiary);*/
+/*    display: block;border-radius: 100px;position: relative;}*/
+/*input.switch + label:after {*/
+/*    content: '';position: absolute;top: 5px;*/
+/*    left: 5px;width: 90px;height: 90px;background: var(--color-bg-primary);*/
+/*    border-radius: 90px;transition: 0.3s;*/
+/*}*/
+/*input.switch:checked + label {background: var(--color-diff-blob-comment-button-bg);}*/
+/*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
+/*input.switch + label:active:after {width: 130px;}*/
 
 /** DIALOGS*/
 input.selectable-image-row-context:checked + div {

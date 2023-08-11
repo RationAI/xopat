@@ -77,15 +77,6 @@ window.addEventListener('load', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-    // TODO: allow switching between annotations by keys
-    // if (e.code === "ArrowDown") {
-    //     ${this._globalSelf}._focus(${focusBox}, ${object.incrementId});
-    //     return;
-    // }
-    // if (e.code === "ArrowUp") {
-    //     return;
-    // }
-    
     const parentContext = opener.${this._globalContext};  
     opener.focus();
     e.focusCanvas = true; //fake focus
@@ -133,7 +124,7 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _getHistoryWindowHeadHtml() {
-        let undoCss = this._context.canvas.getObjects().length > 0 ?
+        let undoCss = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
         return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
@@ -143,9 +134,10 @@ onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
 onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
 <span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
-<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
-onclick="if (${this._globalSelf}._context.disabledInteraction) return; ${this._canvasFocus} 
-${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>`;
+<!--todo does not work<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
+onclick="if (${this._globalSelf}._context.disabledInteraction || !window.confirm('Do you really want to delete all annotations?')) return; ${this._canvasFocus} 
+${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>-->
+`;
     }
 
     /**
@@ -470,7 +462,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         const _this = this;
         const focusBox = this._getFocusBBoxAsString(object, factory);
         const editIcon = factory.isEditable() ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
-title="Edit annotation (disables navigation)" onclick="if (this.html() === 'edit') {
+title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
@@ -481,7 +473,7 @@ onclick="${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
 ${editIcon}
 </div>`;
 
-        if (typeof replaced === "object" && replaced?.incrementId) {
+        if (typeof replaced === "object" && !isNaN(replaced?.incrementId)) {
             this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
                 if (node.length) {
                     node.replaceWith(html);
@@ -595,9 +587,9 @@ ${editIcon}
         this._context.enableInteraction(false);
     }
 
-    async _performSwap(canvas, toAdd, toRemove) {
+    async _performSwap(canvas, toAdd, toRemove, withFocus=true) {
         if (toAdd) {
-            this._focus(this._getFocusBBox(toAdd));
+            if (withFocus) this._focus(this._getFocusBBox(toAdd));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
             this._addToBoard(toAdd, toRemove);
@@ -606,7 +598,7 @@ ${editIcon}
             if (toRemove) canvas.remove(toRemove);
             canvas.setActiveObject(toAdd);
         } else if (toRemove) {
-            this._focus(this._getFocusBBox(toRemove));
+            if (withFocus) this._focus(this._getFocusBBox(toRemove));
             await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);

@@ -45,23 +45,22 @@ export default {
     shadersMainMenu(config) {
         if (!config.visualizations || config.visualizations.length < 1) {
             cy.get("#shaders").should('not.be.visible')
-            return;
-        }
+        } else {
+            let shaderOpener = cy.get("#shaders-pin");
 
-        let shaderOpener = cy.get("#shaders-pin");
+            cy.get("#shaders").should('be.visible')
+            cy.get("#shaders").children('option').then(options => {
+                const actual = [...options].map(o => o.innerText)
+                expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
+            })
 
-        cy.get("#shaders").should('be.visible')
-        cy.get("#shaders").children('option').then(options => {
-            const actual = [...options].map(o => o.innerText)
-            expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
-        })
+            elements.openMenuArrow("#shaders-pin");
 
-        elements.openMenuArrow("#shaders-pin");
+            //testing of the submenu is too complex for general setup, tested in shader tests
 
-        //testing of the submenu is too complex for general setup, tested in shader tests
-
-        if (config.params.webglDebugMode) {
-            cy.contains('#test-inner--webgl', 'WebGL Processing I/O (debug mode)')
+            if (config.params.webglDebugMode) {
+                cy.contains('#test-inner--webgl', 'WebGL Processing I/O (debug mode)')
+            }
         }
     },
 

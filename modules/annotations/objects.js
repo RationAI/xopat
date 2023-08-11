@@ -72,7 +72,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "layerID",
         "color",
         "author",
-        "created"
+        "created",
     ];
 
     /**
@@ -117,8 +117,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Get currently eddited object
-     * @returns
+     * Get currently edited or created object.
+     * If the mode is editing, it returns the currently edited object. It is a full-fledged annotation.
+     *
+     * If the mode is creating (not yet finished), it returns a helper annotation (or their list) instead.
+     * Such a helper annotation must be added with addHelperAnnotation(). In this case, a list can be returned
+     * too - for example, the ruler is created using a line and a text, two separate objects. When finished, a
+     * group is created to attach to the canvas. When aborted, two helper items in an array are returned by this method.
+     * @returns {(fabric.Object|[fabric.Object])}
      */
     getCurrentObject() {
         return null;
@@ -173,6 +179,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * A list of extra properties defining the object geometry required to be included
+     * todo: replace with builtin fabricjs toObject call on each type class
      */
     exportsGeometry() {
         return [];
@@ -356,14 +363,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
-     * @param ofObject
-     * @param zoom
+     * @param {fabric.Object} ofObject
+     * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
+     * @param {number} realZoom real zoom value of the viewer (real zoom, linearly keep scale consistent, for example text)
      */
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
         ofObject.set({
-            strokeWidth: ofObject.originalStrokeWidth/zoom
+            strokeWidth: ofObject.originalStrokeWidth/graphicZoom
         });
         // // Update object properties to reflect zoom
         // var updater = function(x) {
@@ -451,10 +459,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits decimal precision, default undefined
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
         return undefined;
     }
 
@@ -484,9 +493,7 @@ OSDAnnotations.PolygonUtilities = {
 
         let tolerance = 7 / VIEWER.scalebar.imagePixelSizeOnScreen();
         points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
-        points = this._simplifyDouglasPeucker(points, tolerance);
-
-        return points;
+        return this._simplifyDouglasPeucker(points, tolerance);
     },
 
     simplifyQuality: function (points, quality) {

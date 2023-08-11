@@ -1,14 +1,42 @@
-OSDAnnotations.Convertor.GeoJSON = class {
-    title = 'quPath Annotations';
-    description = 'Annotations for quPath (GeoJSON format).';
-    offset = undefined;
+OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convertor.IConvertor {
+    static title = 'QuPath Annotations';
+    static description = 'Annotations for quPath (GeoJSON format).';
+    static exportsPresets = false;
+    static includeAllAnnotationProps = false;
 
     static getFileName(context) {
-        return 'qu_annotations_' + UTILITIES.todayISO() + '.geojson';
+        return 'geojson_qupath_' + UTILITIES.todayISO("_") + '.json';
     }
 
-    //todo check polyline enabled, else show warn
-    static includeAllAnnotationProps = false;
+    static options = {
+        "_title": {
+            type: "text",
+            content: "Note: QuPath is a lossy format, since some annotations (like text) cannot be preserved."
+        },
+        "addOffset": {
+            type: "checkBox",
+            label: "Export with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
+            default: true
+        },
+        "trimToDefaultPresets": {
+            type: "checkBox",
+            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes.</span>",
+            default: true
+        },
+    };
+
+
+    //default presets in quPath that are safe to export
+    _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
+        {"name":"Category","value":"Ignore*"}}},{"color":"#c80000","factoryID":"polygon","presetID":"Tumor",
+        "meta":{"category":{"name":"Category","value":"Tumor"}}},{"color":"#96c896","factoryID":"polygon",
+        "presetID":"Stroma","meta":{"category":{"name":"Category","value":"Stroma"}}},{"color":"#a05aa0",
+        "factoryID":"polygon","presetID":"Immune cells","meta":{"category":{"name":"Category","value":"Immune cells"}}},
+        {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Category",
+        "value":"Necrosis"}}},{"color":"#0000b4","factoryID":"polygon","presetID":"Region*","meta":{"category":
+        {"name":"Category","value":"Region*"}}},{"color":"#fa3e3e","factoryID":"polygon","presetID":"Positive","meta":
+        {"category":{"name":"Category","value":"Positive"}}},{"color":"#7070e1","factoryID":"polygon","presetID":
+        "Negative","meta":{"category":{"name":"Category","value":"Negative"}}}];
 
     //linear ring has the first and last vertex equal, geojson uses arrays, we only for now support arrays of points,
     //no arrays of arrays of points
@@ -20,8 +48,12 @@ OSDAnnotations.Convertor.GeoJSON = class {
             return res && res.length === 3 ? res.map(v => parseInt(v, 16)) : null;
         }
 
+        if (this._presetReplacer && !this._validPresets.includes(preset.presetID)) {
+            preset = this._presetReplacer;
+        }
+
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-        let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+        let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
         if (poly?.length > 0) {
             const offset = this.offset;
             if (offset) poly = poly.map(o => ([o[0]-offset.x, o[1]-offset.y]));
@@ -86,7 +118,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
-        "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], true),
+        "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], false),
         "point": (object, preset) => {
             object = this._asGEOJsonFeature(object, preset, "Point");
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
@@ -97,25 +129,7 @@ OSDAnnotations.Convertor.GeoJSON = class {
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "ruler": (object, preset) => {
-            const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-            const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
-            const line = object.objects[0];
-            //todo bounding box should be exported as well so that coords are not negative without sense
-            //todo reimport is imprecise
-
-            //todo preset data
-            return {
-                geometry: {
-                    type: "LineString",
-                    coordinates: [
-                        converter(line.x1, line.y1),
-                        converter(line.x2, line.y2),
-                    ]
-                },
-                properties: factory.copyNecessaryProperties(object, [], true)
-            };
-        },
+        "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
     _decodeMulti(object, type) {
@@ -150,42 +164,57 @@ OSDAnnotations.Convertor.GeoJSON = class {
         },
     }
 
-    async encode(annotationsGetter, presetsGetter, annotationsModule, options) {
-        this.offset = options.bioFormatsOffset;
+    static encodeFinalize(output) {
+        let result = {
+            type: "FeatureCollection",
+            features: []
+        };
+        let list = result.features;
 
-        this.context = annotationsModule;
+        if (Array.isArray(output.objects)) {
+            for (let obj of output.objects) {
+                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
+                list.push(data);
+            }
+        }
+        return JSON.stringify(result);
+    }
+
+    async encodePartial(annotationsGetter, presetsGetter) {
+        const result = {}
+        if (!this.options.exportsObjects) return result;
+        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
+        this._presetReplacer = this.options.trimToDefaultPresets ?
+            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context) : false;
+        this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
         const annotations = annotationsGetter();
         const presets = presetsGetter();
 
-        let output = {
-            type: "FeatureCollection",
-            features: []
-        };
-        let list = output.features;
-
         // for each object (annotation) create new annotation element with coresponding coordinates
-        for (let i = 0; i < annotations.length; i++) {
-            let obj = annotations[i];
-            if (!obj.factoryID || obj.factoryID.startsWith("_")) {
-                continue;
-            }
+        if (annotations) {
+            result.objects = [];
+            for (let obj of annotations) {
+                if (!obj.factoryID || obj.factoryID.startsWith("_")) {
+                    continue;
+                }
 
-            // noinspection JSUnresolvedVariable
-            if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
-                if (encoded) {
-                    encoded.type = "Feature";
-                    list.push(encoded);
+                // noinspection JSUnresolvedVariable
+                if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
+                    let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
+                    if (encoded) {
+                        encoded.type = "Feature";
+                        if (this.options.serialize) encoded = JSON.stringify(encoded);
+                        result.objects.push(encoded);
+                    }
                 }
             }
         }
-
-        return JSON.stringify(output);
+        return result;
     }
 
-    async decode(data, annotationsModule, options) {
-        this.offset = options.bioFormatsOffset;
+    async decode(data) {
+        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
 
         data = JSON.parse(data);
 
@@ -250,6 +279,4 @@ OSDAnnotations.Convertor.GeoJSON = class {
              presets: Object.values(presets)
         };
     }
-}
-
-OSDAnnotations.Convertor.register("qu-path", OSDAnnotations.Convertor.GeoJSON);
+});

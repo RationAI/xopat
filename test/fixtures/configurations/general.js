@@ -34,7 +34,7 @@ export default {
         }
     }),
     params: (overrides) => ({
-        "locale": "en",
+        locale: "en",
         customBlending: false,
         debugMode: false,
         webglDebugMode: false,
@@ -48,7 +48,7 @@ export default {
         preventNavigationShortcuts: false,
         permaLoadPlugins: false,
         bypassCookies: true, //by default tests do not work with cookies
-        theme: "auto",
+        theme: "dark",
         stackedBackground: false,
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",

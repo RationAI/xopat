@@ -5,7 +5,7 @@ if (!ABS_ROOT) throw new Exception("Plugins must be loaded with active core!");
 require_once PROJECT_ROOT . "modules.php";
 use Ahc\Json\Comment;
 
-global $i18n;
+global $i18n, $PLUGINS;
 $PLUGINS = array();
 
 foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
@@ -34,7 +34,27 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                         $data["error"] = $i18n->t('php.pluginInvalidDeps', array("error" => $MODULES[$modId]->error));
                     }
                 }
-                $PLUGINS[$data["id"]] = $data;
+
+                try {
+                    global $ENV, $PLUGINS;
+                    if (is_array($ENV)) {
+                        if (!isset($ENV["plugins"]) || !is_array($ENV["plugins"])) $ENV["plugins"] = [];
+                        $ENV_PLUG = $ENV["plugins"];
+
+                        if (isset($ENV_PLUG[$data["id"]])) {
+                            $data = array_merge_recursive_distinct($data, $ENV_PLUG[$data["id"]]);
+                        }
+                    } else {
+                        trigger_error("Env setup for module failed: invalid \$ENV! Was CORE included?", E_USER_WARNING);
+                    }
+                } catch (Exception $e) {
+                    trigger_error($e, E_USER_WARNING);
+                }
+
+                if (!isset($data["enabled"]) || $data["enabled"] != false) {
+                    $PLUGINS[$data["id"]] = $data;
+                }
+
             } catch (Exception $e) {
                 $id = $dir;
                 $PLUGINS[$id] = array(
@@ -52,30 +72,7 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
     }
 }
 
-try {
-    global $ENV, $MODULES, $PLUGINS;
-    if (is_array($ENV)) {
-        if (!isset($ENV["modules"]) || !is_array($ENV["modules"])) $ENV["modules"] = [];
-        if (!isset($ENV["plugins"]) || !is_array($ENV["plugins"])) $ENV["plugins"] = [];
-        $ENV_MOD = $ENV["modules"]; $ENV_PLUG = $ENV["plugins"];
 
-        foreach ($MODULES as $id=>$item) {
-            if (isset($ENV_MOD[$id])) {
-                $MODULES[$id] = array_merge_recursive_distinct($item, $ENV_MOD[$id]);
-            }
-        }
-
-        foreach ($PLUGINS as $id=>$item) {
-            if (isset($ENV_PLUG[$id])) {
-                $PLUGINS[$id] = array_merge_recursive_distinct($item, $ENV_PLUG[$id]);
-            }
-        }
-    } else {
-        trigger_error("Env setup shold have been loaded, but the data is missing!", E_USER_WARNING);
-    }
-} catch (Exception $e) {
-    trigger_error($e, E_USER_WARNING);
-}
 
 function require_modules() {
     global $MODULES;

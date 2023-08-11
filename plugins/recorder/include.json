@@ -4,7 +4,7 @@
     "author": "Jirka Horák",
     "version": "1.0.0",
     "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
-    "icon": "",
+    "icon": null,
     "includes" : ["presenter.js"],
     "modules": ["snapshots", "annotations"],
     "permaLoad": false

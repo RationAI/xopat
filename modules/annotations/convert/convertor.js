@@ -2,26 +2,48 @@
  * Example for implementation of a convertor:
  * The convertor file must be included after this file.
  *
- * OSDAnnotations.Convertor.MyConvertor = class {
- *     title = 'My Custom Format';
- *     description = 'This is the best format in the universe.';
+ * OSDAnnotations.Convertor.register("my-format", class extends OSDAnnotations.Convertor.IConvertor {
+ *     static title = 'My Custom Format';
+ *     static description = 'This is the best format in the universe.';
  *
- *     static includeAllAnnotationProps = true | false; //select whether you want to get all or necessary props only
+ *     //override behaviour if needed, default true
+ *     static includeAllAnnotationProps = false;
+ *     static exportsObjects = false;
+ *     static exportsPresets = false;
  *
  *     static getFileName(context) {
- *         return 'annotations_' + UTILITIES.todayISO() + '.awesome';
+ *         return 'annotations_' + UTILITIES.todayISO("_") + '.awesome';
  *     }
  *
- *     encode(annotationsGetter, presetsGetter, annotationsModule) {*
+ *     async encodePartial(annotationsGetter, presetsGetter) {*
  *         const objects = annotationsGetter("keepThisProperty", "keepAlsoThis");
  *         const presets = presetsGetter();
  *         /**
- *          * Must return a string - serialized format.
+ *          * It gives a third party the power to work with each object and preset individually.
+ *          * Note that partial output must not necessarily be a valid output of the given format.
+ *          * In the case of unsupported format flexibility on this granularity, simply return
+ *          * an unfinished list ob objects that can be later finalized into a full valid format output.
+ *          *
+ *          * Options are in this.options, reference to the annotation module as this.context
+ *          *
+ *          * Must return the following object:
  *          *\/
- *         return mySerializeData(objects, presets);
+ *         return {
+ *             objects: [serialized or unserialized list - depends on options.serialize, possibly undefined],
+ *             presets: [serialized or unserialized list - depends on options.serialize, possibly undefined]
+ *         };
  *     }
  *
- *     decode(data, annotationsModule) {
+ *     async encodeFinalize(data) {
+ *         /**
+ *          * Finishes encodePartial() output to a string serialized content.
+ *          * encodeFinalize(encodePartial(...)) is therefore a full exporting routine.
+ *          * This flexibility is meant for third party SW to work on arbitrary granularity.
+ *          *\/
+ *          return myFinalize(data);
+ *     }
+ *
+ *     async decode(data) {
  *         /**
  *          * Must return
  *            {
@@ -32,9 +54,7 @@
  *          *\/
  *         return myParseData(data);
  *     }
- * }
- *
- * OSDAnnotations.Convertor.register("my-format", OSDAnnotations.Convertor.MyConvertor);
+ * });
  *
  */
 
@@ -45,45 +65,82 @@ OSDAnnotations.Convertor = class {
     /**
      * Register custom Annotation Converter
      * @param {string} format a format identifier
-     * @param {object} convertor a converter object main class (function) name from the provided file, it should have:
-     * @param {string} convertor.title human readable title
-     * @param {string} convertor.description optional
-     * @param {function} convertor.encode encodes the annotations into desired format from the native one,
-     *  receives annotations and presets _getters_, should return a string - serialized object
-     * @param {function} convertor.decode decodes the format into native format, receives a string, returns
-     *  on objects {annotations: [], presets: []}
+     * @param {typeof OSDAnnotations.Convertor.IConvertor} convertor a converter object class (not an instance)
      */
     static register(format, convertor) {
         if (typeof this.CONVERTERS[format] === "object") {
             console.warn(`Registered annotations convertor ${format} overrides existing convertor!`);
         }
+        for (let opt in convertor.options) {
+            if (opt.startsWith("_")) continue;
+            const option = convertor.options[opt];
+            if (!option.type) {
+                console.warn("Invalid convertor option: does not have 'type' field!");
+                delete convertor.options[opt];
+                continue;
+            }
+            if (opt in convertor) {
+                console.warn("Invalid convertor option: overriding existing properties is not allowed!", opt, option);
+                delete convertor.options[opt];
+                continue;
+            }
+            option.changed = `OSDAnnotations.Convertor.get('qupath').${opt} = value;`;
+            convertor[opt] = option.default;
+        }
         this.CONVERTERS[format] = convertor;
+    }
+
+    /**
+     * Get a given convertor
+     * @param format
+     */
+    static get(format) {
+        const parserCls = this.CONVERTERS[format];
+        if (!parserCls) throw "Invalid format " + format;
+        return parserCls;
     }
 
     /**
      * Encodes the annotation data using asynchronous communication.
      * @param options
      * @param context
-     * @param widthAnnotations
+     * @param withAnnotations
      * @param withPresets
      */
-    static async encode(options, context, widthAnnotations=true, withPresets=true) {
-        const format = options.format;
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
+    static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
+        const parserCls = this.get(options.format);
         const exportAll = parserCls.includeAllAnnotationProps;
-        return await new parserCls().encode(
-            (...exportedProps) => widthAnnotations ? context.toObject(exportAll, ...exportedProps).objects : [],
-            () => withPresets ? context.presets.toObject() : [],
-            context,
-            options
+
+        options.exportsObjects = withAnnotations && parserCls.exportsObjects;
+        options.exportsPresets = withPresets && parserCls.exportsPresets;
+        const encoded = await new parserCls(context, options).encodePartial(
+            (...exportedProps) => context.toObject(exportAll, ...exportedProps).objects,
+            () => context.presets.toObject()
         );
+        encoded.format = options.format;
+        return encoded;
     }
 
+    /**
+     * Finalize encoding to a string
+     * @param {string} format
+     * @param {object} data
+     * @param {object} data.objects
+     * @param {object} data.presets
+     * @return {string}
+     */
+    static encodeFinalize(format, data) {
+        return this.get(format).encodeFinalize(data);
+    }
+
+    /**
+     * Filename getter for a given format
+     * @param format format to use
+     * @param context annotations module reference
+     * @return {string}
+     */
     static defaultFileName(format, context) {
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
-        return parserCls.getFileName(context);
+        return this.get(format).getFileName(context);
     }
 
     /**
@@ -93,18 +150,151 @@ OSDAnnotations.Convertor = class {
      * @param context
      */
     static async decode(options, data, context) {
-        const format = options.format;
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
-        return await new parserCls().decode(data, context, options);
+        const parserCls = this.get(options.format);
+        return await new parserCls(context, options).decode(data, context, options);
     }
 
-
+    /**
+     * Read the list of available format IDs
+     * @return {string[]}
+     */
     static get formats() {
-        const result = Object.keys(this.CONVERTERS);
-        //todo generalize this to a module and add native as another converter?
-        result.push("native");
-        return result;
+        return Object.keys(this.CONVERTERS);
+    }
+};
+
+/**
+ *
+ * @type {OSDAnnotations.Convertor.IConvertor}
+ */
+OSDAnnotations.Convertor.IConvertor = class {
+    /**
+     * Title, used in GUI
+     * @type {string}
+     */
+    static title = 'My Custom Format';
+    /**
+     * Description, used in GUI
+     * @type {*}
+     */
+    static description = undefined;
+    /**
+     * Options map, supported parameters, each option must be an object
+     * that has:
+     * {
+     *     type: "checkBox" //what GUI input type it maps to, see available in UIComponents.Elements
+     *     default: default value
+     *     ...possibly provide other properties, note that 'changed' property is handled automatically
+     * }
+     * Properties defined here are automatically attached as a static properties of the given class.
+     * E.g.: option
+     * myValue: {type:"checkBox", default: false} will create
+     *    - this.constructor.myValue object with default 'false' value
+     *    - this.options.myVaue object with default value this.constructor.myValue, possibly overridden
+     *    from the constructor.
+     * Note. options starting with underscore are ignored, these can be used for custom HTML content (e.g. a text)
+     */
+    static options = {};
+
+    /**
+     * Declare whether supplied annotations come with
+     * all options (in native format ready for encoding) or with
+     * required set only
+     * @type {boolean}
+     */
+    static includeAllAnnotationProps = true;
+    /**
+     * Declare whether this convertor can export annotation objects
+     * @type {boolean}
+     */
+    static exportsObjects = true;
+    /**
+     * Declare whether this convertor can export annotation presets
+     * @type {boolean}
+     */
+    static exportsPresets = true;
+
+    /**
+     * @param {OSDAnnotations} annotationsModule  reference to the module
+     * @param {object} options any options your converter wants,
+     *   must be documented, passed from the module convertor options
+     * @param {boolean} options.serialize build-in parameter for optimization
+     * @param {boolean} options.exportsObjects true if annotations requested, always false if static set to false
+     * @param {boolean} options.exportsPresets true if presets requested, always false if static set to false
+     * @param options
+     */
+    constructor(annotationsModule, options) {
+        /**
+         * Reference to the annotations module.
+         * @type {OSDAnnotations}
+         * @memberOf OSDAnnotations.Convertor.IConvertor
+         */
+        this.context = annotationsModule;
+        /**
+         * Options object enriched by values from static options (if undefined).
+         * @memberOf OSDAnnotations.Convertor.IConvertor
+         */
+        this.options = {...options};
+        for (let opt in this.constructor.options) {
+            if (opt.startsWith("_")) continue;
+            if (this.options[opt] === undefined) {
+                this.options[opt] = this.constructor[opt];
+            }
+        }
+    }
+
+    /**
+     * Describe what filename has the exported file
+     * @param {OSDAnnotations} context
+     * @return {string}
+     */
+    static getFileName(context) {
+        return 'annotations_' + UTILITIES.todayISO("_") + '.txt';
+    }
+
+    /**
+     * Annotation export into a selected format. For flexibility, the output must be a serialized object list,
+     * and array of serialized exported presets. The encoding must be flexible enough: it is a two-step procedure.
+     * For optimization, options.serialize=true means the output arrays can contain arbitrary data to avoid expensive
+     * re-encoding. encodeFinalize() must then implicitly recognize whether the arrays come with serialized items.
+     *
+     * @param {function} annotationsGetter function that returns a list of objects to export or undefined if not desired
+     * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
+     * @return {object} must return the following structure:
+     *    {
+     *        objects: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
+     *        presets: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
+     *    }
+     */
+    async encodePartial(annotationsGetter, presetsGetter) {
+        throw("::encodePartial must be implemented!");
+    }
+
+    /**
+     * Finalize the encoding to a serialized string. If objects/presets
+     * are strings, the data comes in pre-serialized, otherwise the serialization
+     * was delayed and it is ready for serialization.
+     * @param {object} output result of encodePartial(...)
+     * @param {[(string|any)]} output.objects
+     * @param {[(string|any)]} output.presets
+     * @return {string}
+     */
+    static encodeFinalize(output) {
+        throw("::merge must be implemented!");
+    }
+
+    /**
+     *
+     * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
+     * @return {object} must return the following structure:
+     *    {
+     *        objects: [native export format JS objects] or undefined,
+     *        presets: [native export format JS presets] or undefined
+     *    }
+     *    for native format specs, check the readme. Deserialize the string data and parse.
+     */
+    async decode(data) {
+        throw("::decode must be implemented!");
     }
 };
 

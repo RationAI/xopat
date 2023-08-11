@@ -64,7 +64,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {MetaStore} metadata
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getIcon(metadata, request) {
+    getIcon(metadata=this.currentMeta, request={}) {
         return false; //do not render
     }
 
@@ -73,10 +73,12 @@ AnnotationsGUI.DataLoader = class {
      * @param {MetaStore} metadata
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaAuthor(metadata, request) {
+    getMetaAuthor(metadata=this.currentMeta, request={}) {
         //parse xOpatSchema from the object here
         const user = metadata.get(AnnotationsGUI.MetaSchema.user, "unknown");
         return MetaStore.getStore(user, xOpatSchema.user).get(xOpatSchema.user.name);
+        //we send data as join of tables with users, so request.name = user.name
+        // return 'Annotations created by ' + request.name;
     }
 
     /**
@@ -84,7 +86,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {MetaStore} metadata
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaFormat(metadata, request) {
+    getMetaFormat(metadata=this.currentMeta, request={}) {
         return metadata.get(AnnotationsGUI.MetaSchema.format, "native");
     }
 
@@ -93,7 +95,7 @@ AnnotationsGUI.DataLoader = class {
      * @param {MetaStore} metadata
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaName(metadata, request) {
+    getMetaName(metadata=this.currentMeta, request={}) {
         return metadata.get(AnnotationsGUI.MetaSchema.name);
     }
 
@@ -102,9 +104,10 @@ AnnotationsGUI.DataLoader = class {
      * @param {MetaStore} metadata
      * @param {{}} request data retrieved from the list annotations call for each annotation
      */
-    getMetaDescription(metadata, request) {
-        //we send data as join of tables with users, so request.name = user.name
-        return 'Annotations created by ' + request.name;
+    getMetaDescription(metadata=this.currentMeta, request={}) {
+        const date = metadata.get(AnnotationsGUI.MetaSchema.created);
+        const readableDate = new Date(date).toDateString();
+        return readableDate + " | Uploaded by " + this.getMetaAuthor(metadata, request);
     }
 
     /**
@@ -119,7 +122,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Read
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {function} onSuccess  call with object - data from the response, in expected format
@@ -130,7 +133,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Update
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {object} data annotations data, export from the module
@@ -155,7 +158,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Delete
      * @param {string} server URL to the annotations server
      * @param {number} annotationId id obtained from the system
      * @param {function} onSuccess  call with object - data from the response, in expected format
@@ -166,7 +169,7 @@ AnnotationsGUI.DataLoader = class {
     }
 
     /**
-     *
+     * Create
      * @param {string} server URL to the annotations server
      * @param {string} tissueId tissue ID, usually a path to the file
      * @param {object} data annotations data, export from the module
@@ -175,13 +178,12 @@ AnnotationsGUI.DataLoader = class {
      * @param {function} onFailure call on failure with the error object
      */
     uploadAnnotation(server, tissueId, data, format, onSuccess, onFailure) {
-
         const appMeta = APPLICATION_CONTEXT.metadata;
         this.currentMeta = new MetaStore({});
         this.currentMeta.set(AnnotationsGUI.MetaSchema.format, format);
         this.currentMeta.set(AnnotationsGUI.MetaSchema.version, this.context.context.version);
         this.currentMeta.set(AnnotationsGUI.MetaSchema.user, appMeta.get(xOpatSchema.user));
-        this.currentMeta.set(AnnotationsGUI.MetaSchema.created, new Date().getUTCDate());
+        this.currentMeta.set(AnnotationsGUI.MetaSchema.created, new Date().toISOString());
         this.currentMeta.set(AnnotationsGUI.MetaSchema.name, HumanReadableIds.create());
 
         this._fetchWorker(server, {
@@ -196,7 +198,8 @@ AnnotationsGUI.DataLoader = class {
 
     _fetchWorker(url, post, onSuccess, onFail) {
         if (this.context.context.disabledInteraction) {
-            Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
+            Dialogs.show('Annotations are disabled. <a onclick="$(\'#enable-disable-annotations\').click();">Enable.</a>',
+                2500, Dialogs.MSG_WARN);
             return;
         }
         UTILITIES.fetchJSON(url, post, {}).then(onSuccess).catch(onFail);

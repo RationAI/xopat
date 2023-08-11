@@ -513,7 +513,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             switch (menuName) {
                 case "MainMenu":
                     this.MainMenu.open();
-                    $("#main-panel-content").scrollTo("#" + id);
+                    $("#main-panel-content").scrollTo("#" + menuId);
                     break;
                 case "Tools":
                     this.AdvancedMenu.close();
@@ -1152,6 +1152,7 @@ Theme &emsp; ${inputs.select({
 
         pluginsMenuBuilder.builder.attachHeader();
 
+        let pluginCount = 0;
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             //todo maybe avoid using _dangerously* ?
             let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
@@ -1176,6 +1177,19 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
                 value: plugin.id,
                 selected: plugin.loaded,
                 contentAction:actionPart
+            });
+            pluginCount++;
+        }
+
+        if (pluginCount < 1) {
+            pluginsMenuBuilder.addRow({
+                title: $.t('plugins.noPluginsAvailable'),
+                author: "",
+                details: $.t('plugins.noPluginsDetails'),
+                icon: '<span class="material-icons p-2">explore</span>',
+                value: "_undefined_",
+                selected: false,
+                contentAction: ""
             });
         }
     }

@@ -1,5 +1,5 @@
 <?php
-
+global $MODULES;
 $MODULES = array();
 
 include_once PROJECT_ROOT . "comments.class.php";
@@ -18,9 +18,30 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             if (file_exists($full_path . "style.css")) {
                 $data["styleSheet"] = $data["path"] . "style.css";
             }
-            $MODULES[$data["id"]] = $data;
+
+
+            try {
+                global $ENV, $MODULES;
+                if (is_array($ENV)) {
+                    if (!isset($ENV["modules"]) || !is_array($ENV["modules"])) $ENV["modules"] = [];
+                    $ENV_MOD = $ENV["modules"];
+
+                    if (isset($ENV_MOD[$data["id"]])) {
+                        $data = array_merge_recursive_distinct($data, $ENV_MOD[$data["id"]]);
+                    }
+                } else {
+                    trigger_error("Env setup for module failed: invalid \$ENV! Was CORE included?", E_USER_WARNING);
+                }
+            } catch (Exception $e) {
+                trigger_error($e, E_USER_WARNING);
+            }
+
+            if (!isset($data["enabled"]) || $data["enabled"] != false) {
+                $MODULES[$data["id"]] = $data;
+            }
+
         } catch (Exception $e) {
-            //pass
+            trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
         }
     }
 }
@@ -99,6 +120,12 @@ function printDependencies($directory, $item) {
     if (isset($item["styleSheet"])) {
         echo "<link rel=\"stylesheet\" href=\"{$item["styleSheet"]}?v=$version\" type='text/css'>\n";
     }
+
+    if (file_exists("$directory{$item["directory"]}/index.min.js")) {
+        echo "    <script src=\"$directory{$item["directory"]}/index.min.js?v=$version\"></script>\n";
+        return;
+    }
+
     foreach ($item["includes"] as $__ => $file) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item["directory"]}/$file?v=$version\"></script>\n";
