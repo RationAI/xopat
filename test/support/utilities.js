@@ -1,4 +1,5 @@
 import 'cypress-wait-until';
+import Controls from "../fixtures/configurations/controls";
 
 export default {
     /**

@@ -4,22 +4,26 @@ import {default as utils} from "../support/utilities"
 
 describe('Third party pyramidal image', () => {
     it('Background only: custom protocol', () => {
-        let visualisation = {
+        let isSecure = false;
+
+        let firstConfig = {
             params: config.params({viewport: config.viewport('book', 0)}),
             data: config.data('book'),
             background: config.background({protocol: "data"}, 0)
         };
 
-        cy.launch(visualisation);
-        utils.waitForViewer();
+        cy.launch(firstConfig);
+        utils.waitForViewer().then(x => {
+            isSecure = x.APPLICATION_CONTEXT.secure;
+        });
 
-        testBasic.mainMenu(visualisation);
-        cy.canvas().matchImage(); //do not move the call, screenshot comparison
+        testBasic.mainMenu(firstConfig);
+        cy.canvas().matchImage()
+        testBasic.shadersMainMenu(firstConfig);
 
-        testBasic.shadersMainMenu(visualisation);
 
-        visualisation = {
-            params: visualisation.params,
+        let secondConfig = {
+            params: firstConfig.params,
             data: config.data('book'),
             background: config.background({"protocol": "data"}, 0),
             visualizations: [config.visualization({
@@ -31,16 +35,23 @@ describe('Third party pyramidal image', () => {
 
         cy.window().then(window => {
             window.APPLICATION_CONTEXT.prepareViewer(
-                visualisation.data,
-                visualisation.background,
-                visualisation.visualizations
+                secondConfig.data,
+                secondConfig.background,
+                secondConfig.visualizations
             );
         });
 
-        utils.waitForViewer();
-        testBasic.mainMenu(visualisation);
-        testBasic.shadersMainMenu(visualisation);
-        testBasic.settingsMenu(visualisation);
+        utils.waitForViewer(false).then(x => {
+            if (isSecure) {
+                //secure mode prevets loading of custom protocols, will fail
+                delete secondConfig.visualizations;
+            }
+
+
+            testBasic.mainMenu(secondConfig);
+            testBasic.shadersMainMenu(secondConfig);
+            testBasic.settingsMenu(secondConfig);
+        });
     })
 })
 
@@ -69,10 +80,10 @@ describe('Faulty data', () => {
         };
 
         cy.launch(visualisation);
-        utils.waitForViewer();
-
-        testElements.systemNotification("Failed to load overlays");
-        testBasic.mainMenu(visualisation);
+        utils.waitForViewer().then(x => {
+            testElements.systemNotification("Failed to load overlays");
+            testBasic.mainMenu(visualisation);
+        });
     })
 
     it('Valid layers, invalid background', () => {
@@ -88,7 +99,6 @@ describe('Faulty data', () => {
         cy.launch(visualisation);
         utils.waitForViewer();
 
-        cy.get("#global-tissue-visibility").should('not.be.visible');
         testBasic.settingsMenu(visualisation);
     })
 

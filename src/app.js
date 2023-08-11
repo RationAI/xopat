@@ -587,7 +587,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                         event.item.getBackgroundConfig = () => {
                             return undefined;
                         }
-                        $("#global-tissue-visibility").css("display", "none");
                         //standard
                         handleSyntheticEventFinishWithValidData(0, 1);
                     }
@@ -599,7 +598,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                     worldItem.source.fileFormat = "png";
                 }
             }
-
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
             $("#global-tissue-visibility").css("display", "none");

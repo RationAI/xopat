@@ -224,7 +224,7 @@ $visualisation = json_encode($parsedParams);
 <!-- Main Panel -->
 <span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
-<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium" style="background: var(--color-bg-primary); width: 400px;">
+<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
         <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
             <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>

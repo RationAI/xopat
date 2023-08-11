@@ -439,6 +439,10 @@ OSDAnnotations.PresetManager = class {
     }
 
     _populateObjectOptions(withPreset) {
+        if (!withPreset) {
+            console.warn("Attempt to retrieve metadata without a preset!");
+            return {};
+        }
         if (this.modeOutline) {
             return $.extend({fill: ""},
                 OSDAnnotations.PresetManager._commonProperty,

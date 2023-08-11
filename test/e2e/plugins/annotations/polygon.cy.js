@@ -164,16 +164,14 @@ describe('Annotations - User Controls', () => {
                 return x;
             })
         cy.canvas().matchImage({title: "P2 - fft draw 20radius"}).then(x => {
-            console.log(ANNOTATIONS.canvas._objects, ANNOTATIONS.canvas._objects[0].points)
+            polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_ADD, p1)
         });
-        polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_ADD, p1)
 
         //P2
         cy.draw(cy.get('#osd'), ...freeFormToolConnectSmall)
         cy.canvas().matchImage({title: "P2 - fft draw 5radius"}).then(x => {
-            console.log(ANNOTATIONS.canvas._objects, ANNOTATIONS.canvas._objects[0].points)
+            polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_ADD, p2)
         });
-        polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_ADD, p2)
 
         //swap to erase
         cy.keyUp("e", {focusCanvas: true})
@@ -182,24 +180,24 @@ describe('Annotations - User Controls', () => {
         cy.keyDown("r", {focusCanvas: true})
         cy.draw(cy.get('#osd'), ...freeFormToolEraseSmall1)
         cy.canvas().matchImage({title: "P2 - fft remove: 5radius"}).then(x => {
-            console.log(ANNOTATIONS.canvas._objects, ANNOTATIONS.canvas._objects[0].points)
+            polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_REMOVE, p3)
         });
-        polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_REMOVE, p3)
+
+        //P4
         cy.draw(cy.get('#osd'), ...freeFormToolEraseSmall2)
             .then(x => {
                 ANNOTATIONS.freeFormTool.setRadius(35);
                 return x;
             })
         cy.canvas().matchImage({title: "P2 - fft remove 2: 5radius"}).then(x => {
-            console.log(ANNOTATIONS.canvas._objects, ANNOTATIONS.canvas._objects[0].points)
+            polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_REMOVE, p4)
         });
 
-        //P4
-        polygonAndModeMatches(ANNOTATIONS.Modes.FREE_FORM_TOOL_REMOVE, p4)
+        //Erase
         cy.draw(cy.get('#osd'), ...freeFormToolEraseAll)
         expect(ANNOTATIONS.canvas._objects.length).to.eq(0);
         cy.canvas().matchImage({title: "P2 - fft 35 radius all removes"}).then(x => {
-            console.log(ANNOTATIONS.canvas._objects)
+            expect(ANNOTATIONS.canvas._objects.length).to.eq(0)
         });
 
         cy.keyUp("r", {focusCanvas: true})
@@ -207,58 +205,58 @@ describe('Annotations - User Controls', () => {
         //History: reuse this lengthy test to check all redo's work as they should
         cy.get("#show-annotation-board").click();
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p4)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p3)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p2)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-redo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p3)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p2)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-redo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p3)
         });
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p2)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-undo").click()
-        cy.wait(10).then(x => {
-            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        cy.wait(200).then(x => {
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p1)
         });
-        cy.get("#history-undo").click().then(x => {
+        //original polygon
+        cy.get("#history-undo").click()
+        cy.wait(200).then(x => {
+            expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
+        });
+        cy.get("#annotation-logs").children().should('have.length', 1)
+
+        cy.get("#history-undo").click()
+        cy.wait(200).then(x => {
             expect(ANNOTATIONS.canvas._objects.length).to.eq(0)
         });
         cy.get("#annotation-logs").children().should('have.length', 0)
@@ -270,14 +268,14 @@ describe('Annotations - User Controls', () => {
 
         cy.get("#history-redo").click();
         cy.get("#history-redo").click()
-        cy.wait(10).then(x => {
+        cy.wait(200).then(x => {
             expect(ANNOTATIONS.canvas._objects.length).to.eq(1)
             polygonAndModeMatches(ANNOTATIONS.Modes.AUTO, p4)
         });
         cy.get("#annotation-logs").children().should('have.length', 1)
 
         cy.get("#history-redo").click()
-        cy.wait(10).then(x => {
+        cy.wait(200).then(x => {
             expect(ANNOTATIONS.canvas._objects.length).to.eq(0)
         });
         cy.get("#annotation-logs").children().should('have.length', 0)
