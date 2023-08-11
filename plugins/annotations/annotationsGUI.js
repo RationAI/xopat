@@ -389,16 +389,18 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
 					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'E' key <br> instead in the future."
-				}, {
+				},{
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
-				}, {
-					"next #fft-add-annotation-mode + label": "Selected object can be appended to ('E' key) ..."
-				}, {
+				},{
+					"next #fft-add-annotation-mode + label": "<b>Selected object</b> can be appended to ('E' key) ..."
+				},{
 					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
-				}, {
+				},{
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{
-					"next #viewer-container": "Now you can try it out."
+					"click #fft-remove-annotation-mode + label": "Click here to switch to the removal.<br>We recommend using 'R' key <br> instead in the future."
+				},{
+					"next #viewer-container": "You can now try to erase areas from existing annotations.<br>To start erasing, make sure the object you want to modify is selected."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');

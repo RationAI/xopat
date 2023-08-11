@@ -396,15 +396,9 @@ OSDAnnotations.PresetManager = class {
             throw "Invalid presets data provided as an input for import.";
         }
 
-        if (presets.length > 0) {
-            this.selectPreset(undefined, false);
+        this._presetsImported = presets.length > 0;
+        if (!this.left && first) {
             this.selectPreset(first?.presetID, true);
-            this._presetsImported = true;
-        } else {
-            this._presetsImported = false;
-            if (!this.left) {
-                this.selectPreset(first?.presetID, true);
-            }
         }
         return first;
     }
