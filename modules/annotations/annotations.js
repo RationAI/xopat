@@ -1095,6 +1095,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		function handleRightClickUp(event) {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
+				//todo in auto mode, this event is fired twice!! fix
 				if (_this.cursor.mouseTime === 0) {
 					_this.raiseEvent('canvas-nonprimary-release', {
 						originalEvent: event
@@ -1132,6 +1133,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		function handleLeftClickUp(event) {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
+				//todo in auto mode, this event is fired twice!! fix
 				if (_this.cursor.mouseTime === 0) {
 					_this.raiseEvent('canvas-release', {
 						originalEvent: event
@@ -1569,12 +1571,14 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (clickDelta > 100) return false;
 
 		//instead of auto-creation, select underneath
+		if (!isLeftClick) return false;
 		const active = canvas.getActiveObject();
 		if (active) {
 			active.sendToBack();
 		}
 		const object = canvas.findNextObjectUnderMouse(event, active);
 		if (object) canvas.setActiveObject(object, event);
+		return true; //considered as handled
 
 		//todo implement elsewhere
 		// if (!updater || !this.autoSelectionEnabled) {
@@ -1593,7 +1597,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		// 		isLeftClick: isLeftClick
 		// 	});
 		// }
-		return true;
+		// return true;
 	}
 
 	customHtml() {
@@ -1612,13 +1616,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
 	constructor(context, id, icon, description, actsWhenNotIntersecting) {
 		super(context, id, icon, description);
-		this.actsWhenNotIntersecting = actsWhenNotIntersecting;;
+		this.actsWhenNotIntersecting = actsWhenNotIntersecting;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		this._finish();
-		console.log(this.__temp);
-		this.__temp = undefined;
+		this._finish()
 		return true;
 	}
 
@@ -1628,12 +1630,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	handleMouseMove(point) {
 		this.context.freeFormTool.update(point);
-
-		const p = VIEWER.viewport.imageToWindowCoordinates(point);
-		this.__temp.push(p)
 	}
 
 	_init(o, point, isLeftClick, objectFactory) {
+		console.log("init", o, point, objectFactory)
 		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
@@ -1682,12 +1682,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		if (currentObject) {
 			this.context.freeFormTool.init(currentObject, created);
 			this.context.freeFormTool.update(point);
-
-			if (!this.__temp) this.__temp = [];
-
-			const p = VIEWER.viewport.imageToWindowCoordinates(point);
-			p.click = true;
-			this.__temp.push(p)
 		}
 	}
 
