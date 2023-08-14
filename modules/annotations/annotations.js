@@ -687,6 +687,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
+		annotation.off('deselected');
+		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
 		annotation.sessionID = this.session;
 		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
@@ -788,6 +790,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	replaceAnnotation(previous, next, updateHistory=false, _raise=true) {
 		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
+		next.off('deselected');
+		next.on('deselected', this._objectDeselected.bind(this));
+		previous.off('selected');
+		previous.off('deselected');
+
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
@@ -811,6 +818,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise @private
 	 */
 	deleteObject(o, _raise=true) {
+		this._deletedObject = o;
 		if (this.isAnnotation(o)) this.deleteAnnotation(o, _raise);
 		else this.deleteHelperAnnotation(o);
 	}
@@ -1224,8 +1232,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
-		let _this = this.__self; //todo dirty
-		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets); //todo _this might be undefined
+		let _this = this.instance();
+		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
 		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
@@ -1301,21 +1309,38 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
-	_objectClicked(object) {
+	_objectDeselected(event) {
 		if (this.disabledInteraction) return;
-		object = object.target;
-		this.history.highlight(object);
-		if (this.history.isOngoingEditOf(object)) {
-			if (this.isMouseOSDInteractive()) {
-				object.set({
-					hasControls: false,
-					lockMovementX: true,
-					lockMovementY: true
-				});
-			}
+		//todo make sure deselect prevent does not prevent also deletion
+		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
+			this.disabledInteraction = true;
+			this.canvas.setActiveObject(event.target);
+			this.disabledInteraction = false;
+		}
+	}
+
+	_objectClicked(event) {
+		if (this.disabledInteraction) return;
+		let object = event.target;
+
+		if (!this.mode.objectSelected(event, object)) {
+			this.context.disabledInteraction = true;
+			this.context.canvas.deselectAll();
+			this.context.disabledInteraction = false;
 		} else {
-			let factory = this.getAnnotationObjectFactory(object.factoryID);
-			if (factory) factory.selected(object);
+			this.history.highlight(object);
+			if (this.history.isOngoingEditOf(object)) {
+				if (this.isMouseOSDInteractive()) {
+					object.set({
+						hasControls: false,
+						lockMovementX: true,
+						lockMovementY: true
+					});
+				}
+			} else {
+				let factory = this.getAnnotationObjectFactory(object.factoryID);
+				if (factory) factory.selected(object);
+			}
 		}
 	}
 
@@ -1426,6 +1451,30 @@ OSDAnnotations.AnnotationState = class {
 	 */
 	scroll(event, delta) {
 		//do nothing
+	}
+
+	/**
+	 * Handle object being deselected.
+	 * Warning: thoroughly test that returning false does not break things!
+	 * Preventing object from being deselected means no object can be selected
+	 * instead, and also the object cannot be deleted.
+	 * @param event
+	 * @param object
+	 * @return {boolean} true to allow deselection
+	 */
+	objectDeselected(event, object) {
+		return true;
+	}
+
+	/**
+	 * Handle object being selected
+	 * Warning: thoroughly test that returning false does not break things!
+	 * @param event
+	 * @param object
+	 * @return {boolean} true to allow selection
+	 */
+	objectSelected(event, object) {
+		return true;
 	}
 
 	/**
@@ -1617,6 +1666,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	constructor(context, id, icon, description, actsWhenNotIntersecting) {
 		super(context, id, icon, description);
 		this.actsWhenNotIntersecting = actsWhenNotIntersecting;
+		this.allowDeselection = false;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1632,8 +1682,15 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.freeFormTool.update(point);
 	}
 
+	objectDeselected(event, object) {
+		return this.allowDeselection;
+	}
+	//
+	// objectSelected(event, object) {
+	// 	return false;
+	// }
+
 	_init(o, point, isLeftClick, objectFactory) {
-		console.log("init", o, point, objectFactory)
 		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
@@ -1700,8 +1757,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	_finish() {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
+			this.allowDeselection = true;
 			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
+			this.allowDeselection = false;
 		}
 	}
 

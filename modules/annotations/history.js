@@ -124,13 +124,15 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _getHistoryWindowHeadHtml() {
-        let undoCss = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
+        let redoCss = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
+            "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
+        let undoCss = this._buffer[this._buffidx] ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
         return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
 <span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" 
 onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
-<span id="history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-tertiary);" 
+<span id="history-redo" class="material-icons btn-pointer" style="${redoCss}" 
 onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
 <span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
 id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
