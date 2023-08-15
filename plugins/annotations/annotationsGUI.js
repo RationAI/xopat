@@ -34,8 +34,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.initIO();
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 
-		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-		this.setupActiveTissue(bgImage); // if (!...) return...
+		this.setupActiveTissue();
 
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
@@ -104,12 +103,12 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 	}
 
 	setupActiveTissue(bgImageConfigObject) {
-		if (!bgImageConfigObject) {
+		this.activeTissue = APPLICATION_CONTEXT.referencedName();
+
+		if (!this.activeTissue) {
 			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
 			return false;
 		}
-
-		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
 		return true;
 	}
 
@@ -243,7 +242,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => {
-			_this.setupActiveTissue(e.backgroundSetup);
+			_this.setupActiveTissue();
 			_this.loadAnnotationsList();
 		});
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));

@@ -124,9 +124,9 @@ window.addEventListener("beforeunload", (e) => {
     }
 
     _getHistoryWindowHeadHtml() {
-        let redoCss = this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex ?
+        let redoCss = this.canRedo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
-        let undoCss = this._buffer[this._buffidx] ?
+        let undoCss = this.canUndo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
         return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
@@ -151,13 +151,29 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     }
 
     /**
+     * Check if undo is possible
+     * @return {boolean}
+     */
+    canUndo() {
+        return !! this._buffer[this._buffidx];
+    }
+
+    /**
+     * Check if redo is possible
+     * @return {boolean}
+     */
+    canRedo() {
+        return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
+    }
+
+    /**
      * Go step back in the history. Focuses the undo operation, updates window if opened.
      */
     back() {
         if (this._context.disabledInteraction) return;
 
         const _this = this;
-        if (this._buffer[this._buffidx]) {
+        if (this.canUndo()) {
             this._performSwap(this._context.canvas,
                 this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward);
 
@@ -186,7 +202,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     redo() {
         if (this._context.disabledInteraction) return;
 
-        if (this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex) {
+        if (this.canRedo()) {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
             this._performSwap(this._context.canvas,

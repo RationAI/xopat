@@ -70,6 +70,7 @@
     /**
      * The Viewer Default Settings, all overrideable through params configuration.
      * @typedef {{
+     *   sessionName: ?string
      *   locale: ?string,
      *   customBlending: ?boolean,
      *   debugMode: ?boolean,
@@ -94,6 +95,8 @@
      * }} xoParams
      */
     "setup": {
+        //viewer session name/ID, can be overridden on background-level configuration
+        "sessionName": null,
         // depends on available locales in locales/ folder
         "locale": "en",
         "customBlending": false,
