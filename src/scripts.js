@@ -277,13 +277,14 @@ function initXopatScripts() {
 
         let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
         if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
 
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
 
         let exportData = {};
 
@@ -305,7 +306,6 @@ function initXopatScripts() {
                 exportData[uniqueKey] = data;
             }
         });
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
         return {app, data: exportData};
     };
 

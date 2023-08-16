@@ -399,7 +399,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             try {
                 let data = APPLICATION_CONTEXT.getData(this.id);
                 if (typeof data === "string" && data) {
-                    if (this.willParseImportData()) data = JSON.parse(data);
                     await this.importData(data);
                 }
                 return true;
@@ -427,13 +426,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         async importData(data) {}
         /**
-         * Decide whether importData gets parsed input
-         * @return {boolean}
-         */
-        willParseImportData() {
-            return true;
-        }
-        /**
          * Set cached value, unlike setOption this value is stored in provided system cache (cookies or user)
          * @param {string} key
          * @param {string} value
@@ -450,7 +442,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     console.warn("Silent failure of cache setter -> delegate to local storage.");
                 }
             }
-            localStorage.setItem(key, value);
+
+            try {
+                localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
+            } catch (e) {
+                console.error(e);
+                this.error({
+                    error: e, code: "W_CACHE_WRITE_ERROR",
+                    message: $.t('error.cacheImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+                return false;
+            }
             return true;
         }
         /**
@@ -481,7 +484,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             } catch (e) {
                 console.error(e);
                 this.error({
-                    error: e, code: "W_CACHE_IMPORT_ERROR",
+                    error: e, code: "W_CACHE_READ_ERROR",
                     message: $.t('error.cacheImportFail',
                         {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
                 });
@@ -809,12 +812,25 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param stripSuffix
          */
         fileNameFromPath: function(imageFilePath, stripSuffix=true) {
-            let begin = imageFilePath.lastIndexOf('/')+1;
+            let begin = imageFilePath.lastIndexOf('/');
+            if (begin === -1) return imageFilePath;
+            begin++;
             if (stripSuffix) {
                 let end = imageFilePath.lastIndexOf('.');
                 if (end >= 0) return imageFilePath.substr(begin, end - begin);
             }
             return imageFilePath.substr(begin, imageFilePath.length - begin);
+        },
+
+        /**
+         * Strip path suffix
+         * @param {string} path
+         * @return {string}
+         */
+        stripSuffix: function (path) {
+            let end = path.lastIndexOf('.');
+            if (end >= 0) return path.substr(0, end);
+            return path;
         },
 
         /**

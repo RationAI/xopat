@@ -59,6 +59,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
 
     const metaStore = new MetaStore(CONFIG.meta || {});
+    const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
     /**
      * @namespace APPLICATION_CONTEXT
@@ -120,6 +121,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             get plugins() {
                 return CONFIG.plugins || {};
             },
+        },
+        get sessionName() {
+            const config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig() || {};
+            if (config["sessionName"]) return config["sessionName"];
+            if (sessionName) return sessionName;
+            return this.referencedId();
         },
         /**
          * The Metadata API
@@ -234,15 +241,33 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             return result;
         },
         /**
-         * Get the current FILE ID viewed (not in stacked mode).
+         * Get the current FILE name viewed (zero-index item in stacked mode).
+         * @param {boolean} stripSuffix if true and the returned data is read from config.data
+         *   field, an attempt to return only filename from the file ID.
          * @return {string}
          */
-        referencedFileName(stripSuffix=false) {
+        referencedName(stripSuffix=false) {
             if (CONFIG.background.length < 0) {
                 return undefined;
             }
             const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            if (bgConfig) return UTILITIES.fileNameFromPath(CONFIG.data[bgConfig.dataReference], stripSuffix);
+            if (bgConfig) {
+                if (bgConfig.name) return bgConfig.name;
+                return UTILITIES.fileNameFromPath(CONFIG.data[bgConfig.dataReference], stripSuffix);
+            }
+            return undefined;
+        },
+        /**
+         * Get the current FILE ID viewed (zero-index item in stacked mode).
+         * @param stripSuffix
+         * @return {string}
+         */
+        referencedId() {
+            if (CONFIG.background.length < 0) {
+                return undefined;
+            }
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            if (bgConfig) return CONFIG.data[bgConfig.dataReference];
             return undefined;
         },
         _setCookie(key, value) {

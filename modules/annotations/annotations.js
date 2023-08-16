@@ -90,25 +90,75 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._registerAnnotationFactory(FactoryClass, atRuntime);
 	}
 
-	/******************* EXPORT, IMPORT... todo move to convertor? **********************/
+	/******************* EXPORT, IMPORT **********************/
 
 	async exportData() {
 		return await this.export();
 	}
 
 	async importData(data) {
-		await this.import(data);
+		if (!this._avoidImport) await this.import(data);
 	}
 
 	async initIO() {
+
+		//todo a bit hacky, first attempt to save workspaces
+		let data = await this.getCache("_unsaved");
+		if (data) {
+			try {
+				if (data?.session === APPLICATION_CONTEXT.sessionName) {
+					if (confirm("Your last annotation workspace was not saved! Load?")) {
+						this._avoidImport = true;
+						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
+						if (data?.presets) this.presets.import(data?.presets, true);
+						this.raiseEvent('import', {
+							options: {},
+							clear: true,
+							data: {
+								objects: data.objects,
+								presets: data.presets
+							},
+						});
+					} else {
+						this._avoidImport = false;
+						//do not erase cache upon load, still not saved anywhere
+						await this.setCache('_unsaved', null);
+					}
+				}
+			} catch (e) {
+				console.error("Faulty cached data!", e);
+			}
+		}
+
+		let guard = 0; const _this=this;
+		function editRoutine(force=false) {
+			if (force || guard++ > 10) {
+				guard = 0;
+				_this.setCache('_unsaved', {
+					session: APPLICATION_CONTEXT.sessionName,
+					objects: _this.toObject(true)?.objects,
+					presets: _this.presets.toObject()
+				});
+			}
+		}
+
+		this.addHandler('export', () => {
+			_this.setCache('_unsaved', null);
+			guard = 0;
+		});
+		this.addHandler('annotation-create', editRoutine);
+		this.addHandler('annotation-delete', editRoutine);
+		this.addHandler('annotation-replace', editRoutine);
+		this.addHandler('annotation-edit', editRoutine);
+		addEventListener("beforeunload", event => {
+			if (guard === 0 || !_this.history.canUndo()) return;
+			editRoutine(true);
+		});
+
 		if (await super.initIO()) {
-			await this.loadPresetsCookieSnapshot();
+			if (!this._avoidImport) await this.loadPresetsCookieSnapshot();
 			return true;
 		}
-		return false;
-	}
-
-	willParseImportData() {
 		return false;
 	}
 
@@ -156,7 +206,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	async exportPartial(options={}, withAnnotations=true, withPresets=true) {
 		if (!options?.format) options.format = "native";
-		return await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		const result = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		this.raiseEvent('export-partial', {
+			options: options,
+			data: result
+		});
+		return result;
 	}
 
 	/**
@@ -165,7 +220,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {string?} format default 'native'
 	 */
 	exportFinalize(data, format='native') {
-		return OSDAnnotations.Convertor.encodeFinalize(format, data);
+		const result = OSDAnnotations.Convertor.encodeFinalize(format, data);
+		this.raiseEvent('export', {
+			data: result
+		});
+		return result;
 	}
 
 	/**
@@ -183,7 +242,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
-		return OSDAnnotations.Convertor.encodeFinalize(options.format, output);
+		this.raiseEvent('export-partial', {
+			options: options,
+			data: output
+		});
+		output = OSDAnnotations.Convertor.encodeFinalize(options.format, output);
+		this.raiseEvent('export', {
+			data: output
+		});
+		return output;
 	}
 
 	/**
@@ -256,7 +323,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones,
 	 *   string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
-	 * @return {object} exported canvas content in {objects:[object]} format
+	 * @return {object} exported canvas content in {objects:[object], version:string} format
 	 */
 	toObject(withAllProps=false, ...withProperties) {
 		let props;
@@ -687,6 +754,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	promoteHelperAnnotation(annotation, _raise=true) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
+		annotation.off('deselected');
+		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
 		annotation.sessionID = this.session;
 		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
@@ -788,6 +857,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	replaceAnnotation(previous, next, updateHistory=false, _raise=true) {
 		next.off('selected');
 		next.on('selected', this._objectClicked.bind(this));
+		next.off('deselected');
+		next.on('deselected', this._objectDeselected.bind(this));
+		previous.off('selected');
+		previous.off('deselected');
+
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
@@ -811,6 +885,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise @private
 	 */
 	deleteObject(o, _raise=true) {
+		this._deletedObject = o;
 		if (this.isAnnotation(o)) this.deleteAnnotation(o, _raise);
 		else this.deleteHelperAnnotation(o);
 	}
@@ -1224,8 +1299,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
-		let _this = this.__self; //todo dirty
-		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets); //todo _this might be undefined
+		let _this = this.instance();
+		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
 		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
@@ -1301,21 +1376,38 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
-	_objectClicked(object) {
+	_objectDeselected(event) {
 		if (this.disabledInteraction) return;
-		object = object.target;
-		this.history.highlight(object);
-		if (this.history.isOngoingEditOf(object)) {
-			if (this.isMouseOSDInteractive()) {
-				object.set({
-					hasControls: false,
-					lockMovementX: true,
-					lockMovementY: true
-				});
-			}
+		//todo make sure deselect prevent does not prevent also deletion
+		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
+			this.disabledInteraction = true;
+			this.canvas.setActiveObject(event.target);
+			this.disabledInteraction = false;
+		}
+	}
+
+	_objectClicked(event) {
+		if (this.disabledInteraction) return;
+		let object = event.target;
+
+		if (!this.mode.objectSelected(event, object)) {
+			this.context.disabledInteraction = true;
+			this.context.canvas.deselectAll();
+			this.context.disabledInteraction = false;
 		} else {
-			let factory = this.getAnnotationObjectFactory(object.factoryID);
-			if (factory) factory.selected(object);
+			this.history.highlight(object);
+			if (this.history.isOngoingEditOf(object)) {
+				if (this.isMouseOSDInteractive()) {
+					object.set({
+						hasControls: false,
+						lockMovementX: true,
+						lockMovementY: true
+					});
+				}
+			} else {
+				let factory = this.getAnnotationObjectFactory(object.factoryID);
+				if (factory) factory.selected(object);
+			}
 		}
 	}
 
@@ -1426,6 +1518,30 @@ OSDAnnotations.AnnotationState = class {
 	 */
 	scroll(event, delta) {
 		//do nothing
+	}
+
+	/**
+	 * Handle object being deselected.
+	 * Warning: thoroughly test that returning false does not break things!
+	 * Preventing object from being deselected means no object can be selected
+	 * instead, and also the object cannot be deleted.
+	 * @param event
+	 * @param object
+	 * @return {boolean} true to allow deselection
+	 */
+	objectDeselected(event, object) {
+		return true;
+	}
+
+	/**
+	 * Handle object being selected
+	 * Warning: thoroughly test that returning false does not break things!
+	 * @param event
+	 * @param object
+	 * @return {boolean} true to allow selection
+	 */
+	objectSelected(event, object) {
+		return true;
 	}
 
 	/**
@@ -1617,6 +1733,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	constructor(context, id, icon, description, actsWhenNotIntersecting) {
 		super(context, id, icon, description);
 		this.actsWhenNotIntersecting = actsWhenNotIntersecting;
+		this.allowDeselection = false;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1632,8 +1749,15 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.freeFormTool.update(point);
 	}
 
+	objectDeselected(event, object) {
+		return this.allowDeselection;
+	}
+	//
+	// objectSelected(event, object) {
+	// 	return false;
+	// }
+
 	_init(o, point, isLeftClick, objectFactory) {
-		console.log("init", o, point, objectFactory)
 		let currentObject = this.context.canvas.getActiveObject(),
 			created = false;
 
@@ -1700,8 +1824,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	_finish() {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
+			this.allowDeselection = true;
 			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
+			this.allowDeselection = false;
 		}
 	}
 

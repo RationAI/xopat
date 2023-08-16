@@ -22,14 +22,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
     }
 
     refresh() {
-        const conf = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-        const index = Number.parseInt(conf?.dataReference);
-        if (!Number.isInteger(index)) {
-            //todo warn?
-            console.error("Unable to load the viewport tracking!");
-            return undefined;
-        }
-        this.key = APPLICATION_CONTEXT.config.data[conf.dataReference];
+        this.key = APPLICATION_CONTEXT.sessionName;
         this.recordCtx = this.getContext();
         this.record = this.recordCtx.canvas;
         const bounds = this.refreshCanvas(); //refreshes setup
