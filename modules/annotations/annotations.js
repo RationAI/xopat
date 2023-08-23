@@ -109,8 +109,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
 						this._avoidImport = true;
-						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
 						if (data?.presets) this.presets.import(data?.presets, true);
+						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
 						this.raiseEvent('import', {
 							options: {},
 							clear: true,

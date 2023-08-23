@@ -270,8 +270,11 @@ OpenSeadragon.Tools = class {
                     sDy = -sy;
                     sy = 0;
                 }
-                //todo what about raising events
-                if (tile.context2D) {
+
+                //todo fix once OSD cache system remodelled
+                if (tile.getCanvasContext) {
+                    c2d.drawImage(tile.getCanvasContext()?.canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+                } else if (tile.context2D) {
                     c2d.drawImage(tile.context2D.canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
                 } else {
                     //cache can be an empty object, it correctly processes the data and returns operate-able object
