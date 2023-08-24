@@ -163,10 +163,6 @@ async exportData() {
 async importData(data) {
     await this.import(data); //our import function expects data as a serialized string
 }
-
-willParseImportData() {
-    return false; //therefore we change custom behaviour of parsing the input
-}
 ````
 As you might've noticed, there are no options to export _multiple items_ - and it is intended.
 The module should export (for simplicity) all its data in one serialized object, e.g. annotations would

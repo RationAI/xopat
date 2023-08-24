@@ -110,6 +110,7 @@ Example configuration:
 We will use [R] for required and [O] for optional parameters.
 - [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
 - [O]`params` - an object, visualisation parameters, supported:
+    - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
     - [O]`locale` - language locale, default `en`
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
@@ -140,7 +141,8 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`microns` - size of pixel in micrometers, default `undefined`,
     - [O]`micronsX` - horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
     - [O]`micronsY` - vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
-    - [O]`name` - custom tissue name, default the tissue path
+    - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
+    - [O]`sessionName` - overrides `sessionName` of global params if set
     - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
 - [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
     - [R]`url` - url where to fetch the shader implementation

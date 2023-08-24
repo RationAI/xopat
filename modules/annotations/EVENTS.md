@@ -34,5 +34,8 @@
 
 ##### import | ``{options: object, clear: boolean, data: object}``
 
+##### export-partial | ``{options: object, data: object}``
+
+##### export | ``{data: string}``
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

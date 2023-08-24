@@ -168,8 +168,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
         text.set({
-            scaleX: 1,
-            scaleY: 1,
             top: line.top + line.height / 2,
             left: line.left + line.width / 2
         });

@@ -15,12 +15,12 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         },
         "addOffset": {
             type: "checkBox",
-            label: "Export with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
+            label: "Export/Import with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
             default: true
         },
         "trimToDefaultPresets": {
             type: "checkBox",
-            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes.</span>",
+            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes. Replace them when exporting to prevent this error.</span>",
             default: true
         },
     };

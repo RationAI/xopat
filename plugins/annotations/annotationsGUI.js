@@ -34,8 +34,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.initIO();
 		this.dataLoader = new AnnotationsGUI.DataLoader(this);
 
-		let bgImage = APPLICATION_CONTEXT.config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)];
-		this.setupActiveTissue(bgImage); // if (!...) return...
+		this.setupActiveTissue();
 
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
@@ -104,12 +103,12 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 	}
 
 	setupActiveTissue(bgImageConfigObject) {
-		if (!bgImageConfigObject) {
+		this.activeTissue = APPLICATION_CONTEXT.referencedName();
+
+		if (!this.activeTissue) {
 			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
 			return false;
 		}
-
-		this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
 		return true;
 	}
 
@@ -160,7 +159,8 @@ load available sets manually</a>.`, 2000, Dialogs.MSG_WARN);
 		for (let factoryId of this._allowedFactories) {
 			const factory = this.context.getAnnotationObjectFactory(factoryId);
 			if (factory) {
-				factorySwitch.push(`<span id="${factoryId}-annotation-factory-switch" class="label-annotation-mode position-relative">
+				factorySwitch.push(`<span id="${factoryId}-annotation-factory-switch" data-factory="${factoryId}" 
+class="label-annotation-mode position-relative d-inline-block rounded-2" style="border: 3px inset transparent;">
 <span class="material-icons btn-pointer p-1 rounded-2" onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryId}');" 
 oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryId}'); event.preventDefault(); return false;" 
 title="${factory.title()}">${factory.getIcon()}</span></span>`);
@@ -171,7 +171,7 @@ title="${factory.title()}">${factory.getIcon()}</span></span>`);
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
 			`<div class="px-3 py-2" id="annotations-tool-bar-content">${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
 vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&nbsp;<div id="mode-custom-items" class="d-inline-block">${this.context.mode.customHtml()}</div>
-<div class="px-2 mx-2 border-sm rounded-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
+<div class="px-2 mx-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
 
 		if (!this.isModalHistory) this._createHistoryInAdvancedMenu();
 
@@ -242,7 +242,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => {
-			_this.setupActiveTissue(e.backgroundSetup);
+			_this.setupActiveTissue();
 			_this.loadAnnotationsList();
 		});
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
@@ -370,7 +370,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in the manual creation mode. <br> We recommend using 'W' key instead of switching modes with a mouse."
+					"next #custom-annotation-mode + label": "You need to be in the manual creation mode. <br> We recommend holding 'W' key instead of switching modes with a mouse."
 				}, {
 					"next #polygon-annotation-factory-switch": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
@@ -388,17 +388,19 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Free form tool", "painting with your mouse", "gesture", [
 				{
-					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend using 'E' key <br> instead in the future."
-				}, {
+					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'E' key <br> instead in the future."
+				},{
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
-				}, {
-					"next #fft-add-annotation-mode + label": "Selected object can be appended to ('E' key) ..."
-				}, {
+				},{
+					"next #fft-add-annotation-mode + label": "<b>Selected object</b> can be appended to ('E' key) ..."
+				},{
 					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
-				}, {
+				},{
 					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
 				},{
-					"next #viewer-container": "Now you can try it out."
+					"click #fft-remove-annotation-mode + label": "Click here to switch to the removal.<br>We recommend holding 'R' key <br> instead in the future."
+				},{
+					"next #viewer-container": "You can now try to erase areas from existing annotations.<br>To start erasing, make sure the object you want to modify is selected."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -705,6 +707,14 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 			this.validatePresetFactory(rightPreset);
 			right.html(this.getPresetControlHTML(rightPreset, false));
 		} else right.html(this.getMissingPresetHTML(false));
+
+		const lid = leftPreset?.objectFactory.factoryID,
+			rid = rightPreset?.objectFactory.factoryID;
+		$("#annotations-fast-factory-switch").children().each(function() {
+			if (this.dataset.factory === lid) this.style.borderColor = leftPreset.color;
+			else if (this.dataset.factory === rid) this.style.borderColor = rightPreset.color;
+			else this.style.borderColor = 'transparent';
+		});
 	}
 
 	/**

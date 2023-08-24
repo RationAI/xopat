@@ -296,5 +296,19 @@ OSDAnnotations.Convertor.IConvertor = class {
     async decode(data) {
         throw("::decode must be implemented!");
     }
+
+    /**
+     * Native-format method that removes unused presets, or keeps all if objects are not exported
+     * @param {[object]?} annotations or undefined
+     * @param {[object]?} presets or undefined
+     */
+    filterUnusedPresets(annotations, presets) {
+        if (!annotations || !presets) return presets;
+        const presetsIdSet = new Set();
+        for (let annotation of annotations) {
+            presetsIdSet.add(annotation?.presetID);
+        }
+        return presets.filter(p => presetsIdSet.has(p.presetID));
+    }
 };
 

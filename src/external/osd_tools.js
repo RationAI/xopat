@@ -221,6 +221,7 @@ OpenSeadragon.Tools = class {
                         onfail(data, tile);
                         return;
                     }
+                    tile.tiledImage = tiledImage;
                     onload(data, tile);
                 },
                 abort: function() {
@@ -270,16 +271,14 @@ OpenSeadragon.Tools = class {
                     sDy = -sy;
                     sy = 0;
                 }
-                //todo what about raising events
-                if (tile.context2D) {
-                    c2d.drawImage(tile.context2D.canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-                } else {
-                    //cache can be an empty object, it correctly processes the data and returns operate-able object
-                    let cache = {};
-                    source.createTileCache(cache, data, tile);
-                    c2d.drawImage(source.getTileCacheDataAsContext2D(cache).canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-                    source.destroyTileCache(cache);
-                }
+
+                //prepares all underlying workings
+                tile.setCache(data, tile.cacheKey);
+                const canvas = tile.getCanvasContext ? tile.getCanvasContext()?.canvas : tile.getImage();
+                c2d.drawImage(canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+
+                //frees the unused tile
+                //TODO allow destruction: source.destroyTileCache(cache);
                 finish();
             }
 
