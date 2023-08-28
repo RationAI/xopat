@@ -109,7 +109,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
 						this._avoidImport = true;
-						if (data?.presets) this.presets.import(data?.presets, true);
+						if (data?.presets) await this.presets.import(data?.presets, true);
 						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
 						this.raiseEvent('import', {
 							options: {},
@@ -283,7 +283,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		} else {
 			if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
 				imported = true;
-				this.presets.import(toImport.presets, clear);
+				await this.presets.import(toImport.presets, clear);
 			}
 			if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
 				imported = true;
@@ -587,7 +587,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean} left true if left mouse button
 	 * @return {OSDAnnotations.Preset|undefined} original preset that has been replaced
 	 */
-	setPreset(preset=undefined, left=true) {
+	setPreset(preset=undefined, left=true, cached=true) {
 		if (typeof preset === "boolean" && preset) {
 			for (let key in this.presets._presets) {
 				if (this.presets.exists(key)) {
@@ -598,7 +598,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (typeof preset === "boolean") preset = this.presets.addPreset();
 		}
 		let original = this.presets.getActivePreset(left);
-		this.presets.selectPreset(preset?.presetID || preset, left);
+		this.presets.selectPreset(preset?.presetID || preset, left, cached);
 		return original;
 	}
 
@@ -971,7 +971,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				return;
 			}
 			try {
-				presets.import(presetCookiesData);
+				await presets.import(presetCookiesData);
 			} catch (e) {
 				console.error(e);
 				this.warn({
@@ -979,38 +979,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					message: "Could not load presets. Please, let us know about this issue and provide exported file.",
 				});
 			}
-		}
-	}
-
-	_deprecatedAPIHandlers() {
-		const presets = this.presets;
-		const presetData = APPLICATION_CONTEXT.getData("annotation_presets");
-		if (presetData) {
-			try {
-				presets.import(presetData);
-			} catch (e) {
-				console.error(e);
-				VIEWER.raiseEvent('warn-user', {
-					error: e,
-					originType: "module",
-					originId: "annotations",
-					code: "W_COOKIES_DISABLED",
-					message: "Could not load presets. Please, let us know about this issue and provide exported file.",
-				});
-			}
-		}
-		let imageJson = APPLICATION_CONTEXT.getData("annotation-list");
-		if (imageJson) {
-			this.loadObjects(JSON.parse(imageJson)).catch(e => {
-				console.warn(e);
-				VIEWER.raiseEvent('warn-user', {
-					error: e,
-					originType: "module",
-					originId: "annotations",
-					code: "W_COOKIES_DISABLED",
-					message: "Could not load annotations. Please, let us know about this issue and provide exported file.",
-				});
-			});
 		}
 	}
 

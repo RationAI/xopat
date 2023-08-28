@@ -361,7 +361,7 @@ OSDAnnotations.PresetManager = class {
      * @param {boolean} clear true if existing presets should be replaced upon ID match
      * @return {OSDAnnotations.Preset|undefined} preset
      */
-    import(presets, clear=false) {
+    async import(presets, clear=false) {
         const _this = this;
 
         if (clear) {
@@ -397,8 +397,18 @@ OSDAnnotations.PresetManager = class {
         }
 
         this._presetsImported = presets.length > 0;
+
+        const leftPresetId = await this._context.getCache('presets.left.id', undefined, false);
+        const rightPresetId = await this._context.getCache('presets.right.id', undefined, false);
+        if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
+            this.left = this._presets[leftPresetId];
+        }
+        if (rightPresetId && (rightPresetId === "__unset__" || this._presets[rightPresetId])) {
+            this.right = this._presets[rightPresetId];
+        }
+
         if (!this.left && first) {
-            this.selectPreset(first?.presetID, true);
+            this.selectPreset(first.presetID, true, false);
         }
         return first;
     }
@@ -408,14 +418,20 @@ OSDAnnotations.PresetManager = class {
      * @param {string} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      */
-    selectPreset(id, isLeftClick) {
-        let preset = undefined;
+    selectPreset(id, isLeftClick, cached) {
+        let preset = undefined, cachedId = "__unset__";
         if (id) {
             if (!this._presets[id]) return;
             preset = this._presets[id];
+            cachedId = preset.presetID;
         }
-        if (isLeftClick) this.left = preset;
-        else this.right = preset;
+        if (isLeftClick) {
+            this.left = preset;
+            if (cached) this._context.setCache('presets.left.id', cachedId);
+        } else {
+            this.right = preset;
+            if (cached) this._context.setCache('presets.right.id', cachedId);
+        }
         this._context.raiseEvent('preset-select', {preset, isLeftClick});
     }
 

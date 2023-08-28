@@ -80,7 +80,7 @@ addPlugin("user-session", class extends XOpatPlugin {
 
         USER_INTERFACE.MainMenu.replace(
             `User &nbsp;<span class="f3-light">${meta.get(xOpatSchema.user.name, "unknown")}</span>`,
-            this.activeTissue ? `<span class="btn-pointer" title="Store your workplace on the server." 
+            this.activeTissue && this.storeSessionServer ? `<span class="btn-pointer" title="Store your workplace on the server." 
 style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">
 Save Session: <span class="material-icons">save</span></span>` : "",
             '',
@@ -92,7 +92,9 @@ Save Session: <span class="material-icons">save</span></span>` : "",
     _finishAuthFail() {
         USER_INTERFACE.MainMenu.replace(
             "Not logged in!",
-            `<span title="Session storing not available!." style="text-align:right; text-decoration: line-through; vertical-align:sub;float: right;">Save Session: <span class="material-icons">save</span></span>`,
+            this.activeTissue && this.storeSessionServer ? `<span title="Session storing not available!." 
+style="text-align:right; text-decoration: line-through; vertical-align:sub;float: right;">Save Session: 
+<span class="material-icons">save</span></span>` : "",
             `Some services might not work. <a class="pointer" onclick="plugin('${this.id}').performAuth(false);">Log-in.</a>`,
             "user-session-panel",
             this.id
