@@ -198,6 +198,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 </div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
+		this.updatePresetsHTML();
 	}
 
 	getIOFormatRadioButton(format) {
