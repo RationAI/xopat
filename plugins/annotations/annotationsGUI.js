@@ -926,8 +926,31 @@ class="btn m-2">Set for left click </button>
 
 	/*** HTTP API **/
 
+	get serverStoredList() {
+		return this.getServerStoredListWithCallback(() => {
+			Dialogs.show("Reconnected to the server! Please, repeat this action to proceed.",
+				20000, Dialogs.MSG_INFO);
+		});
+	}
+
+	getServerStoredListWithCallback(onSuccess) {
+		if (!this._serverAnnotationList) {
+			this.loadAnnotationsList(onSuccess, (error) => {
+				console.error(error);
+				Dialogs.show("Failed to finish the task. Please, notify us about the problem.",
+					20000, Dialogs.MSG_ERR);
+			});
+			return [];
+		}
+		return this._serverAnnotationList;
+	}
+
+	set serverStoredList(value) {
+		this._serverAnnotationList = value;
+	}
+
 	getAnnotationById(id) {
-		for (let annotation of this._serverAnnotationList) {
+		for (let annotation of this.serverStoredList) {
 			//load default annotation if present
 			if (this.dataLoader.getId(annotation) == id) {
 				return annotation;
@@ -937,7 +960,7 @@ class="btn m-2">Set for left click </button>
 	}
 
 	getDefaultAnnotationItemId() {
-		for (let annotation of this._serverAnnotationList) {
+		for (let annotation of this.serverStoredList) {
 			//load default annotation if present
 			if (this.dataLoader.getIsDefault(annotation)) {
 				return this.dataLoader.getId(annotation);
@@ -956,20 +979,29 @@ class="btn m-2">Set for left click </button>
 		}
 	}
 
-	loadAnnotationsList(onSuccessLoad=()=>{}) {
+	loadAnnotationsList(onSuccessLoad=()=>{}, onError=undefined) {
 		if (!this._server) {
 			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(`This feature is not enabled.`));
 			return;
 		}
 		this.annotationsMenuBuilder.clear();
-		this._serverAnnotationList = null;
+		this.serverStoredList = null;
+
+		if (!onError) {
+			const _this = this;
+			onError = function (error) {
+				console.error(_this.dataLoader.getErrorResponseMessage(error));
+				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu(
+					`Could not load annotations list. <a class="pointer" onclick="plugin('${_this.id}').loadAnnotationsList()">Retry.</a>`));
+			}
+		}
 
 		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
 			let count = 0,
 				user = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.name, "unknown user");
 
 			//todo unify behaviour, two servers send different response :/
-			this._serverAnnotationList = Array.isArray(json) ? json : json.annotations;
+			this.serverStoredList = Array.isArray(json) ? json : json.annotations;
 
 			this.annotationsMenuBuilder.addRow({
 				title: `Upload new annotations (name <input type="text" value="" placeholder="automatic" class="form-control" id="annotations-upload-name" title="Name">)`,
@@ -985,7 +1017,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 <br><span style="font-size: smaller">${text}</span></span>`;
 			}
 
-			for (let available of this._serverAnnotationList) {
+			for (let available of this._serverAnnotationList) { //access raw, prevents recursion
 				//unsafe mode will parse all the metadata as one, so the user meta will be read from available.metadata
 				this.dataLoader.parseMetadata(available);
 				this.dataLoader.setActive(available);
@@ -1002,10 +1034,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 			}
 			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu());
 			onSuccessLoad(json);
-		}, error => {
-			console.error(this.dataLoader.getErrorResponseMessage(error));
-			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(`Could not load annotations list. <a class="pointer" onclick="plugin('${this.id}').loadAnnotationsList()">Retry.</a>`));
-		});
+		}, onError);
 	}
 
 	loadAnnotation(id, force=false) {
@@ -1020,7 +1049,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 
 	_loadAnnotation(id, onError, force=false) {
 		const _this = this
-		this.dataLoader.setActive(this._serverAnnotationList.find(x => _this.dataLoader.getId(x) == id));
+		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
 		const isDefault = this.dataLoader.getIsDefault();
 
 		this.dataLoader.loadAnnotation(this._server, id, isDefault,json => {
@@ -1041,7 +1070,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 
 	updateAnnotation(id) {
 		const _this = this;
-		this.dataLoader.setActive(this._serverAnnotationList.find(x => _this.dataLoader.getId(x) == id));
+		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
 		if (!confirm("You are about to overwrite annotation set '" + this.dataLoader.getMetaName() + "'. Continue?" )) return;
 
 		const isDefault = this.dataLoader.getIsDefault();
@@ -1068,7 +1097,7 @@ class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-f
 
 	removeAnnotation(id) {
 		const _this = this;
-		this.dataLoader.setActive(this._serverAnnotationList.find(x => _this.dataLoader.getId(x) == id));
+		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
 		if (!confirm("You are about to delete annotation set '" + this.dataLoader.getMetaName() + "'. Continue?" )) return;
 
 		const isDefault = this.dataLoader.getIsDefault();
