@@ -680,7 +680,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 <button class="btn btn-sm btn-primary ml-2 mr-5 pl-0 pr-2" id="show-annotation-board" title="${this.t('showBoard')}" onclick="${this.THIS}.openHistoryWindow();"><span class="material-icons px-1 text-small">assignment</span><span class="text-small">Show list</span></button>
 <div class="float-right">
 <button class="btn-pointer btn btn-sm mx-2 px-1" title="Export annotations" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><span class="text-small">Advanced I/O</span></button>
-<button class="btn-pointer btn btn-outline" id="server-primary-save" onclick="${this.THIS}.uploadDefault();"><span class="material-icons pl-0 pr-1">cloud_upload</span>Upload</button>
+<button class="btn btn-outline" id="server-primary-save" onclick="${this.THIS}.uploadDefault();"><span class="material-icons pl-0 pr-1">cloud_upload</span>Upload</button>
 </div>
 </div>
 <span id="annotations-left-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3"

@@ -831,6 +831,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         }
 
         if (renderingWithWebGL) {
+            //prepare rendering can disable layers
+            APPLICATION_CONTEXT.prepareRendering();
+            renderingWithWebGL = APPLICATION_CONTEXT.layersAvailable;
+        }
+
+        if (renderingWithWebGL) {
             APPLICATION_CONTEXT.prepareRendering();
 
             let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
