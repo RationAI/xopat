@@ -14,5 +14,6 @@
     "performAuth": null,
     //API url: where to store session exports
     "sessionServer": null,
+    "exportHTML": false,
     "headers": null
 }
