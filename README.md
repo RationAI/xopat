@@ -7,20 +7,27 @@
 
 ![The XOpat Viewer](docs/assets/xopat-banner.png)
 
-<hr>
-With the focus on flexibility, extensibility and modularity, the xOpat
-viewer tries to address various issues in digital pathology related to analysis and 
+### Why xOpat?
+Instead of going with a rigid solution, here, you can take a half-ready solution
+and bring it to something that covers all your needs. With the focus on flexibility, extensibility and modularity, the xOpat
+viewer tries to address issues in digital pathology related to analysis and 
 AI development.
 
-Annotations, and other plugins introduce a powerful set of additional features
-that take the WSI far beyond standard.
+ - Behaves as an enhanced OpenSeadragon*, a popular (feature-less) flexible viewer.
+   - Full data protocol flexibility.
+   - Advanced extensibility.
+   - Powerful visualization capabilities.
+   - Annotations, and other plugins introduce a unusual set of additional features
+     that take the WSI far beyond standard.
 
-Note that the viewer is still in active development. Currently, it is used for versatile
+Note that the viewer is still in active development. If you wish to start
+using the viewer, please do not hesitate to reach us. Currently, it is used for versatile
 offline AI data inspection. We work now on integration workflows and in future
 the focus will be on services, namely non-standard integration with a ML pipeline for
-effective algorithm/network debugging and profiling with the help of powerful visualisation platform. 
+effective algorithm/network debugging and profiling with the help of powerful visualisation platform.
 
 
+(*except for the server deployment part, which is a must for scanning for modules, plugins and parsing HTTP requests)
 
 ## Setup
 There is _docker_ available: https://github.com/RationAI/xopat-docker. Although very versatile, setting up

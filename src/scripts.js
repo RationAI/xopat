@@ -233,23 +233,24 @@ function initXopatScripts() {
     /**
      * Create the viewer configuration serialized
      */
-    window.UTILITIES.serializeAppConfig = function() {
+    window.UTILITIES.serializeAppConfig = function(withCookies=false) {
+        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
+        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
         let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
         APPLICATION_CONTEXT.config.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
             point: VIEWER.viewport.getCenter()
         };
 
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        APPLICATION_CONTEXT.config.params.bypassCookies = true;
-
-        let postData = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+        //by default ommit underscore
+        let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config);
-
-        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
+            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        return postData;
+        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
+
+        return app;
     };
 
     /**
@@ -275,17 +276,6 @@ function initXopatScripts() {
             }
         }
 
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
-
-        //by default ommit underscore
-        let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
-        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
-
         let exportData = {};
 
         /**
@@ -306,11 +296,11 @@ function initXopatScripts() {
                 exportData[uniqueKey] = data;
             }
         });
-        return {app, data: exportData};
+        return {app: UTILITIES.serializeAppConfig(withCookies), data: exportData};
     };
 
     /**
-     * Get the viewer form that, when in HTML redirects to the viewer
+     * Get the viewer form+script html that automatically redirects to the viewer
      * @param customAttributes
      * @param includedPluginsList
      * @param withCookies
@@ -370,11 +360,7 @@ form.submit();
      * @return {Promise<void>}
      */
     window.UTILITIES.export = async function() {
-        let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
-        APPLICATION_CONTEXT.config.params.viewport = {
-            zoomLevel: VIEWER.viewport.getZoom(),
-            point: VIEWER.viewport.getCenter()
-        };
+
         let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualisation export</title></head>
@@ -382,7 +368,7 @@ form.submit();
 <div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
 ${await UTILITIES.getForm()}
 </body></html>`;
-        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
+
         UTILITIES.downloadAsFile("export.html", doc);
         APPLICATION_CONTEXT.__cache.dirty = false;
     };
