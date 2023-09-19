@@ -256,6 +256,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		this.context.addHandler('mode-changed', this.annotationModeChanged);
 		this.annotationModeChanged({mode: this.context.mode}); //force refresh manually
 
+		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
