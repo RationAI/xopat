@@ -288,7 +288,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     class XOpatElement {
 
         constructor(id, executionContextName) {
-            if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
+            if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
             this.id = id;
             this.xoContext = executionContextName;
         }

@@ -341,7 +341,8 @@ div {box-sizing: initial !important;}
 .system-container .material-icons {color: var(--color-border-inverse);}
 #main-panel {z-index: 90;right: 0;transition: right 0.3s;user-select: none;background: var(--color-bg-primary); }
 #main-panel-hide {cursor: pointer;margin-left: -12px;}
-#main-panel-show {position: fixed;z-index: 89;top: 5px;right: 5px;cursor: pointer;text-shadow: 0 0 20px #ffffff;}
+#main-panel-show {position: fixed;z-index: 89;top: 0px;right: 0px; padding: 5px; border-top-left-radius: 20%;
+    border-bottom-left-radius: 20%; cursor: pointer; color: var(--color-bg-primary); background: var(--color-text-primary);}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
 .inner-panel::after {content: '';}

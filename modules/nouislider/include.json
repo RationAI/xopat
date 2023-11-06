@@ -1,8 +1,0 @@
-{
-    "id": "nouislider",
-    "name": "Advanced slider for HTML",
-    "includes" : [
-        "nouislider.min.js"
-    ],
-    "requires": []
-}
