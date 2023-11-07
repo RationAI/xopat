@@ -167,7 +167,7 @@
             if (this.__cachedZoom !== zoom) {
                 this.__cachedZoom = zoom;
 
-                let tiledImage = this.getReferencedTiledImage() || viewport;
+                let tiledImage = this.getReferencedTiledImage() || this.viewer.world.getItemAt(0);
                 //todo proprietary func from before OSD 2.0, remove? search API
                 this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
             }

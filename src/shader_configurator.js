@@ -105,6 +105,17 @@ var ShaderConfigurator = {
                     "class='position-relative'><span class='flex-1'>Control <code>",
                     control, "</code> | Supports: ", supported.join(", ") ,"</span></span></div>");
             }
+
+            let didParams = false;
+            for (let param in shader.customParams) {
+                if (!didParams) {
+                    didParams = true;
+                    html.push("<hr>");
+                }
+                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+                    "class='position-relative'><span class='flex-1'>Parameter <code>",
+                    param, "</code> <br><span class='text-small'>", shader.customParams[param].usage ,"</span></span></span></div>");
+            }
             html.push("</div></div><br>");
         }
         html.push("</div><br>");
@@ -468,7 +479,8 @@ ${renders.join("")}
         if (this.__uicontrols) return this.__uicontrols;
         this.__uicontrols = {};
         let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {}, {layer: {}});
+        let fallbackLayer = new WebGLModule.IdentityLayer("id", {layer: {}});
+        fallbackLayer.construct({}, [0]);
         for (let type of types) {
             let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
             let glType = ctrl.type;

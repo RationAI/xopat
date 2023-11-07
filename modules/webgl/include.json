@@ -12,6 +12,7 @@
         "shaders/colormapVisualisationLayer.js",
         "shaders/codingVisualisationLayer.js",
         "shaders/identityVisualisationLayer.js",
+        "shaders/timeSeries.js",
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],

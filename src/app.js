@@ -387,10 +387,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     //properties depentend and important to change on bg image load/swap
     //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
     function updateBackgroundChanged(index) {
+        //Todo once rewritten, treat always low level item as the reference layer (index == 0)
+
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer, or possibly the rendering layers layer
-        const tiledImage = VIEWER.world.getItemAt(index),
-            imageData = tiledImage?.getBackgroundConfig();
+        const tiledImage = VIEWER.world.getItemAt(index);
+        const imageData = tiledImage?.getBackgroundConfig();
 
         const title = $("#tissue-title-header").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
@@ -399,7 +401,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             );
             title.html(name);
             title.attr('title', name);
-        } else if (!tiledImage || tiledImage.source instanceof OpenSeadragon.EmptyTileSource) {
+        } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
             title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
         }
 
@@ -626,12 +628,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
             $("#global-tissue-visibility").css("display", "none");
-            handleSyntheticEventFinishWithValidData(0, 0);
+            handleSyntheticEventFinishWithValidData(-1, 0);
         }
     }
 
     function handleSyntheticEventFinishWithValidData(referenceImage, layerPosition) {
         updateBackgroundChanged(referenceImage);
+
         const eventOpts = {};
 
 
