@@ -22,7 +22,7 @@ addPlugin("user-session", class extends XOpatPlugin {
 
     setupActiveTissue(bgImageConfigObject) {
         if (!bgImageConfigObject) this.activeTissue = null;
-        this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
+        else this.activeTissue = APPLICATION_CONTEXT.config.data[bgImageConfigObject.dataReference];
     }
 
     authenticate(repeatedLogin=true) {

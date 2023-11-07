@@ -155,7 +155,6 @@
          */
         linkReferenceTileSourceIndex: function(index) {
             this.getReferencedTiledImage = this.viewer.world.getItemAt.bind(this.viewer.world, index);
-
         },
         /**
          * Compute size of one pixel in the image on your screen
