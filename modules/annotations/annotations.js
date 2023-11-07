@@ -1019,7 +1019,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			isDown: false,  //FABRIC handler click down recognition
 		};
 
-		let refTileImage = VIEWER.scalebar.getReferencedTiledImage();
+		let refTileImage = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
 		this.overlay = VIEWER.fabricjsOverlay({
 			scale: refTileImage.source.dimensions ?
 				refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,

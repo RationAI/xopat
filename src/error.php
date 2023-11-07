@@ -31,7 +31,11 @@ $description = $description ? $i18n->t($description) : $description;
     <meta charset="utf-8">
     <title>Error</title>
 
-    <?php require_core("env"); ?>
+    <?php
+        if (defined('VERSION')) {
+            require_core("env");
+        }
+    ?>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 </head>
@@ -46,7 +50,11 @@ $description = $description ? $i18n->t($description) : $description;
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><?php echo $i18n->t('error.detailsBtn') ?></button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
 
-    <button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button"><?php echo $i18n->t('error.back') ?></button>
+    <?php
+        if (defined('GATEWAY')) {
+            ?><button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button"><?php echo $i18n->t('error.back') ?></button><?php
+        }
+    ?>
 
 </div>
 

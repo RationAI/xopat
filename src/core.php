@@ -85,6 +85,8 @@ function parse_env_config($data, $err) {
 }
 
 global $ENV;
+
+$parse_exception = null;
 try {
     $ENV = [];
     $env = getenv('XOPAT_ENV');
@@ -103,7 +105,8 @@ try {
     $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
 
 } catch (Exception $e) {
-    throw new Exception("Unable to parse ENV configuration file: is it a valid JSON?");
+    $parse_exception = $e;
+    //core uses default values
 }
 
 $C = [];
@@ -202,4 +205,8 @@ function require_core($type) {
     global $CORE;
     if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
     if (isset($CORE["js"]["src"][$type])) print_js_single($CORE["js"]["src"][$type], PROJECT_SOURCES);
+}
+
+if ($parse_exception !== null) {
+    throw new Exception("Unable to parse ENV configuration file: is it a valid JSON?");
 }

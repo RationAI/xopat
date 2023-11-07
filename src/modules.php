@@ -19,7 +19,6 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 $data["styleSheet"] = $data["path"] . "style.css";
             }
 
-
             try {
                 global $ENV, $MODULES;
                 if (is_array($ENV)) {
@@ -28,6 +27,10 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
 
                     if (isset($ENV_MOD[$data["id"]])) {
                         $data = array_merge_recursive_distinct($data, $ENV_MOD[$data["id"]]);
+                    }
+
+                    if (isset($data["permaLoad"]) && $data["permaLoad"]) {
+                        $data["loaded"] = true;
                     }
                 } else {
                     trigger_error("Env setup for module failed: invalid \$ENV! Was CORE included?", E_USER_WARNING);

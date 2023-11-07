@@ -185,6 +185,7 @@ $visualisation = json_encode($parsedParams);
         crossorigin="anonymous"></script>
     <script src="config_meta.js"></script>
 
+    <script src="https://togetherjs.com/togetherjs-min.js"></script>
 
     <?php require_libs(); ?>
     <?php require_openseadragon(); ?>
@@ -324,7 +325,9 @@ EOF;
             </span>&emsp;
             <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
-    </div>
+    <button onclick="TogetherJS(this); return false;">Start TogetherJS</button>
+
+</div>
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
     <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
@@ -353,6 +356,7 @@ EOF;
         window.onerror = function (message, file, line, col, error) {
             let ErrUI = USER_INTERFACE.Errors;
             if (ErrUI.active) return false;
+            error = error || {};
             ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
 <b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
             return false;

@@ -12,8 +12,9 @@
         "shaders/colormapVisualisationLayer.js",
         "shaders/codingVisualisationLayer.js",
         "shaders/identityVisualisationLayer.js",
+        "shaders/timeSeries.js",
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],
-    "requires": ["nouislider", "colorMaps"]
+    "requires": ["colorMaps"]
 }

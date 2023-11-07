@@ -45,7 +45,7 @@ window.WebGLModule = class {
      * to distinguish uniquely between static generated code parts
      * @type {RegExp}
      */
-    static idPattern = /[0-9a-zA-Z_]*/;
+    static idPattern = /^[0-9a-zA-Z_]*$/;
 
     /**
      * @param {object} incomingOptions
@@ -737,21 +737,32 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         return idx;
     }
 
-    _initializeShaderFactory(ShaderFactoryClass, layer, idx) {
+    _initializeShaderFactory(visualization, ShaderFactoryClass, layer, idx) {
         if (!ShaderFactoryClass) {
             layer.error = "Unknown layer type.";
             layer.desc = `The layer type '${layer.type}' has no associated factory. Missing in 'shaderSources'.`;
             console.warn("Skipping layer " + layer.name);
             return;
         }
+        const _this = this;
         layer._index = idx;
         layer.visible = layer.visible ?? true;
-        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, layer.params || {}, {
+        layer._renderContext = new ShaderFactoryClass(`${this.uniqueId}${idx}`, {
             layer: layer,
             webgl: this.webGLImplementation,
             invalidate: this.resetCallback,
-            rebuild: this.rebuildVisualisation.bind(this, undefined)
+            rebuild: this.rebuildVisualisation.bind(this, undefined),
+            refetch: function() {
+                _this._updateRequiredDataSources(visualization);
+                //vis not change, but underlying data
+                _this.visualisationChanged(visualization, visualization);
+            }
         });
+        layer._renderContext.construct(layer.params || {}, layer.dataReferences);
+
+        if (!layer._renderContext.initialized()) {
+            console.error(`Invalid shader ${ShaderFactoryClass.name()}! Construct must call super implementation!`);
+        }
     }
 
     _updateRequiredDataSources(vis) {
@@ -805,7 +816,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     let layer = vis.shaders[key],
                         ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
                     if (layer.type === "none") continue;
-                    this._initializeShaderFactory(ShaderFactoryClass, layer, index++);
+                    this._initializeShaderFactory(vis, ShaderFactoryClass, layer, index++);
                 }
             }
         } else {
@@ -823,7 +834,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
                     delete layer.desc;
                     if (layer.type === "none") continue;
                     let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(layer.type);
-                    this._initializeShaderFactory(ShaderFactoryClass, layer, layer._index);
+                    this._initializeShaderFactory(vis, ShaderFactoryClass, layer, layer._index);
                 }
             }
         }

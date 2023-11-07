@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "1.1.1",
+    "version": "1.1.2",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -156,7 +156,8 @@
                 "enjoyhint.js",
                 "js.cookie.js",
                 "osd_tools.js",
-                "scalebar.js"
+                "scalebar.js",
+                "nouislider.min.js"
             ]
         },
         /**
@@ -183,7 +184,8 @@
         "libs": {
         },
         "external": {
-            "enjoyhint": "enjoyhint.css"
+            "enjoyhint": "enjoyhint.css",
+            "nouislider": "nouislider.css"
         },
         "src": {
             "env": ["libs/primer_css.css", "assets/style.css", "assets/xopat.css"]
