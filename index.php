@@ -185,8 +185,6 @@ $visualisation = json_encode($parsedParams);
         crossorigin="anonymous"></script>
     <script src="config_meta.js"></script>
 
-    <script src="https://togetherjs.com/togetherjs-min.js"></script>
-
     <?php require_libs(); ?>
     <?php require_openseadragon(); ?>
     <?php require_external(); ?>
@@ -325,8 +323,6 @@ EOF;
             </span>&emsp;
             <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
-    <button onclick="TogetherJS(this); return false;">Start TogetherJS</button>
-
 </div>
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
