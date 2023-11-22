@@ -108,6 +108,13 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
     configure: function( data, url, postData ){
 
         var options = $.isPlainObject(data) ? configureFromObject(this, data) : configureFromXML(this, data);
+
+        //little hack: if we ask for non-pyramidal data (jpg, png), overwrite level, we use post: the query contains link
+        const targetUrl = typeof postData === "string" ? postData : url;
+        if (targetUrl.endsWith("jpg.dzi") || targetUrl.endsWith("png.dzi") || targetUrl.endsWith("jpeg.dzi")) {
+            options.maxLevel = options.minLevel = 0;
+        }
+
         if (postData) {
             options.postData = postData.replace(/([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/');
         } else if (url) {
