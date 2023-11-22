@@ -26,11 +26,6 @@ WebGLModule.TimeSeries = class extends WebGLModule.VisualisationLayer {
             this.series = [];
         }
 
-        // dynamic override which specifies
-        options.timeline = options.timeline || {};
-        options.timeline.max = options.series.length;
-        options.timeline.default = options.series.indexOf(dataReferences[0]) + 1;
-
         this._dataReferences = dataReferences;
         super.construct(options, dataReferences);
         this._renderer.construct(options, dataReferences);
@@ -63,7 +58,7 @@ WebGLModule.TimeSeries = class extends WebGLModule.VisualisationLayer {
         timeline: {
             default: {title: "Timeline: "},
             accepts: (type, instance) => type === "float",
-            required: {type: "range_input", step: 1, min: 1}
+            required: {type: "range_input"}
         },
         opacity: false
     };
@@ -97,7 +92,13 @@ ${this._renderer.getFragmentShaderDefinition()}`;
     }
 
     init() {
-        this.timeline.params
+        //parse and correct timeline data
+        const seriesLength = this.series.length;
+        const requestedLength = (this.timeline.params.max - this.timeline.params.min) / this.timeline.step;
+        if (requestedLength !== seriesLength) {
+            this.timeline.params.max = seriesLength * this.timeline.step + this.timeline.params.min;
+            this.timeline.params.default = this.timeline.params.min;
+        }
 
         super.init();
         this._renderer.init();
