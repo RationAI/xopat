@@ -26,6 +26,27 @@ WebGLModule.TimeSeries = class extends WebGLModule.VisualisationLayer {
             this.series = [];
         }
 
+        //parse and correct timeline data
+        let timeline = options.timeline;
+        if (typeof timeline !== "object") {
+            timeline = {type: timeline};
+        }
+        if (!timeline.step) {
+            timeline.step = 1;
+        }
+        const seriesLength = this.series.length;
+        if (timeline.min % timeline.step !== 0) {
+            timeline.min = 0;
+        }
+        if ((timeline.default - timeline.min) % timeline.step !== 0) {
+            timeline.default = timeline.min;
+        }
+        //min is also used as a valid selection: +1
+        const requestedLength = (timeline.max - timeline.min) / timeline.step + 1;
+        if (requestedLength !== seriesLength) {
+            timeline.max = (seriesLength -1) * timeline.step + timeline.min;
+        }
+
         this._dataReferences = dataReferences;
         super.construct(options, dataReferences);
         this._renderer.construct(options, dataReferences);
@@ -92,22 +113,13 @@ ${this._renderer.getFragmentShaderDefinition()}`;
     }
 
     init() {
-        //parse and correct timeline data
-        const seriesLength = this.series.length;
-        const requestedLength = (this.timeline.params.max - this.timeline.params.min) / this.timeline.step;
-        if (requestedLength !== seriesLength) {
-            this.timeline.params.max = seriesLength * this.timeline.step + this.timeline.params.min;
-            this.timeline.params.default = this.timeline.params.min;
-        }
-
         super.init();
         this._renderer.init();
 
         const _this = this;
         this.timeline.on('default', (raw, encoded, ctx) => {
-            const value = Number.parseInt(encoded);
-            if (value < 0 || value >= _this.series.length) return;
-            this._dataReferences[0] = _this.series[value - 1];
+            const value = (Number.parseInt(encoded) - this.timeline.params.min) / _this.timeline.params.step;
+            _this._dataReferences[0] = _this.series[value];
             _this._refetch();
         });
     }
