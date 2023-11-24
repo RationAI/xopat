@@ -301,6 +301,17 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         return `${x}_${y}/${level}/${this.postData}`;
     },
 
+    getTileCacheDataAsContext2D: function(cacheObject) {
+        //hotfix: in case the cacheObject._data object arrives as array, fix it (webgl drawing did not get called)
+        //todo will be replaced by the cache overhaul in OpenSeadragon
+        if (!cacheObject._renderedContext) {
+            if (Array.isArray(cacheObject._data)) {
+                cacheObject._data = cacheObject._data[0];
+            }
+        }
+        return super.getTileCacheDataAsContext2D(cacheObject);
+    },
+
     /**
      * @function
      * @param {Number} level
