@@ -444,10 +444,8 @@ window.OpenSeadragon.BridgeGL = class {
             this.webGLEngine.setDimensions(e.tile.sourceBounds.width, e.tile.sourceBounds.height);
             let imageData = e.tile.__data;
             // Render a webGL canvas to an input canvas using cached version
-            let output = this.webGLEngine.processImage(imageData, {
-                width: tile.tiledImage.source.getTileWidth(tile.level),
-                height: tile.tiledImage.source.getTileHeight(tile.level)
-            }, this.openSD.viewport.getZoom(), this.imagePixelSizeOnScreen());
+            let output = this.webGLEngine.processImage(imageData, e.tile.sourceBounds,
+                this.openSD.viewport.getZoom(), this.imagePixelSizeOnScreen());
 
             // Note: you can comment out clearing if you don't use transparency
             e.rendered.clearRect(0, 0, e.tile.sourceBounds.width, e.tile.sourceBounds.height);
@@ -470,12 +468,10 @@ window.OpenSeadragon.BridgeGL = class {
         };
 
         source.__cached_createTileCache = source.createTileCache;
+
         source.createTileCache = function(cache, data, tile) {
             cache._data = data;
-            cache._dim = {
-                width: tile.tiledImage.source.getTileWidth(tile.level),
-                height: tile.tiledImage.source.getTileHeight(tile.level)
-            };
+            cache._dim = tile.sourceBounds;
             cache._dim.width = Math.max(cache._dim.width,1);
             cache._dim.height = Math.max(cache._dim.height,1);
         };
