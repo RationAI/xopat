@@ -46,7 +46,7 @@
  * @property {String} fileFormat
  */
 
-class ExtendedDziTileSource extends $.TileSource {
+$.ExtendedDziTileSource = class extends $.TileSource {
 
     constructor(options) {
         super(options);
