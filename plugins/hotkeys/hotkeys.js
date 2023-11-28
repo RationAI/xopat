@@ -31,7 +31,7 @@ system shortcuts and map available ones real-time.
                         if (focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
                             VIEWER.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, false);
                             VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, false);
-                            UTILITIES.copyToClipboard("");
+                            UTILITIES.copyToClipboard("{}");
                         } else {
                             UTILITIES.copyToClipboard(JSON.stringify({
                                 point: VIEWER.viewport.getCenter(),

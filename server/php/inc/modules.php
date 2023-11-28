@@ -136,12 +136,13 @@ function printDependencies($directory, $item) {
     foreach ($item["includes"] as $__ => $file) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item["directory"]}/$file?v=$version\"></script>\n";
-        } else if (is_object($file)) {
+        } else if (is_array($file)) {
             echo "    <script" . getAttributes($file, array(
                     'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer',
                     'integrity' => 'integrity', 'referrerPolicy' => 'referrerpolicy', 'src' => 'src')) . "></script>";
         } else {
-            echo "<script>console.warn('Invalid include:', '{$item["id"]}', '$file');</script>";
+            $details = json_encode($file);
+            echo "<script type='text/javascript'>console.warn('Invalid include', '{$item["id"]}', {$details});</script>";
         }
     }
 }
