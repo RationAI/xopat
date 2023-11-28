@@ -1689,7 +1689,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	accepts(e) {
-		return e.key === "q" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "q" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1834,7 +1834,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	}
 
 	accepts(e) {
-		return e.key === "e" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "e" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1854,7 +1854,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1930,7 +1930,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.key === "w" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "w" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
