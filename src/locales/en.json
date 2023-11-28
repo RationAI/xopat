@@ -8,7 +8,9 @@
       "back": "Go back",
       "noDetails": "No details provided",
       "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
-      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file."
+      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
+      "nothingToRender": "No data to view.",
+      "nothingToRenderDetails": "The active session does not specify any image or layers to render."
     },
     "main": {
       "global": {

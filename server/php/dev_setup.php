@@ -1,5 +1,9 @@
 <?php
-include_once("src/core.php");
+
+if (!defined( 'ABSPATH' )) {
+    define( 'ABSPATH', dirname(__DIR__, 2) . '/' );
+}
+include_once ABSPATH . "server/php/inc/core.php";
 ?>
 
 <!DOCTYPE html>
@@ -9,22 +13,18 @@ include_once("src/core.php");
   <meta charset="utf-8">
   <title>Visualisation Developer Setup</title>
 
-  <link rel="stylesheet" href="<?php echo LIBS_ROOT; ?>primer_css.css">
-  <script src="<?php echo PROJECT_SOURCES; ?>shader_configurator.js"></script>
-  <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
-  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <?php require_lib("primer"); ?>
+    <?php require_lib("jquery"); ?>
+    <?php require_core("env"); ?>
+    <?php require_core("deps"); ?>
 
-  <!-- jquery -->
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
-            crossorigin="anonymous"></script>
     <script>
         var OpenSeadragon = {};
     </script>
 
     <?php
 
-    include_once(PROJECT_SOURCES . "plugins.php");
+    include_once(PHP_INCLUDES . "plugins.php");
 
     $webglPath = "";
     $version = VERSION;
@@ -36,7 +36,7 @@ include_once("src/core.php");
         return isset($array[$key]) && $array[$key];
     }
 
-    $root = $CORE["client"]["domain"] . $CORE["client"]["path"];
+    $root = PROJECT_ROOT;
 
     ?>
 
@@ -69,13 +69,6 @@ include_once("src/core.php");
             "lossless": false
         }
     ],
-    "shaderSources" : [
-        {
-            "url": "http://my-shader-url.com/customShader.js",
-            "headers": {},
-            "typedef": "new_type"
-        }
-    ],
     "visualizations": [
         {
             "name": "A visualisation setup 1",
@@ -94,7 +87,7 @@ include_once("src/core.php");
     ]
 }
 </textarea>
-      <form method="POST" target="_blank" action="<?php echo $root; ?>/index.php" id="custom-request">
+      <form method="POST" target="_blank" action="<?php echo PROJECT_ROOT ?>index.php" id="custom-request">
           <input type="hidden" name="visualisation" id="custom-visualisation" value=''>
           <button class="btn pointer" type="submit" value="Ready!">Ready!</button>&emsp;
       </form>
@@ -112,7 +105,7 @@ include_once("src/core.php");
 
     $(document).off('submit');
 
-    $('#custom-request').submit(function(evt) {
+    $('#custom-request').on('submit', evt => {
         document.getElementById("custom-visualisation").value = $("#custom-params").val();
     });
 

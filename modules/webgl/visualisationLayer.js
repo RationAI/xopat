@@ -1111,6 +1111,10 @@ WebGLModule.UIControls.IControl = class {
      *  - these can be referenced in this.init(...)
      *  - should respect this.params.interactive attribute and return non-interactive output if interactive=false
      *      - don't forget to no to work with DOM elements in init(...) in this case
+     *
+     * todo: when overrided value before 'init' call on params, toHtml was already called, changes might not get propagated
+     *  - either: delay toHtml to trigger insertion later (not nice)
+     *  - do not allow changes before init call, these changes must happen at constructor
      */
     toHtml(breakLine=true, controlCss="") {
         throw "WebGLModule.UIControls.IControl::toHtml() must be implemented.";
@@ -1317,13 +1321,12 @@ WebGLModule.UIControls.SimpleUIControl = class extends WebGLModule.UIControls.IC
         super(context, name, webGLVariableName, uniq);
         this.component = intristicComponent;
         this._params = this.getParams(params);
-
-        this.encodedValue = this.load(this.params.default);
-        //this unfortunatelly makes cache erasing and rebuilding vis impossible, the shader part has to be fully re-instantiated
-        this.params.default = this.encodedValue;
     }
 
     init() {
+        this.encodedValue = this.load(this.params.default);
+        //this unfortunatelly makes cache erasing and rebuilding vis impossible, the shader part has to be fully re-instantiated
+        this.params.default = this.encodedValue;
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
         if (this.params.interactive) {

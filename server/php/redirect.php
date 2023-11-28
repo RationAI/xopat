@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
+    <!--Outdated way of redirection-->
     <meta charset="utf-8">
     <title>Redirecting...</title>
 </head>

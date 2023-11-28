@@ -468,6 +468,7 @@ window.OpenSeadragon.BridgeGL = class {
         };
 
         source.__cached_createTileCache = source.createTileCache;
+
         source.createTileCache = function(cache, data, tile) {
             cache._data = data;
             cache._dim = tile.sourceBounds;

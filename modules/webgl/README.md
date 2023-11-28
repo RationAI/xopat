@@ -163,13 +163,6 @@ Your app can then request a configuration like so:
 ````json
 {
       "data": ["image1", "image2"],
-      "shaderSources" : [
-            {
-                 "url": "http://my-shader-url.com/customShader.js",
-                 "headers": {},
-                 "typedef": "new_type"
-            }
-      ],
       "visualizations": [
             {
                   ... config references items in "data" 

@@ -35,7 +35,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-(function( $ ){
+(function( $ ) {
 
 /**
  * @class ExtendedDziTileSource
@@ -45,35 +45,37 @@
  * @property {String} tilesUrl
  * @property {String} fileFormat
  */
-$.ExtendedDziTileSource = function( options ) {
-    var i,
-        rect,
-        level;
 
-    this._levelRects  = {};
-    this.tilesUrl     = options.tilesUrl;
-    this.fileFormat   = options.fileFormat;
-    this.displayRects = options.displayRects;
+$.ExtendedDziTileSource = class extends $.TileSource {
 
-    if ( this.displayRects ) {
-        for ( i = this.displayRects.length - 1; i >= 0; i-- ) {
-            rect = this.displayRects[ i ];
-            for ( level = rect.minLevel; level <= rect.maxLevel; level++ ) {
-                if ( !this._levelRects[ level ] ) {
-                    this._levelRects[ level ] = [];
+    constructor(options) {
+        super(options);
+
+        var i,
+            rect,
+            level;
+
+        this._levelRects = {};
+        this.tilesUrl = options.tilesUrl;
+        this.fileFormat = options.fileFormat;
+        this.displayRects = options.displayRects;
+
+        if (this.displayRects) {
+            for (i = this.displayRects.length - 1; i >= 0; i--) {
+                rect = this.displayRects[i];
+                for (level = rect.minLevel; level <= rect.maxLevel; level++) {
+                    if (!this._levelRects[level]) {
+                        this._levelRects[level] = [];
+                    }
+                    this._levelRects[level].push(rect);
                 }
-                this._levelRects[ level ].push( rect );
             }
         }
+
+        if (!this.fileFormat) this.fileFormat = ".jpg";
+        if (!this.greyscale) this.greyscale = "";
     }
 
-    $.TileSource.apply( this, [ options ] );
-
-    if (!this.fileFormat) this.fileFormat = ".jpg";
-    if (!this.greyscale) this.greyscale = "";
-};
-
-$.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends OpenSeadragon.ExtendedDziTileSource.prototype */{
 
     /**
      * Determine if the data and/or url imply the image service is supported by
@@ -81,7 +83,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {(Object|Array)} data
      * @param {String} url
      */
-    supports: function( data, url ){
+    supports( data, url ){
         var ns;
         if ( data.ImageArray ) {
             ns = data.ImageArray.xmlns;
@@ -92,7 +94,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
         }
         ns = ns || "";
         return ns.indexOf('rationai.fi.muni.cz/deepzoom/images') !== -1;
-    },
+    }
 
     /**
      * TODO!!!! this is not tileSource but tiledImage!!!
@@ -105,9 +107,16 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @return {Object} options - A dictionary of keyword arguments sufficient
      *      to configure this tile sources constructor.
      */
-    configure: function( data, url, postData ){
+    configure( data, url, postData ){
 
         var options = $.isPlainObject(data) ? configureFromObject(this, data) : configureFromXML(this, data);
+
+        //little hack: if we ask for non-pyramidal data (jpg, png), overwrite level, we use post: the query contains link
+        const targetUrl = typeof postData === "string" ? postData : url;
+        if (targetUrl.endsWith("jpg.dzi") || targetUrl.endsWith("png.dzi") || targetUrl.endsWith("jpeg.dzi")) {
+            options.maxLevel = options.minLevel = 0;
+        }
+
         if (postData) {
             options.postData = postData.replace(/([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/');
         } else if (url) {
@@ -124,7 +133,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
             }
         }
         return options;
-    },
+    }
 
     /**
      * @param {Number} level
@@ -132,9 +141,9 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} y
      * @return {string}
      */
-    getTileUrl: function( level, x, y ) {
+    getTileUrl( level, x, y ) {
         return this.getUrl(level, x, y);
-    },
+    }
 
     /**
      * More generic for other approaches
@@ -144,10 +153,10 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {String} tiles optionally, provide tiles URL
      * @return {string}
      */
-    getUrl: function( level, x, y, tiles=this.tilesUrl ) {
+    getUrl( level, x, y, tiles=this.tilesUrl ) {
         return this.postData ? `${tiles}${this.queryParams}`
             : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}${this.queryParams}`;
-    },
+    }
 
     /**
      * Responsible for retrieving the headers which will be attached to the image request for the
@@ -162,9 +171,9 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} y
      * @returns {Object}
      */
-    getTileAjaxHeaders: function( level, x, y ) {
+    getTileAjaxHeaders( level, x, y ) {
         return {'Content-type': 'application/x-www-form-urlencoded'};
-    },
+    }
 
     /**
      * Must use AJAX in order to work, i.e. loadTilesWithAjax : true is set.
@@ -176,9 +185,9 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param y
      * @return {string|null} post data to send with tile configuration request
      */
-    getTilePostData: function(level, x, y) {
+    getTilePostData(level, x, y) {
         return this.getPostData(level, x, y, this.postData);
-    },
+    }
 
     /**
      * More general implementation of post data construction
@@ -188,16 +197,16 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param data
      * @return {string|null} post data to send with tile configuration request
      */
-    getPostData: function(level, x, y, data) {
+    getPostData(level, x, y, data) {
         return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
-    },
+    }
 
     //TO-DOCS describe how meta is handled and error property treated
-    getImageMetaAt: function(index) {
+    getImageMetaAt(index) {
         return this.ImageArray[index];
-    },
+    }
 
-    setFormat: function(format) {
+    setFormat(format) {
         this.fileFormat = format;
 
         let blackImage = (context, resolve, reject) => {
@@ -276,7 +285,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
                             abort
                         );
                     },
-                    error: function(request) {
+                    error(request) {
                         abort("Image load aborted - XHR error");
                     }
                 });
@@ -288,11 +297,22 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
             this.downloadTileStart = this.__cached_downloadTileStart;
             this.downloadTileAbort = this.__cached_downloadTileAbort;
         }
-    },
+    }
 
-    getTileHashKey: function(level, x, y, url, ajaxHeaders, postData) {
+    getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         return `${x}_${y}/${level}/${this.postData}`;
-    },
+    }
+
+    getTileCacheDataAsContext2D(cacheObject) {
+        //hotfix: in case the cacheObject._data object arrives as array, fix it (webgl drawing did not get called)
+        //todo will be replaced by the cache overhaul in OpenSeadragon
+        if (!cacheObject._renderedContext) {
+            if (Array.isArray(cacheObject._data)) {
+                cacheObject._data = cacheObject._data[0];
+            }
+        }
+        return super.getTileCacheDataAsContext2D(cacheObject);
+    }
 
     /**
      * @function
@@ -300,7 +320,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
      * @param {Number} x
      * @param {Number} y
      */
-    tileExists: function( level, x, y ) {
+    tileExists( level, x, y ) {
         let rects = this._levelRects[ level ],
             rect,
             scale,
@@ -343,7 +363,7 @@ $.extend( $.ExtendedDziTileSource.prototype, $.TileSource.prototype, /** @lends 
 
         return false;
     }
-});
+}
 
 
 /**
@@ -531,5 +551,6 @@ function configureFromObject( tileSource, configuration ){
         displayRects: displayRects /* displayRects */
     }, configuration );
 }
+})(OpenSeadragon);
 
-}( OpenSeadragon ));
+

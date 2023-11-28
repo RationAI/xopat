@@ -349,9 +349,12 @@ form.submit();
      * Exports only the viewer direct link (without data) as a URL to the user clipboard
      */
     window.UTILITIES.copyUrlToClipboard = function() {
-        const baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
+        let baseUrl = APPLICATION_CONTEXT.getOption("shares_url", "");
+        if (!baseUrl.match(/^https?:\/\//)) { //protocol required
+            baseUrl = APPLICATION_CONTEXT.url + baseUrl;
+        }
         const data = UTILITIES.serializeAppConfig();
-        UTILITIES.copyToClipboard(baseUrl + encodeURIComponent(data));
+        UTILITIES.copyToClipboard(baseUrl + "#" + encodeURIComponent(data));
         Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 

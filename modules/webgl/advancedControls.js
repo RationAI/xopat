@@ -9,11 +9,12 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
             context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('range'));
         params.title = "";
         this._c2 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'), "second-");
+            context, name, webGLVariableName, {}, WebGLModule.UIControls.getUiElement('number'), "second-");
     }
 
     init() {
         const _this = this;
+        this._c2._params = this._c1._params;
         this._c1.init();
         this._c2.init();
         this._c1.on("default", function(value, encoded, context) {

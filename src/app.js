@@ -34,15 +34,50 @@
  * @param MODULES
  * @param ENV
  * @param POST_DATA
- * @param CONFIG
+ * @param {object|function} CONFIG configuration or function that gets i18next param and returns the configuration
  * @param PLUGINS_FOLDER
  * @param MODULES_FOLDER
  * @param VERSION
+ * @param I18NCONFIG
  * @private
  */
-function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MODULES_FOLDER, VERSION) {
+function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+    initXopatUI();
+
+    //Prepare xopat core loading utilities and interfaces
     const runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
 
+    //Setup language and parse config if function provided
+    function localizeDom() {
+        jqueryI18next.init(i18next, $, {
+            tName: 't', // $.t = i18next.t
+            i18nName: 'i18n', // $.i18n = i18next
+            handleName: 'localize', // $(selector).localize(opts);
+            selectorAttr: 'data-i18n', // data-() attribute
+            targetAttr: 'i18n-target', // data-() attribute
+            optionsAttr: 'i18n-options', // data-() attribute
+            useOptionsAttr: false, // see optionsAttr
+            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
+        });
+        //clean up
+        delete window.jqueryI18next;
+        delete window.i18next;
+        $('body').localize();
+    }
+    if (i18next.isInitialized) {
+        localizeDom();
+    } else {
+        I18NCONFIG.fallbackLng = 'en';
+        i18next.init(I18NCONFIG, (err, t) => {
+            if (err) throw err;
+            localizeDom();
+        });
+    }
+    if (typeof CONFIG === "function") {
+        CONFIG = CONFIG($.i18n);
+    }
+
+    //Perform initialization based on provided data
     const defaultSetup = ENV.setup;
     const viewerSecureMode = ENV.client.secureMode && ENV.client.secureMode !== "false";
     const cookies = Cookies;
@@ -105,14 +140,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
              */
             get visualizations() {
                 return CONFIG.visualizations || [];
-            },
-            /**
-             * Possible shader sources to download, disabled with secureMode=true
-             * todo: change to any scripts to include realtime+
-             * @type {Array}
-             */
-            get shaderSources() {
-                return CONFIG.shaderSources || [];
             },
             /**
              * Startup configuration of plugins
@@ -869,4 +896,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             openAll(0);
         }
     }
+
+    initXopatScripts();
+    initXopatLayers();
 }

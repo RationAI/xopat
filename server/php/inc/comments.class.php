@@ -13,6 +13,10 @@ declare(strict_types=1);
 
 namespace Ahc\Json;
 
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
+
 /**
  * JSON comment and trailing comma stripper.
  *

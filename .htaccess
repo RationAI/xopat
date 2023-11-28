@@ -1,0 +1,10 @@
+# This file is a PHP server redirection for old PHP interface
+RewriteEngine On
+
+RewriteRule redirect index.php?directive=redirect [NC,L,QSA]
+RewriteRule dev_setup index.php?directive=dev_setup [NC,L,QSA]
+RewriteRule user_setup index.php?directive=user_setup [NC,L,QSA]
+
+RewriteRule redirect\.php redirect [R=301,NC,QSA]
+RewriteRule dev_setup\.php dev_setup [R=301,NC,QSA]
+RewriteRule user_setup\.php user_setup [R=301,NC,QSA]

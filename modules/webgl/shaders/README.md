@@ -31,7 +31,6 @@ The visualisation setup is used to instantiate to JavaScript shader layer classe
 Each shader (layer) must inherit from `VisualisationLayer` class. There are pre-defined shader layers such as `identity`, 
 `heatmap`, `edge`, `biploar-heatmap` or `colormap`. Then, the `shaders[<id>].params` field is sent to the constructor as a single object.
 
-`shaderSources` are used to download and initialize custom-defined shader layers. The output of the specified url must be a text interpretable by JavaScript.
 Furthermore:
 - shader layer class must inherit from `VisualisationLayer`
     - your constructor must pass the received object to the super constructor
