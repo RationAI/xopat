@@ -174,7 +174,7 @@ if (is_array($parsedParams->plugins)) {
 
 foreach ($PLUGINS as $key => &$plugin) {
     $hasParams = isset($parsedParams->plugins->{$plugin["id"]});
-    $plugin["loaded"] = !isset($plugin["error"]) && ($hasParams || in_array($plugin["id"], $pluginsInCookies));
+    $plugin["loaded"] = $plugin["loaded"] || !isset($plugin["error"]) && ($hasParams || in_array($plugin["id"], $pluginsInCookies));
 
     //make sure all modules required by plugins are also loaded
     if ($plugin["loaded"]) {
