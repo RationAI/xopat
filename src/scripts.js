@@ -359,6 +359,27 @@ form.submit();
     };
 
     /**
+     * Creates the viewport screenshot.
+     */
+    window.UTILITIES.makeScreenshot = function() {
+        // todo OSD v5.0 ensure we can copy the canvas among drawers
+        const canvas = document.createElement("canvas"),
+            viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        context.drawImage(viewportCanvas, 0, 0);
+        //todo make this awaiting in OSD v5.0
+        VIEWER.raiseEvent('screenshot', {
+            context2D: context,
+            width: width,
+            height: height
+        });
+        //show result in a new window
+        canvas.toBlob((blob) => window.open(URL.createObjectURL(blob), '_blank'));
+    };
+
+    /**
      * Export the viewer as a HTML file that, when opened, loads the session
      * @return {Promise<void>}
      */

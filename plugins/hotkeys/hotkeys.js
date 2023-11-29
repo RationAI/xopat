@@ -26,9 +26,8 @@ addPlugin('hotkeys', class extends XOpatPlugin {
                 }).catch(e => {
                     Dialogs.show("Your browser blocked the attempt to read your clipboard!", 1500, Dialogs.MSG_ERR);
                 });
-            }, "s": () => {
-                VIEWER.drawer.canvas.toBlob((blob) => window.open(URL.createObjectURL(blob), '_blank'));
-            }
+            },
+            "s": UTILITIES.makeScreenshot
         };
     }
 

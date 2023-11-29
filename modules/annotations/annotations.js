@@ -1113,15 +1113,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	_setListeners() {
 		const _this = this;
-		VIEWER.addHandler('key-down', function (e) {
-			_this._keyDownHandler(e);
-		});
-		VIEWER.addHandler('key-up', function (e) {
-			_this._keyUpHandler(e);
-		});
+		VIEWER.addHandler('key-down', e => _this._keyDownHandler(e));
+		VIEWER.addHandler('key-up', e => _this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", e => _this.setMode(_this.Modes.AUTO), false);
 		window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+		VIEWER.addHandler('screenshot', e => {
+ 			e.context2D.drawImage(_this.canvas.getElement(), 0, 0);
+		});
 
 		/**************************************************************************************************
 		   Click Handlers
