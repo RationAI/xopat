@@ -5,10 +5,13 @@ const path = require("path");
 const execAtPath = (binPath, cmd, options=undefined) => {
     return exec(`${path.relative("", binPath)} ${cmd}`, options);
 };
-
+const {registerStaticServerTask} = require("./server/static/build.grunt");
 
 module.exports = function(grunt) {
     // Project configuration.
+
+    //todo more fancy way of doing this?
+    registerStaticServerTask(grunt);
 
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks("grunt-contrib-connect");

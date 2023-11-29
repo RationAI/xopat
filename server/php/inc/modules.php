@@ -1,8 +1,12 @@
 <?php
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
+
 global $MODULES;
 $MODULES = array();
 
-include_once PROJECT_ROOT . "comments.class.php";
+include_once PHP_INCLUDES . "comments.class.php";
 use Ahc\Json\Comment;
 
 foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
@@ -56,7 +60,7 @@ function scanDependencies(&$itemList, $id, $contextName) {
     $item = &$itemList[$id];
     global $order;
 
-    $item["priority"] = -1;
+    $item["_priority"] = -1;
 
     $valid = true;
     foreach ($item["requires"] as $dependency) {
@@ -73,15 +77,15 @@ function scanDependencies(&$itemList, $id, $contextName) {
             return false;
         }
 
-        if (!isset($dep["priority"])) {
+        if (!isset($dep["_priority"])) {
             $valid &= scanDependencies($itemList, $dependency, $contextName);
-        } else if ($dep["priority"] == -1) {
+        } else if ($dep["_priority"] == -1) {
             $item["error"] = $i18n->t('php.cyclicDeps',
                 array("context" => $contextName, "dependency" => $dependency));
             return false;
         }
     }
-    $item["priority"] = $order++;
+    $item["_priority"] = $order++;
     if (!$valid) {
         $item["error"] = $i18n->t('php.removedInvalidDeps',
             array("dependencies" => implode(", ", $item["requires"])));
@@ -132,12 +136,13 @@ function printDependencies($directory, $item) {
     foreach ($item["includes"] as $__ => $file) {
         if (is_string($file)) {
             echo "    <script src=\"$directory{$item["directory"]}/$file?v=$version\"></script>\n";
-        } else if (is_object($file)) {
+        } else if (is_array($file)) {
             echo "    <script" . getAttributes($file, array(
                     'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer',
                     'integrity' => 'integrity', 'referrerPolicy' => 'referrerpolicy', 'src' => 'src')) . "></script>";
         } else {
-            echo "<script>console.warn('Invalid include:', '{$item["id"]}', '$file');</script>";
+            $details = json_encode($file);
+            echo "<script type='text/javascript'>console.warn('Invalid include', '{$item["id"]}', {$details});</script>";
         }
     }
 }
@@ -146,14 +151,14 @@ function printDependencies($directory, $item) {
 foreach ($MODULES as $id=>$mod) {
     //scan only if priority not set (not visited yet)
 
-    if (!isset($mod["priority"])) {
+    if (!isset($mod["_priority"])) {
         scanDependencies($MODULES, $id, 'modules');
     }
 }
 
 uasort($MODULES, function($a, $b) {
     //ascending
-    return $a["priority"] - $b["priority"];
+    return $a["_priority"] - $b["_priority"];
 });
 
 ?>

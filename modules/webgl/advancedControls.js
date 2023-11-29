@@ -9,7 +9,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
             context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('range'));
         params.title = "";
         this._c2 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'), "second-");
+            context, name, webGLVariableName, {}, WebGLModule.UIControls.getUiElement('number'), "second-");
     }
 
     init() {

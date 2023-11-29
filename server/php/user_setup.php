@@ -11,7 +11,10 @@
         });
     };
  */
-require_once "src/core.php";
+if (!defined( 'ABSPATH' )) {
+    define( 'ABSPATH', dirname(__DIR__, 2) . '/' );
+}
+include_once ABSPATH . "server/php/inc/core.php";
 
 ?>
 
@@ -21,22 +24,19 @@ require_once "src/core.php";
     <meta charset="utf-8">
     <title>Visualisation Developer Setup</title>
 
-    <link rel="stylesheet" href="<?php echo LIBS_ROOT; ?>primer_css.css">
-    <script src="<?php echo PROJECT_SOURCES; ?>loader.js"></script>
-    <script src="<?php echo PROJECT_SOURCES; ?>shader_configurator.js"></script>
-    <script src="<?php echo PROJECT_SOURCES; ?>ui_components.js"></script>
+    <?php require_core("env"); ?>
+    <?php require_lib("primer"); ?>
+    <?php require_lib("jquery"); ?>
+    <?php require_core("loader"); ?>
+    <?php require_core("deps"); ?>
 
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-
-    <!-- jquery -->
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script>
         var OpenSeadragon = {};
     </script>
 
     <?php
 
-    include_once(PROJECT_SOURCES . "plugins.php");
+    include_once(PHP_INCLUDES . "plugins.php");
     global $PLUGINS, $MODULES;
     resolveDependencies($MODULES);
     ?>

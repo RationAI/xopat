@@ -1113,15 +1113,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	_setListeners() {
 		const _this = this;
-		VIEWER.addHandler('key-down', function (e) {
-			_this._keyDownHandler(e);
-		});
-		VIEWER.addHandler('key-up', function (e) {
-			_this._keyUpHandler(e);
-		});
+		VIEWER.addHandler('key-down', e => _this._keyDownHandler(e));
+		VIEWER.addHandler('key-up', e => _this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", e => _this.setMode(_this.Modes.AUTO), false);
 		window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+		VIEWER.addHandler('screenshot', e => {
+ 			e.context2D.drawImage(_this.canvas.getElement(), 0, 0);
+		});
 
 		/**************************************************************************************************
 		   Click Handlers
@@ -1689,7 +1688,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	accepts(e) {
-		return e.key === "q" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "q" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1834,7 +1833,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	}
 
 	accepts(e) {
-		return e.key === "e" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "e" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1854,7 +1853,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1930,7 +1929,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.key === "w" && !e.ctrlKey && !e.shiftKey;
+		return e.key === "w" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {

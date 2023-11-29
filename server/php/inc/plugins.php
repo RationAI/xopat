@@ -1,8 +1,11 @@
 <?php
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
 
-if (!ABS_ROOT) throw new Exception("Plugins must be loaded with active core!");
+if (!PHP_INCLUDES) throw new Exception("Plugins must be loaded with active core!");
 
-require_once PROJECT_ROOT . "modules.php";
+require_once PHP_INCLUDES . "modules.php";
 use Ahc\Json\Comment;
 
 global $i18n, $PLUGINS;
@@ -43,6 +46,10 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
 
                         if (isset($ENV_PLUG[$data["id"]])) {
                             $data = array_merge_recursive_distinct($data, $ENV_PLUG[$data["id"]]);
+                        }
+
+                        if (isset($data["permaLoad"]) && $data["permaLoad"]) {
+                            $data["loaded"] = true;
                         }
                     } else {
                         trigger_error("Env setup for module failed: invalid \$ENV! Was CORE included?", E_USER_WARNING);

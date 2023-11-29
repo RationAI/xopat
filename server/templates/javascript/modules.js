@@ -1,0 +1,189 @@
+const {parse} = require("comment-json");
+
+module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n) {
+
+    const isType = core.isType;
+    const MODULES = core.MODULES,
+        ENV = core.ENV;
+
+    let modulePaths = scanDir(core.ABS_MODULES);
+
+    for (let dir of modulePaths) {
+        if (dir == "." || dir == "..") continue;
+
+        let fullPath = `${core.ABS_MODULES}${dir}/`;
+        let modConfig = fullPath + "include.json";
+
+        if (fileExists(modConfig)) {
+            try {
+                let data = parse(readFile(modConfig));
+                data["directory"] = dir;
+                data["path"] = `${core.MODULES_FOLDER}${dir}/`;
+                data["loaded"] = false;
+                if (fileExists(fullPath + "style.css")) {
+                    data["styleSheet"] = data["path"] + "style.css";
+                }
+
+                try {
+                    if (isType(ENV, "object")) {
+                        if (!isType(ENV["modules"], "object")) ENV["modules"] = {};
+                        const ENV_MOD = ENV["modules"];
+
+                        if (isType(ENV_MOD[data["id"]], "string")) {
+                            data = core.objectMergeRecursiveDistinct(data, ENV_MOD[data["id"]]);
+                        }
+
+                        if (isType(data["permaLoad"], "boolean") && core.parseBool(data["permaLoad"])) {
+                            data["loaded"] = true;
+                        }
+                    } else {
+                        core.exception = "Env setup for module failed: invalid ENV! Was CORE included?";
+                        console.error(core.exception);
+                    }
+                } catch (e) {
+                    //todo php uses trigger_error, core could define function that remembers all issues
+                    core.exception = e;
+                    console.error(e);
+                }
+
+                if (core.parseBool(data["enabled"]) !== false) {
+                    MODULES[data["id"]] = data;
+                }
+
+            } catch (e) {
+                core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
+                console.error(core.exception, e);
+            }
+        }
+
+    }
+
+
+    let order = 0;
+
+    //DFS assigns smaller numbers to children -> loaded earlier
+    function scanDependencies(itemList, id, contextName) {
+        let item = itemList[id];
+        item["_priority"] = -1;
+
+        let valid = true;
+        for (let dependency of item["requires"]) {
+            let dep = itemList[dependency];
+            if (!dep) {
+                item["error"] = i18n.t('php.invalidDeps', {context: contextName, dependency: dependency});
+                return false;
+            }
+
+            if (dep["error"]) {
+                item["error"] = i18n.t('php.transitiveInvalidDeps',
+                    {context: contextName, dependency: dependency, transitive: dependency});
+                return false;
+            }
+
+            if (!dep["_priority"]) {
+                valid &= scanDependencies(itemList, dependency, contextName);
+            } else if (dep["_priority"] === -1) {
+                item["error"] = i18n.t('php.cyclicDeps', {context: contextName, dependency: dependency});
+                return false;
+            }
+        }
+        item["_priority"] = order++;
+
+        if (!valid) {
+            item["error"] = i18n.t('php.removedInvalidDeps', {dependencies: item["requires"].join(", ")});
+        }
+        return valid;
+    }
+
+    /**
+     * Load all modules
+     */
+    core.requireModules = function () {
+        core.resolveDependencies(core._MODULE_ORDER, core.MODULES);
+        return core._MODULE_ORDER.map(mid => {
+            let module = core.MODULES[mid];
+            if (core.parseBool(module["loaded"])) {
+                return core.printDependencies(core.MODULES_FOLDER, module);
+            }
+            return "";
+        }).join("");
+    }
+
+    /**
+     * Go in ascending order by sorted list itemKeyOrder (which was prepared by the framework)
+     *
+     * make sure all modules required by other modules are loaded, goes in acyclic deps list - everything gets loaded
+     * PHP can have sorted named arrays, here we pass for example resolveDependencies(_MODULES_ORDER and MODULES)
+     * @param itemKeyOrder
+     * @param objectList
+     */
+    core.resolveDependencies = function (itemKeyOrder, objectList) {
+        for (let modId of itemKeyOrder) {
+            const mod = objectList[modId];
+            //has to be in reverse order!
+            if (mod["loaded"]) {
+                for (let requirement of mod["requires"]) {
+                    objectList[requirement]["loaded"] = true;
+                }
+            }
+        }
+    }
+
+    function getAttributes(source, properties) {
+        let html = "";
+        for (let property in properties) {
+            let propScriptName = properties[property];
+            let sourceValue = source[property];
+            if (sourceValue) {
+                html += ` ${propScriptName}="${sourceValue}"`;
+            }
+        }
+        return html;
+    }
+
+    /**
+     * Print module or plugin dependency based on its parsed configuration
+     * @param directory string parent context directory full path, ending with slash
+     * @param item object item to load
+     */
+    core.printDependencies = function (directory, item) {
+        const version = core.VERSION;
+        //add module style sheet if exists
+        let result = "";
+        if (item["styleSheet"]) {
+            result = `<link rel="stylesheet" href="${item["styleSheet"]}?v=${version}" type='text/css'>\n`;
+        }
+
+        if (fileExists(`${directory}${item["directory"]}/index.min.js`)) {
+            return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
+        }
+
+        for (let file of item["includes"]) {
+            if (isType(file, "string")) {
+                result += `    <script src="${directory}${item["directory"]}/${file}?v=${version}"></script>\n`;
+            } else if (isType(file, "object")) {
+                result += `    <script ${getAttributes(file, {
+                    async: 'async', crossOrigin: 'crossorigin',
+                    defer: 'defer', integrity: 'integrity', referrerPolicy: 'referrerpolicy', src: 'src'
+                })}></script>`;
+            } else {
+                result += `    <script>console.warn('Invalid include:', '${item["id"]}', '${file}');</script>`;
+            }
+        }
+    }
+
+    //resolve dependencies
+    for (let id in MODULES) {
+        let mod = MODULES[id];
+        //scan only if priority not set (not visited yet)
+
+        if (mod["_priority"] === undefined) {
+            scanDependencies(MODULES, id, 'modules');
+        }
+    }
+
+    let moduleList = Object.values(MODULES);
+    //ascending
+    moduleList.sort((a, b) => a["_priority"] - b["_priority"])
+    core._MODULE_ORDER = moduleList.map(mod => mod.id);
+}

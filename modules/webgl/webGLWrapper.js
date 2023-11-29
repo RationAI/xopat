@@ -232,7 +232,7 @@ window.WebGLModule = class {
             console.error("The viaGL was already prepared: shaders are no longer add-able.");
             return;
         }
-        this._customShaders.push(...shaderSources);
+        console.warn("Shader sources are deprecated feature.");
     }
 
     /**
@@ -481,11 +481,8 @@ window.WebGLModule = class {
         this._prepared = true;
         this.getCurrentProgramIndex(); //resets index
 
-        this._downloadRequiredShaderFactories(this._customShaders).then(
-            this._visualisationToProgram.bind(this, this._visualisations[this._program], this._program)
-        ).then(
-            onPrepared
-        );
+        this._visualisationToProgram(this._visualisations[this._program], this._program);
+        onPrepared();
     }
 
     /**
@@ -716,17 +713,6 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         });
     }
 
-    async _downloadRequiredShaderFactories(shaderSources) {
-        for (let source of shaderSources) {
-            let ShaderFactoryClass = WebGLModule.ShaderMediator.getClass(source["typedef"]);
-            if (!ShaderFactoryClass) {
-                await this._downloadAndRegisterShader(source["url"], source["headers"]);
-            } else {
-                console.warn("Shader source " + source["typedef"] + " already defined!")
-            }
-        }
-    }
-
     _visualisationToProgram(vis, idx) {
         if (!vis.hasOwnProperty("_built")) {
             vis._built = {};
@@ -740,7 +726,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     _initializeShaderFactory(visualization, ShaderFactoryClass, layer, idx) {
         if (!ShaderFactoryClass) {
             layer.error = "Unknown layer type.";
-            layer.desc = `The layer type '${layer.type}' has no associated factory. Missing in 'shaderSources'.`;
+            layer.desc = `The layer type '${layer.type}' has no associated factory.`;
             console.warn("Skipping layer " + layer.name);
             return;
         }
@@ -783,9 +769,8 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             this._origDataSources.push("__generated_do_not_use__");
         }
 
-        this._dataSourceMapping = new Array(
-            Math.max(this._origDataSources.length, usedIds[usedIds.length-1])
-        ).fill(-1);
+        const usedIdsMax = usedIds[usedIds.length-1] || 0;
+        this._dataSourceMapping = new Array(Math.max(this._origDataSources.length, usedIdsMax)).fill(-1);
 
         for (let id of usedIds) {
             this._dataSourceMapping[id] = this._dataSources.length;

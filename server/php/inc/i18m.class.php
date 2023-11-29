@@ -1,5 +1,7 @@
 <?php
-
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
 /*
  * i18mock interface fallback
  */

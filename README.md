@@ -2,7 +2,7 @@
 <h1 align="center">XOpat - Explainable Open Pathology Analysis Tool
 </h1>
 <p align="center">
-  <sup>A web based, REST API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</sup>
+  <sup>A web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</sup>
 </p>
 
 ![The XOpat Viewer](docs/assets/xopat-banner.png)
@@ -17,13 +17,13 @@ AI development.
    - Full data protocol flexibility.
    - Advanced extensibility.
    - Powerful visualization capabilities.
-   - Annotations, and other plugins introduce a unusual set of additional features
+   - Annotations, and other plugins introduce an unusual set of additional features
      that take the WSI far beyond standard.
 
 Note that the viewer is still in active development. If you wish to start
 using the viewer, please do not hesitate to reach us. Currently, it is used for versatile
 offline AI data inspection. We work now on integration workflows and in future
-the focus will be on services, namely non-standard integration with a ML pipeline for
+the focus will be on services, namely non-standard integration with an ML pipeline for
 effective algorithm/network debugging and profiling with the help of powerful visualisation platform.
 
 

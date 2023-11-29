@@ -1111,6 +1111,10 @@ WebGLModule.UIControls.IControl = class {
      *  - these can be referenced in this.init(...)
      *  - should respect this.params.interactive attribute and return non-interactive output if interactive=false
      *      - don't forget to no to work with DOM elements in init(...) in this case
+     *
+     * todo: when overrided value before 'init' call on params, toHtml was already called, changes might not get propagated
+     *  - either: delay toHtml to trigger insertion later (not nice)
+     *  - do not allow changes before init call, these changes must happen at constructor
      */
     toHtml(breakLine=true, controlCss="") {
         throw "WebGLModule.UIControls.IControl::toHtml() must be implemented.";

@@ -1,4 +1,8 @@
 <?php
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
+
 /**
  * Using the APP files require "core.php" for constants and core files definition.
  * Inclusion of "plugins.php" loads modules and plugins metadata into the system as well.
@@ -7,10 +11,11 @@
 //todo detect if built and run from built
 use Ahc\Json\Comment;
 
-//Absolute Root Path to the project
-defined('ABS_ROOT') || define('ABS_ROOT', dirname(__FILE__) . "/");
-define('ABS_MODULES', ABS_ROOT . '../modules/');
-define('ABS_PLUGINS', ABS_ROOT . '../plugins/');
+//Absolute Root Path to the php server
+define('PHP_INCLUDES', ABSPATH . 'server/php/inc/');
+define('VIEWER_SOURCES_ABS_ROOT', ABSPATH . 'src/');
+define('ABS_MODULES', ABSPATH . 'modules/');
+define('ABS_PLUGINS', ABSPATH . 'plugins/');
 
 //Relative Paths For the Viewer
 defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
@@ -37,7 +42,8 @@ if (!function_exists("array_is_list")) {
     }
 }
 /**
- * array_merge_recursive duplicates values
+ * array_merge_recursive merge second argument to the first, only
+ *   allows overriding existing values
  * @param array $array1
  * @param array $array2
  * @return array
@@ -67,8 +73,8 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
  * Parse CORE Env
  */
 
-require_once PROJECT_ROOT . "comments.class.php";
-$CORE = (new Comment)->decode(file_get_contents(ABS_ROOT . "config.json"), true);
+require_once PHP_INCLUDES . "comments.class.php";
+$CORE = (new Comment)->decode(file_get_contents(VIEWER_SOURCES_ABS_ROOT . "config.json"), true);
 
 function parse_env_config($data, $err) {
     try {
@@ -96,8 +102,8 @@ try {
     } else if (is_string($env)) {
         $ENV = parse_env_config($env,
             "Variable XOPAT_ENV is not a readable file or a valid ENV configuration!");
-    } else if (file_exists(ABS_ROOT . "../env/env.json")) {
-        $ENV = parse_env_config(file_get_contents(ABS_ROOT . "../env/env.json"),
+    } else if (file_exists(ABSPATH . "env/env.json")) {
+        $ENV = parse_env_config(file_get_contents(ABSPATH . "env/env.json"),
             "Configuration 'env/env.json' contains a syntactic error!");
     }
 
@@ -128,7 +134,7 @@ define('GATEWAY', $CORE["gateway"]);
  */
 
 if ($C["path"] == null) {
-    $CORE["client"]["path"] = dirname($_SERVER['SCRIPT_NAME']) . '/';
+    $CORE["client"]["path"] = PROJECT_ROOT;
 }
 if ($C["domain"] == null) {
     //https://stackoverflow.com/questions/4503135/php-get-site-url-protocol-http-vs-https
@@ -187,6 +193,12 @@ function print_css_single($files, $path) {
 function require_openseadragon() {
     global $CORE;
     echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}\"></script>\n";
+}
+
+function require_lib($name) {
+    global $CORE;
+    if (isset($CORE["css"]["libs"][$name])) print_css_single($CORE["css"]["libs"][$name], LIBS_ROOT);
+    if (isset($CORE["js"]["libs"][$name])) print_js_single($CORE["js"]["libs"][$name], LIBS_ROOT);
 }
 
 function require_libs() {

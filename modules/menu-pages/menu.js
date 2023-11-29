@@ -39,6 +39,13 @@ window.AdvancedMenuPages = class {
                     }
                     output.push('</div>');
                     break;
+                case 'html':
+                    if (sanitizer) {
+                        output.push(sanitizer(root.html));
+                    } else if (!APPLICATION_CONTEXT.secure) {
+                        output.push(root.html);
+                    }
+                    break;
                 default:
                     function sanitizeDeep(node) {
                         const t = typeof node;
@@ -77,7 +84,7 @@ window.AdvancedMenuPages = class {
             }
 
             delete this.vegaInit[id];
-            object.view = new vega.View(vega.parse(object.specs), {renderer: 'canvas', container: `#${id}`, hover: true});
+            object.view = new vega.View(vega.parse(object.vega), {renderer: 'canvas', container: `#${id}`, hover: true});
             object.view.runAsync();
         }
     }
@@ -148,7 +155,7 @@ window.AdvancedMenuPages = class {
     /**
      * Allowed types of config[i].page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
      * Columns
-     * @param {object} config array of objects - advanced menu page specs, each spec must have title and page props
+     * @param {object} config array of objects - advanced menu page vega, each spec must have title and page props
      * @param {boolean|object} sanitizeConfig configuration (see https://github.com/apostrophecms/sanitize-html)
      *   or simple on/off flag for default behaviour
      * @type {{}}

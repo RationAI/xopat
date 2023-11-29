@@ -67,13 +67,6 @@ Example configuration:
             "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
         }
     ],
-    "shaderSources" : [
-        {
-            "url": "http://my-shader-url.com/customShader.js",
-            "headers": {},
-            "typedef": "new_type"
-        }
-    ],
     "visualizations": [
         {
             "name": "A visualisation setup 1",
@@ -144,11 +137,6 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
     - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
-- [O]`shaderSources` - an array of objects, more details in `./webgl/shaders/`, each object defines:
-    - [R]`url` - url where to fetch the shader implementation
-    - [R]`typedef` - the type which can be referenced later in `shaders`, make sure it has unique value
-        - NOTE: this value must equal to the shader id registered in the `ShaderMediator`, see `./webgl/shaders/`
-    - [O]`headers` - arbitrary headers
 - [O]`visualization` - array of objects that define visualisations (sometimes we say _visualization goals_) of the **data** group,
 it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
     - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 

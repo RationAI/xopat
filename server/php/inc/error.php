@@ -1,5 +1,7 @@
 <?php
-
+if (!defined( 'ABSPATH' )) {
+    exit;
+}
 /**
  * @param $err_title string translation key
  * @param $err_desc string translation key
@@ -15,7 +17,7 @@ $techNFO = $err_details ?? false;
 
 global $i18n;
 if (!isset($i18n)) {
-    require_once PROJECT_SOURCES . 'i18n.class.php';
+    require_once PHP_INCLUDES . 'i18n.class.php';
     $i18n = i18n::default($locale, LOCALES_ROOT);
 }
 
@@ -35,9 +37,8 @@ $description = $description ? $i18n->t($description) : $description;
         if (defined('VERSION')) {
             require_core("env");
         }
+        require_lib("jquery");
     ?>
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
 </head>
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >

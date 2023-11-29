@@ -349,10 +349,34 @@ form.submit();
      * Exports only the viewer direct link (without data) as a URL to the user clipboard
      */
     window.UTILITIES.copyUrlToClipboard = function() {
-        const baseUrl = APPLICATION_CONTEXT.url + "redirect.php#";
+        let baseUrl = APPLICATION_CONTEXT.getOption("shares_url", "");
+        if (!baseUrl.match(/^https?:\/\//)) { //protocol required
+            baseUrl = APPLICATION_CONTEXT.url + baseUrl;
+        }
         const data = UTILITIES.serializeAppConfig();
-        UTILITIES.copyToClipboard(baseUrl + encodeURIComponent(data));
+        UTILITIES.copyToClipboard(baseUrl + "#" + encodeURIComponent(data));
         Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
+    };
+
+    /**
+     * Creates the viewport screenshot.
+     */
+    window.UTILITIES.makeScreenshot = function() {
+        // todo OSD v5.0 ensure we can copy the canvas among drawers
+        const canvas = document.createElement("canvas"),
+            viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        context.drawImage(viewportCanvas, 0, 0);
+        //todo make this awaiting in OSD v5.0
+        VIEWER.raiseEvent('screenshot', {
+            context2D: context,
+            width: width,
+            height: height
+        });
+        //show result in a new window
+        canvas.toBlob((blob) => window.open(URL.createObjectURL(blob), '_blank'));
     };
 
     /**
