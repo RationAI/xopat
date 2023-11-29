@@ -70,6 +70,9 @@ Fired when plugin fails to load within a system (at runtime).
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 
+#### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
+Fired when a viewport screenshot is requested.
+
 ### User Input Events
 
 #### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
