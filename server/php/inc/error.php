@@ -34,10 +34,11 @@ $description = $description ? $i18n->t($description) : $description;
     <title>Error</title>
 
     <?php
-        if (defined('VERSION')) {
-            require_core("env");
-        }
-        require_lib("jquery");
+    require_lib("primer");
+    if (defined('VERSION')) {
+        require_core("env");
+    }
+    require_lib("jquery");
     ?>
 </head>
 
@@ -47,7 +48,7 @@ $description = $description ? $i18n->t($description) : $description;
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">
     <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<?php echo $i18n->t('error.title') ?></div>
-    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary"></div>
+    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary mb-3"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><?php echo $i18n->t('error.detailsBtn') ?></button>
     <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
 
