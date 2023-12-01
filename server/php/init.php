@@ -2,6 +2,9 @@
 
 /**
  * PHP server index entrypoint, parsing queries and compiling index.html page.
+ *
+ * TODO: unify naming, now CORE gets sent to app.js where it is called ENV
+ * (server view: CORE is parsed EMV, app view: ENV is the default config)
  */
 
 

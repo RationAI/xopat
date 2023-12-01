@@ -1,13 +1,16 @@
 // This file adds task for grunt to compile the 'static server'
 
 /**
- * PHP server index entrypoint, parsing queries and compiling index.html page.
+ * Static server index entrypoint, grunt compiles HTML page.
  * The static page can:
  *  - receive full configuration via GET, though it might arrive at url length limit
  *  - receive full configuration via # hash url-encoded part, which is parsed by javascript
  *  - receive GET parameters:
  *      slide: slide path/id
  *      masks: comma-separated list of mask paths/ids
+ *
+ * TODO: unify naming, now CORE gets sent to app.js where it is called ENV
+ * (server view: CORE is parsed EMV, app view: ENV is the default config)
  */
 
 const PROJECT_PATH = "";
@@ -30,6 +33,11 @@ module.exports.registerStaticServerTask = function (grunt, message) {
             return process.env[key];
         });
         throwIfError(core, "Failed to parse the CORE inicialization!");
+
+        if (core.CORE.client.supportsPost) {
+            grunt.log.warn('Support for POST data enabled in the ENV: forcefully disabling as static index pages do not support POST...');
+            core.CORE.client.supportsPost = false;
+        }
 
         //todo o18n and locale
         //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
