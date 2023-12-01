@@ -24,10 +24,12 @@ function xOpatParseConfiguration(i18n) {
         }
 
         if (!configuration) {
-            return getError("messages.urlInvalid", "messages.invalidPostData",
-                JSON.stringify(configuration));
+            return null;
         }
 
+        if (typeof configuration === "string") {
+            configuration = JSON.parse(configuration);
+        }
 
         ensureDefined(configuration, "params", {});
         ensureDefined(configuration, "data", []);
@@ -38,16 +40,11 @@ function xOpatParseConfiguration(i18n) {
         const bypassCookies = isBoolFlagInObject(configuration.params, "bypassCookies");
 
         for (let bg of configuration.background) {
-            if (!bg || !bg.dataReference) {
-                return getError("messages.urlInvalid", "messages.bgReferenceMissing",
-                    JSON.stringify(bg));
-            }
-
-            if (!Number.isInteger(bg.dataReference)
+            if (!bg || !Number.isInteger(bg.dataReference)
                 || bg.dataReference < 0
                 || bg.dataReference > configuration.data.length) {
                 return getError(  "messages.urlInvalid", "messages.bgReferenceMissing",
-                    "Invalid data reference value '$bg->dataReference'. Available data: "
+                    `Invalid data reference value '${bg.dataReference}'. Available data: `
                     + JSON.stringify(configuration.data));
             }
         }
@@ -67,6 +64,7 @@ function xOpatParseConfiguration(i18n) {
                 "error.nothingToRenderDescription",
                 "Empty background and visualization configuration.");
         }
+        return configuration;
     }
 
     let visualization;
@@ -74,7 +72,7 @@ function xOpatParseConfiguration(i18n) {
         const url = new URL(window.location.href);
         visualization = _parse(
             url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'
-                JSON.parse(url.searchParams.get("visualization"))
+                url.searchParams.get("visualization")
         );
 
         if (!visualization) {
@@ -98,7 +96,7 @@ function xOpatParseConfiguration(i18n) {
 
                 let index = 1;
                 for (let mask of masks) {
-                    data.push(mask);
+                    handMadeConfiguration.data.push(mask);
                     visConfig.shaders[mask] = {
                         type: "heatmap",
                         fixed: false,
