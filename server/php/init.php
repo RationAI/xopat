@@ -11,6 +11,40 @@
 if (!defined( 'ABSPATH' )) {
     exit;
 }
+define('HTML_TEMPLATE_REGEX', "/<template\s+id=\"template-([a-zA-Z0-9-_]+)\">\s*<\/template>/");
+
+function throwFatalErrorIfFallback($condition, $title, $description, $details) {
+
+    if (!file_exists(ABSPATH . "error.html")) {
+        //try to reach the file externally
+        header("Location error.html");
+        exit;
+    }
+    //try to add additional info to the file
+
+    echo preg_replace_callback(HTML_TEMPLATE_REGEX, function ($match) use ($title, $description, $details) {
+        switch ($match[1]) {
+            case "error":
+                return <<<EOF
+<div class="collapsible" onclick="toggleContent()">Detailed Information</div>
+<div class="content">
+  <p>$description</p>
+  <code>$details</code>
+</div>
+EOF;
+            default:
+                break;
+        }
+        return "";
+    }, file_get_contents(ABSPATH . "error.html"));
+    exit;
+}
+
+set_exception_handler(function (Throwable $exception) {
+    throwFatalErrorIfFallback(true, "Unknown Error", "",$exception->getMessage() .
+        " in " . $exception->getFile() . " line " . $exception->getLine() .
+        "<br>" . $exception->getTraceAsString());
+});
 
 function getAppParam($key, $default=false) {
     return hasKey($_POST, $key) ? $_POST[$key] : (hasKey($_GET, $key) ? $_GET[$key] : $default);
@@ -24,8 +58,52 @@ $visualisation = getAppParam("visualization");
 if (!$visualisation) {
     $visualisation = getAppParam("visualisation");
 }
+
 /**
- * Redirection: based on parameters, either setup visualisation or redirect
+ * Try to parse GET: slide & masks params
+ */
+if (!$visualisation) {
+    if (hasKey($_GET, 'slide')) {
+        //try building the object from scratch
+
+        $slide = $_GET["slide"];
+        $visualisation = json_decode(<<<EOF
+{
+    "data": ["$slide"],
+    "background": [{
+        "dataReference": 0,
+        "lossless": false
+    }]
+}
+EOF);
+        if (hasKey($_GET, 'masks')) {
+            $masks = explode(',', $_GET["masks"]);
+            $visualisation->{"visualizations"} = [
+                (object) array('name' => 'Masks', 'lossless' => true, 'shaders' => (object) array())
+            ];
+
+            $index = 1; $vis_config = $visualisation->visualizations[0]->shaders;
+            foreach ($masks as $mask) {
+                $visualisation->data[] = $mask;
+
+                $vis_config->{$mask} = (object) array(
+                    'type' => 'heatmap',
+                    'fixed' => false,
+                    'visible' => 1,
+                    'dataReferences' => [$index++],
+                    'params' => (object) array()
+                );
+            }
+        }
+
+    }
+    if (!$_POST) {
+        $_POST = json_decode(file_get_contents('php://input'));
+    }
+}
+
+/**
+ * Try to parse input manually
  */
 if (!$visualisation) {
     //for json-based POST requests
@@ -35,6 +113,10 @@ if (!$visualisation) {
         $visualisation = $_POST["visualisation"];
     }
 }
+
+/**
+ * Redirection: no data found, suppose it was attached as # arg
+ */
 if (!$visualisation) {
     //todo try supporting common use-case: show WSI + default layers
 
@@ -99,9 +181,13 @@ function isBoolFlagInObject($object, $key) {
 
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
-        require_once(PHP_INCLUDES . "error.php");
-        show_error($title, $description, $details, $_GET["lang"] ?? 'en');
-        exit;
+        try {
+            require_once(PHP_INCLUDES . "error.php");
+            show_error($title, $description, $details, $_GET["lang"] ?? 'en');
+            exit;
+        } catch (Throwable $e) {
+            throwFatalErrorIfFallback(true, $title, $description, $details);
+        }
     }
 }
 
@@ -195,6 +281,8 @@ throwFatalErrorIf(!$defined_rendering, "No data to view.", "The active session d
 
 $visualisation = json_encode($parsedParams);
 
+
+
 $replacer = function($match) use ($visualisation, $i18n) {
     ob_start();
 
@@ -252,5 +340,4 @@ if (!file_exists($template_file)) {
     throwFatalErrorIf(true, "error.unknown", "error.noDetails",
         "File not found: " . ABSPATH . "server/templates/index.html");
 }
-echo preg_replace_callback("/<template\s+id=\"template-([a-zA-Z0-9-_]+)\">\s*<\/template>/",
-    $replacer, file_get_contents($template_file));
+echo preg_replace_callback(HTML_TEMPLATE_REGEX, $replacer, file_get_contents($template_file));

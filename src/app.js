@@ -99,7 +99,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     CONFIG.params = CONFIG.params || {};
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
-
+    POST_DATA = POST_DATA || {};
     const metaStore = new MetaStore(CONFIG.meta || {});
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 

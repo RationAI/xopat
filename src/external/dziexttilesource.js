@@ -309,6 +309,8 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (!cacheObject._renderedContext) {
             if (Array.isArray(cacheObject._data)) {
                 cacheObject._data = cacheObject._data[0];
+            } else if (Array.isArray(cacheObject.data)) {
+                cacheObject.data = cacheObject.data[0];
             }
         }
         return super.getTileCacheDataAsContext2D(cacheObject);
