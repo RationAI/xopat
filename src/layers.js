@@ -55,7 +55,7 @@ function initXopatLayers() {
                     layer.cache = namedCache;
                     layer._cacheApplied = "name";
                 } else {
-                    layer.cache = orderedCookieCache[sid++] || {};
+                    layer.cache = layer.cache || orderedCookieCache[sid++] || {};
                     layer._cacheApplied = Object.keys(layer.cache).length > 0 ? "order" : undefined;
                 }
                 shaderCount++;
