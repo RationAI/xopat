@@ -13,8 +13,8 @@
     /* Client Server dependent configurations, at runtime "client" is replaced by its "active_client" child  */
     "client": {
         "localhost": {
-            /* The Viewer Domain Full URL including protocol */
-            "domain": "http://localhost:8080",
+            /* The Viewer Domain Full URL including protocol NOTE: should end with a slash */
+            "domain": "http://localhost:8080/",
             /*
              The Path to the Viewer at given domain, so that 'domain+path+index.php' is the viewer index.
              Use null to let the system detect the path automatically.
@@ -51,7 +51,9 @@
             "secureMode": false,
             //todo make servers able to provide sensible defaults
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "shares_url": "redirect.php"
+            "shares_url": "redirect.php",
+            // Disable for servers that do not support POST parsing: will not support direct data sharing
+            "supportsPost": true
         },
         "prod": {
             "domain": "https://rationai-vis.ics.muni.cz/",
@@ -68,7 +70,8 @@
             "js_cookie_same_site": "None",
             "js_cookie_secure": "false",
             "secureMode": true,
-            "shares_url": "redirect.php"
+            "shares_url": "redirect.php",
+            "supportsPost": true
         }
     },
     /**

@@ -307,15 +307,25 @@ function initXopatScripts() {
      * @return {Promise<string>}
      */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
-        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
-
-        let form = `
-      <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
+        if (! APPLICATION_CONTEXT.env.client.supportsPost) {
+            return `
+    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
         <input type="hidden" id="visualisation" name="visualisation">
         ${customAttributes}
         <input type="submit" value="">
-      </form>
-      <script type="text/javascript">
+        </form>
+    <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
+        }
+
+        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
+
+        let form = `
+    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
+        <input type="hidden" id="visualisation" name="visualisation">
+        ${customAttributes}
+        <input type="submit" value="">
+    </form>
+    <script type="text/javascript">
         document.getElementById("visualisation").value = \`${app.replaceAll("\\", "\\\\")}\`;
         const form = document.getElementById("redirect");
         let node;`;

@@ -76,6 +76,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     if (typeof CONFIG === "function") {
         CONFIG = CONFIG($.i18n);
     }
+    if (!CONFIG) {
+        CONFIG = {
+            error: $.t('error.nothingToRender'),
+            description: $.t('error.noDetails'),
+            details: 'Initial configuration is not defined!'
+        };
+    }
 
     //Perform initialization based on provided data
     const defaultSetup = ENV.setup;
@@ -92,7 +99,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     CONFIG.params = CONFIG.params || {};
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
-
+    POST_DATA = POST_DATA || {};
     const metaStore = new MetaStore(CONFIG.meta || {});
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
@@ -899,4 +906,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
     initXopatScripts();
     initXopatLayers();
+
+    if (CONFIG.error) {
+        USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,
+            true);
+    }
 }

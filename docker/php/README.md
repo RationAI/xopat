@@ -50,4 +50,9 @@ nano /etc/apache2/sites-available/000-default.conf # edit server config
 apache2ctl graceful # restart server
 ````
 
+To clean up images (unused), do:
+`````shell
+docker images --quiet --filter=dangling=true | xargs --no-run-if-empty docker rmi
+`````
+
 

@@ -41,7 +41,7 @@ WebGLModule.ColorMap = class extends WebGLModule.VisualisationLayer {
         super.construct(options, dataReferences);
         //delete unused controls if applicable after initialization
         if (this.color.getName() !== "colormap") {
-            delete this.connect;
+            this.removeControl("connect");
         }
     }
 
