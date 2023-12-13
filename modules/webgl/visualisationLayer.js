@@ -272,6 +272,15 @@ WebGLModule.VisualisationLayer = class {
     }
 
     /**
+     * @param id control id to delete
+     */
+    removeControl(id) {
+        if (!this._ownedControls[id]) return;
+        delete this._ownedControls[id];
+        delete this[id];
+    }
+
+    /**
      * Check if shader is initialized.
      * @return {boolean}
      */
