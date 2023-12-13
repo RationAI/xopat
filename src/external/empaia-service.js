@@ -44,12 +44,12 @@
  * @param {object} options configuration either empaia info response or list of these objects
  */
 
-$.ExtendedDziTileSource = class extends $.TileSource {
+$.EmpaiaTileSource = class extends $.TileSource {
 
     constructor(options) {
         super(options);
 
-        this.level_meta = {};
+        //this.level_meta = {};
         //Asume levels ordered by downsample factor asc (biggest level first)
         //options.levels.sort((x, y) => x.downsample_factor - y.downsample_factor);
         // let OSD_level;
