@@ -259,6 +259,9 @@ window.OpenSeadragon.BridgeGL = class {
      * Draw/update viewport, does not invalidate last post-processed results
      */
     draw() {
+        //Necessary to clear if underlying image is hidden, todo: when refactoring, optimize this
+        this.openSD.drawer._clear();
+        this.openSD.navigator.drawer._clear();
         this.openSD.world.draw();
         this.openSD.navigator.world.draw();
     }
