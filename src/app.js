@@ -195,7 +195,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @type {string}
          */
         get url() {
-            return this.env.client.domain + this.env.client.path;
+            const domain = this.env.client.domain;
+            if (!domain.endsWith("/")) return domain + "/" + this.env.client.path;
+            return domain + this.env.client.path;
         },
         /**
          * Get all the post data available to the current session

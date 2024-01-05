@@ -14,7 +14,10 @@ And works with the env configuration:
 "image_group_protocol": "`${path}v3/slides/${data}/info`", //the server query
 "image_group_preview": "`${path}v3/slides/${data}/thumbnail/max_size/1024/1024`", //the thumbnail query
 ````
-This can be changed in the apache configuration file. To build image (using name `xopat` and tag `v1`):
+The env configuration is read from relevant location, either the default
+`env/env.json` or location specified with the `XO_ENV` variable.
+The WSI server proxy configuration can be changed in the apache configuration file. 
+To build image (using name `xopat` and tag `v1`):
 
  ``docker build -t xopat:v1 -f Dockerfile .``
 
@@ -45,7 +48,7 @@ To debug (and modify at runtime) reverse proxy do:
 
 ````bash
 docker exec -it xopat bash # enter container
-cat /var/log/apache2/error.log  # see errors
+cat /var/log/apache2/error.log  # see server errors if any
 nano /etc/apache2/sites-available/000-default.conf # edit server config
 apache2ctl graceful # restart server
 ````

@@ -51,7 +51,7 @@
             "secureMode": false,
             //todo make servers able to provide sensible defaults
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "shares_url": "redirect.php",
+            "redirectUrl": "redirect.php",
             // Disable for servers that do not support POST parsing: will not support direct data sharing
             "supportsPost": true
         },
@@ -70,7 +70,7 @@
             "js_cookie_same_site": "None",
             "js_cookie_secure": "false",
             "secureMode": true,
-            "shares_url": "redirect.php",
+            "redirectUrl": "redirect.php",
             "supportsPost": true
         }
     },

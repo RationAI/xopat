@@ -249,7 +249,6 @@ function initXopatScripts() {
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
         APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
-
         return app;
     };
 
@@ -326,7 +325,7 @@ function initXopatScripts() {
         <input type="submit" value="">
     </form>
     <script type="text/javascript">
-        document.getElementById("visualisation").value = \`${app.replaceAll("\\", "\\\\")}\`;
+        document.getElementById("visualisation").value = JSON.stringify(${app});
         const form = document.getElementById("redirect");
         let node;`;
 
@@ -334,7 +333,7 @@ function initXopatScripts() {
             form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
 node.setAttribute("name", \`${id}\`);
-node.setAttribute("value", \`${data[id].replaceAll("\\", "\\\\")}\`);
+node.setAttribute("value", JSON.stringify(${data[id]}));
 form.appendChild(node);`;
         }
 
@@ -359,7 +358,7 @@ form.submit();
      * Exports only the viewer direct link (without data) as a URL to the user clipboard
      */
     window.UTILITIES.copyUrlToClipboard = function() {
-        let baseUrl = APPLICATION_CONTEXT.getOption("shares_url", "");
+        let baseUrl = APPLICATION_CONTEXT.getOption("redirectUrl", "");
         if (!baseUrl.match(/^https?:\/\//)) { //protocol required
             baseUrl = APPLICATION_CONTEXT.url + baseUrl;
         }
