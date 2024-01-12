@@ -2,6 +2,7 @@
     "id": "annotations",
     "name": "Annotations Module",
     "description": "A module that brings annotations functionality.",
+    "version": "0.1.0",
     "includes" : [
         "ext/greiner-hormann.min.js",
         "annotations.js",

@@ -1,6 +1,7 @@
 {
     "id": "menu-pages",
     "name": "Page builder for Advanced Menu",
+    "version": "0.1.0",
     "includes" : [
         "menu.js"
     ],

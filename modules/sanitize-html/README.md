@@ -15,7 +15,14 @@ const clean = SanitizeHtml(dirty, {
 });
 ````
 
-The source is built with ``browserify`` and `minify` from simple
-> window.SanitizeHtml = require('sanitize-html');
+The source is built with ``browserify`` and `minify` from a single js script that you have to create in the root
+directory:
+> browser.js
+> ````js
+> window.SanitizeHtml = require('./index.js');
+> ````
 
+And call
+
+ ``browserify browser.js > sanitize.js``
 

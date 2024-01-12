@@ -2,9 +2,9 @@
     "id": "vega",
     "name": "VEGA: The visualization grammar",
     "includes" : [{
-        "src": "https://cdn.jsdelivr.net/npm/vega@5",
+        "src": "https://cdn.jsdelivr.net/npm/vega@5.27.0/build/vega.min.js",
         "crossOrigin": "anonymous",
-        "integrity": "sha384-AZeKeCsE6MsYa+2n+zcsJXGRycl6LzqjRZ4lVHVpL6dNmO15ySXwh7BViztvSCMO"
+        "integrity": "sha384-vIJXm0P/3F/Wcx/LKc464HOVQcK3/rM9DTjzExPNNpA1298xyu/+aBAZsp416+0k"
     }],
     "requires": []
 }

@@ -1,6 +1,7 @@
 {
     "id": "webgl",
     "name": "WebGL rendering module",
+    "version": "1.2.0",
     "includes" : [
         "webGLWrapper.js",
         "visualisationLayer.js",

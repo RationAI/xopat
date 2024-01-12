@@ -1,6 +1,7 @@
 {
     "id": "human-readable-ids",
     "name": "Human-readable ID generator",
+    "version": "0.1.0",
     "includes" : [
         "index.js"
     ],

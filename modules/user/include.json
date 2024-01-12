@@ -1,0 +1,10 @@
+{
+    "id": "user",
+    "name": "User",
+    "description": "Add user utilities to the viewer.",
+    "version": "0.1.0",
+    "includes" : [
+        "index.js"
+    ],
+    "requires": []
+}

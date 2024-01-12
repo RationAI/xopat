@@ -3,9 +3,9 @@
     "name": "VEGA: The visualization grammar (with secure interpreter)",
     "includes" : [
         {
-            "src": "https://cdn.jsdelivr.net/npm/vega-interpreter@1",
+            "src": "https://cdn.jsdelivr.net/npm/vega-interpreter@1.0.5/build/vega-interpreter.min.js",
             "crossOrigin": "anonymous",
-            "integrity": "sha384-WTWdb9mGVEJxYBHrkBY8E6M01GTcUxvw3cbOF5kblEx0Z3tZZHJdYQqEOY1F7ruW"
+            "integrity": "sha384-9LanOUB60Mnbvh+fwRI/G5STHUPkO7uZitLePc1jEQdjQWSQy34Oc+TzpdvXTIh2"
         },
         "init.js"
     ],
