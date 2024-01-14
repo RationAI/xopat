@@ -1,8 +1,0 @@
-{
-    "id": "intercept",
-    "name": "Low Level Intercept Library",
-    "includes" : [
-        "intercept.js"
-    ],
-    "requires": []
-}

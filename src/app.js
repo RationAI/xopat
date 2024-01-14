@@ -435,10 +435,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.html(name);
+            title.children().last().html(name);
             title.attr('title', name);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
-            title.addClass('error-container').html($.t('main.navigator.faultyTissue'));
+            title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue'));
         }
 
         let ppm = imageData?.microns, ppmX = imageData?.micronsX, ppmY = imageData?.micronsY,
@@ -683,20 +683,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                     layerWorldItem, activeVis);
 
                 $("#panel-shaders").css('display', 'block');
-                $("#global-opacity").css('display', 'initial');
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualisationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
-                $("#global-opacity").css('display', 'none');
 
                 APPLICATION_CONTEXT.disableVisualisation();
                 eventOpts.error = $.t('messages.overlaysDisabled');
             }
-        } else {
-            $("#global-opacity").css('display', 'none');
         }
         handleSyntheticEventFinish(eventOpts);
     }
@@ -753,13 +749,65 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
     }
 
+    /**
+     * Run the first viewer configuration. This method should be called once
+     * at the beginning of the app lifecycle.
+     * @param data
+     * @param background
+     * @param visualizations
+     * @returns {Promise<void>}
+     */
+    APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
+                                              background,
+                                              visualizations=[]) {
+        let error = null;
+        //todo show loading screen
+        /**
+         * First loading of the viewer from a clean state.
+         * @memberOf VIEWER
+         * @event before-first-open
+         */
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', null).catch(e =>
+            {
+                //todo UI Update
+                error = e;
+            }
+        );
+        if (!background.length || !visualizations.length) {
+            //Try parsing url for serialized config in the headers and redirect
+            const url = new URL(window.location.href);
+            if (url.hash) {
+                const form = document.createElement("form");
+                form.method = "POST";
+                const node = document.createElement("input");
+                node.name = "visualisation";
+                node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
+                form.appendChild(node);
+                form.style.visibility = 'hidden';
+                document.appendChild(form);
+                form.submit();
+            }
+        } else if (error) {
+            //todo consider event
+            throw error;
+        }
+        UTILITIES.showLoading(false);
+        this.openViewerWith(data, background, visualizations=[]);
+    };
+
     let _allowRecursionReload = true;
-    APPLICATION_CONTEXT.prepareViewer = function (
+    /**
+     * Open desired configuration on the current viewer
+     * @param data
+     * @param background
+     * @param visualizations
+     */
+    APPLICATION_CONTEXT.openViewerWith = function (
         data,
         background,
         visualizations=[],
     ) {
-        window.VIEWER.close();
+        VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
         let renderingWithWebGL = visualizations?.length > 0;

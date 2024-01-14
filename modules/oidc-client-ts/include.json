@@ -4,7 +4,23 @@
     "description": "Library to provide OpenID Connect (OIDC) and OAuth2 protocol support for client-side, browser-based JavaScript client applications. Also included is support for user session and access token management.",
     "version": "2.4.0",
     "includes" : [
-        "oidc-client-ts.js"
+        "oidc-client-ts.js",
+        "oidc-auth.js"
     ],
-    "requires": []
+    "requires": ["pollyjs", "jwt-decode"],
+    "permaLoad": true,
+    //Authority ID (url) the OIDC sets in the communication, url used for authorization
+    "authority": "",
+    //Client ID of this application,
+    "clientId": "",
+    //Default scope for the user
+    "scope": "openid offline_access",
+    //Can specify where to redirect after login, by default the current page (null)
+    "redirectUri": null,
+    //Can specify where to redirect after logout, by default the viewer gateway
+    "logoutRedirectUri": null,
+    //How often token tends to expire
+    "accessTokenExpiringNotificationTimeInSeconds": 150,
+    //Event priority
+    "eventBeforeOpenPriority": 0
 }

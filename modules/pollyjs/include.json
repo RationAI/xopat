@@ -1,0 +1,10 @@
+{
+    "id": "pollyjs",
+    "name": "Polly.js",
+    "description": "Polly.JS is a standalone, framework-agnostic JavaScript library that enables recording, replaying, and stubbing of HTTP interactions.",
+    "version": "6.0.6",
+    "includes" : [
+        "polly.js"
+    ],
+    "requires": []
+}

@@ -285,6 +285,7 @@ function initXopatScripts() {
          *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
          * @memberOf VIEWER
          * @event export-data
+         * todo OSD v5.0 will support also async events
          */
         await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
             setSerializedData: (uniqueKey, data) => {

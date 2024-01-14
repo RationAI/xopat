@@ -3,11 +3,12 @@ window.AdvancedMenuPages = class {
     vegaInit = {};
 
     /**
-     * @param pluginId
+     * Create AdvancedMenuPages instance
+     * @param {string} moduleId unique id of this module instance.
      */
-    constructor(pluginId) {
+    constructor(moduleId) {
         this.id = "menu-pages";
-        this.uid = pluginId;
+        this.uid = moduleId;
         this._count = 0;
     }
 

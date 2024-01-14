@@ -945,6 +945,19 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             }
             return MODULES[id].loaded;
         },
+
+        /**
+         * Set loading
+         * @param loading
+         */
+        showLoading: function (loading) {
+            const loader = $("#fullscreen-loader");
+            if (loading) {
+                loader.css('display', 'block');
+            } else {
+                loader.css('display', 'none');
+            }
+        },
     };
 
     return function() {

@@ -75,48 +75,45 @@
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
-        <div id="general-controls" class="inner-panel inner-panel-visible d-flex py-1">
+        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1">
             <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
 
-            <span id="global-opacity">
-                <label>
-                    <span data-i18n="main.global.layerOpacity">Layer Opacity</span>
-                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
-                </label>
-                &emsp;
-            </span>
+            <div id="user-panel" class="btn-pointer float-right">
+                <span id="user-name">____</span>
+                <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
+            </div>
+        </div>
 
-            <span id="global-tissue-visibility">
-                <label>
-                    <span data-i18n="main.global.tissue">Tissue</span>
-                    <input type="checkbox" style="align-self: center;" checked class="form-control ml-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-                </label>
-                &emsp;
-            </span>
-
-            <span class="material-icons btn-pointer ml-2 pr-0" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone">repeat_on</span>
-        </div><!--end of general controls-->
-
-        <div id="navigator-container" data-position="relative"  class="inner-panel right-0" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
+        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
             <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
-            <span id="navigator-pin" class="material-icons btn-pointer inline-pin position-absolute right-2 top-2" onclick="
+            <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
+                <div id="tissue-title-header" class="one-liner" style="max-height: 255px; flex-grow: 1">
+                    <span id="global-tissue-visibility">
+                        <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                    </span>
+                    <span class="text-shadow-mild"><!--Inserted slide name--></span>
+                </div>
+                <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="
  let self = $(this);
  if (self.hasClass('pressed')) {
     self.removeClass('pressed');
-    self.parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
+    self.parent().parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
  } else {
-    self.parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
+    self.parent().parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
     self.addClass('pressed');
  }
 "> push_pin </span>
-            <div id="tissue-title-header" class="one-liner" style="max-height: 255px;"></div>
+            </div>
+            <span class="material-icons btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone">open_in_new</span>
+
         </div>
 
         <div id="panel-images" class="inner-panel mt-2"></div>
 
         <div id="panel-shaders" class="inner-panel" style="display:none;">
+
             <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
             <div class="inner-panel-content noselect" id="inner-panel-content-1">
                 <div>
@@ -134,16 +131,22 @@
                             <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cookiesByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
                         </div>
                     </div>
+                    <br>
+                    <div id="global-opacity" class="float-right">
+                        <label>
+                            <span data-i18n="main.global.layerOpacity">Opacity</span>
+                            <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
+                        </label>
+                    </div>
                 </div>
 
-                <div id="data-layer-options" class="inner-panel-hidden">
+                <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
                         <!--populated with options for a given image data -->
                 </div>
                 <div id="blending-equation"></div>
             </div>
         </div>
-
-            <!-- Appended controls for other plugins -->
+        <!-- Appended controls for other plugins -->
     </div>
 
     <div class="d-flex flex-items-end px-1 flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
@@ -169,7 +172,9 @@
 
     <div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
     <div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
-
+    <div id="fullscreen-loader" class="position-fixed width-full height-full" style="z-index: 999; background-color: var(--color-bg-backdrop);">
+        <div class="loader position-fixed" style="top: 50%; left: 50%; transform: translate(-50%, -50%);"></div>
+    </div>
     <script>
 //preventive error message, that will be discarded after the full initialization, no translation
 window.onerror = function (message, file, line, col, error) {
@@ -201,11 +206,11 @@ window.onerror = function (message, file, line, col, error) {
         {'next #viewer-container' : $.t('tutorials.basic.1')
         }, {'next #main-panel' : $.t('tutorials.basic.2')
         }, {'next #navigator-container' : $.t('tutorials.basic.3')
-        }, {'next #general-controls' : $.t('tutorials.basic.4'),
+        }, {'next #navigator-container' : $.t('tutorials.basic.4'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
-        }, {'next #general-controls' : $.t('tutorials.basic.4a'),
+        }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {'next #general-controls' : $.t('tutorials.basic.5'), runIf: withLayers
+        }, {'next #global-opacity' : $.t('tutorials.basic.5'), runIf: withLayers
         }, {
             'next #__tisue_list' : $.t('tutorials.basic.6'),
             runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
@@ -244,7 +249,7 @@ window.onerror = function (message, file, line, col, error) {
     <template id="template-plugins"></template>
 
 <script>
-    APPLICATION_CONTEXT.prepareViewer(
+    APPLICATION_CONTEXT.beginApplicationLifecycle(
         APPLICATION_CONTEXT.config.data,
         APPLICATION_CONTEXT.config.background,
         APPLICATION_CONTEXT.config.visualizations

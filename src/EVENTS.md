@@ -44,6 +44,14 @@ Fired when the viewer is ready. Note this is not the OSD native event but instea
 It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
 initial load).
 
+#### async `before-first-open` | e: null
+Fired before the first open of the viewer happens. Apps can perform
+custom functionality just before the viewer gets initialized.
+In this event, you can also override the application rendering configuration,
+as it has not been initialized yet. For example, if the application rendering
+is missing all the data, you can provide default values for the rendering.
+Note that exception thrown in this event is considered as a signal for aborting the rendering.
+
 #### `export-data` | e: `{setSerializedData: function}`
 Submit your serialized data to the export event. The event gives you a callback to use to 
 save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value

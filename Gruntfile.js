@@ -163,6 +163,7 @@ module.exports = function(grunt) {
             delete module.id;
             delete module.name;
             delete module.includes;
+            delete module.version;
             delete module.requires;
             delete module.description;
             if (fullReport) {

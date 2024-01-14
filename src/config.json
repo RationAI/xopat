@@ -184,7 +184,7 @@
             //"env": "",
             "loader": "loader.js",
             "deps": ["ui_components.js", "shader_configurator.js"],
-            "app": ["app.js", "user_interface.js", "scripts.js", "layers.js"]
+            "app": ["app.js", "user_interface.js", "scripts.js", "layers.js", "user.js"]
         }
     },
 

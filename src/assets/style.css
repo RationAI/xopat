@@ -10,6 +10,9 @@
 .text-shadow {
     text-shadow: -1px 0 var(--color-bg-primary), 0 1px var(--color-bg-primary), 1px 0 var(--color-bg-primary), 0 -1px var(--color-bg-primary);
 }
+.text-shadow-mild {
+    text-shadow: 0px 0px 3px var(--color-bg-primary);
+}
 html[data-color-mode=dark] .invert-icon {
     filter: invert(0.8);
 }
@@ -322,6 +325,32 @@ input.switch:checked + label span {
     color: var(--color-state-focus-border);
 }
 
+/* HTML: <div class="loader"></div> from https://css-loaders.com/spinner/ */
+.loader {
+    width: 50px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 8px solid var(--color-icon-primary);
+    animation:
+            l20-1 0.8s infinite linear alternate,
+            l20-2 1.6s infinite linear;
+}
+@keyframes l20-1{
+    0%    {clip-path: polygon(50% 50%,0       0,  50%   0%,  50%    0%, 50%    0%, 50%    0%, 50%    0% )}
+    12.5% {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100%   0%, 100%   0%, 100%   0% )}
+    25%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 100% 100%, 100% 100% )}
+    50%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
+    62.5% {clip-path: polygon(50% 50%,100%    0, 100%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
+    75%   {clip-path: polygon(50% 50%,100% 100%, 100% 100%,  100% 100%, 100% 100%, 50%  100%, 0%   100% )}
+    100%  {clip-path: polygon(50% 50%,50%  100%,  50% 100%,   50% 100%,  50% 100%, 50%  100%, 0%   100% )}
+}
+@keyframes l20-2{
+    0%    {transform:scaleY(1)  rotate(0deg)}
+    49.99%{transform:scaleY(1)  rotate(135deg)}
+    50%   {transform:scaleY(-1) rotate(0deg)}
+    100%  {transform:scaleY(-1) rotate(-135deg)}
+}
+
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
@@ -381,8 +410,8 @@ div {box-sizing: initial !important;}
 @keyframes spin { 100% {transform: rotate(360deg);} }
 .inline-pin {cursor: pointer;vertical-align: baseline !important;}
 .inline-pin.pressed  {transform: translate(0, 6px);}
-.inline-pin.pressed::after {content: '';width: 20px;height: 7px;background: var(--color-bg-canvas);position: absolute;
-    right: 7px;top: 17px;}
+.inline-pin.pressed::after {content: '';width: 6px;height: 7px;background: var(--color-bg-canvas);position: absolute;
+    right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
 .shader-part {background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));}
@@ -430,10 +459,6 @@ div {box-sizing: initial !important;}
     z-index: 4;
 }
 #tissue-title-header {
-    position: absolute;
-    right: 12px;
-    top: 39px;
-    writing-mode: tb;
     font-size: 16px;
     font-weight: bold;
 }

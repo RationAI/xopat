@@ -53,21 +53,22 @@ function getAppParam($key, $default=false) {
 /**
  * Parse queries and decide on what to do
  */
-$visualisation = getAppParam("visualization");
+$visualization = getAppParam("visualization");
 //old key (deprecated)
-if (!$visualisation) {
-    $visualisation = getAppParam("visualisation");
+if (!$visualization) {
+    //Old name
+    $visualization = getAppParam("visualisation");
 }
 
 /**
  * Try to parse GET: slide & masks params
  */
-if (!$visualisation) {
+if (!$visualization) {
     if (hasKey($_GET, 'slide')) {
         //try building the object from scratch
 
         $slide = $_GET["slide"];
-        $visualisation = json_decode(<<<EOF
+        $visualization = json_decode(<<<EOF
 {
     "data": ["$slide"],
     "background": [{
@@ -78,13 +79,13 @@ if (!$visualisation) {
 EOF);
         if (hasKey($_GET, 'masks')) {
             $masks = explode(',', $_GET["masks"]);
-            $visualisation->{"visualizations"} = [
+            $visualization->{"visualizations"} = [
                 (object) array('name' => 'Masks', 'lossless' => true, 'shaders' => (object) array())
             ];
 
-            $index = 1; $vis_config = $visualisation->visualizations[0]->shaders;
+            $index = 1; $vis_config = $visualization->visualizations[0]->shaders;
             foreach ($masks as $mask) {
-                $visualisation->data[] = $mask;
+                $visualization->data[] = $mask;
 
                 $vis_config->{$mask} = (object) array(
                     'type' => 'heatmap',
@@ -105,52 +106,21 @@ EOF);
 /**
  * Try to parse input manually
  */
-if (!$visualisation) {
+if (!$visualization) {
     //for json-based POST requests
     $data = file_get_contents('php://input');
     if ($data) {
         $_POST = json_decode($data);
-        $visualisation = $_POST["visualisation"];
+        $visualization = $_POST["visualization"];
+        if (!$visualization) {
+            //Old name
+            $visualization = $_POST["visualisation"];
+        }
     }
 }
-
-/**
- * Redirection: no data found, suppose it was attached as # arg
- */
-if (!$visualisation) {
-    //todo try supporting common use-case: show WSI + default layers
-
-    ?>
-    <!DOCTYPE html>
-    <html lang="en" dir="ltr">
-    <head>
-        <meta charset="utf-8">
-        <title>Redirecting...</title>
-    </head>
-    <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
-    <form method="POST" id="redirect">
-        <input type="hidden" name="visualisation" id="visualisation" value=''>
-    </form>
-    <script type="text/javascript">
-        try {
-            var url = new URL(window.location.href);
-
-            if (!url.hash) {
-                //todo more elegant way than encoding empty config
-                window.history.replaceState( {} , 'Error', 'index.php?visualization=%7B%7D' );
-            }
-
-            var form = document.getElementById("redirect");
-            document.getElementById("visualisation").value = decodeURIComponent(url.hash.substring(1)); //remove '#'
-            form.submit();
-        } catch (error) {
-            alert(error);
-        }
-    </script>
-    </body>
-    </html>
-    <?php
-    die();
+// Fallback - no configuration provided
+if (!$visualization) {
+    $visualization = [];
 }
 
 global $i18n;
@@ -199,19 +169,17 @@ function ensureDefined($object, $property, $default) {
     return true;
 }
 
-throwFatalErrorIf(!$visualisation, "messages.urlInvalid", "messages.invalidPostData",
-    print_r($_POST, true));
 
 /**
  * Parsing: verify valid parameters
  */
 
 //params that come in might be associative arrays :/
-$parsedParams = $visualisation;
-if (is_string($visualisation)) $parsedParams = json_decode($parsedParams, false);
-else if (is_array($visualisation)) $parsedParams = (object)$parsedParams;
+$parsedParams = $visualization;
+if (is_string($visualization)) $parsedParams = json_decode($parsedParams, false);
+else if (is_array($visualization)) $parsedParams = (object)$parsedParams;
 throwFatalErrorIf(!is_object($parsedParams), "messages.urlInvalid", "messages.postDataSyntaxErr",
-    "JSON Error: " . json_last_error_msg() . "<br>" . print_r($visualisation, true));
+    "JSON Error: " . json_last_error_msg() . "<br>" . print_r($visualization, true));
 
 ensureDefined($parsedParams, "params", (object)array());
 ensureDefined($parsedParams, "data", array());
@@ -276,14 +244,9 @@ foreach ($PLUGINS as $key => &$plugin) {
     }
 }
 
-//todo better way of handling these, some default promo page? fractal? :D
-throwFatalErrorIf(!$defined_rendering, "No data to view.", "The active session does not specify any image or layers to render.", "Empty background and visualization configuration.");
+$visualization = json_encode($parsedParams);
 
-$visualisation = json_encode($parsedParams);
-
-
-
-$replacer = function($match) use ($visualisation, $i18n) {
+$replacer = function($match) use ($visualization, $i18n) {
     ob_start();
 
     switch ($match[1]) {
@@ -306,7 +269,7 @@ $replacer = function($match) use ($visualisation, $i18n) {
             <?php echo json_encode((object)$MODULES) ?>,
             <?php echo json_encode((object)$CORE) ?>,
             <?php unset($_POST["visualisation"]); echo json_encode($_POST); ?>,
-            <?php echo $visualisation ?>,
+            <?php echo $visualization ?>,
             '<?php echo PLUGINS_FOLDER ?>',
             '<?php echo MODULES_FOLDER ?>',
             '<?php echo VERSION ?>',

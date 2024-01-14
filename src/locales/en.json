@@ -12,10 +12,13 @@
       "nothingToRender": "No data to view.",
       "nothingToRenderDetails": "The active session does not specify any image or layers to render."
     },
+    "user": {
+      "notConfigured": "Users are not supported in this setup."
+    },
     "main": {
       "global": {
         "tissue": "Tissue",
-        "layerOpacity": "Layer Opacity",
+        "layerOpacity": "Opacity",
         "clone": "Clone the viewer and synchronize"
       },
       "navigator": {
