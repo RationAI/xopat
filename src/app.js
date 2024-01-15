@@ -34,7 +34,7 @@
  * @param MODULES
  * @param ENV
  * @param POST_DATA
- * @param {object|function} CONFIG configuration or function that gets i18next param and returns the configuration
+ * @param {object|function} CONFIG configuration or function that gets postData and i18next param and returns the configuration
  * @param PLUGINS_FOLDER
  * @param MODULES_FOLDER
  * @param VERSION
@@ -74,7 +74,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         });
     }
     if (typeof CONFIG === "function") {
-        CONFIG = CONFIG($.i18n);
+        CONFIG = CONFIG(POST_DATA, $.i18n);
     }
     if (!CONFIG) {
         CONFIG = {
@@ -338,6 +338,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             dirty: false
         }
     };
+    //todo remove metastore
     metaStore.initPersistentStore(ENV.client.meta_store);
 
 
@@ -760,6 +761,33 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
                                               background,
                                               visualizations=[]) {
+        // First step: load plugins that were marked as to be loaded but were not yet loaded
+        function loadPluginAwaits(pid, hasParams) {
+            return new Promise((resolve) => {
+                UTILITIES.loadPlugin(pid, resolve);
+                if (!hasParams) {
+                    //todo consider doing this automatically
+                    CONFIG.plugins[pid] = {};
+                }
+            });
+        }
+
+        const pluginKeys = cookies.get('_plugins').split(',') || [];
+        for (let pid in PLUGINS) {
+            const hasParams = CONFIG.plugins[pid];
+            const plugin = PLUGINS[pid];
+            if (!plugin.loaded && !plugin.error && (hasParams || pluginKeys.includes(pid))) {
+                await loadPluginAwaits(pid, hasParams);
+            }
+        }
+
+        /*---------------------------------------------------------*/
+        /*------------ Initialization of UI -----------------------*/
+        /*---------------------------------------------------------*/
+
+        USER_INTERFACE.AdvancedMenu._build();
+        USER_INTERFACE.MainMenu._sync();
+
         let error = null;
         //todo show loading screen
         /**

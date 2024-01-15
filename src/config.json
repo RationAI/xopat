@@ -183,8 +183,8 @@
         "src": {
             //"env": "",
             "loader": "loader.js",
-            "deps": ["ui_components.js", "shader_configurator.js"],
-            "app": ["app.js", "user_interface.js", "scripts.js", "layers.js", "user.js"]
+            "deps": ["ui-components.js", "shader-configurator.js"],
+            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         }
     },
 

@@ -862,40 +862,26 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         loadPlugin: function(id, onload=_=>{}) {
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
-            if (window.hasOwnProperty(id)) {
-                /**
-                 * @property {string} id plugin id
-                 * @property {string} message
-                 * @memberOf VIEWER
-                 * @event plugin-failed
-                 */
-                window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
-                    id: id,
-                    message: $.t('messages.pluginLoadFailed'),
-                });
-                console.warn("Plugin id collision on global scope", id);
-                return;
-            }
             if (!Array.isArray(meta.includes)) {
+                meta.includes = [];
+            }
+
+            if (REGISTERED_PLUGINS === undefined) {
                 /**
+                 * Before a request to plugin loading is processed at runtime.
                  * @property {string} id plugin id
-                 * @property {string} message
                  * @memberOf VIEWER
-                 * @event plugin-failed
+                 * @event before-plugin-load
                  */
-                window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
-                    id: id,
-                    message: $.t('messages.pluginLoadFailed'),
-                });
-                console.warn("Plugin include invalid.");
-                return;
+                VIEWER.raiseEvent('before-plugin-load', {id: id});
             }
 
             let successLoaded = function() {
                 LOADING_PLUGIN = false;
 
-                //loaded after page load
-                if (!initializePlugin(PLUGINS[id].instance)) {
+                //loaded after page load if REGISTERED_PLUGINS === undefined
+                const loadedAfterPluginInit = REGISTERED_PLUGINS === undefined;
+                if (loadedAfterPluginInit && !initializePlugin(PLUGINS[id].instance)) {
                     /**
                      * @property {string} id plugin id
                      * @property {string} message
@@ -920,13 +906,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     }
                     APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
                 }
-                /**
-                 * Plugin was loaded dynamically at runtime.
-                 * @property {string} id plugin id
-                 * @memberOf VIEWER
-                 * @event plugin-loaded
-                 */
-                VIEWER.raiseEvent('plugin-loaded', {id: id});
+                if (loadedAfterPluginInit) {
+                    /**
+                     * Plugin was loaded dynamically at runtime.
+                     * @property {string} id plugin id
+                     * @memberOf VIEWER
+                     * @event plugin-loaded
+                     */
+                    VIEWER.raiseEvent('plugin-loaded', {id: id});
+                }
                 onload();
             };
             LOADING_PLUGIN = true;

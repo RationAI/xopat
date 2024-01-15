@@ -2,7 +2,7 @@
 
 xOpat is a standalone web-browser application. Server-side execution is necessary only
 due to certain capabilities browsers cannot provide:
- - parse HTTP GET/POST requests
+ - parse HTTP POST data
  - scan filesystem
  - dynamically compile from configurations
 
@@ -14,7 +14,7 @@ then provides an HTML static page.
 ## Available Servers / Entrypoints
  - [x] PHP Server
  - [ ] Node.js Server [in development]
- - [x] HTML static index page [in development]
+ - [x] HTML static index page
 
 ## Implementation
 
@@ -59,17 +59,11 @@ It should also reason about what items should be loaded at the beginning (e.g. l
 if the viewer is going to render visualizations, etc. Server should parse correctly the
 configuration input and act relevantly on errors, providing translated interface where possible.
 Servers should also allow to
- - parse GET:
-   - `lang`, optional preferred language
-   - `visualization`, the full session configuration (here URL-encoded)
-   - `slide` & `masks` - slide identification and mask coma-separated list of identifications to show
-     - identification being either file path or ID the server understands, with default configuration applied 
- - parse and prefer using POST if possible:
-   - support ``visualization`` attribute
-   - pass all the POST data except the keys specified above to the viewer initialization
+ - pass POST data to the JS app initialization function
  - use only single URL endpoint to multiple functionalities if applicable:
    - ``directive=user_setup`` shows page that documents statically available visualizations and allows
    users to build sessions using JSON
    - ``directive=user_setup`` shows page with user-friendly setup of shaders (TODO: in progress of design)
 
-The baseline is an existing server implementation which should new implementations adhere to.
+An existing server implementation demonstrates these requirements,
+which should new implementations adhere to.

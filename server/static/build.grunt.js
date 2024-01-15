@@ -47,32 +47,6 @@ module.exports.registerStaticServerTask = function (grunt, message) {
         }, {t: function () {return "Dummy trasnlation function";}});
         throwIfError(core, "Failed to parse the MODULES or PLUGINS inicialization!");
 
-        //todo: we can't read modify the config, but we could do this JS-wise on the client, downloading
-        //all stuff manually
-        //the module is enabled by default since static page cannot decide this dynamically
-        // /**
-        //  * Detect required presence of plugins
-        //  */
-        // $pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
-        // if (is_array($parsedParams->plugins)) {
-        //     $parsedParams->plugins = (object)$parsedParams->plugins;
-        // }
-        //
-        // foreach ($PLUGINS as $key => &$plugin) {
-        //     $hasParams = isset($parsedParams->plugins->{$plugin["id"]});
-        //     $plugin["loaded"] = !isset($plugin["error"]) && ($hasParams || in_array($plugin["id"], $pluginsInCookies));
-        //
-        //     //make sure all modules required by plugins are also loaded
-        //     if ($plugin["loaded"]) {
-        //         if (!$hasParams) {
-        //             $parsedParams->plugins->{$plugin["id"]} = (object)array();
-        //         }
-        //         foreach ($plugin["modules"] as $modId) {
-        //             $MODULES[$modId]["loaded"] = true;
-        //         }
-        //     }
-        // }
-
 console.log(core)
         const replacer = function(match, p1) {
             try {
@@ -80,7 +54,6 @@ console.log(core)
                     case "head":
                         grunt.log.write(' head');
                         return `
-    <script src="${core.PROJECT_ROOT}server/templates/init.js"></script>
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}

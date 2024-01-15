@@ -416,6 +416,7 @@ ${contentAction}
          */
         constructor(options) {
             this.contextId = options.containerId;
+            if (!this.contextId) throw "Selectable row requires options.contextId property!";
             this.options = options;
         }
 
@@ -457,18 +458,18 @@ ${contentAction}
 
         getSelected() {
             let values = [];
-            $(document.getElementById(this.contextId)).find(`input.selectable-image-row-context`).each((i, ch) => {
+            $(document.getElementById(this.contextId)).find('input.selectable-image-row-context').each((i, ch) => {
                 if (ch.checked) values.push(ch.value);
             });
             return values;
         }
 
         selectAll() {
-            $(document.getElementById(this.contextId)).find(`input.selectable-image-row-context`).each((i, ch) => ch.checked = true);
+            $(document.getElementById(this.contextId)).find('input.selectable-image-row-context').each((i, ch) => ch.checked = true);
         }
 
         deselectAll() {
-            $(document.getElementById(this.contextId)).find(`input.selectable-image-row-context`).each((i, ch) => ch.checked = false);
+            $(document.getElementById(this.contextId)).find('input.selectable-image-row-context').each((i, ch) => ch.checked = false);
         }
 
         attachHeader() {
@@ -684,7 +685,7 @@ panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
             const context = document.getElementById(containerId);
             if (!context) throw "RowPanel(): invalid initialization: container does not exist!";
             this.containerId = containerId + "-content";
-            builderOptions.container = this.containerId;
+            builderOptions.containerId = this.containerId;
             this.builder = new builder(builderOptions);
             this.uid = containerId;
             context.innerHTML = `<div id="${this.containerId}"></div>`;

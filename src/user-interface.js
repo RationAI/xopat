@@ -1154,6 +1154,14 @@ Theme &emsp; ${inputs.select({
 
         pluginsMenuBuilder.builder.attachHeader();
 
+        VIEWER.addHandler('before-plugin-load', e => {
+            const button = document.getElementById(`load-plugin-${e.id}`)?.firstElementChild;
+            if (button) {
+                button.setAttribute('disabled',true);
+                button.innerHTML = $.t('common.Loading') + '<span class="AnimatedEllipsis"></span>';
+            }
+        });
+
         let pluginCount = 0;
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             //todo maybe avoid using _dangerously* ?
@@ -1167,9 +1175,8 @@ Theme &emsp; ${inputs.select({
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";
             let problematic = `<div id="error-plugin-${plugin.id}" class="mx-2 mb-3 text-small">${errMessage}</div>`;
 
-
-            let actionPart = errMessage ? "" : `<div id="load-plugin-${plugin.id}"><button onclick="UTILITIES.loadPlugin('${plugin.id}');
-this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span class=\\'AnimatedEllipsis\\'></span>';return false;" class="btn">${$.t('common.Load')}</button></div>`;
+            let actionPart = errMessage || plugin.loaded ? "" : `<div id="load-plugin-${plugin.id}">
+<button onclick="UTILITIES.loadPlugin('${plugin.id}');return false;" class="btn">${$.t('common.Load')}</button></div>`;
             pluginsMenuBuilder.addRow({
                 title: plugin.name,
                 author: plugin.author,
@@ -1178,7 +1185,7 @@ this.setAttribute('disabled',true);this.innerHTML=$.t('common.Loading') + '<span
                 icon: plugin.icon,
                 value: plugin.id,
                 selected: plugin.loaded,
-                contentAction:actionPart
+                contentAction: actionPart
             });
             pluginCount++;
         }

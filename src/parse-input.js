@@ -1,7 +1,10 @@
 /**
- * Client-side parsing queries.
+ * Client-side parsing of the viewer session configuration
+ * @param {object} postData post data available to the viewer if any
+ * @param i18n i18next translation context
+ * @returns {*|{error}}
  */
-function xOpatParseConfiguration(i18n) {
+function xOpatParseConfiguration(postData, i18n) {
 
     function _parse(configuration) {
         function isBoolFlagInObject(object, key) {
@@ -28,7 +31,13 @@ function xOpatParseConfiguration(i18n) {
         }
 
         if (typeof configuration === "string") {
-            configuration = JSON.parse(configuration);
+            try {
+                configuration = JSON.parse(configuration);
+            } catch (e) {
+                return getError(  "messages.urlInvalid", "messages.postDataSyntaxErr",
+                    ` "JSON Error: ${e}<br>`
+                    + JSON.stringify(configuration.data));
+            }
         }
 
         ensureDefined(configuration, "params", {});
@@ -55,10 +64,8 @@ function xOpatParseConfiguration(i18n) {
         if (configuration.visualizations) {
             //requires webgl module
             definedRendering = true;
-
         }
 
-        //todo better way of handling these, some default promo page? fractal? :D
         if (!definedRendering) {
             return getError("error.nothingToRender",
                 "error.nothingToRenderDescription",
@@ -67,15 +74,22 @@ function xOpatParseConfiguration(i18n) {
         return configuration;
     }
 
-    let visualization;
+    let session;
     try {
         const url = new URL(window.location.href);
-        visualization = _parse(
-            url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'
-                url.searchParams.get("visualization")
-        );
 
-        if (!visualization) {
+        //old data key was 'visualisation' todo consider 'session' as name instead
+        session = _parse(postData["visualization"] || postData["visualisation"]);
+        if (!session || session.error) {
+            const data = url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'
+                url.searchParams.get("visualization");
+            if (data) {
+                session = _parse(data);
+            }
+        }
+
+
+        if (!session) {
             //try building the object from scratch
             const handMadeConfiguration = {
                 data: [url.searchParams.get("slide")],
@@ -106,19 +120,19 @@ function xOpatParseConfiguration(i18n) {
                     }
                 }
             }
-            visualization = _parse(handMadeConfiguration);
+            session = _parse(handMadeConfiguration);
         }
 
-        if (visualization.error) {
-            visualization.error = i18n.t(visualization.error);
-            if (visualization.description) visualization.description = i18n.t(visualization.description);
+        if (session.error) {
+            session.error = i18n.t(session.error);
+            if (session.description) session.description = i18n.t(session.description);
         }
-
     } catch (e) {
         //todo error
-        visualization = {error: e};
+        session = {error: e};
     }
 
-    //todo show error page
-    return visualization;
+    //todo show error page if plausible
+    //especially page with error 'error.nothingToRender'
+    return session;
 }

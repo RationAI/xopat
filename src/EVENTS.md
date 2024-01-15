@@ -69,6 +69,9 @@ a different notification is being shown). Parameters should be strictly kept:
 #### `error-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 Same as above, an error event. 
 
+#### `before-plugin-load` | e: `{id: string}
+Fired before a plugin is loaded within a system (at runtime).
+
 #### `plugin-loaded` | e: `{id: string}
 Fired when plugin is loaded within a system (at runtime).
 

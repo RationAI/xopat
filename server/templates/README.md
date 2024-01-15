@@ -31,7 +31,7 @@ initXopat(
     <MODULES: json object describing available modules and their meta>,
     <CORE: json object describing xOpat metadata configuration>,
     <POST: post data: key value map that plugins might export data to>,
-    <visualization: the xOpat session JSON or callback (see xOpatParseConfiguration(..))>,
+    <session: the xOpat session JSON or callback (see xOpatParseConfiguration(..))>,
     '<PLUGINS_FOLDER: the path to plugins so that browser can import scripts>',
     '<MODULES_FOLDER: the path to modules so that browser can import scripts>',
     '<VERSION: the version tag>',
