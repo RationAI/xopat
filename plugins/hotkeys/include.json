@@ -3,7 +3,8 @@
     "name": "Hotkeys & Shortcuts",
     "description": "Custom & Buildin Hotkeys extension",
     "includes" : [
-        "hotkeys.js"
+        "hotkeys.js",
+        "temp.js"
     ],
     "version": "1.0.0",
     "permaLoad": false
