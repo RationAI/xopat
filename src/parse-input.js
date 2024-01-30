@@ -42,7 +42,7 @@ function xOpatParseConfiguration(postData, i18n) {
 
         ensureDefined(configuration, "params", {});
         ensureDefined(configuration, "data", []);
-        let definedRendering = ensureDefined(configuration, "background", {});
+        let definedRendering = ensureDefined(configuration, "background", []);
         ensureDefined(configuration, "plugins", {});
 
         const isDebug = isBoolFlagInObject(configuration.params, "debugMode");

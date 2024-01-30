@@ -34,7 +34,7 @@ describe('Third party pyramidal image', () => {
         }
 
         cy.window().then(window => {
-            window.APPLICATION_CONTEXT.prepareViewer(
+            window.APPLICATION_CONTEXT.openViewerWith(
                 secondConfig.data,
                 secondConfig.background,
                 secondConfig.visualizations

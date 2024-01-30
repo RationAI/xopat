@@ -4,13 +4,16 @@
       "title": "Error",
       "doExport": " [ if you want to report a problem, please include exported file ] ",
       "detailsBtn": "details",
+      "dismissBtn": "dismiss",
       "unknown": "Unknown error",
       "back": "Go back",
       "noDetails": "No details provided",
       "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
       "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
       "nothingToRender": "No data to view.",
-      "nothingToRenderDetails": "The active session does not specify any image or layers to render."
+      "nothingToRenderDetails": "The active session does not specify any image or layers to render.",
+      "renderTitle": "Rendering Warning",
+      "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended."
     },
     "user": {
       "notConfigured": "Users are not supported in this setup."

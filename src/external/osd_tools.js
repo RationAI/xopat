@@ -10,6 +10,7 @@ OpenSeadragon.Tools = class {
      * @param context OpenSeadragon instance
      */
     constructor(context) {
+        //todo initialize explicitly outside to help IDE resolution
         if (context.tools) throw "OSD Tools already instantiated on the given viewer instance!";
         context.tools = this;
         this.viewer = context;

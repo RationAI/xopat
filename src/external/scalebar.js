@@ -158,6 +158,7 @@
         },
         /**
          * Compute size of one pixel in the image on your screen
+         * //todo rename to get..() or change to property getter
          * @return {number} image pixel size on screen (should be between 0 and 1 in most cases)
          */
         imagePixelSizeOnScreen: function() {

@@ -240,8 +240,8 @@ either documented or self-explanatory named. Some selected API is described in p
 Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
 Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their
 enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
-the engine setup. ``scripts.js`` contain various utility functions - having a look into the source code is always
-encouraged.
+the engine setup. ``scripts.js`` contain various utility functions - we encourange browsing
+the documentation API page.
 
 Outside, ``../index.php`` file takes care of the main UI layout and basic functionality around parameter and metadata
 handling, plugin and module loading and the viewport and events management.

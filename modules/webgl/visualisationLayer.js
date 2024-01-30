@@ -162,6 +162,7 @@ WebGLModule.VisualisationLayer = class {
         //use with care... todo document
         this._rebuild = privateOptions.rebuild;
         this._refetch = privateOptions.refetch;
+        this._hasInteractiveControls = privateOptions.interactive;
     }
 
     /**
@@ -591,7 +592,7 @@ WebGLModule.VisualisationLayer = class {
 
         this._ownedControls.push(name);
         const control = WebGLModule.UIControls.build(this, name, controlOptions,
-            buildContext.default, buildContext.accepts, buildContext.required);
+            buildContext.default, buildContext.accepts, buildContext.required, this._hasInteractiveControls);
         this[name] = control;
         return control;
     }
@@ -719,12 +720,16 @@ WebGLModule.UIControls = class {
      * @param {object} defaultParams default parameters that the shader might leverage above defaults of the control itself
      * @param {function} accepts required GLSL type of the control predicate, for compatibility typechecking
      * @param {object} requiredParams parameters that override anything sent by user or present by defaultParams
+     * @param {boolean} interactivityEnabled must be false if HTML nodes are not managed
      * @return {WebGLModule.UIControls.IControl}
      */
-    static build(context, name, params, defaultParams={}, accepts=() => true, requiredParams={}) {
+    static build(context, name, params, defaultParams={}, accepts=() => true, requiredParams={}, interactivityEnabled=true) {
         //if not an object, but a value: make it the default one
         if (!(typeof params === 'object')) {
             params = {default: params};
+        }
+        if (!interactivityEnabled) {
+            params.interactive = false;
         }
         let originalType = defaultParams.type;
 
@@ -733,7 +738,7 @@ WebGLModule.UIControls = class {
         if (!this._items.hasOwnProperty(defaultParams.type)) {
             if (!this._impls.hasOwnProperty(defaultParams.type)) {
                 return this._buildFallback(defaultParams.type, originalType, context,
-                    name, params, defaultParams, accepts, requiredParams);
+                    name, params, defaultParams, accepts, requiredParams, interactivityEnabled);
             }
 
             let cls = new this._impls[defaultParams.type](
@@ -741,7 +746,7 @@ WebGLModule.UIControls = class {
             );
             if (accepts(cls.type, cls)) return cls;
             return this._buildFallback(defaultParams.type, originalType, context,
-                name, params, defaultParams, accepts, requiredParams);
+                name, params, defaultParams, accepts, requiredParams, interactivityEnabled);
         } else {
             let contextComponent = this.getUiElement(defaultParams.type);
             let comp = new WebGLModule.UIControls.SimpleUIControl(
@@ -749,7 +754,7 @@ WebGLModule.UIControls = class {
             );
             if (accepts(comp.type, comp)) return comp;
             return this._buildFallback(contextComponent.glType, originalType, context,
-                name, params, defaultParams, accepts, requiredParams);
+                name, params, defaultParams, accepts, requiredParams, interactivityEnabled);
         }
     }
 
@@ -933,7 +938,8 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
         }
     };
 
-    static _buildFallback(newType, originalType, context, name, params, defaultParams, requiredType, requiredParams) {
+    static _buildFallback(newType, originalType, context, name, params, defaultParams,
+                          requiredType, requiredParams, interactivityEnabled) {
         //repeated check when building object from type
 
         params.interactive = false;
@@ -943,7 +949,7 @@ class="form-control input-sm" onchange="this.value=this.checked; return true;">`
         } else { //otherwise try to build with originalType (default)
             params.type = originalType;
             console.warn("Incompatible UI control type '"+newType+"': making the input non-interactive.");
-            return this.build(context, name, params, defaultParams, requiredType, requiredParams);
+            return this.build(context, name, params, defaultParams, requiredType, requiredParams, interactivityEnabled);
         }
     }
 };

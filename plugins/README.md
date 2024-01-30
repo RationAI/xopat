@@ -254,8 +254,9 @@ annotation logic, HTML sanitization, vega graphs, threading worker or keyframe s
 ### Available Third-party Code and UI
 You can use
  - [jQuery](https://jquery.com/), 
- - [Material design icons](https://fonts.google.com/icons?selected=Material+Icons)
- for icons (use `<span>`) and 
+ - [Material Design icons](https://fonts.google.com/icons?selected=Material+Icons)
+ - [Font Awesome 6 Free icons](https://fontawesome.com/)
+ for icons (prefer using `<span>`) and 
  - [Primer CSS bootstrap](https://primer.style/css).
  - Pre-defined, documented CSS in the core ``src/assets/style.css``
  - other libraries included in `/external`, the Monaco editor is available only in a child window

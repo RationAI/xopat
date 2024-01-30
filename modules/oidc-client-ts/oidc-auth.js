@@ -1,23 +1,21 @@
 oidc.xOpatUser = class extends XOpatModuleSingleton {
 
+    //todo test when the user closed auth without signin
     constructor() {
         super("oidc-client-ts");
-        this.authority = this.getStaticMeta('authority');
-        this.clientId = this.getStaticMeta('clientId');
-        this.scope = this.getStaticMeta('scope');
 
-        if (!this.authority || !this.clientId || !this.scope) {
+        this.configuration = this.getStaticMeta('oidc', {});
+        this._connectionRetries = 0;
+        if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
             return;
         }
 
-        this.redirectUri = this.getStaticMeta('redirectUri');
-        if (!this.redirectUri) {
-            this.redirectUri = window.location.href.split('#')[0].split('?')[0];
-        }
+        this.configuration.redirect_uri = this.configuration.redirect_uri
+            || window.location.href.split('#')[0].split('?')[0];
 
-        this.logoutRedirectUri = this.getStaticMeta('logoutRedirectUri')
-            || APPLICATION_CONTEXT.env.gateway || this.redirectUri;
+        this.configuration.post_logout_redirect_uri = this.configuration.post_logout_redirect_uri
+            || APPLICATION_CONTEXT.env.gateway || this.configuration.redirect_uri;
 
         VIEWER.addHandler('before-first-open', this.init.bind(this),
             null, this.getStaticMeta('eventBeforeOpenPriority', 0));
@@ -33,93 +31,38 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
 
         //Create OIDC User Manager
-        this.userManager = new oidc.UserManager({
-            authority: this.authority,
-            client_id: this.clientId,
-            redirect_uri: this.redirectUri,
-            post_logout_redirect_uri: this.logoutRedirectUri,
-            accessTokenExpiringNotificationTimeInSeconds:
-                this.getStaticMeta('accessTokenExpiringNotificationTimeInSeconds'),
-            scope: this.scope,
-            redirectMethod: "replace",
-            redirectTarget: "top",
-            // filterProtocolClaims: true,
-            // loadUserInfo: true,
-            // automaticSilentRenew: true,
-            // includeIdTokenInSilentRenew: true,
-            // silent_redirect_uri: 'http://localhost:4200/silent-refresh.html',
-        });
+        this.userManager = new oidc.UserManager(this.configuration);
 
         //Resolve once we know if we handle login
         let resolves = null;
-        const returns = new Promise(async (resolve) => {
-            const urlParams = new URLSearchParams(window.location.search);
-            resolves = () => {
-                resolve();
-                resolves = null;
-            };
+        const returns = new Promise(async (resolve, reject) => {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                resolves = () => {
+                    resolve();
+                    resolves = null;
+                };
 
-            //todo prevent recurse...
-            if (await this.handleUserDataChanged()) {
-                resolves && resolves();
-            } else if (urlParams.get('state') !== null) {
-                return (async () => {
-                    debugger;
-                    await this.userManager.signinPopupCallback(window.location.href);
-                    await this.handleUserDataChanged();
-                    resolves && resolves();
-                })();
-            } else {
-                const refreshTokenExpiration = this.getRefreshTokenExpiration();
-                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
-                    await this.userManager.signinPopup({
-                        popupWindowFeatures: {
-                        }
-                    });
-                    await this.handleUserDataChanged();
-                    resolves && resolves();
-                } else {
-                    await retrySignin(true);
+                //try if we can cache-load the user info...
+                if (!await this.handleUserDataChanged()) {
+                    if (urlParams.get('state') !== null) {
+                        return (async () => {
+                            await this.userManager.signinPopupCallback(window.location.href);
+                            await this.handleUserDataChanged();
+                        })();
+                    } else {
+                        await this.trySignIn(true);
+                    }
                 }
+                resolves && resolves();
+            } catch (e) {
+                reject(e);
             }
         }).catch(e => {
             //Error not handled considered as login abort
+            //todo consider user-login-fail handler (dialog / action redirect...)
             console.log("OIDC Aborted user login. Reason:", e);
         });
-
-        //todo verify args if n
-        const retrySignin = async (preventRecurse = false, firedManually = false) => {
-            try {
-                await this.userManager.signinSilent();
-                await this.handleUserDataChanged();
-                resolves && resolves();
-            } catch (error) {
-                if (firedManually) return;
-                if (error.message.includes('Failed to fetch')) {
-                    console.log('Silent signin failed due to connection issues. Retrying in 5 seconds.');
-                    //todo translation
-                    Dialogs.show('Failed to login, retrying in 5 seconds. <a onclick="oidc.xOpatUser.instance().retrySignin(true, true);">Retry now</a>.');
-                    setTimeout(async () => {
-                        const refreshTokenExpiration = this.getRefreshTokenExpiration()
-                        if (refreshTokenExpiration < Date.now() / 1000) {
-                            console.log('Refresh token expired.');
-                            await this.handleUserDataChanged();
-                            resolves && resolves();
-                        } else {
-                            console.log('Refresh token still valid for another',
-                                Math.round(refreshTokenExpiration - Date.now() / 1000), 'seconds');
-                            if (preventRecurse) {
-                                await retrySignin(true)
-                            } else {
-                                resolves && resolves();
-                            }
-                        }
-                    }, 5000);
-                } else {
-                    resolves && resolves();
-                }
-            }
-        };
 
         const renewError = async () => {
             const user = XOpatUser.instance();
@@ -127,13 +70,54 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 this.userManager.events.removeSilentRenewError();
                 return;
             }
-            console.log('Silent renew failed. Retrying with silent signin.');
-            await retrySignin();
+            console.log('Silent renew failed. Retrying with signin.');
+            await this.trySignIn();
         };
         this.userManager.events.addSilentRenewError(renewError);
-
+        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
         return returns;
     }
+
+    //todo verify args if n
+    async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
+        try {
+            if (allowUserPrompt) {
+                const refreshTokenExpiration = this.getRefreshTokenExpiration();
+                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
+                    console.log(refreshTokenExpiration)
+                    console.log("OIDC: Try to sign in via popup.");
+                    await this.userManager.signinPopup({
+                        popupWindowFeatures: {
+                        }
+                    });
+                } else {
+                    console.log("OIDC: Signing silently: refresh token available.");
+                    await this.userManager.signinSilent();
+                }
+            } else {
+                console.log("OIDC: Signing silently..");
+                await this.userManager.signinSilent();
+            }
+
+            await this.handleUserDataChanged();
+            this._connectionRetries = 0;
+        } catch (error) {
+            if (firedManually) return;
+            if (error.message.includes('Failed to fetch')) {
+                console.log('OIDC: Signin failed due to connection issues. Retrying in 5 seconds.');
+                if (!preventRecurse) {
+                    //todo translation
+                    Dialogs.show('Failed to login, retrying in 5 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true);">Retry now</a>.');
+                    setTimeout(async () => {
+                        await this.trySignIn(false, this._connectionRetries > 5);
+                    }, 5000);
+                } else {
+                    //todo redirect to page
+                    console.error("OIDC: MAX retry exceeded");
+                }
+            }
+        }
+    };
 
     getRefreshTokenExpiration() {
         let refreshToken = ''
@@ -143,6 +127,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         Object.keys(sessionStorage).forEach(function (key) {
             if (key.includes(clientId)) {
                 const values = JSON.parse(sessionStorage.getItem(key))
+                console.log('REFRESH TOKEN',values)
                 if ('refresh_token' in values) {
                     refreshToken = values.refresh_token;
                 }
@@ -150,7 +135,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         });
         if (refreshToken) {
             try {
-                return jwtDecode(refreshToken).exp;
+                const refresh = jwtDecode(refreshToken);
+                //if exp not specified, act as if did not expire
+                return refresh.exp || refresh.profile?.exp || Infinity;
             } catch (e) {
                 console.warn(e);
             }
@@ -186,6 +173,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 const userid = decodedToken.sub;
                 user.login(userid, username, "");
                 this.setupTrafficInterception();
+                user.addOnceHandler('logout', () => {
+
+                    //todo should also notify user about leaving page :/
+                    this.userManager.signoutRedirect();
+                });
             }
             return true;
         }

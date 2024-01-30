@@ -45,7 +45,7 @@ window.WebGLModule = class {
      * to distinguish uniquely between static generated code parts
      * @type {RegExp}
      */
-    static idPattern = /^[0-9a-zA-Z_]*$/;
+    static idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
 
     /**
      * @param {object} incomingOptions
@@ -57,7 +57,7 @@ window.WebGLModule = class {
      * @param {function} incomingOptions.resetCallback function called when user input changed, e.g. changed output of the current rendering
      * @param {function} incomingOptions.visualisationInUse function called when visualisation is initialized and run
      * @param {function} incomingOptions.visualisationChanged function called when a visualization swap is performed:
-     *   signature f({Visualization} oldVisualisation,{Visualization} newVisualisation)
+     *   signature f({WebGLModule.VisualizationConfig} oldVisualisation,{WebGLModule.VisualizationConfig} newVisualisation)
      * @param {function} incomingOptions.onFatalError called when this module is unable to run
      * @param {function} incomingOptions.onError called when a problem occurs, but other parts of the system still might work
      * @constructor
@@ -108,7 +108,7 @@ window.WebGLModule = class {
         }
 
         if (!this.constructor.idPattern.test(this.uniqueId)) {
-            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore. ID: " + this.uniqueId;
+            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore (non-consecutive, not at the beginning). ID: " + this.uniqueId;
         }
 
         /**
@@ -188,7 +188,7 @@ window.WebGLModule = class {
 
     /**
      * Set program shaders. Vertex shader is set by default a square.
-     * @param {Visualization} visualisations - objects that define the visualisation (see Readme)
+     * @param {WebGLModule.VisualizationConfig} visualisations - objects that define the visualisation (see Readme)
      * @return {boolean} true if loaded successfully
      * @instance
      * @memberOf WebGLModule
@@ -615,6 +615,10 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
 
     _loadDebugInfo() {
         if (!this.debug) return;
+        if (!this.supportsHtmlControls()) {
+            console.warn(`WebGL Renderer ${this.uniqueId} does not support visual rendering without enabled HTML control!`);
+            return;
+        }
 
         let container = document.getElementById(`test-${this.uniqueId}-webgl`);
         if (!container) {
@@ -628,6 +632,9 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 
     async _renderDebugIO(inputData, outputData) {
+        if (!this.supportsHtmlControls()) {
+            return;
+        }
         let input = document.getElementById(`test-${this.uniqueId}-webgl-input`);
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
@@ -737,6 +744,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             layer: layer,
             webgl: this.webGLImplementation,
             invalidate: this.resetCallback,
+            interactive: this.supportsHtmlControls(),
             rebuild: this.rebuildVisualisation.bind(this, undefined),
             refetch: function() {
                 _this._updateRequiredDataSources(visualization);

@@ -193,7 +193,8 @@
      */
     "css": {
         "libs": {
-            "primer": "primer_css.css"
+            "primer": "primer_css.css",
+            "fontawesome": "fontawesome/css/v6-all.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

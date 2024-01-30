@@ -125,7 +125,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             plugin.pluginReady();
             return true;
         } catch (e) {
-            console.warn(`Failed to initialize plugin ${plugin}.`, e);
+            console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
         }
         return false;

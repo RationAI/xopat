@@ -9,18 +9,22 @@
     ],
     "requires": ["pollyjs", "jwt-decode"],
     "permaLoad": true,
-    //Authority ID (url) the OIDC sets in the communication, url used for authorization
-    "authority": "",
-    //Client ID of this application,
-    "clientId": "",
-    //Default scope for the user
-    "scope": "openid offline_access",
-    //Can specify where to redirect after login, by default the current page (null)
-    "redirectUri": null,
-    //Can specify where to redirect after logout, by default the viewer gateway
-    "logoutRedirectUri": null,
-    //How often token tends to expire
-    "accessTokenExpiringNotificationTimeInSeconds": 150,
     //Event priority
-    "eventBeforeOpenPriority": 0
+    "eventBeforeOpenPriority": 0,
+    //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
+    //We recommend not to modify 'redirect_uri'
+    "oidc": {
+        //Authority ID (url) the OIDC sets in the communication, url used for authorization
+        "authority": "",
+        //Client ID of this application, its auth secret (or null)
+        "client_id": "",
+        "client_secret": null,
+        //Default scope for the user
+        "scope": "openid offline_access",
+        //Can specify where to redirect after logout, by default the viewer gateway
+        "post_logout_redirect_uri": null, //by default the logout_redirect_uri
+        "accessTokenExpiringNotificationTimeInSeconds": 150,
+        "redirectMethod": "replace",
+        "redirectTarget": "top"
+    }
 }

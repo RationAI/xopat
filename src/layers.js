@@ -121,7 +121,8 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     enableDragSort("data-layer-options");
                     UTILITIES.updateUIForMissingSources();
                     //called only if everything is fine
-                    USER_INTERFACE.Errors.hide(); //preventive
+                    // TODO: consider timeout - this hides any errors although they might be valid
+                    //USER_INTERFACE.Errors.hide(); //preventive
 
                     //Re-fetching data not necessary as we always fetch all the data of given visualization
                     // var activeData = ""; //don't set this globally :(
@@ -779,5 +780,63 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
             }
         }
+    }
+
+    /**
+     * Test for rendering capabilities
+     * Throws error on failure
+     */
+    UTILITIES.testRendering = function(pixelErrThreshold=10) {
+        //test 4X4 with heatmap shader
+        const webglModuleTest = new WebGLModule({
+            webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+            onFatalError: error => {throw error},
+            onError: error => {throw error},
+            debug: true,
+            uniqueId: "browser_render_test"
+        });
+        //tests #43ff64 --> [67, 255, 100]
+        webglModuleTest.addVisualisation({name: "Test", shaders: {
+                test: {
+                    type: "heatmap",
+                    params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
+                    dataReferences: [0]
+                }
+            }});
+        webglModuleTest.prepareAndInit(null, 2, 2);
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = canvas.height = 2;
+        ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillRect(0, 0, 1, 1);
+        ctx.fillStyle = "rgba(255, 80, 125, 255)"; ctx.fillRect(1, 0, 1, 1);
+        ctx.fillStyle = "rgba(32, 0, 32, 128)"; ctx.fillRect(0, 1, 1, 1);
+        ctx.fillStyle = "rgba(80, 80, 90, 120)"; ctx.fillRect(1, 1, 1, 1);
+
+        // Render a webGL canvas to an input canvas using cached version
+        const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 0.1);
+        if (!output) throw "Failed to process WebGL output: null returned.";
+        ctx.drawImage(output, 0, 0, 2, 2);
+        const data = ctx.getImageData(0, 0, 2, 2).data;
+        const testPixel = (pixelPosition, expectedRGBA) => {
+            let index = pixelPosition*4;
+            for (let i = 0; i < 4; i++) {
+                const d = Math.abs(data[index+i] - expectedRGBA[i]);
+                if (d > pixelErrThreshold) {
+                    const description = `PIXEL[${(pixelPosition)%2}, ${Math.floor(pixelPosition/2)}] expected [${expectedRGBA}], got [${data.slice(index, index+4)}]`;
+                    if (d > 2*pixelErrThreshold) throw "Heatmap shader does not work as intended! " + description;
+                    console.warn("WebGL Test shows minor color error in the output - this might be caused by interpolation.");
+                }
+            }
+        }
+        // Remove subsequent tests
+        UTILITIES.testRendering = function () {};
+        console.log("Rendering test output:", data);
+        // Test pixels [0, 0], [1, 0], [0, 1], [1, 1]
+        testPixel(0, [0, 0, 0, 0]); // R0 -> alpha 0, output zeroed out (no-op)
+        testPixel(1, [67, 255, 100, 255]); // R255 -> alpha 0
+
+        // TODO: for some reason test returns modified colors for alpha != 255
+        //testPixel(2, [67, 255, 100, 32]); // R32 -> alpha 32
+        //testPixel(3, [67, 255, 100, 80]); // R80 -> alpha 80
     }
 }

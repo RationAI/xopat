@@ -24,6 +24,7 @@ window.OpenSeadragon.BridgeGL = class {
         if (!cachedMode) {
             this.uid = OpenSeadragon.BridgeGL.getUniqueId();
         }
+        //todo probably bad implementation, weakmap does not count reference for _KEYS_
         this._rendering = new WeakMap();
         this.imageData = undefined;
     }
@@ -142,7 +143,7 @@ window.OpenSeadragon.BridgeGL = class {
      * @returns {object} a visualisaiton goal object
      */
     visualization(index=undefined) {
-        return this.webGLEngine.visualization(index || this.webGLEngine.currentVisualisationIndex());
+        return this.webGLEngine.visualization(index === undefined ? this.webGLEngine.currentVisualisationIndex() : index);
     }
 
     /**
@@ -189,7 +190,7 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Make ViaWebGL download and prepare visualisations,
+     * Make ViaWebGL prepare visualisations,
      * called inside init() if not called manually before
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */

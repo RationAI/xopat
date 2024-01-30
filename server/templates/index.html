@@ -55,9 +55,11 @@
         <span data-i18n="error.title">Error</span>
     </div>
     <div id="system-message-title" class="f2-light text-center clearfix"></div>
-    <div class="text-small text-center" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
-    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+    <div id="system-message-subtitle" class="text-normal text-center"></div>
+    <div class="text-small text-center mb-4" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('display', 'none');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
+    <div id="system-message-details" class="px-4 py-3 mb-2 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+    <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()" class="btn" type="button" data-i18n="error.dismissBtn">dismiss</button>
 </div>
 
 <!--Tutorials-->
@@ -75,10 +77,10 @@
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
-        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1">
-            <span id="main-panel-hide" class="material-icons btn-pointer flex-1" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
+        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1 flex-content-between">
+            <span id="main-panel-hide" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
 
-            <div id="user-panel" class="btn-pointer float-right">
+            <div id="user-panel" class="btn-pointer" style="flex-grow: 1;text-align-last: right;">
                 <span id="user-name">____</span>
                 <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
             </div>
@@ -106,7 +108,7 @@
  }
 "> push_pin </span>
             </div>
-            <span class="material-icons btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone">open_in_new</span>
+            <span class="fas fa-clone btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone"></span>
 
         </div>
 

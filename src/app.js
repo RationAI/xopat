@@ -820,7 +820,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             throw error;
         }
         UTILITIES.showLoading(false);
-        this.openViewerWith(data, background, visualizations=[]);
+        this.openViewerWith(data, background, visualizations);
     };
 
     let _allowRecursionReload = true;
@@ -842,7 +842,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
                 _allowRecursionReload = false;
-                UTILITIES.loadModules(() => APPLICATION_CONTEXT.prepareViewer(data, background, visualizations), "webgl");
+                UTILITIES.loadModules(() => APPLICATION_CONTEXT.openViewerWith(data, background, visualizations), "webgl");
                 return;
             }
 
@@ -946,6 +946,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         }
 
         if (renderingWithWebGL) {
+            try {
+                UTILITIES.testRendering();
+            } catch (e) {
+                console.error(e);
+                USER_INTERFACE.Errors.show($.t('error.renderTitle'), `${$.t('error.renderDesc')} <br><code>${e}</code>`, true);
+            }
+
             //prepare rendering can disable layers
             APPLICATION_CONTEXT.prepareRendering();
             renderingWithWebGL = APPLICATION_CONTEXT.layersAvailable;
