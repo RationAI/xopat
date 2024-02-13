@@ -3,7 +3,8 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
     static description = 'Annotations in GeoJSON format.';
 
     static getFileName(context) {
-        return 'geojson_xopat_' + UTILITIES.todayISO("_") + '.json';
+        return APPLICATION_CONTEXT.referencedName(true) +
+            UTILITIES.todayISO("_") + 'xo.geo.json';
     }
 
     static includeAllAnnotationProps = false;

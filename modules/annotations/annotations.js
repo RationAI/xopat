@@ -1117,7 +1117,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		VIEWER.addHandler('key-up', e => _this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
 		window.addEventListener("focus", e => _this.setMode(_this.Modes.AUTO), false);
-		window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+		//window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
 		VIEWER.addHandler('screenshot', e => {
  			e.context2D.drawImage(_this.canvas.getElement(), 0, 0);
 		});
@@ -1231,7 +1231,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		this.canvas.on('mouse:move', function (o) {
 			if (_this.disabledInteraction || !_this.cursor.isDown) return;
-			_this.mode.handleMouseMove(screenToPixelCoords(o.e.x, o.e.y));
+			_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
 		});
 
 		this.canvas.on('mouse:wheel', function (o) {
@@ -1471,9 +1471,10 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * Handle mouse moving event while the OSD navigation is disabled
 	 * NOTE: mouse move in navigation mode is used to navigate, not available
+	 * @param {MouseEvent} event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 */
-	handleMouseMove(point) {
+	handleMouseMove(event, point) {
 		//do nothing
 	}
 
@@ -1712,7 +1713,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this._init(o, point, isLeftClick, objectFactory);
 	}
 
-	handleMouseMove(point) {
+	handleMouseMove(e, point) {
 		this.context.freeFormTool.update(point);
 	}
 
@@ -1880,7 +1881,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		this._init(point, isLeftClick, objectFactory);
 	}
 
-	handleMouseMove(point) {
+	handleMouseMove(e, point) {
 		//todo experiment with this condition, also is it necessary for fft?
 		if (this.context.isMouseOSDInteractive()) {
 			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);

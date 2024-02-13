@@ -5,7 +5,8 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
     static includeAllAnnotationProps = false;
 
     static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO("_") + '.json';
+        return APPLICATION_CONTEXT.referencedName(true) +
+            UTILITIES.todayISO("_") + '.json';
     }
 
     static encodeFinalize(output) {

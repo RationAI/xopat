@@ -28,6 +28,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
+		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 
 		await this.setupFromParams();
 
@@ -663,8 +664,11 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	exportToFile(withObjects=true, withPresets=true) {
 		const toFormat = this.exportOptions.format || this._defaultFormat;
 		this._ioArgs.format = toFormat;
+
+		const name = withPresets && withObjects ? "all" :
+			(withObjects ? "annotations" : "presets")
 		this.context.export(this._ioArgs, withObjects, withPresets).then(result => {
-			UTILITIES.downloadAsFile(this.context.defaultFileNameFor(toFormat), result);
+			UTILITIES.downloadAsFile(name + "-" + this.context.defaultFileNameFor(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
@@ -710,6 +714,13 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 	 * Update main HTML GUI part of presets upon preset change
 	 */
 	updatePresetsHTML() {
+		if (Object.keys(this.context.presets._presets).length < 1) {
+			const p = this.context.presets.addPreset();
+			if (!this.context.presets.getActivePreset(true)) {
+				this.context.presets.selectPreset(p.presetID, true);
+			}
+		}
+
 		let leftPreset = this.context.getPreset(true),
 			rightPreset = this.context.getPreset(false),
 			left = $("#annotations-left-click"),
