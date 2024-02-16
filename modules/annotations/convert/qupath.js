@@ -4,9 +4,8 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     static exportsPresets = false;
     static includeAllAnnotationProps = false;
 
-    static getFileName(context) {
-        return APPLICATION_CONTEXT.referencedName(true) +
-            UTILITIES.todayISO("_") + 'qu.geo.json';
+    static getSuffix() {
+        return 'qu.geo.json';
     }
 
     static options = {

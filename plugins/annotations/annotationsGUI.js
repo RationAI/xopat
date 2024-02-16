@@ -665,10 +665,11 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		const toFormat = this.exportOptions.format || this._defaultFormat;
 		this._ioArgs.format = toFormat;
 
-		const name = withPresets && withObjects ? "all" :
-			(withObjects ? "annotations" : "presets")
+		const name = APPLICATION_CONTEXT.referencedName(true)
+			+ "-" + UTILITIES.todayISOReversed() + "-"
+			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
 		this.context.export(this._ioArgs, withObjects, withPresets).then(result => {
-			UTILITIES.downloadAsFile(name + "-" + this.context.defaultFileNameFor(toFormat), result);
+			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);

@@ -204,6 +204,15 @@ function initXopatScripts() {
     };
 
     /**
+     * Get current date as reversed ISO year first
+     * @param separator
+     * @returns {string}
+     */
+    window.UTILITIES.todayISOReversed = function(separator="/") {
+        return new Date().toJSON().slice(0,10).split('-').join(separator);
+    };
+
+    /**
      * Safely evaluate boolean parameter from JSON config, e.g. undefined | "false" | "True" | 0 | 1 | false
      * string values are treated as true except for 'false' literals and empty string
      * @param {any} value to evaluate

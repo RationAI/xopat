@@ -162,8 +162,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		return false;
 	}
 
-	defaultFileNameFor(format=undefined) {
-		return OSDAnnotations.Convertor.defaultFileName(format, this);
+	getFormatSuffix(format=undefined) {
+		return OSDAnnotations.Convertor.getSuffix(format);
 	}
 
 	/**
@@ -1344,7 +1344,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_objectDeselected(event) {
-		if (this.disabledInteraction) return;
+		if (this.disabledInteraction || !event.target) return;
 		//todo make sure deselect prevent does not prevent also deletion
 		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
 			this.disabledInteraction = true;

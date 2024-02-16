@@ -3,37 +3,30 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         super(context, "magic-wand", "blur_on", "Automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
-        this.threshold=10;
-        this.minThreshold=-1;
-        this.maxThreshold=200;
-        this.startThreshold=10;
-        // this._readingKey = "";
-        // this._currentTile = null;
-        // const _this = this;
-        // this._renderEngine = new WebGLModule({
-        //     uniqueId: "annot",
-        //     onError: function(error) {
-        //         //potentially able to cope with it
-        //         context.raiseEvent('warn-system', {
-        //             originType: "module",
-        //             originId: "annotations",
-        //             code: "E_AUTO_OUTLINE_ENGINE_ERROR",
-        //             message: "Error in the webgl module.",
-        //             trace: error
-        //         });
-        //     },
-        //     onFatalError: function (error) {
-        //         console.error("Error with automatic detection: this feature wil be disabled.");
-        //         VIEWER.raiseEvent('error-user', {
-        //             originType: "module",
-        //             originId: "annotations",
-        //             code: "E_AUTO_OUTLINE_ENGINE_ERROR",
-        //             message: "Error with automatic detection: this feature wil be disabled.",
-        //             trace: error
-        //         });
-        //         _this._running = false;
-        //     }
-        // });
+        this.threshold = 10;
+        this.minThreshold = 0;
+        this.maxThreshold = 200;
+        // single mouse scroll is +- 100 value
+        this.thStep = 5 / 100;
+
+        this.addMode = false; //todo not tested yet
+        this.oldMask = null;
+        this.mask = null;
+
+        this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
+            APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
+
+        const drawerType = "canvas"; //VIEWER.drawer.getType();
+        const Drawer = OpenSeadragon.determineDrawer(drawerType);
+        this.drawer = new Drawer({
+            viewer:             VIEWER,
+            viewport:           VIEWER.viewport,
+            element:            VIEWER.drawer.container,
+            debugGridColor:     VIEWER.debugGridColor,
+            options:            VIEWER.drawerOptions[drawerType]
+        });
+        this.drawer.canvas.style.setProperty('visibility', 'hidden');
+        this.drawer.canvas.style.setProperty('display', 'none');
     }
 
     setLayer(index, key) {
@@ -46,97 +39,33 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             this.context.promoteHelperAnnotation(this.result);
             this.result = null;
             this.data = null;
+            this.drawer.canvas.style.setProperty('display', 'none');
         }
         return true;
     }
 
     handleClickDown(o, point, isLeftClick, objectFactory) {
-        // const vis = VIEWER.bridge.visualization();
-        // const targetVis = {
-        //     shaders: {
-        //         target: {}
-        //     }
-        // };
-        // let toAppend = targetVis.shaders.target;
-        //
-        // for (let key in vis.shaders) {
-        //     if (vis.shaders.hasOwnProperty(key)) {
-        //         let otherLayer = vis.shaders[key];
-        //         if (key === this._readingKey) {
-        //             if (!otherLayer.visible || otherLayer.visible === "false" || otherLayer.visible === "0") {
-        //
-        //                 VIEWER.raiseEvent('warn-user', {
-        //                     originType: "module",
-        //                     originId: "annotations",
-        //                     code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
-        //                     message: "Creating annotation in an invisible layer.",
-        //                 });
-        //                 return false;
-        //             }
-        //
-        //             this.comparator = function(pixel) {
-        //                 return pixel[3] > 0;
-        //             };
-        //             toAppend[key] = {
-        //                 ...otherLayer
-        //             }
-        //         } else {
-        //             toAppend[key] = {
-        //                 type: "none",
-        //                 visible: false,
-        //                 cache: {},
-        //                 dataReferences: [-1],
-        //                 params: {},
-        //                 _index: otherLayer._index
-        //             }
-        //         }
-        //     }
-        // }
-        // this._renderEngine.reset();
-        // this._renderEngine.addVisualisation(targetVis);
-        //
-        // this._renderEngine.prepareAndInit(VIEWER.bridge.dataImageSources(),
-        //     VIEWER.drawer.canvas.width, VIEWER.drawer.canvas.height);
+        if (!objectFactory) return; // no preset - no op
 
-        //this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
-        // let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
-        // for (let i = 0; i < tiles.length; i++) {
-        //     let tile = tiles[i];
-        //     if (!tile.hasOwnProperty("annotationCanvas")) {
-        //         tile.annotationCanvas = document.createElement("canvas");
-        //         tile.annotationCanvasCtx = tile.annotationCanvas.getContext("2d");
-        //     }
-        //     this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
-        //     let canvas = this._renderEngine.processImage(
-        //         tile.cacheImageRecord?.getData() || tile.__data, tile.sourceBounds, 0, this._currentPixelSize
-        //     );
-        //     tile.annotationCanvas.width = tile.sourceBounds.width;
-        //     tile.annotationCanvas.height = tile.sourceBounds.height;
-        //     tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
-        // }
-        // return true;
-
-        // We must now render the whole data
-        // this._currentTile = "";
-        // this._readingIndex = 0;
-        // this._readingKey = "";
-        this.getStupidImageData();
+        this.context.canvas.discardActiveObject();
+        this.drawer.canvas.style.setProperty('display', 'block');
+        this.prepareViewportScreenshot();
         this._isLeft = isLeftClick;
         this._process(o);
     }
 
-    getStupidImageData(x, y, w, h){
+    prepareViewportScreenshot(x, y, w, h) {
+        this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
         x = x || 0;
         y = y || 0;
-        w = w == undefined ? VIEWER.drawer.canvas.width : w;
-        h = h == undefined ? VIEWER.drawer.canvas.height : h;
-        const data = VIEWER.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
+        w = w || VIEWER.drawer.canvas.width;
+        h = h || VIEWER.drawer.canvas.height;
+        const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
         this.data = {
             width: data.width,
             height: data.height,
             data: data.data,
             bytes:4,
-            //colorMask:cm,
             binaryMask: new Uint8ClampedArray(data.width * data.height)
         }
         return this.data;
@@ -144,28 +73,31 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
     _process(o) {
         if (!this.data) return;
-        this.startThreshold=this.threshold;
-        //todo other modes
-        let magicWandOutput = this.MagicWand.floodFill(this.data, Math.round(o.x), Math.round(o.y), this.threshold,
-            undefined, false);
 
-        // let morph = new OSDAnnotations.Morph(magicWandOutput);
-        // let mask = morph.addBorder();
+        if (this.addMode && !this.oldMask) {
+            this.oldMask = mask;
+        }
+        const ref = VIEWER.scalebar.getReferencedTiledImage();
+        const oldMask = this.oldMask && this.oldMask.data;
+
+        //todo other modes
+        this.mask = this.MagicWand.floodFill(this.data, Math.round(o.x), Math.round(o.y), this.threshold,
+            this.threshold, oldMask, false);
+
+        // let morph = new OSDAnnotations.Morph(this.mask);
+        // this.mask = morph.addBorder();
         // //todo if dilate
         // morph.dilate();
 
-        let mask = magicWandOutput;
-        mask.bounds={
-            minX:0,
-            minY:0,
-            maxX:mask.width,
-            maxY:mask.height,
+        if (this.mask) this.mask = this.MagicWand.gaussBlurOnlyBorder(this.mask, 5, oldMask);
+        if (this.addMode && oldMask) {
+            this.mask = this.mask ? this._concatMasks(this.mask, oldMask) : oldMask;
         }
-        let contours = this.MagicWand.traceContours(mask);
-        const ref = VIEWER.scalebar.getReferencedTiledImage();
-        //trick: find the largest polygon and render it
+        this.mask.bounds.minX = this.mask.bounds.minY = 0;
+        var cs = this.MagicWand.traceContours(this.mask);
+        cs = this.MagicWand.simplifyContours(cs, 0, 30);
         let largest, count = 0;
-        for (let line of contours) {
+        for (let line of cs) {
             if (!line.inner && line.points.length > count) {
                 largest = line.points;
                 count = largest.length;
@@ -178,7 +110,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         if (largest && factory) {
             largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x, pt.y)));
-            largest = OSDAnnotations.PolygonUtilities.simplify(largest);
             this.result = factory.create(largest, this.context.presets.getAnnotationOptions(this._isLeft));
             this.context.addHelperAnnotation(this.result);
         } else {
@@ -186,18 +117,69 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
     }
 
+    _concatMasks(mask, old) {
+        let
+            data1 = old.data,
+            data2 = mask.data,
+            w1 = old.width,
+            w2 = mask.width,
+            b1 = old.bounds,
+            b2 = mask.bounds,
+            b = { // bounds for new mask
+                minX: Math.min(b1.minX, b2.minX),
+                minY: Math.min(b1.minY, b2.minY),
+                maxX: Math.max(b1.maxX, b2.maxX),
+                maxY: Math.max(b1.maxY, b2.maxY)
+            },
+            w = old.width, // size for new mask
+            h = old.height,
+            i, j, k, k1, k2, len;
+
+        let result = new Uint8Array(w * h);
+
+        // copy all old mask
+        len = b1.maxX - b1.minX + 1;
+        i = b1.minY * w + b1.minX;
+        k1 = b1.minY * w1 + b1.minX;
+        k2 = b1.maxY * w1 + b1.minX + 1;
+        // walk through rows (Y)
+        for (k = k1; k < k2; k += w1) {
+            result.set(data1.subarray(k, k + len), i); // copy row
+            i += w;
+        }
+
+        // copy new mask (only "black" pixels)
+        len = b2.maxX - b2.minX + 1;
+        i = b2.minY * w + b2.minX;
+        k1 = b2.minY * w2 + b2.minX;
+        k2 = b2.maxY * w2 + b2.minX + 1;
+        // walk through rows (Y)
+        for (k = k1; k < k2; k += w2) {
+            // walk through cols (X)
+            for (j = 0; j < len; j++) {
+                if (data2[k + j] === 1) result[i + j] = 1;
+            }
+            i += w;
+        }
+
+        return {
+            data: result,
+            width: w,
+            height: h,
+            bounds: b
+        };
+    }
+
+
     scroll(event, delta) {
-        this.threshold = Math.min(this.maxThreshold, Math.max(this.minThreshold, this.threshold - Math.round(delta/10)));
+        this.threshold = Math.min(this.maxThreshold,
+            Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
         $("#a-magic-wand-threshold").val(this.threshold);
         this._process(event);
     }
 
     handleMouseMove(event, point) {
         this._process(event);
-    }
-
-    objectDeselected(event, object) {
-        return this.allowDeselection;
     }
 
     setFromAuto() {
@@ -214,12 +196,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return true;
     }
 
-    setAutoTargetLayer(self) {
-        let key = $(self).val(),
-            layer = VIEWER.bridge.visualization().shaders[key];
-        this.setLayer(layer._index, key);
-    }
-
     accepts(e) {
         return e.key === "t" && !e.ctrlKey && !e.shiftKey && !e.altKey;
     }
@@ -229,45 +205,22 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     customHtml() {
+        let options;
+        if (APPLICATION_CONTEXT.config.background.length < 1) {
+            options = "<option selected value='0'>Overlay</option>";
+        } else if (APPLICATION_CONTEXT.config.visualizations.length < 1) {
+            options = "<option selected value='0'>Tissue</option>";
+        } else {
+            options = "<option value='0'>Tissue</option>" + "<option selected value='1'>Overlay</option>";;
+        }
+
         return `
 <span class="d-inline-block">
 <span class="position-absolute top-1" style="font-size: xx-small">Growth:</span>
 <input type="range" id="a-magic-wand-threshold" style="width: 150px;" 
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
-</span>`
-
-//         let html = "";
-//         let index = -1;
-//         let layer = null;
-//         let key = "";
-//         if (!VIEWER.bridge) return "";
-//         const visualisation = VIEWER.bridge.visualization();
-//
-//         for (key in visualisation.shaders) {
-//             if (!visualisation.shaders.hasOwnProperty(key)) continue;
-//             layer = visualisation.shaders[key];
-//             if (isNaN(layer._index)) continue;
-//
-//             let selected = "";
-//
-//             if (layer._index === this._readingIndex) {
-//                 index = layer._index;
-//                 this.setLayer(index, key);
-//                 selected = "selected";
-//             }
-//             html += `<option value='${key}' ${selected}>${layer.name}</option>`;
-//         }
-//
-//         if (index < 0) {
-//             if (!layer) return;
-//             this.setLayer(layer._index, key);
-//             html = "<option selected " + html.substring(8);
-//         }
-//
-//         return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic
-// annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
-// type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setAutoTargetLayer(this);">
-// ${html}</select>`;
+</span><select class="form-control"
+onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].tiledImageIndex = Number.parseInt(this.value);">${options}</select>`;
     }
 };

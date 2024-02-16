@@ -1,19 +1,22 @@
+/**
+ * Used, maintained & modified by xOpat
+ *
+ * changelog:
+ *  16/2/24 added support for alpha threshold to magic wand
+ */
+
 ////// MagicWand.js
 // https://github.com/Tamersoul/magic-wand-js a3b0903 last modified Oct 13, 2020, downloaded 9/21/21
 // The MIT License (MIT)
-
 // Copyright (c) 2014, Ryasnoy Paul (ryasnoypaul@gmail.com)
-
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
-
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -28,20 +31,21 @@ OSDAnnotations.makeMagicWand = function () {
     /** Create a binary mask on the image by color threshold
      * Algorithm: Scanline flood fill (http://en.wikipedia.org/wiki/Flood_fill)
      * @param {Object} image: {Uint8Array} data, {int} width, {int} height, {int} bytes
-     * @param {int} x of start pixel
-     * @param {int} y of start pixel
-     * @param {int} color threshold
+     * @param {number} px
+     * @param {number} py
+     * @param {number} colorThreshold
+     * @param {number} alphaThreshold
      * @param {Uint8Array} mask of visited points (optional)
      * @param {boolean} [includeBorders=false] indicate whether to include borders pixels
      * @return {Object} mask: {Uint8Array} data, {int} width, {int} height, {Object} bounds
      */
-    lib.floodFill = function(image, px, py, colorThreshold, mask, includeBorders) {
+    lib.floodFill = function(image, px, py, colorThreshold, alphaThreshold, mask, includeBorders) {
         return includeBorders
-            ? floodFillWithBorders(image, px, py, colorThreshold, mask)
-            : floodFillWithoutBorders(image, px, py, colorThreshold, mask);
+            ? floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask)
+            : floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask);
     };
 
-    function floodFillWithoutBorders(image, px, py, colorThreshold, mask) {
+    function floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask) {
 
         var c, x, newY, el, xr, xl, dy, dyl, dyr, checkY,
             data = image.data,
@@ -56,7 +60,7 @@ OSDAnnotations.makeMagicWand = function () {
         if (visited[i] === 1) return null;
 
         i = i * bytes; // start point index in the image data
-        var sampleColor = [data[i], data[i + 1], data[i + 2], data[i + 3]]; // start point color (sample)
+        var R = data[i], G = data[i + 1], B = data[i + 2], A = data[i + 3]; // start point color (sample)
 
         var stack = [{ y: py, left: px - 1, right: px + 1, dir: 1 }]; // first scanning line
         do {
@@ -70,12 +74,14 @@ OSDAnnotations.makeMagicWand = function () {
                 if (visited[dy + x] === 1) continue; // check whether the point has been visited
 
                 // compare the color of the sample
-                c = data[i] - sampleColor[0]; // check by red
+                c = data[i] - R; // check by red
                 if (c > colorThreshold || c < -colorThreshold) continue;
-                c = data[i + 1] - sampleColor[1]; // check by green
+                c = data[i + 1] - G; // check by green
                 if (c > colorThreshold || c < -colorThreshold) continue;
-                c = data[i + 2] - sampleColor[2]; // check by blue
+                c = data[i + 2] - B; // check by blue
                 if (c > colorThreshold || c < -colorThreshold) continue;
+                c = data[i + 3] - A; // check by alpha
+                if (c > alphaThreshold || c < -alphaThreshold) continue;
 
                 //ignore transparent points
                 if(data[i+3] === 0) continue;
@@ -92,12 +98,14 @@ OSDAnnotations.makeMagicWand = function () {
                     i = dyl * bytes; // point index in the image data
                     if (visited[dyl] === 1) break; // check whether the point has been visited
                     // compare the color of the sample
-                    c = data[i] - sampleColor[0]; // check by red
+                    c = data[i] - R; // check by red
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 1] - sampleColor[1]; // check by green
+                    c = data[i + 1] - G; // check by green
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 2] - sampleColor[2]; // check by blue
+                    c = data[i + 2] - B; // check by blue
                     if (c > colorThreshold || c < -colorThreshold) break;
+                    c = data[i + 3] - A; // check by alpha
+                    if (c > alphaThreshold || c < -alphaThreshold) break;
 
                     //ignore transparent points
                     if(data[i+3] === 0) break;
@@ -114,12 +122,14 @@ OSDAnnotations.makeMagicWand = function () {
                     i = dyr * bytes; // index point in the image data
                     if (visited[dyr] === 1) break; // check whether the point has been visited
                     // compare the color of the sample
-                    c = data[i] - sampleColor[0]; // check by red
+                    c = data[i] - R; // check by red
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 1] - sampleColor[1]; // check by green
+                    c = data[i + 1] - G; // check by green
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 2] - sampleColor[2]; // check by blue
+                    c = data[i + 2] - B; // check by blue
                     if (c > colorThreshold || c < -colorThreshold) break;
+                    c = data[i + 3] - A; // check by alpha
+                    if (c > alphaThreshold || c < -alphaThreshold) break;
 
                     //ignore transparent points
                     if(data[i+3] === 0) break;
@@ -161,11 +171,11 @@ OSDAnnotations.makeMagicWand = function () {
                 maxX: maxX,
                 maxY: maxY
             },
-            sampleColor:sampleColor,
+            sampleColor: [R, G, B, A],
         };
     };
 
-    function floodFillWithBorders(image, px, py, colorThreshold, mask) {
+    function floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask) {
 
         var c, x, newY, el, xr, xl, dy, dyl, dyr, checkY,
             data = image.data,
@@ -180,7 +190,7 @@ OSDAnnotations.makeMagicWand = function () {
         if (visited[i] === 1) return null;
 
         i = i * bytes; // start point index in the image data
-        var sampleColor = [data[i], data[i + 1], data[i + 2], data[i + 3]]; // start point color (sample)
+        var R = data[i], G = data[i + 1], B = data[i + 2], A = data[i + 3]; // start point color (sample)
 
         var stack = [{ y: py, left: px - 1, right: px + 1, dir: 1 }]; // first scanning line
         do {
@@ -199,12 +209,14 @@ OSDAnnotations.makeMagicWand = function () {
                 visited[dy + x] = 1; // mark a new point as visited
 
                 // compare the color of the sample
-                c = data[i] - sampleColor[0]; // check by red
+                c = data[i] - R; // check by red
                 if (c > colorThreshold || c < -colorThreshold) continue;
-                c = data[i + 1] - sampleColor[1]; // check by green
+                c = data[i + 1] - G; // check by green
                 if (c > colorThreshold || c < -colorThreshold) continue;
-                c = data[i + 2] - sampleColor[2]; // check by blue
+                c = data[i + 2] - B; // check by blue
                 if (c > colorThreshold || c < -colorThreshold) continue;
+                c = data[i + 3] - A; // check by alpha
+                if (c > alphaThreshold || c < -alphaThreshold) continue;
 
                 //ignore transparent points
                 if(data[i+3] === 0) continue;
@@ -221,12 +233,14 @@ OSDAnnotations.makeMagicWand = function () {
                     xl--;
 
                     // compare the color of the sample
-                    c = data[i] - sampleColor[0]; // check by red
+                    c = data[i] - R; // check by red
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 1] - sampleColor[1]; // check by green
+                    c = data[i + 1] - G; // check by green
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 2] - sampleColor[2]; // check by blue
+                    c = data[i + 2] - B; // check by blue
                     if (c > colorThreshold || c < -colorThreshold) break;
+                    c = data[i + 3] - A; // check by alpha
+                    if (c > alphaThreshold || c < -alphaThreshold) break;
 
                     //ignore transparent points
                     if(data[i+3] === 0) break;
@@ -243,12 +257,14 @@ OSDAnnotations.makeMagicWand = function () {
                     xr++;
 
                     // compare the color of the sample
-                    c = data[i] - sampleColor[0]; // check by red
+                    c = data[i] - R; // check by red
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 1] - sampleColor[1]; // check by green
+                    c = data[i + 1] - G; // check by green
                     if (c > colorThreshold || c < -colorThreshold) break;
-                    c = data[i + 2] - sampleColor[2]; // check by blue
+                    c = data[i + 2] - B; // check by blue
                     if (c > colorThreshold || c < -colorThreshold) break;
+                    c = data[i + 3] - A; // check by alpha
+                    if (c > alphaThreshold || c < -alphaThreshold) break;
 
                     //ignore transparent points
                     if(data[i+3] === 0) break;
@@ -285,7 +301,7 @@ OSDAnnotations.makeMagicWand = function () {
                 maxX: maxX,
                 maxY: maxY
             },
-            sampleColor:sampleColor,
+            sampleColor: [R, G, B, A],
         };
     };
 
