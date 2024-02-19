@@ -367,6 +367,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 
     /**
      * @namespace DropDown
+     * todo either use lib or ensure window constrrains do not affect it (too low, too right)
      */
     window.DropDown = /**@lends DropDown*/ {
 
@@ -421,10 +422,17 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             });
         },
 
+        /**
+         * @returns {boolean} true if opened
+         */
+        opened: function () {
+            return this._calls.length > 0;
+        },
+
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
         // if too close to edges
         _toggle: function(mouseEvent, optionsGetter) {
-            const opened = this._calls.length > 0;
+            const opened = this.opened();
 
             if (mouseEvent === undefined || opened) {
                 if (opened) {

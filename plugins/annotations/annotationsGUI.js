@@ -174,11 +174,14 @@ title="${factory.title()}">${factory.getIcon()}</span></span>`);
 
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
-			`<div class="px-3 py-2" id="annotations-tool-bar-content">${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
+			`<div class="px-3 py-2" id="annotations-tool-bar-content" title="Hold keys or click to select. Scroll controls work with shift if hotkeys are not used.">
+<span class="position-absolute top-0" style="font-size: xx-small; color: var(--color-text-secondary)">Hold keys or click to select.</span>
+${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
 vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&nbsp;<div id="mode-custom-items" class="d-inline-block">${this.context.mode.customHtml()}</div>
 <div class="px-2 mx-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
 
-		if (!this.isModalHistory) this._createHistoryInAdvancedMenu();
+		//history menu in advanced menu
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
@@ -222,26 +225,23 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		);
 	}
 
-	openHistoryWindow() {
-		if (this.isModalHistory) {
+	openHistoryWindow(asModal = this.isModalHistory) {
+		if (asModal) {
 			this.context.history.openHistoryWindow();
-
-			if (this._openedHistoryMenu) {
-				//needs to re-open the menu - update in DOM invalidates the container
-				document.getElementById('annotations-board-in-advanced-menu').innerHTML =
-					`<button class="btn m-4" onclick="${this.THIS}._createHistoryInAdvancedMenu(true);">Opened in modal window. Re-open here.</button>`;
-			}
 		} else {
-			if (!this._openedHistoryMenu) this._createHistoryInAdvancedMenu();
-			USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+			this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		}
+		this._afterHistoryWindowOpen(asModal);
 	}
 
-	_createHistoryInAdvancedMenu(focus=false) {
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
-		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
-		this._openedHistoryMenu = true;
-		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+	_afterHistoryWindowOpen(asModal = this.isModalHistory) {
+		if (asModal) {
+			document.getElementById('annotations-board-in-advanced-menu').innerHTML =
+				`<button class="btn m-4" onclick="${this.THIS}.openHistoryWindow(false);">Opened in modal window. Re-open here.</button>`;
+		} else {
+			USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+		}
+		this.isModalHistory = asModal;
 	}
 
 	initHandlers() {
@@ -270,10 +270,15 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			}
 			this.context.createPresetsCookieSnapshot();
 		});
+		this.context.history.enableAutoOpenTargetId("annotations-board-in-advanced-menu");
+		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 
 		//allways select primary button preset since context menu shows only on non-primary
 		function showContextMenu(e) {
-			if (_this.context.presets.right) return;
+			if (_this.context.presets.right
+				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
+				return;
+			}
 
 			const actions = [{
 				title: `Select preset for left click.`
@@ -295,7 +300,6 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		}
 		this.context.addHandler('canvas-nonprimary-release', showContextMenu);
-
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);

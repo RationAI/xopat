@@ -440,6 +440,78 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		VIEWER.setMouseNavEnabled(tracking);
 	}
 
+	// Copied out of OpenSeadragon private code scope to allow manual scroll navigation
+	fireMouseWheelNavigation(event) {
+		// Simulate a 'wheel' event
+		const tracker = VIEWER.innerTracker;
+		const simulatedEvent = {
+			target:     event.target || event.srcElement,
+			type:       "wheel",
+			shiftKey:   event.shiftKey || false,
+			clientX:    event.clientX,
+			clientY:    event.clientY,
+			pageX:      event.pageX ? event.pageX : event.clientX,
+			pageY:      event.pageY ? event.pageY : event.clientY,
+			deltaMode:  event.type === "MozMousePixelScroll" ? 0 : 1, // 0=pixel, 1=line, 2=page
+			deltaX:     0,
+			deltaZ:     0
+		};
+
+		// Calculate deltaY
+		if ( OpenSeadragon.MouseTracker.wheelEventName === "mousewheel" ) {
+			simulatedEvent.deltaY = -event.wheelDelta / OpenSeadragon.DEFAULT_SETTINGS.pixelsPerWheelLine;
+		} else {
+			simulatedEvent.deltaY = event.deltaY;
+		}
+		const originalEvent = event;
+		event = simulatedEvent;
+
+		var nDelta, eventInfo, eventArgs = null;
+		nDelta = event.deltaY < 0 ? 1 : -1;
+		eventInfo = {
+			originalEvent: event,
+			eventType: 'wheel',
+			pointerType: 'mouse',
+			isEmulated: event !== originalEvent,
+			eventSource: tracker,
+			eventPhase: event ? ((typeof event.eventPhase !== 'undefined') ? event.eventPhase : 0) : 0,
+			defaultPrevented: OpenSeadragon.eventIsCanceled( event ),
+			shouldCapture: false,
+			shouldReleaseCapture: false,
+			userData: tracker.userData,
+			isStoppable: true,
+			isCancelable: true,
+			preventDefault: false,
+			preventGesture: !tracker.hasScrollHandler,
+			stopPropagation: false,
+		};
+
+		if ( tracker.preProcessEventHandler ) {
+			tracker.preProcessEventHandler( eventInfo );
+		}
+
+		if ( tracker.scrollHandler && !eventInfo.preventGesture && !eventInfo.defaultPrevented ) {
+			eventArgs = {
+				eventSource:          tracker,
+				pointerType:          'mouse',
+				position:             OpenSeadragon.getMousePosition( event ).minus( OpenSeadragon.getElementOffset( tracker.element )),
+				scroll:               nDelta,
+				shift:                event.shiftKey,
+				isTouchEvent:         false,
+				originalEvent:        originalEvent,
+				preventDefault:       eventInfo.preventDefault || eventInfo.defaultPrevented,
+				userData:             tracker.userData
+			};
+			tracker.scrollHandler( eventArgs );
+		}
+		if ( eventInfo.stopPropagation ) {
+			OpenSeadragon.stopEvent( originalEvent );
+		}
+		if (( eventArgs && eventArgs.preventDefault ) || ( eventInfo.preventDefault && !eventInfo.defaultPrevented ) ) {
+			OpenSeadragon.cancelEvent( originalEvent );
+		}
+	}
+
 	/**
 	 * Check for OSD interactivity
 	 * @return {boolean}
@@ -904,6 +976,29 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Find all objects that intersects with target bbox
+	 * @param bbox
+	 * @returns {[fabric.Object]}
+	 */
+	findIntersectingObjectsByBBox(bbox) {
+		// Cache all targets where their bounding box contains point.
+		const objects = this.canvas._objects;
+		let targets = [], i = objects.length;
+		while (i--) {
+			const coords = objects[i].aCoords;
+			if (OSDAnnotations.PolygonUtilities.intersectAABB(bbox, {
+				x: coords.tl.x,
+				y: coords.tl.y,
+				width: coords.br.x - coords.tl.x,
+				height: coords.br.y - coords.tl.y
+			})) {
+				targets.push(objects[i]);
+			}
+		}
+		return targets;
+	}
+
+	/**
 	 * Clear fabric selection (of any kind)
 	 */
 	clearSelection() {
@@ -1014,8 +1109,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = [];
+		this._wasModeFiredByKey = false;
 		this.cursor = {
-			mouseTime: 0, //OSD handler click timer
+			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
 		};
 
@@ -1113,13 +1209,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	_setListeners() {
 		const _this = this;
-		VIEWER.addHandler('key-down', e => _this._keyDownHandler(e));
-		VIEWER.addHandler('key-up', e => _this._keyUpHandler(e));
+		VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
+		VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
-		window.addEventListener("focus", e => _this.setMode(_this.Modes.AUTO), false);
+		window.addEventListener("focus", e => {
+			if (this._wasModeFiredByKey) {
+				this.setMode(this.Modes.AUTO);
+			}
+		}, false);
 		//window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
 		VIEWER.addHandler('screenshot', e => {
- 			e.context2D.drawImage(_this.canvas.getElement(), 0, 0);
+ 			e.context2D.drawImage(this.canvas.getElement(), 0, 0);
 		});
 
 		/**************************************************************************************************
@@ -1138,9 +1238,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
 				//todo in auto mode, this event is fired twice!! fix
-				if (_this.cursor.mouseTime === 0) {
+				if (_this.cursor.mouseTime === Infinity) {
 					_this.raiseEvent('canvas-nonprimary-release', {
-						originalEvent: event
+						originalEvent: event,
+						pressTime: _this.cursor.abortedTime
 					});
 				}
 				_this.cursor.mouseTime = -1;
@@ -1154,7 +1255,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-nonprimary-release', {
-					originalEvent: event
+					originalEvent: event,
+					pressTime: _this.cursor.mouseTime === Infinity ? _this.cursor.abortedTime : _this.cursor.mouseTime
 				});
 			}
 
@@ -1176,9 +1278,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
 				//todo in auto mode, this event is fired twice!! fix
-				if (_this.cursor.mouseTime === 0) {
+				if (_this.cursor.mouseTime === Infinity) {
 					_this.raiseEvent('canvas-release', {
-						originalEvent: event
+						originalEvent: event,
+						pressTime: _this.cursor.abortedTime
 					});
 				}
 				_this.cursor.mouseTime = -1;
@@ -1192,7 +1295,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-release', {
-					originalEvent: event
+					originalEvent: event,
+					pressTime: _this.cursor.mouseTime === Infinity ? _this.cursor.abortedTime : _this.cursor.mouseTime
 				});
 			}
 
@@ -1206,6 +1310,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
+			if (!factory) {
+				// try to recover
+				const presets = _this.presets.getExistingIds();
+				if (presets.length > 0) {
+					factory = presets[0];
+					_this.setPreset(factory, true);
+				}
+			}
 			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickDown(event, point, true, factory);
 		}
@@ -1236,7 +1348,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		this.canvas.on('mouse:wheel', function (o) {
 			if (_this.disabledInteraction) return;
-			_this.mode.scroll(o.e, o.e.deltaY);
+
+			if (_this.isModeAuto() || _this._wasModeFiredByKey || o.e.shiftKey) {
+				_this.mode.scroll(o.e, o.e.deltaY);
+			} else {
+				_this.fireMouseWheelNavigation(o.e);
+				_this.mode.scrollZooming(o.e, o.e.deltaY);
+			}
 		});
 
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
@@ -1285,6 +1403,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_setModeToAuto(switching) {
+		this._wasModeFiredByKey = false;
 		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
@@ -1313,6 +1432,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		let modeFromCode = this._getModeByKeyEvent(e);
 		if (modeFromCode) {
+			this._wasModeFiredByKey = true;
 			this.setMode(modeFromCode);
 			e.preventDefault();
 		}
@@ -1359,7 +1479,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (!this.mode.objectSelected(event, object)) {
 			this.context.disabledInteraction = true;
-			this.context.canvas.deselectAll();
+			this.context.canvas.discardActiveObject();
 			this.context.disabledInteraction = false;
 		} else {
 			this.history.highlight(object);
@@ -1479,12 +1599,20 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
-	 * Handle scroll event while the OSD navigation is disabled
-	 * NOTE: scroll in navigation mode is used to zoom, not available
+	 * Handle scroll event while the OSD navigation is disabled including zoom
 	 * @param {Event} event original MouseWheel event
 	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
 	 */
 	scroll(event, delta) {
+		//do nothing
+	}
+
+	/**
+	 * Handle scroll event while the OSD navigation is enabled only for zooming
+	 * @param {Event} event original MouseWheel event
+	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
+	 */
+	scrollZooming(event, delta) {
 		//do nothing
 	}
 
@@ -1554,9 +1682,13 @@ OSDAnnotations.AnnotationState = class {
 	 * @param noPresetError raise error event 'W_NO_PRESET'
 	 */
 	abortClick(isLeftClick, noPresetError=false) {
-		this.context.cursor.mouseTime = 0;
+		this.context.cursor.abortedTime = this.context.cursor.mouseTime;
+		this.context.cursor.mouseTime = Infinity;
 		this.context.cursor.isDown = false;
-		if (noPresetError) {
+
+		// if user selects mode by other method than hotkey, do not fire error on right click
+		// todo consider OSD filter event implementation and letting others decide whether to warn or not
+		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
 			VIEWER.raiseEvent('warn-user', {
 				originType: "module",
 				originId: "annotations",
@@ -1629,23 +1761,6 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		return this._finish(o, isLeftClick, objectFactory);
-	}
-
-	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, objectFactory);
-	}
-
-	_init(event, factory) {
-		//if clicked on object, highlight it
-		let active = this.context.canvas.findTarget(event);
-		if (active) {
-			this.context.canvas.setActiveObject(active);
-			this.context.canvas.renderAll();
-		}
-	}
-
-	_finish(event, isLeftClick, updater) {
 		let clickTime = Date.now();
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
@@ -1660,8 +1775,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (active) {
 			active.sendToBack();
 		}
-		const object = canvas.findNextObjectUnderMouse(event, active);
-		if (object) canvas.setActiveObject(object, event);
+		const object = canvas.findNextObjectUnderMouse(o, active);
+		if (object) canvas.setActiveObject(object, o);
 		return true; //considered as handled
 
 		//todo implement elsewhere
@@ -1671,7 +1786,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		// }
 		//
 		// //instant create wants screen pixels as we approximate based on zoom level
-		// const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
+		// const created = updater.instantCreate(new OpenSeadragon.Point(o.x, o.y), isLeftClick);
 		// if (created === false) {
 		// 	VIEWER.raiseEvent('warn-user', {
 		// 		originType: "module",
@@ -1682,6 +1797,17 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		// 	});
 		// }
 		// return true;
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		//if clicked on object, highlight it
+		let active = this.context.canvas.findTarget(o);
+		if (active) {
+			this.context.canvas.setActiveObject(active);
+		} else {
+			this.context.canvas.discardActiveObject();
+		}
+		this.context.canvas.renderAll();
 	}
 
 	customHtml() {
@@ -1698,9 +1824,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 };
 
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
-	constructor(context, id, icon, description, actsWhenNotIntersecting) {
+	constructor(context, id, icon, description) {
 		super(context, id, icon, description);
-		this.actsWhenNotIntersecting = actsWhenNotIntersecting;
 		this.allowDeselection = false;
 	}
 
@@ -1710,83 +1835,80 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, point, isLeftClick, objectFactory);
+		if (!objectFactory) this.abortClick(isLeftClick);
+		else this._init(o, point, isLeftClick, objectFactory);
 	}
 
 	handleMouseMove(e, point) {
+		this.context.freeFormTool.recomputeRadius();
 		this.context.freeFormTool.update(point);
 	}
 
 	objectDeselected(event, object) {
 		return this.allowDeselection;
 	}
-	//
-	// objectSelected(event, object) {
-	// 	return false;
-	// }
+
+	_intersects(polygon, object) {
+		let	factory = object._factory();
+		if (!factory.isEditable()) return null;
+		const objAsPolygon = factory.isImplicit() ?
+			factory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : object;
+		return OSDAnnotations.PolygonUtilities.polygonsIntersect(polygon, objAsPolygon) ? objAsPolygon : null;
+	}
+
+	// find intersection and return as polygon
+	_findIntersects(pointer, pointerBbox, currentObject) {
+		if (currentObject && this._intersects(pointer, currentObject)) {
+			return currentObject; //todo consider active object
+		}
+
+		const candidates = this.context.findIntersectingObjectsByBBox(pointerBbox);
+		for (let candidate of candidates) {
+			candidate = this._intersects(pointer, candidate);
+			if (candidate) {
+				return candidate;
+			}
+		}
+		return undefined;
+	}
 
 	_init(o, point, isLeftClick, objectFactory) {
-		let currentObject = this.context.canvas.getActiveObject(),
+		if (!objectFactory) {
+			this.abortClick(isLeftClick, true);
+			return undefined;
+		}
+
+		let ffTool = this.context.freeFormTool,
+			newPolygonPoints = this._geCirclePoints(point),
+			currentObject = this._findIntersects(newPolygonPoints,
+				{
+					x: point.x - ffTool.radius,
+					y: point.y - ffTool.radius,
+					width: ffTool.radius * 2,
+					height: ffTool.radius * 2
+				},
+				this.context.canvas.getActiveObject()),
 			created = false;
 
 		if (!currentObject) {
-			if (!this.context.freeFormTool.modeAdd) {
+			if (!ffTool.modeAdd) {
 				//subtract needs active object
 				this.abortClick(isLeftClick);
 				return;
 			}
-			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick, objectFactory);
+			currentObject = this.context.polygonFactory.create(newPolygonPoints, this.context.presets.getAnnotationOptions(isLeftClick));
 			created = true;
-		} else {
-			let	factory = currentObject._factory(),
-				willModify, newPolygonPoints;
-
-			//treat as polygon
-			if (!factory.isEditable()) {
-				willModify = false;
-			} else if (factory.isImplicit()) {
-				//let radius = this.context.freeFormTool.screenRadius*1.5;
-				// let bounds = currentObject.getBoundingRect();
-				// let w = bounds.left + bounds.width + radius,
-				// 	h = bounds.top + bounds.height + radius;
-				// bounds.left -= radius;
-				// bounds.right -= radius;
-				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
-			} else {
-				newPolygonPoints = this._geCirclePoints(point);
-				willModify = this.actsWhenNotIntersecting ||
-					OSDAnnotations.PolygonUtilities.polygonsIntersect({points: newPolygonPoints}, currentObject);
-			}
-
-			if (!willModify) {
-				if (!this.context.freeFormTool.modeAdd) {
-					//subtract needs active object
-					this.abortClick(isLeftClick);
-					return;
-				}
-				currentObject = this._initFromPoints(
-					newPolygonPoints || this._geCirclePoints(point), isLeftClick, objectFactory
-				);
-				created = true;
-			}
 		}
 
 		if (currentObject) {
-			this.context.freeFormTool.init(currentObject, created);
-			this.context.freeFormTool.update(point);
+			this.context.canvas.discardActiveObject();
+			ffTool.init(currentObject, created);
+			ffTool.update(point);
 		}
 	}
 
 	_geCirclePoints(point) {
 		return this.context.freeFormTool.getCircleShape(point);
-	}
-
-	_initFromPoints(points, isLeftClick, objectFactory) {
-		if (!objectFactory) {
-			this.abortClick(isLeftClick, true);
-			return undefined;
-		}
-		return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(isLeftClick));
 	}
 
 	_finish() {
@@ -1825,7 +1947,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "🅴 brush to create/edit", false);
+		super(context, "fft-add", "brush", "🅴  brush to create/edit");
 	}
 
 	setFromAuto() {
@@ -1845,7 +1967,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "🆁 brush to remove", true);
+		super(context, "fft-remove", "brush", "🆁  brush to remove");
 	}
 
 	setFromAuto() {
@@ -1864,7 +1986,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "format_shapes","🆆 create annotations manually");
+		super(context, "custom", "format_shapes","🆆  create annotations manually");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {

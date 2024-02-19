@@ -14,7 +14,7 @@ OSDAnnotations.History = class {
         this._canvasFocus = '';
 
         this._buffer = [];
-        this._buffidx = 0;
+        this._buffidx = -1;
         this.BUFFER_LENGTH = null;
         this._lastValidIndex = -1;
         this._autoIncrement = 0;
@@ -23,6 +23,7 @@ OSDAnnotations.History = class {
         this._presets = presetManager;
         this.containerId = "history-board-for-annotations";
         this._focusWithScreen = true;
+        this._autoOpenTargetId = null;
         this._lastOpenedInDetachedWindow = false;
     }
 
@@ -38,10 +39,14 @@ OSDAnnotations.History = class {
         this._focusWithScreen = value;
     }
 
+    enableAutoOpenTargetId(id) {
+        this._autoOpenTargetId = id;
+    }
+
     /**
      * Open external menu window with the history toolbox
      * focuses window if already opened.
-     * @param target target for the content to render to, a DOM node or undefined to open in detached window
+     * @param {Element} target target for the content to render to, a DOM node or undefined to open in detached window
      */
     openHistoryWindow(target=undefined) {
 
@@ -101,6 +106,33 @@ window.addEventListener("beforeunload", (e) => {
 
         let active = this._context.canvas.getActiveObject();
         if (active) this.highlight(active);
+        this._context.raiseEvent('history-open', {
+            inNewWindow: !target,
+            containerId: this.containerId,
+        });
+    }
+
+    swapHistoryWindowLocation() {
+        const willOpenNewWindow = !this._lastOpenedInDetachedWindow;
+        if (willOpenNewWindow) {
+            this._context.raiseEvent('before-history-swap', {
+                inNewWindow: true,
+            });
+            this.openHistoryWindow(undefined);
+        } else {
+            const el = this._autoOpenTargetId && document.getElementById(this._autoOpenTargetId);
+            if (!el) {
+                console.error("History window cannot be swapped when auto target ID has not been set or is invalid!");
+                return;
+            }
+            this._context.raiseEvent('before-history-swap', {
+                inNewWindow: false,
+            });
+            this.openHistoryWindow(el);
+        }
+        this._context.raiseEvent('history-swap', {
+            inNewWindow: willOpenNewWindow,
+        });
     }
 
     /**
@@ -116,6 +148,9 @@ window.addEventListener("beforeunload", (e) => {
                 node.remove();
             }
         }
+        this._context.raiseEvent('history-close', {
+            inNewWindow: this._lastOpenedInDetachedWindow,
+        });
     }
 
     _getHistoryWindowBodyHtml() {
@@ -129,13 +164,18 @@ window.addEventListener("beforeunload", (e) => {
         let undoCss = this.canUndo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
+        let swapButton = this._autoOpenTargetId ? `<span id="history-swap-display" class="material-icons btn-pointer 
+position-absolute right-2 top-2 text-small" 
+onclick="${this._globalSelf}.swapHistoryWindowLocation()" id="history-refresh" 
+title="Refresh board (fix inconsistencies).">${this._lastOpenedInDetachedWindow ? "open_in_new_off" : "open_in_new_down"}</span>` : "";
+
+
         return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
-<span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" 
-onclick="${this._globalSelf}.back()" id="history-undo">undo</span>
-<span id="history-redo" class="material-icons btn-pointer" style="${redoCss}" 
-onclick="${this._globalSelf}.redo()" id="history-redo">redo</span>
+<span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" onclick="${this._globalSelf}.back()">undo</span>
+<span id="history-redo" class="material-icons btn-pointer" style="${redoCss}" onclick="${this._globalSelf}.redo()">redo</span>
 <span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
-id="history-refresh" title="Refresh board (fix inconsistencies).">refresh</span>
+title="Refresh board (fix inconsistencies).">refresh</span>
+${swapButton}
 <!--todo does not work<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (${this._globalSelf}._context.disabledInteraction || !window.confirm('Do you really want to delete all annotations?')) return; ${this._canvasFocus} 
 ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>-->
@@ -174,8 +214,8 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
         const _this = this;
         if (this.canUndo()) {
-            this._performSwap(this._context.canvas,
-                this._buffer[this._buffidx].back, this._buffer[this._buffidx].forward);
+            this._performSwap(this._context.canvas, this._buffer[this._buffidx].back,
+                this._buffer[this._buffidx].forward, true, true);
 
             this._buffidx--;
             if (this._buffidx < 0) this._buffidx = this.BUFFER_LENGTH - 1;
@@ -205,8 +245,8 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         if (this.canRedo()) {
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
 
-            this._performSwap(this._context.canvas,
-                this._buffer[this._buffidx].forward, this._buffer[this._buffidx].back);
+            this._performSwap(this._context.canvas, this._buffer[this._buffidx].forward,
+                this._buffer[this._buffidx].back, true, true);
 
             const _this = this;
             this._performAtJQNode("history-redo", node => node.css("color",
@@ -216,6 +256,17 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
             this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         }
+    }
+
+    _annotationVisible(object) {
+        if (!object) return false;
+        let image = VIEWER.scalebar.getReferencedTiledImage(),
+            tl = image.imageToWindowCoordinates(new OpenSeadragon.Point(object.left, object.top)),
+            br = image.imageToWindowCoordinates(new OpenSeadragon.Point(object.left + object.width,
+                object.top + object.height));
+        let windowHeight = window.innerHeight || document.documentElement.clientHeight;
+        let windowWidth  = window.innerWidth || document.documentElement.clientWidth;
+        return (tl.x >= 0 && br.x <= windowWidth) && (tl.y >= 0 && br.y <= windowHeight);
     }
 
     /**
@@ -387,15 +438,15 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         }
 
         if (adjustZoom && bbox.width > 0 && bbox.height > 0) {
-            //show such that the annotation would fit on the screen three times
+            //show such that the annotation would fit on the screen 4 times
             let offX = bbox.width,
                 offY = bbox.height;
-            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportRectangle(bbox.left-offX*1.5,
-                bbox.top-offY*1.5, bbox.width+offX*3, bbox.height+offY*3);
+            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportRectangle(bbox.left-offX*2,
+                bbox.top-offY*2, bbox.width+offX*4, bbox.height+offY*4);
 
             VIEWER.tools.focus({bounds: target});
         } else {
-            let cx = bbox.left + bbox.width / 2, cy = bbox.top + bbox.height / 2;
+            let cx = bbox.left + bbox.width / 4, cy = bbox.top + bbox.height / 4;
             let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
             VIEWER.viewport.panTo(target, false);
             VIEWER.viewport.applyConstraints();
@@ -606,19 +657,27 @@ ${editIcon}
         this._context.enableInteraction(false);
     }
 
-    async _performSwap(canvas, toAdd, toRemove, withFocus=true) {
+    async _performSwap(canvas, toAdd, toRemove, withFocus=true, focusOnlyIfNecessary=false) {
         if (toAdd) {
-            if (withFocus) this._focus(this._getFocusBBox(toAdd));
-            await this._sleep(150); //let user to orient where canvas moved before deleting the element
             canvas.add(toAdd);
             this._addToBoard(toAdd, toRemove);
-            this._context.raiseEvent('annotation-create', {object: toAdd});
-
+            if (withFocus) {
+                if (focusOnlyIfNecessary && this._annotationVisible(toAdd)) {
+                    this.highlight(toAdd);
+                } else {
+                    this._focus(this._getFocusBBox(toAdd), undefined, !focusOnlyIfNecessary);
+                    await this._sleep(150); //let user to orient where canvas moved before deleting the element
+                }
+            }
             if (toRemove) canvas.remove(toRemove);
             canvas.setActiveObject(toAdd);
+
+            this._context.raiseEvent('annotation-create', {object: toAdd});
         } else if (toRemove) {
-            if (withFocus) this._focus(this._getFocusBBox(toRemove));
-            await this._sleep(150); //let user to orient where canvas moved before deleting the element
+            if (withFocus && (!focusOnlyIfNecessary || !this._annotationVisible(toRemove))) {
+                this._focus(this._getFocusBBox(toRemove), undefined, !focusOnlyIfNecessary);
+                await this._sleep(150); //let user to orient where canvas moved before deleting the element
+            }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
             this._context.raiseEvent('annotation-delete', {object: toAdd});

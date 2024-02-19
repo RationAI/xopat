@@ -1,6 +1,6 @@
 OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "magic-wand", "blur_on", "Automatic selection wand");
+        super(context, "magic-wand", "blur_on", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.threshold = 10;
@@ -16,15 +16,23 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
             APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
 
-        const drawerType = "canvas"; //VIEWER.drawer.getType();
-        const Drawer = OpenSeadragon.determineDrawer(drawerType);
-        this.drawer = new Drawer({
+        // TODO works with OSD 5.0+
+        // const drawerType = "canvas"; //VIEWER.drawer.getType();
+        // const Drawer = OpenSeadragon.determineDrawer(drawerType);
+        // this.drawer = new Drawer({
+        //     viewer:             VIEWER,
+        //     viewport:           VIEWER.viewport,
+        //     element:            VIEWER.drawer.container,
+        //     debugGridColor:     VIEWER.debugGridColor,
+        //     options:            VIEWER.drawerOptions[drawerType]
+        // });
+        this.drawer = new OpenSeadragon.Drawer({
             viewer:             VIEWER,
             viewport:           VIEWER.viewport,
-            element:            VIEWER.drawer.container,
-            debugGridColor:     VIEWER.debugGridColor,
-            options:            VIEWER.drawerOptions[drawerType]
+            element:            VIEWER.canvas,
+            debugGridColor:     VIEWER.debugGridColor
         });
+        this.drawer.canvas.style.setProperty('z-index', '-999');
         this.drawer.canvas.style.setProperty('visibility', 'hidden');
         this.drawer.canvas.style.setProperty('display', 'none');
     }
@@ -37,9 +45,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleClickUp(o, point, isLeftClick, objectFactory) {
         if (this.result) {
             this.context.promoteHelperAnnotation(this.result);
-            this.result = null;
-            this.data = null;
-            this.drawer.canvas.style.setProperty('display', 'none');
+            this._cleanUp();
         }
         return true;
     }
@@ -55,17 +61,27 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     prepareViewportScreenshot(x, y, w, h) {
-        this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
         x = x || 0;
         y = y || 0;
-        w = w || VIEWER.drawer.canvas.width;
-        h = h || VIEWER.drawer.canvas.height;
+        w = w || Math.round(VIEWER.drawer.canvas.width);
+        h = h || Math.round(VIEWER.drawer.canvas.height);
+
+        //TODO single line works with OSD 5.0+
+        //this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
+        this.drawer.clear();
+        const targetImage = VIEWER.world.getItemAt(this.tiledImageIndex),
+            oldDrawer = targetImage._drawer;
+        targetImage._drawer = this.drawer;
+        targetImage.draw();
+        targetImage._drawer = oldDrawer;
+        // end
         const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
         this.data = {
             width: data.width,
             height: data.height,
             data: data.data,
             bytes:4,
+            rawData: data,
             binaryMask: new Uint8ClampedArray(data.width * data.height)
         }
         return this.data;
@@ -75,19 +91,14 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         if (!this.data) return;
 
         if (this.addMode && !this.oldMask) {
-            this.oldMask = mask;
+            this.oldMask = this.mask;
         }
         const ref = VIEWER.scalebar.getReferencedTiledImage();
         const oldMask = this.oldMask && this.oldMask.data;
+        const ratio = OpenSeadragon.pixelDensityRatio;
 
-        //todo other modes
-        this.mask = this.MagicWand.floodFill(this.data, Math.round(o.x), Math.round(o.y), this.threshold,
-            this.threshold, oldMask, false);
-
-        // let morph = new OSDAnnotations.Morph(this.mask);
-        // this.mask = morph.addBorder();
-        // //todo if dilate
-        // morph.dilate();
+        this.mask = this.MagicWand.floodFill(this.data, Math.round(o.x*ratio), Math.round(o.y*ratio), this.threshold,
+            this.threshold, oldMask, true);
 
         if (this.mask) this.mask = this.MagicWand.gaussBlurOnlyBorder(this.mask, 5, oldMask);
         if (this.addMode && oldMask) {
@@ -109,7 +120,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
 
         if (largest && factory) {
-            largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x, pt.y)));
+            largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)));
             this.result = factory.create(largest, this.context.presets.getAnnotationOptions(this._isLeft));
             this.context.addHelperAnnotation(this.result);
         } else {
@@ -170,12 +181,21 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         };
     }
 
+    _cleanUp() {
+        this.result = null;
+        this.data = null;
+        this.drawer.canvas.style.setProperty('display', 'none');
+    }
 
     scroll(event, delta) {
         this.threshold = Math.min(this.maxThreshold,
             Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
         $("#a-magic-wand-threshold").val(this.threshold);
         this._process(event);
+    }
+
+    scrollZooming(event, delta) {
+        if (this.data) this._cleanUp();
     }
 
     handleMouseMove(event, point) {

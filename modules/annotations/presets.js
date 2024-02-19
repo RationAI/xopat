@@ -205,6 +205,14 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
+     * Presets getter
+     * @returns {Array<any>} preset ids
+     */
+    getExistingIds() {
+        return Object.keys(this._presets);
+    }
+
+    /**
      * Presets getter, creates if it does not exist
      * @param {string} id preset id
      * @param {string?} categoryName name to set
