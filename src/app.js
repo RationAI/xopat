@@ -220,7 +220,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         getOption(name, defaultValue=undefined, cache=true) {
             if (cache) {
                 let cached = localStorage.getItem(name);
-                if (cached !== null) return cached;
+                if (cached !== null && cached !== undefined) {
+                    if (cached === "false") cached = false;
+                    else if (cached === "true") cached = true;
+                    return cached;
+                }
             }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
                 (defaultValue === undefined ? this.defaultConfig[name] : defaultValue);

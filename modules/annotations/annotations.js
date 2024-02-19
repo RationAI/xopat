@@ -129,6 +129,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				console.error("Faulty cached data!", e);
 			}
 		}
+		if (!this._avoidImport) {
+			let presets = await this.getCache("_lastPresetList");
+			if (presets) {
+				await this.presets.import(presets, true);
+				this.raiseEvent('import', {
+					options: {},
+					clear: true,
+					data: {
+						presets: presets
+					},
+				});
+			}
+		}
 
 		let guard = 0; const _this=this;
 		function editRoutine(force=false) {
@@ -150,7 +163,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.addHandler('annotation-delete', editRoutine);
 		this.addHandler('annotation-replace', editRoutine);
 		this.addHandler('annotation-edit', editRoutine);
-		addEventListener("beforeunload", event => {
+		this.addHandler('preset-create', () => this.setCache('_lastPresetList', this.presets.toObject()));
+		this.addHandler('preset-update', () => this.setCache('_lastPresetList', this.presets.toObject()));
+		this.addHandler('preset-delete', () => this.setCache('_lastPresetList', this.presets.toObject()));
+
+		window.addEventListener("beforeunload", event => {
 			if (guard === 0 || !_this.history.canUndo()) return;
 			editRoutine(true);
 		});
