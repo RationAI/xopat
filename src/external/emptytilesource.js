@@ -46,10 +46,10 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
     }
 
     downloadTileStart(context) {
-        let size = context.tile.size;
+        let size = context.tile.size || {x: 0, y: 0};
         let canvas = document.createElement("canvas");
         let ctx = canvas.getContext('2d');
-        if (size.width < 1 || size.height < 1) {
+        if (size.x < 1 || size.y < 1) {
             canvas.width = 512;
             canvas.height = 512;
         } else {

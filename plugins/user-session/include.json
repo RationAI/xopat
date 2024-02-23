@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Export user sessions and store them using custom API.",
     "icon": null,
-    "includes" : ["session.js"],
+    "includes" : ["session.js", "annotationDataStore.js"],
     "modules": [],
     "permaLoad": false,
     //API Url: auth prompt

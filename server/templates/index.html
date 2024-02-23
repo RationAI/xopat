@@ -37,8 +37,6 @@
         })();
     </script>
 
-    <script src="config_meta.js"></script>
-
     <!-- Template head -->
     <template id="template-head"></template>
 </head>
@@ -120,7 +118,7 @@
             <div class="inner-panel-content noselect" id="inner-panel-content-1">
                 <div>
                     <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.clickMenuHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                    APPLICATION_CONTEXT._setCookie('_shadersPin', `\${jqSelf.hasClass('opened')}`);" style="padding: 0;">navigate_next</span>
+                    APPLICATION_CONTEXT.AppCookies.set('_shadersPin', `\${jqSelf.hasClass('opened')}`);" style="padding: 0;">navigate_next</span>
                     <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualisation">
                         <!--populated with shaders from the list -->
                     </select>
@@ -129,8 +127,8 @@
                         style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
                         <div class="position-absolute px-2 py-1 rounded-2 border-sm cache-snapshot-visible top-0 right-2 flex-row"
                         style="display: none; background: var(--color-bg-tertiary);">
-                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cookiesByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
-                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cookiesByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
                         </div>
                     </div>
                     <br>

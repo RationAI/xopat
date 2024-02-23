@@ -110,7 +110,8 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         },
 
         requireOpenseadragon: function() {
-            return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}"></script>\n`;
+            const version = this.VERSION;
+            return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
 
         requireLib: function (name) {

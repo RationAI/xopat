@@ -364,9 +364,19 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
     }; // end of namespace Dialogs
     Dialogs.init();
 
+    /**
+     * @typedef {{
+     *  icon?: string,
+     * 	iconCss?: string,
+     * 	title: string,
+     * 	action: function,
+     * 	selected?: boolean
+     * }} DropDownItem
+     */
 
     /**
      * @namespace DropDown
+     * todo either use lib or ensure window constrrains do not affect it (too low, too right)
      */
     window.DropDown = /**@lends DropDown*/ {
 
@@ -385,11 +395,18 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         /**
          * Open dialog from fired user input event
          * @param {Event} mouseEvent
-         * @param {function} optionsGetter
+         * @param {function|Array<DropDownItem>} optionsGetter
          */
         open: function(mouseEvent, optionsGetter) {
              this._toggle(mouseEvent, optionsGetter);
              mouseEvent.preventDefault();
+        },
+
+        /**
+         * @returns {boolean} true if opened
+         */
+        opened: function () {
+            return this._calls.length > 0;
         },
 
         /**
@@ -424,7 +441,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
         // if too close to edges
         _toggle: function(mouseEvent, optionsGetter) {
-            const opened = this._calls.length > 0;
+            const opened = this.opened();
 
             if (mouseEvent === undefined || opened) {
                 if (opened) {
@@ -882,7 +899,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
                 }
                 let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
-                APPLICATION_CONTEXT._setCookie('_plugins', pluginCookie); //todo local store? or persistent store?
+                APPLICATION_CONTEXT.AppCookies.set('_plugins', pluginCookie); //todo where we want to store this?
                 UTILITIES.refreshPage(formData.join(""), plugins);
             },
             /**
@@ -980,7 +997,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     USER_INTERFACE.Tools.open();
                 }
                 this.running = false;
-                APPLICATION_CONTEXT._setCookie('_shadersPin', 'false');
+                APPLICATION_CONTEXT.AppCookies.set('_shadersPin', 'false');
             },
 
             /**
@@ -1089,8 +1106,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     function buildSettingsMenu(ctx) {
         let inputs = UIComponents.Elements;
         let notifyNeedRefresh = "$('#settings-notification').css('visibility', 'visible');";
-        let updateOption = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cookies});`;
-        let updateBool = (name, cookies=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cookies});`;
+        let updateOption = (name, cache=false) => `APPLICATION_CONTEXT.setOption('${name}', $(this).val(), ${cache});`;
+        let updateBool = (name, cache=false) => `APPLICATION_CONTEXT.setOption('${name}', this.checked, ${cache});`;
         let standardBoolInput = (id, title, onChange=notifyNeedRefresh) => inputs.checkBox({
             label: title, onchange: updateBool(id) + onChange, default: APPLICATION_CONTEXT.getOption(id)
         });

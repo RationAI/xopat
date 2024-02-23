@@ -51,7 +51,7 @@ In this event, you can also override the application rendering configuration,
 as it has not been initialized yet. For example, if the application rendering
 is missing all the data, you can provide default values for the rendering.
 Note that exception thrown in this event is considered as a signal for aborting the rendering.
-
+TODO DOCS
 #### `export-data` | e: `{setSerializedData: function}`
 Submit your serialized data to the export event. The event gives you a callback to use to 
 save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value
@@ -72,7 +72,7 @@ Same as above, an error event.
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
-#### `plugin-loaded` | e: `{id: string}
+#### `plugin-loaded` | e: `{id: string, plugin: XOpatPlugin}
 Fired when plugin is loaded within a system (at runtime).
 
 #### `plugin-failed` | e: `{id: string, message:string}
@@ -111,6 +111,12 @@ fully re-usable for your purposes, **using custom annotation objects to perform 
 
 
 ### Rendering-Related Events
+
+#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, previewUrl: null}`
+Fired when the UI wants to know what is a slide _preview url_, which can be constructed
+from ``server`` on which `image` slide identification lives. If `previewUrl`
+is not set to be a valid string URL value, it is created automatically based on server and image
+values using the ``image_group_preview`` configuration specification.
 
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
 Fired when the corresponding `TiledImage` fails to load multiple tiles within a certain time

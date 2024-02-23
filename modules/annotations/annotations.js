@@ -13,7 +13,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		super("annotations");
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
-		this.initEventSource();
+		this.registerAsEventSource();
 		this._init();
 		this._setListeners();
 	}
@@ -91,23 +91,74 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/******************* EXPORT, IMPORT **********************/
-
 	async exportData() {
 		return await this.export();
 	}
 
 	async importData(data) {
-		if (!this._avoidImport) await this.import(data);
+		await this.import(data);
 	}
 
+	/**
+	 * Get the currently used data persistence storage module.
+	 * This initializes the main persitor.
+	 * @return {PostDataStore}
+	 */
 	async initIO() {
+		if (this.POSTStore) return this.POSTStore;
 
-		//todo a bit hacky, first attempt to save workspaces
-		let data = await this.getCache("_unsaved");
+		const store = await super.initIO({
+			schema: {
+				"": {_deprecated: ["annotations"]},
+			},
+			strictSchema: false
+		});
+
+		await this._initIoFromCache();
+
+		let guard = 0; const _this=this;
+		function editRoutine(force=false) {
+			if (force || guard++ > 10) {
+				guard = 0;
+				//todo ensure cache can be non-persistent as a fallback
+				_this.cache.set('_unsaved', {
+					session: APPLICATION_CONTEXT.sessionName,
+					objects: _this.toObject(true)?.objects,
+					presets: _this.presets.toObject()
+				});
+			}
+		}
+
+		this.addHandler('export', () => {
+			_this.cache.set('_unsaved', null);
+			guard = 0;
+		});
+		this.addHandler('annotation-create', editRoutine);
+		this.addHandler('annotation-delete', editRoutine);
+		this.addHandler('annotation-replace', editRoutine);
+		this.addHandler('annotation-edit', editRoutine);
+		window.addEventListener("beforeunload", event => {
+			if (guard === 0 || !_this.history.canUndo()) return;
+			editRoutine(true);
+		});
+
+		if (!this._avoidImport) {
+			await this.loadPresetsCookieSnapshot();
+		}
+
+		return store;
+	}
+
+	async _initIoFromCache() {
+		//todo verify how this behaves with override data import later from the data API
+		// also problem: if cache implemented over DB? we could add cache.local option that could
+		// explicitly request / enforce local storage usage
+		let data = this.cache.get("_unsaved");
 		if (data) {
 			try {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
+						//todo do not avoid import but import to a new layer!!!
 						this._avoidImport = true;
 						if (data?.presets) await this.presets.import(data?.presets, true);
 						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
@@ -122,48 +173,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					} else {
 						this._avoidImport = false;
 						//do not erase cache upon load, still not saved anywhere
-						await this.setCache('_unsaved', null);
+						await this.cache.set('_unsaved', null);
 					}
 				}
 			} catch (e) {
 				console.error("Faulty cached data!", e);
 			}
 		}
-
-		let guard = 0; const _this=this;
-		function editRoutine(force=false) {
-			if (force || guard++ > 10) {
-				guard = 0;
-				_this.setCache('_unsaved', {
-					session: APPLICATION_CONTEXT.sessionName,
-					objects: _this.toObject(true)?.objects,
-					presets: _this.presets.toObject()
-				});
-			}
-		}
-
-		this.addHandler('export', () => {
-			_this.setCache('_unsaved', null);
-			guard = 0;
-		});
-		this.addHandler('annotation-create', editRoutine);
-		this.addHandler('annotation-delete', editRoutine);
-		this.addHandler('annotation-replace', editRoutine);
-		this.addHandler('annotation-edit', editRoutine);
-		addEventListener("beforeunload", event => {
-			if (guard === 0 || !_this.history.canUndo()) return;
-			editRoutine(true);
-		});
-
-		if (await super.initIO()) {
-			if (!this._avoidImport) await this.loadPresetsCookieSnapshot();
-			return true;
-		}
-		return false;
 	}
 
-	defaultFileNameFor(format=undefined) {
-		return OSDAnnotations.Convertor.defaultFileName(format, this);
+	getFormatSuffix(format=undefined) {
+		return OSDAnnotations.Convertor.getSuffix(format);
 	}
 
 	/**
@@ -758,7 +778,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
 		annotation.sessionID = this.session;
-		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
+		annotation.author = XOpatUser.instance().name;
 		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
@@ -768,7 +788,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Add annotation to the canvas
+	 * Add annotation to the canvas. Annotation will have identity
+	 * (unlike helper annotation which is meant for visual purposes only).
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
 	 */
@@ -778,7 +799,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Delete helper annotation, should not be used on normal annotation
+	 * Delete helper annotation, should not be used on full identity
+	 * annotation.
 	 * @param {fabric.Object} annotation helper annotation
 	 */
 	deleteHelperAnnotation(annotation) {
@@ -904,6 +926,31 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Find all objects that intersects with target bbox
+	 * @param bbox
+	 * @returns {[fabric.Object]}
+	 */
+	findIntersectingObjectsByBBox(bbox) {
+		// Cache all targets where their bounding box contains point.
+		const objects = this.canvas._objects;
+		let targets = [], i = objects.length;
+		while (i--) {
+			const object = objects[i];
+			if (!object.sessionID) continue;
+			const coords = object.aCoords;
+			if (OSDAnnotations.PolygonUtilities.intersectAABB(bbox, {
+				x: coords.tl.x,
+				y: coords.tl.y,
+				width: coords.br.x - coords.tl.x,
+				height: coords.br.y - coords.tl.y
+			})) {
+				targets.push(object);
+			}
+		}
+		return targets;
+	}
+
+	/**
 	 * Clear fabric selection (of any kind)
 	 */
 	clearSelection() {
@@ -952,7 +999,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {
-		return await this.setCache('presets.cache', JSON.stringify(this.presets.toObject()));
+		return await this.cache.set('presets', JSON.stringify(this.presets.toObject()));
 	}
 
 	/**
@@ -960,7 +1007,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	async loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
-		const presetCookiesData = await this.getCache('presets.cache');
+		const presetCookiesData = this.cache.get('presets');
 
 		if (presetCookiesData) {
 			if (ask && this.presets._presetsImported) {
@@ -989,11 +1036,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// can maybe attach 'edit' button controls to object...
 		// note the board would have to reflect the UI state when opening
 
+		const _this = this;
 		/**
 		 * Attach factory getter to each object
 		 */
 		fabric.Object.prototype._factory = function () {
-			const factory = _this.getAnnotationObjectFactory(this.factoryID || this.factoryId); //todo fallback factoryId remove in future
+			const factory = _this.getAnnotationObjectFactory(this.factoryID);
 			if (factory) this._factory = () => factory;
 			else if (this.factoryID) {
 				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
@@ -1014,8 +1062,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = [];
+		this._wasModeFiredByKey = false;
 		this.cursor = {
-			mouseTime: 0, //OSD handler click timer
+			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
 		};
 
@@ -1052,8 +1101,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.automaticCreationStrategy = VIEWER.bridge ?
 			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
 			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
-
-		const _this = this;
 
 		//after properties initialize
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
@@ -1113,13 +1160,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	_setListeners() {
 		const _this = this;
-		VIEWER.addHandler('key-down', e => _this._keyDownHandler(e));
-		VIEWER.addHandler('key-up', e => _this._keyUpHandler(e));
+		VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
+		VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
-		window.addEventListener("focus", e => _this.setMode(_this.Modes.AUTO), false);
-		window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+		window.addEventListener("focus", e => {
+			if (this._wasModeFiredByKey) {
+				this.setMode(this.Modes.AUTO);
+			}
+		}, false);
+		// window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
 		VIEWER.addHandler('screenshot', e => {
- 			e.context2D.drawImage(_this.canvas.getElement(), 0, 0);
+			e.context2D.drawImage(this.canvas.getElement(), 0, 0);
 		});
 
 		/**************************************************************************************************
@@ -1138,9 +1189,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
 				//todo in auto mode, this event is fired twice!! fix
-				if (_this.cursor.mouseTime === 0) {
+				if (_this.cursor.mouseTime === Infinity) {
 					_this.raiseEvent('canvas-nonprimary-release', {
-						originalEvent: event
+						originalEvent: event,
+						pressTime: _this.cursor.abortedTime
 					});
 				}
 				_this.cursor.mouseTime = -1;
@@ -1154,7 +1206,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-nonprimary-release', {
-					originalEvent: event
+					originalEvent: event,
+					pressTime: _this.cursor.mouseTime === Infinity ? _this.cursor.abortedTime : _this.cursor.mouseTime
 				});
 			}
 
@@ -1176,9 +1229,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.disabledInteraction) return;
 			if (!_this.cursor.isDown) {
 				//todo in auto mode, this event is fired twice!! fix
-				if (_this.cursor.mouseTime === 0) {
+				if (_this.cursor.mouseTime === Infinity) {
 					_this.raiseEvent('canvas-release', {
-						originalEvent: event
+						originalEvent: event,
+						pressTime: _this.cursor.abortedTime
 					});
 				}
 				_this.cursor.mouseTime = -1;
@@ -1192,7 +1246,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-release', {
-					originalEvent: event
+					originalEvent: event,
+					pressTime: _this.cursor.mouseTime === Infinity ? _this.cursor.abortedTime : _this.cursor.mouseTime
 				});
 			}
 
@@ -1206,6 +1261,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			_this.cursor.isDown = true;
 
 			let factory = _this.presets.left ? _this.presets.left.objectFactory : undefined;
+			if (!factory) {
+				// try to recover
+				const presets = _this.presets.getExistingIds();
+				if (presets.length > 0) {
+					factory = presets[0];
+					_this.setPreset(factory, true);
+				}
+			}
 			let point = screenToPixelCoords(event.x, event.y);
 			_this.mode.handleClickDown(event, point, true, factory);
 		}
@@ -1231,12 +1294,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		this.canvas.on('mouse:move', function (o) {
 			if (_this.disabledInteraction || !_this.cursor.isDown) return;
-			_this.mode.handleMouseMove(screenToPixelCoords(o.e.x, o.e.y));
+			_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
 		});
 
 		this.canvas.on('mouse:wheel', function (o) {
 			if (_this.disabledInteraction) return;
-			_this.mode.scroll(o.e, o.e.deltaY);
+
+			if (_this.isModeAuto() || _this._wasModeFiredByKey || o.e.shiftKey) {
+				_this.mode.scroll(o.e, o.e.deltaY);
+			} else {
+				_this._fireMouseWheelNavigation(o.e);
+				_this.mode.scrollZooming(o.e, o.e.deltaY);
+			}
 		});
 
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
@@ -1285,6 +1354,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_setModeToAuto(switching) {
+		this._wasModeFiredByKey = false;
 		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
@@ -1313,6 +1383,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		let modeFromCode = this._getModeByKeyEvent(e);
 		if (modeFromCode) {
+			this._wasModeFiredByKey = true;
 			this.setMode(modeFromCode);
 			e.preventDefault();
 		}
@@ -1344,7 +1415,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_objectDeselected(event) {
-		if (this.disabledInteraction) return;
+		if (this.disabledInteraction || !event.target) return;
 		//todo make sure deselect prevent does not prevent also deletion
 		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
 			this.disabledInteraction = true;
@@ -1359,7 +1430,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (!this.mode.objectSelected(event, object)) {
 			this.context.disabledInteraction = true;
-			this.context.canvas.deselectAll();
+			this.context.canvas.discardActiveObject();
 			this.context.disabledInteraction = false;
 		} else {
 			this.history.highlight(object);
@@ -1423,11 +1494,85 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
 	}
+
+	// Copied out of OpenSeadragon private code scope to allow manual scroll navigation
+	_fireMouseWheelNavigation(event) {
+		// Simulate a 'wheel' event
+		const tracker = VIEWER.innerTracker;
+		const simulatedEvent = {
+			target:     event.target || event.srcElement,
+			type:       "wheel",
+			shiftKey:   event.shiftKey || false,
+			clientX:    event.clientX,
+			clientY:    event.clientY,
+			pageX:      event.pageX ? event.pageX : event.clientX,
+			pageY:      event.pageY ? event.pageY : event.clientY,
+			deltaMode:  event.type === "MozMousePixelScroll" ? 0 : 1, // 0=pixel, 1=line, 2=page
+			deltaX:     0,
+			deltaZ:     0
+		};
+
+		// Calculate deltaY
+		if ( OpenSeadragon.MouseTracker.wheelEventName === "mousewheel" ) {
+			simulatedEvent.deltaY = -event.wheelDelta / OpenSeadragon.DEFAULT_SETTINGS.pixelsPerWheelLine;
+		} else {
+			simulatedEvent.deltaY = event.deltaY;
+		}
+		const originalEvent = event;
+		event = simulatedEvent;
+
+		var nDelta, eventInfo, eventArgs = null;
+		nDelta = event.deltaY < 0 ? 1 : -1;
+		eventInfo = {
+			originalEvent: event,
+			eventType: 'wheel',
+			pointerType: 'mouse',
+			isEmulated: event !== originalEvent,
+			eventSource: tracker,
+			eventPhase: event ? ((typeof event.eventPhase !== 'undefined') ? event.eventPhase : 0) : 0,
+			defaultPrevented: OpenSeadragon.eventIsCanceled( event ),
+			shouldCapture: false,
+			shouldReleaseCapture: false,
+			userData: tracker.userData,
+			isStoppable: true,
+			isCancelable: true,
+			preventDefault: false,
+			preventGesture: !tracker.hasScrollHandler,
+			stopPropagation: false,
+		};
+
+		if ( tracker.preProcessEventHandler ) {
+			tracker.preProcessEventHandler( eventInfo );
+		}
+
+		if ( tracker.scrollHandler && !eventInfo.preventGesture && !eventInfo.defaultPrevented ) {
+			eventArgs = {
+				eventSource:          tracker,
+				pointerType:          'mouse',
+				position:             OpenSeadragon.getMousePosition( event ).minus( OpenSeadragon.getElementOffset( tracker.element )),
+				scroll:               nDelta,
+				shift:                event.shiftKey,
+				isTouchEvent:         false,
+				originalEvent:        originalEvent,
+				preventDefault:       eventInfo.preventDefault || eventInfo.defaultPrevented,
+				userData:             tracker.userData
+			};
+			tracker.scrollHandler( eventArgs );
+		}
+		if ( eventInfo.stopPropagation ) {
+			OpenSeadragon.stopEvent( originalEvent );
+		}
+		if (( eventArgs && eventArgs.preventDefault ) || ( eventInfo.preventDefault && !eventInfo.defaultPrevented ) ) {
+			OpenSeadragon.cancelEvent( originalEvent );
+		}
+	}
 };
 
 /**
- * Default annotation state parent class, also a valid mode (does nothing).
- * @type {OSDAnnotations.AnnotationState}
+ * @classdesc Default annotation state parent class, also a valid mode (does nothing).
+ * 	The annotation mode defines how it is turned on (key shortcuts) and how it
+ *  drives the user control over this module
+ * @class {OSDAnnotations.AnnotationState}
  */
 OSDAnnotations.AnnotationState = class {
 	/**
@@ -1439,15 +1584,31 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {string} description description of this mode
 	 */
 	constructor(context, id, icon, description) {
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this._id = id;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this.icon = icon;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {OSDAnnotations}
+		 */
 		this.context = context;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this.description = description;
 	}
 
 	/**
 	 * Perform action on mouse up event
-	 * @param {Event} o original js event
+	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
@@ -1459,7 +1620,7 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Perform action on mouse down event
-	 * @param {Event} o original js event
+	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
@@ -1471,19 +1632,28 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * Handle mouse moving event while the OSD navigation is disabled
 	 * NOTE: mouse move in navigation mode is used to navigate, not available
+	 * @param {MouseEvent} o original event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 */
-	handleMouseMove(point) {
+	handleMouseMove(o, point) {
 		//do nothing
 	}
 
 	/**
-	 * Handle scroll event while the OSD navigation is disabled
-	 * NOTE: scroll in navigation mode is used to zoom, not available
+	 * Handle scroll event while the OSD navigation is disabled including zoom
 	 * @param {Event} event original MouseWheel event
 	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
 	 */
 	scroll(event, delta) {
+		//do nothing
+	}
+
+	/**
+	 * Handle scroll event while the OSD navigation is enabled only for zooming
+	 * @param {Event} event original MouseWheel event
+	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
+	 */
+	scrollZooming(event, delta) {
 		//do nothing
 	}
 
@@ -1553,9 +1723,13 @@ OSDAnnotations.AnnotationState = class {
 	 * @param noPresetError raise error event 'W_NO_PRESET'
 	 */
 	abortClick(isLeftClick, noPresetError=false) {
-		this.context.cursor.mouseTime = 0;
+		this.context.cursor.abortedTime = this.context.cursor.mouseTime;
+		this.context.cursor.mouseTime = Infinity;
 		this.context.cursor.isDown = false;
-		if (noPresetError) {
+
+		// if user selects mode by other method than hotkey, do not fire error on right click
+		// todo consider OSD filter event implementation and letting others decide whether to warn or not
+		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
 			VIEWER.raiseEvent('warn-user', {
 				originType: "module",
 				originId: "annotations",
@@ -1624,27 +1798,10 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "🆀 navigate / select annotations");
+		super(context, "auto", "open_with", "🆀  navigate / select annotations");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		return this._finish(o, isLeftClick, objectFactory);
-	}
-
-	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, objectFactory);
-	}
-
-	_init(event, factory) {
-		//if clicked on object, highlight it
-		let active = this.context.canvas.findTarget(event);
-		if (active) {
-			this.context.canvas.setActiveObject(active);
-			this.context.canvas.renderAll();
-		}
-	}
-
-	_finish(event, isLeftClick, updater) {
 		let clickTime = Date.now();
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
@@ -1659,28 +1816,20 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (active) {
 			active.sendToBack();
 		}
-		const object = canvas.findNextObjectUnderMouse(event, active);
-		if (object) canvas.setActiveObject(object, event);
+		const object = canvas.findNextObjectUnderMouse(o, active);
+		if (object) canvas.setActiveObject(object, o);
 		return true; //considered as handled
+	}
 
-		//todo implement elsewhere
-		// if (!updater || !this.autoSelectionEnabled) {
-		// 	this.abortClick(isLeftClick, true);
-		// 	return false;
-		// }
-		//
-		// //instant create wants screen pixels as we approximate based on zoom level
-		// const created = updater.instantCreate(new OpenSeadragon.Point(event.x, event.y), isLeftClick);
-		// if (created === false) {
-		// 	VIEWER.raiseEvent('warn-user', {
-		// 		originType: "module",
-		// 		originId: "annotations",
-		// 		code: "W_AUTO_CREATION_FAIL",
-		// 		message: "Automatic annotation creation failed!",
-		// 		isLeftClick: isLeftClick
-		// 	});
-		// }
-		// return true;
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		//if clicked on object, highlight it
+		let active = this.context.canvas.findTarget(o);
+		if (active) {
+			this.context.canvas.setActiveObject(active);
+		} else {
+			this.context.canvas.discardActiveObject();
+		}
+		this.context.canvas.renderAll();
 	}
 
 	customHtml() {
@@ -1697,9 +1846,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 };
 
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
-	constructor(context, id, icon, description, actsWhenNotIntersecting) {
+	constructor(context, id, icon, description) {
 		super(context, id, icon, description);
-		this.actsWhenNotIntersecting = actsWhenNotIntersecting;
 		this.allowDeselection = false;
 	}
 
@@ -1709,83 +1857,81 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
-		this._init(o, point, isLeftClick, objectFactory);
+		if (!objectFactory) this.abortClick(isLeftClick);
+		else this._init(o, point, isLeftClick, objectFactory);
 	}
 
-	handleMouseMove(point) {
+	handleMouseMove(o, point) {
+		this.context.freeFormTool.recomputeRadius();
 		this.context.freeFormTool.update(point);
 	}
 
 	objectDeselected(event, object) {
 		return this.allowDeselection;
 	}
-	//
-	// objectSelected(event, object) {
-	// 	return false;
-	// }
+
+
+	_intersects(polygon, object) {
+		let	factory = object._factory();
+		if (!factory.isEditable()) return null;
+		const objAsPolygon = factory.isImplicit() ?
+			factory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : object;
+		return OSDAnnotations.PolygonUtilities.polygonsIntersect(polygon, objAsPolygon) ? objAsPolygon : null;
+	}
+
+	// find intersection and return as polygon
+	_findIntersects(pointer, pointerBbox, currentObject) {
+		if (currentObject && this._intersects(pointer, currentObject)) {
+			return currentObject; //todo consider active object
+		}
+
+		const candidates = this.context.findIntersectingObjectsByBBox(pointerBbox);
+		for (let candidate of candidates) {
+			candidate = this._intersects(pointer, candidate);
+			if (candidate) {
+				return candidate;
+			}
+		}
+		return undefined;
+	}
 
 	_init(o, point, isLeftClick, objectFactory) {
-		let currentObject = this.context.canvas.getActiveObject(),
+		if (!objectFactory) {
+			this.abortClick(isLeftClick, true);
+			return undefined;
+		}
+
+		let ffTool = this.context.freeFormTool,
+			newPolygonPoints = this._geCirclePoints(point),
+			currentObject = this._findIntersects(newPolygonPoints,
+				{
+					x: point.x - ffTool.radius,
+					y: point.y - ffTool.radius,
+					width: ffTool.radius * 2,
+					height: ffTool.radius * 2
+				},
+				this.context.canvas.getActiveObject()),
 			created = false;
 
 		if (!currentObject) {
-			if (!this.context.freeFormTool.modeAdd) {
+			if (!ffTool.modeAdd) {
 				//subtract needs active object
 				this.abortClick(isLeftClick);
 				return;
 			}
-			currentObject = this._initFromPoints(this._geCirclePoints(point), isLeftClick, objectFactory);
+			currentObject = this.context.polygonFactory.create(newPolygonPoints, this.context.presets.getAnnotationOptions(isLeftClick));
 			created = true;
-		} else {
-			let	factory = currentObject._factory(),
-				willModify, newPolygonPoints;
-
-			//treat as polygon
-			if (!factory.isEditable()) {
-				willModify = false;
-			} else if (factory.isImplicit()) {
-				//let radius = this.context.freeFormTool.screenRadius*1.5;
-				// let bounds = currentObject.getBoundingRect();
-				// let w = bounds.left + bounds.width + radius,
-				// 	h = bounds.top + bounds.height + radius;
-				// bounds.left -= radius;
-				// bounds.right -= radius;
-				willModify = true; // o.y < bounds.top || o.y > h || o.x < bounds.left || o.x > w;
-			} else {
-				newPolygonPoints = this._geCirclePoints(point);
-				willModify = this.actsWhenNotIntersecting ||
-					OSDAnnotations.PolygonUtilities.polygonsIntersect({points: newPolygonPoints}, currentObject);
-			}
-
-			if (!willModify) {
-				if (!this.context.freeFormTool.modeAdd) {
-					//subtract needs active object
-					this.abortClick(isLeftClick);
-					return;
-				}
-				currentObject = this._initFromPoints(
-					newPolygonPoints || this._geCirclePoints(point), isLeftClick, objectFactory
-				);
-				created = true;
-			}
 		}
 
 		if (currentObject) {
-			this.context.freeFormTool.init(currentObject, created);
-			this.context.freeFormTool.update(point);
+			this.context.canvas.discardActiveObject();
+			ffTool.init(currentObject, created);
+			ffTool.update(point);
 		}
 	}
 
 	_geCirclePoints(point) {
 		return this.context.freeFormTool.getCircleShape(point);
-	}
-
-	_initFromPoints(points, isLeftClick, objectFactory) {
-		if (!objectFactory) {
-			this.abortClick(isLeftClick, true);
-			return undefined;
-		}
-		return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(isLeftClick));
 	}
 
 	_finish() {
@@ -1824,7 +1970,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "🅴 brush to create/edit", false);
+		super(context, "fft-add", "brush", "🅴  brush to create/edit");
 	}
 
 	setFromAuto() {
@@ -1844,7 +1990,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "🆁 brush to remove", true);
+		super(context, "fft-remove", "brush", "🆁  brush to remove");
 	}
 
 	setFromAuto() {
@@ -1863,7 +2009,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "format_shapes","🆆 create annotations manually");
+		super(context, "custom", "format_shapes","🆆  create annotations manually");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1880,7 +2026,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		this._init(point, isLeftClick, objectFactory);
 	}
 
-	handleMouseMove(point) {
+	handleMouseMove(e, point) {
 		//todo experiment with this condition, also is it necessary for fft?
 		if (this.context.isMouseOSDInteractive()) {
 			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);

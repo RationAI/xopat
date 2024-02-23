@@ -92,12 +92,10 @@ Save Session: <span class="material-icons">save</span></span>`,
         }
     }
 
+    //todo implement new auth flow
     _finishAuthOk(response) {
-        const meta = APPLICATION_CONTEXT.metadata;
-        meta.set(xOpatSchema.user, response);
-
         USER_INTERFACE.MainMenu.replace(
-            `User &nbsp;<span class="f3-light">${meta.get(xOpatSchema.user.name, "unknown")}</span>`,
+            `User &nbsp;<span class="f3-light">${XOpatUser.instance().name}</span>`,
             this.activeTissue && this.storeSessionServer ? `<span class="btn-pointer" title="Store your workplace on the server." 
 style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">
 Save Session: <span class="material-icons">save</span></span>` : "",

@@ -267,6 +267,10 @@ to the tile source instance, as if we called this in some method that injects th
         img.src = canvas.toDataURL();
     };
 
+    this.setFormat = function(format) {
+        this.fileFormat = format;
+    }
+
     this.downloadTileStart = function(imageJob) {
         let count = URLs.length, errors = 0;
         const context = imageJob.userData,
@@ -296,13 +300,11 @@ to the tile source instance, as if we called this in some method that injects th
                 );
             };
     
-    this.setFormat = function(format) {
-        this.fileFormat = format;
-    }
-
-    const coords = imageJob.postData,
-        success = finish.bind(this, null)
-        self = this;
+            const coords = imageJob.postData,
+                success = () => {
+                   finish(null)
+                };
+                self = this;
 
         //ignored: use just ajax allways: if (imageJob.loadWithAjax)...
         context.images = new Array(count);
@@ -334,7 +336,9 @@ to the tile source instance, as if we called this in some method that injects th
                 body: null
             }).then(data => data.blob()).then(blob => {
                 if (imageJob.userData.didAbort) throw "Aborted!";
-                context.images[i].src = URL.createObjectURL(blob);
+                const url = URL.createObjectURL(blob);
+                context.images[i].src = url;
+                //note you should free the object url after image load completion! 
             }).catch((e) => {
                 console.log(e);
                 fallBack(i);

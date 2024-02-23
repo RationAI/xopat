@@ -3,8 +3,8 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
     static title = 'ASAP-XML Annotations';
     static description = 'ASAP-compatible XML Annotations Format';
 
-    static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO("_") + '.xml';
+    static getSuffix() {
+        return '.xml';
     }
 
     static parse(string) {

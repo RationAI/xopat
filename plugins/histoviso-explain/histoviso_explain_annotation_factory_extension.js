@@ -455,10 +455,11 @@ class HistovisoImageRenderer extends HistovisoImage {
 
             let urlCreator = window.URL || window.webkitURL;
             //drawing with opengl now not implemented
-            var myImage = document.createElement('img');
-            myImage.src = urlCreator.createObjectURL(blob);
+            var myImage = document.createElement('img'), url = urlCreator.createObjectURL(blob);
+            myImage.src = url;
 
             myImage.onload = () => {
+                URL.revokeObjectURL(url);
                 //todo necessary?
                 _this._renderer.setDimensions(myImage.width*2, myImage.height*2); //idk why 2* but it works
 

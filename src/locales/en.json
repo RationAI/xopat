@@ -16,7 +16,7 @@
       "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended."
     },
     "user": {
-      "notConfigured": "Users are not supported in this setup."
+      "notConfigured": "User menu is not available."
     },
     "main": {
       "global": {
@@ -38,8 +38,8 @@
         "clipMaskOff": "Unset clipping mask",
         "faulty": "Possibly faulty layer.",
         "defaultTitle": "Custom Visualization",
-        "cookiesByOrder": "Remember settings by layers order",
-        "cookiesByName": "Remember settings by layer name",
+        "cacheByOrder": "Remember settings by layers order",
+        "cacheByName": "Remember settings by layer name",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."

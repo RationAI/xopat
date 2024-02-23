@@ -118,8 +118,8 @@ Returns stored value if available, supports cookie caching and the value gets ex
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
 for build-in defaults, defined in the viewer core.
 
-#### `APPLICATION_CONTEXT::setOption(key, value, cookies=true)`
-Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
+#### `APPLICATION_CONTEXT::setOption(key, value, cache=true)`
+Stores value under arbitrary `key`, caches it if allowed. The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor.
 
 #### `APPLICATION_CONTEXT::getData(key)`
@@ -131,7 +131,7 @@ Modules (and plugins) can have their own event system - in that case, the `EVENT
 should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
 should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
 
-> Events are available only after `this.initEventSource()` has been called.
+> Events are available only after `this.registerAsEventSource()` has been called.
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -154,7 +154,7 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 ``bindIO`` method is available that explicitly enables IO within a module. The module should have
 explicit impact on the viewer and load data only when requested, so leave this method call to the
 code using your module if possible.
-
+todo docs
 The example below shows how to implement IO within a module with proper function overrides.
 ````js
 async exportData() {
@@ -175,7 +175,7 @@ export something like:
   "presets": [...]
 }
 ````
-
+TODO DOCS
 #####Note:
 It is possible (but not advised) to use internal core API to do custom exports: 
 ``````javascript

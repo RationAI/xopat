@@ -1,50 +1,12 @@
 // noinspection JSUnresolvedVariable
 
-/*
- * OpenSeadragon - EmpaiaTileSource
- *
- * Copyright (C) 2009 CodePlex Foundation
- * Copyright (C) 2010-2013 OpenSeadragon contributors
- * Copyright (C) 2021 RationAI Research Group (Modifications)
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- * - Redistributions of source code must retain the above copyright notice,
- *   this list of conditions and the following disclaimer.
- *
- * - Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in the
- *   documentation and/or other materials provided with the distribution.
- *
- * - Neither the name of CodePlex Foundation nor the names of its
- *   contributors may be used to endorse or promote products derived from
- *   this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
- * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
- * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
-(function( $ ){
-
 /**
- * @class EmpaiaTileSource
+ * @class EmpaiaStandaloneV3TileSource
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
  * @param {object} options configuration either empaia info response or list of these objects
  */
-
-$.EmpaiaTileSource = class extends $.TileSource {
+OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSource {
 
     constructor(options) {
         super(options);
@@ -68,21 +30,13 @@ $.EmpaiaTileSource = class extends $.TileSource {
      * @param {String} url
      */
     supports( data, url ){
-        //multi-tile access, must replace temporarily '/' in path to '>'
-        let match = url.match(/^(\/?[^\/].*\/v\d+\/files)\/info/i);
+        //multi-tile or single tile access
+        let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
-            if (Array.isArray(data)) {
-                //re-use first object as reference object for comparison
-                data[0].tilesUrl = match[1];
-            } else {
-                data.tilesUrl = match[1];
-                data = [data];
-            }
+            data[0].tilesUrl = match[1];
             return true;
         }
-
-        //single tile access
-        match = url.match(/^(\/?[^\/].*\/v\d+\/slides)\/[^\/\s]+\/info/i);
+        match = url.match(/^(\/?[^\/].*\/v3\/slides)\/[^\/\s]+\/info/i);
         if (match) {
             data.tilesUrl = match[1];
             return true;
@@ -113,6 +67,11 @@ $.EmpaiaTileSource = class extends $.TileSource {
                 multifetch: false,
                 data: data
             };
+        }
+
+        if (data.length === 0) {
+            //todo some event
+            throw "Invalid data: no data available for given url " + url;
         }
 
         let width         = Infinity,
@@ -259,10 +218,16 @@ $.EmpaiaTileSource = class extends $.TileSource {
                                 return new Promise((resolve, reject) => {
                                     entry.blob().then(blob => {
                                         if (blob.size > 0) {
-                                            const img = new Image();
-                                            img.onload = () => resolve(img);
-                                            img.onerror = img.onabort = reject;
-                                            img.src = URL.createObjectURL(blob);
+                                            const img = new Image(), url = URL.createObjectURL(blob);
+                                            img.onload = () => {
+                                                URL.revokeObjectURL(url);
+                                                resolve(img);
+                                            };
+                                            img.onerror = img.onabort = () => {
+                                                URL.revokeObjectURL(url);
+                                                reject();
+                                            };
+                                            img.src = url;
                                         } else blackImage(_this, resolve, reject);
                                     });
                                 });
@@ -305,5 +270,3 @@ $.EmpaiaTileSource = class extends $.TileSource {
         return super.getTileCacheDataAsContext2D(cacheObject);
     }
 };
-
-}( OpenSeadragon ));

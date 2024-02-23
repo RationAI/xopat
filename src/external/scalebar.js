@@ -147,6 +147,8 @@
     $.Scalebar.prototype = {
         /**
          * Referenced tile image getter used for measurements
+         * todo we should provide references scale image allways and all
+         *  access on BG data should be via the APP Context
          */
         getReferencedTiledImage: function () {},
         /**
@@ -317,14 +319,11 @@
                     this.viewer.container.appendChild(this.magnificationContainer);
                 }
                 this.viewer.addHandler("open", this.refreshHandler);
-                this.viewer.addHandler("animation", this.refreshHandler);
-                this.viewer.addHandler("resize", this.refreshHandler);
+                this.viewer.addHandler("update-viewport", this.refreshHandler);
             } else {
                 this._active = false;
                 this.viewer.removeHandler("open", this.refreshHandler);
-                this.viewer.removeHandler("animation", this.refreshHandler);
-                this.viewer.removeHandler("resize", this.refreshHandler);
-
+                this.viewer.removeHandler("update-viewport", this.refreshHandler);
                 let container = document.getElementById("viewer-scale-bar");
                 if (container) container.remove();
                 container = document.getElementById("viewer-scale-bar");

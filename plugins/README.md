@@ -50,7 +50,7 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 > and provide necessary steps to ensure secure execution if applicable.
 
 ### Interface XOpatPlugin
-
+Basic functions that are available to plugins atop what ``XOpatElement`` provides.
 ````js
 /**
  * Function called once a viewer is fully loaded
@@ -94,6 +94,17 @@ getOption(key, defaultValue=undefined);
 get THIS();
 
 /**
+ * Plugins CANNOT BE DIRECTLY DEPENDENT on each other. Only loosely.
+ * To simplify plugin interaction, you can register a callback executed
+ * when a certain plugin gets loaded into the system.
+ * @param {string} pluginId
+ * @param {function} callback that receives the plugin instance
+ * @return {boolean} true if finished immediatelly, false if registered handler for the
+ *   future possibility of plugin being loaded
+ */
+integrateWithPlugin(pluginId, callback);
+
+/**
  * Absolute url (path part only) to plugins folder
  */
 static ROOT;
@@ -112,7 +123,7 @@ in this function instead of the constructor, especially if
  - you access **the global API**
  - you access any **API of other plugins/modules**
  - you access global scope **of your own plugin's _other files_**!
- 
+ TODO: rewrite
 #### `XOpatPlugin::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
@@ -154,6 +165,7 @@ This (global) function will register the plugin and initialize it. It will make 
 call (somewhere in the initialization phase, usually in `pluginReady()`) function `initIO`
 on itself as well as any other module that does not call it explicitly.
 
+TODO docs
 The example below shows how to implement IO within with proper function overrides.
 ````js
 async exportData() {
@@ -177,10 +189,11 @@ export something like:
 ````
 
 
-### Data Management Options
+### Data Management Options  TODO: rewrite
 There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
 three different options are available:
 
+TODO docs
  1. ``getOption``, `setOption` suitable for small configuration metadata, present in the configuration present in _viewer URL and file exports_
  2. ``getStaticMeta``, ``-nothing-`` suitable for static (hardcoded) configuration metadata, reading from your `include.json`
  3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available
@@ -188,7 +201,7 @@ three different options are available:
 
 And one global meta store meant for reading only, global viewer metadata    
  4. ``APPLICATION_CONTEXT.metadata`` as an instance of `MetaStore` class  
-    
+todo docs
 For data IO, you ahve two options
  1. ``async importData``, `async exportData` suitable for data in general, present in _viewer file exports_
  2. custom service storing data at server
@@ -202,7 +215,7 @@ Modules (and plugins) can have their own event system - in that case, the `EVENT
 should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
 should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
 
-> Events are available only after `this.initEventSource()` has been called.
+> Events are available only after `this.registerAsEventSource()` has been called.
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -214,7 +227,6 @@ this.loadLocale()
 this.loadLocale('cs', {"x":"y"}) 
 ````
 Override ``getLocaleFile`` function to describe module-relative path to the locale file for given `locale` string.
-
 
 
 ## Global API
@@ -236,9 +248,7 @@ First, get familiar with (sorted in importance order):
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
-    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``
-    - builtin property with POST request is a ``metadata`` value that passes the viewer metadata to every request
-    - TODO describe this more prominently
+    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``  todo docs is this still true?
  - Third party code (see below)    
  - `window.UIComponents`
     - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...

@@ -172,7 +172,7 @@ WebGLModule.VisualisationLayer = class {
      *  options.use_channel[X]: "r", "g" or "b" channel to sample index X, default "r"
      *  options.use_mode: blending mode - default alpha ("show"), custom blending ("mask") and clipping mask blend ("mask_clip")
      *  options.use_[*]: filtering, gamma/exposure/logscale with a float filter parameter (e.g. "use_gamma" : 1.5)
-     * @param {[number]} dataReferences indexes of data being requested for this shader
+     * @param {Array<number>} dataReferences indexes of data being requested for this shader
      */
     construct(options, dataReferences) {
         this._ownedControls = [];

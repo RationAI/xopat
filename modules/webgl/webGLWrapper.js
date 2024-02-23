@@ -126,7 +126,7 @@ window.WebGLModule = class {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Internals /////////////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
-
+        this._programs = {};
         this.reset();
 
         try {
@@ -137,7 +137,7 @@ window.WebGLModule = class {
             console.error(e);
             return;
         }
-        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId})`);
+        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId || '<main>'})`);
 
         this.gl_loaded = function(gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
@@ -154,7 +154,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     reset() {
-        this._unloadCurrentProgram();
+        Object.keys(this._programs).forEach(key => this._unloadProgram(key));
         this._visualisations = [];
         this._dataSources = [];
         this._origDataSources = [];
@@ -258,7 +258,7 @@ window.WebGLModule = class {
         if (order) {
             vis.order = order;
         }
-        this._unloadCurrentProgram();
+        this._unloadProgram();
         this._visualisationToProgram(vis, this._program);
         this._forceSwitchShader(this._program);
     }
@@ -587,10 +587,10 @@ window.WebGLModule = class {
         }
     }
 
-    _unloadCurrentProgram() {
-        if (this._programs && this._programs.hasOwnProperty(this._program)) {
+    _unloadProgram(index = this._program) {
+        if (this._programs && this._programs.hasOwnProperty(index)) {
             //must remove before attaching new
-            let program = this._programs[this._program];
+            let program = this._programs[index];
             this._detachShader(program, "VERTEX_SHADER");
             this._detachShader(program, "FRAGMENT_SHADER");
         }

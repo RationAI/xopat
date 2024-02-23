@@ -3,6 +3,12 @@
 if (!defined( 'ABSPATH' )) {
     define( 'ABSPATH', dirname(__DIR__, 2) . '/' );
 }
+
+//disable autoload on pages that use custom modules
+define('ENABLE_PERMA_LOAD', false);
+require_once ABSPATH . "server/php/inc/init.php";
+$locale = setupI18n(false, "en");
+
 include_once ABSPATH . "server/php/inc/core.php";
 ?>
 
@@ -31,10 +37,6 @@ include_once ABSPATH . "server/php/inc/core.php";
 
     $MODULES["webgl"]["loaded"] = true;
     require_modules();
-
-    function hasKey($array, $key) {
-        return isset($array[$key]) && $array[$key];
-    }
 
     $root = PROJECT_ROOT;
 

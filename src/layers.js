@@ -13,8 +13,7 @@ function initXopatLayers() {
 
     function parseStore(key) {
         try {
-            const cookie = localStorage.getItem(key) || "{}";
-            return cookie ? JSON.parse(cookie) : {};
+            return JSON.parse(APPLICATION_CONTEXT.AppCache.get(key, "{}"));
         } catch (e) {
             return {};
         }
@@ -322,7 +321,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         }
                     }
                 }
-                localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
+                APPLICATION_CONTEXT.AppCache.set(cookieKey, JSON.stringify(shaderCache));
             };
 
             /**
@@ -748,6 +747,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                                     body: postData
                                 }).then(data => data.blob()).then(blob => {
                                     if (imageJob.userData.didAbort) throw "Aborted!";
+                                    //todo revoke not called! implement with v5 in OSD destructors
                                     context.images[i].src = URL.createObjectURL(blob);
                                 }).catch((e) => {
                                     console.log(e);
@@ -792,7 +792,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
             onFatalError: error => {throw error},
             onError: error => {throw error},
-            debug: true,
+            debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
             uniqueId: "browser_render_test"
         });
         //tests #43ff64 --> [67, 255, 100]

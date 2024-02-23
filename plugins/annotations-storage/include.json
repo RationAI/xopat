@@ -1,0 +1,13 @@
+{
+    "id": "annotations-storage",
+    "name": "Annotations Storage Addon",
+    "author": "Jirka Horák",
+    "version": "1.0.0",
+    "description": "A plugin for annotation remote storage.",
+    "icon": null,
+    "includes" : ["frontend.js", "storage.js"],
+    "modules": ["annotations"],
+    "permaLoad": false,
+    //Annotation server API endpoint to store annotations at
+    "server": null
+}

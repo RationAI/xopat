@@ -1,0 +1,16 @@
+{
+    "id": "empation-api",
+    "name": "RationAI library for communication with Workbench API",
+    "version": "3.0.0",
+    "includes" : [
+        "empationapi.js",
+        "integration.js",
+        "tilesource.js"
+    ],
+    "requires": [],
+    // See EmpationAPIOptions type for other optional properties
+    "options": {
+        "workbenchApiUrl": null,
+        "maxRetryCount": 5
+    }
+}

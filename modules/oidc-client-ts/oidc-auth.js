@@ -5,6 +5,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         super("oidc-client-ts");
 
         this.configuration = this.getStaticMeta('oidc', {});
+        this.forceToken = this.getStaticMeta('forceUseToken', false);
         this._connectionRetries = 0;
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
@@ -31,7 +32,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
 
         //Create OIDC User Manager
-        this.userManager = new oidc.UserManager(this.configuration);
+        this.userManager = new oidc.UserManager({
+            ...this.configuration,
+            // todo use cookies
+            //stateStore: new oidc.WebStorageStateStore({ store: APPLICATION_CONTEXT.AppCookies.getStore() })
+        });
 
         //Resolve once we know if we handle login
         let resolves = null;
@@ -78,13 +83,17 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return returns;
     }
 
+    sleep(time) {
+        return new Promise(_ => setTimeout(_, time));
+    }
+
     //todo verify args if n
     async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
+        this._connectionRetries++;
         try {
             if (allowUserPrompt) {
                 const refreshTokenExpiration = this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
-                    console.log(refreshTokenExpiration)
                     console.log("OIDC: Try to sign in via popup.");
                     await this.userManager.signinPopup({
                         popupWindowFeatures: {
@@ -102,45 +111,47 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             await this.handleUserDataChanged();
             this._connectionRetries = 0;
         } catch (error) {
-            if (firedManually) return;
+            if (firedManually) {
+                console.error("OIDC: ", error);
+                return;
+            }
             if (error.message.includes('Failed to fetch')) {
-                console.log('OIDC: Signin failed due to connection issues. Retrying in 5 seconds.');
+                console.log('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
                 if (!preventRecurse) {
-                    //todo translation
-                    Dialogs.show('Failed to login, retrying in 5 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true);">Retry now</a>.');
-                    setTimeout(async () => {
-                        await this.trySignIn(false, this._connectionRetries > 5);
-                    }, 5000);
+                    Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true);">Retry now</a>.',
+                        20000, Dialogs.MSG_WARN);
+                    await this.sleep(20000);
+                    await this.trySignIn(false, this._connectionRetries > 5);
                 } else {
                     //todo redirect to page
                     console.error("OIDC: MAX retry exceeded");
                 }
             }
+            console.error("OIDC auth attempt: ", error);
         }
     };
 
     getRefreshTokenExpiration() {
-        let refreshToken = ''
-        const clientId = this.clientId;
-
-        //todo replace with storage api
-        Object.keys(sessionStorage).forEach(function (key) {
-            if (key.includes(clientId)) {
-                const values = JSON.parse(sessionStorage.getItem(key))
-                console.log('REFRESH TOKEN',values)
+        // Key used:
+        //oidc.user:<authority>:<client>
+        let refreshToken = '';
+        // const token = APPLICATION_CONTEXT.AppCookies
+        //     .get(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+        const token = sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+        try {
+            if (token) {
+                const values = JSON.parse(token);
                 if ('refresh_token' in values) {
                     refreshToken = values.refresh_token;
                 }
             }
-        });
-        if (refreshToken) {
-            try {
+            if (refreshToken) {
                 const refresh = jwtDecode(refreshToken);
                 //if exp not specified, act as if did not expire
                 return refresh.exp || refresh.profile?.exp || Infinity;
-            } catch (e) {
-                console.warn(e);
             }
+        } catch (e) {
+            console.warn(e);
         }
         return 0;
     }
@@ -154,7 +165,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }).server;
         const user = XOpatUser.instance();
         const interceptor = (req, res) => {
-            if (user.secret) {
+            if (user.secret && (this.forceToken || !req.headers['Authorization'])) {
                 req.headers['Authorization'] = user.secret;
             }
         };

@@ -8,41 +8,10 @@
 if (!defined( 'ABSPATH' )) {
     exit;
 }
+
+require_once ABSPATH . "server/php/inc/init.php";
+
 define('HTML_TEMPLATE_REGEX', "/<template\s+id=\"template-([a-zA-Z0-9-_]+)\">\s*<\/template>/");
-
-function throwFatalErrorIfFallback($condition, $title, $description, $details) {
-
-    if (!file_exists(ABSPATH . "error.html")) {
-        //try to reach the file externally
-        header("Location error.html");
-        exit;
-    }
-    //try to add additional info to the file
-
-    echo preg_replace_callback(HTML_TEMPLATE_REGEX, function ($match) use ($title, $description, $details) {
-        switch ($match[1]) {
-            case "error":
-                return <<<EOF
-<div class="collapsible" onclick="toggleContent()">Detailed Information</div>
-<div class="content">
-  <p>$description</p>
-  <code>$details</code>
-</div>
-EOF;
-            default:
-                break;
-        }
-        return "";
-    }, file_get_contents(ABSPATH . "error.html"));
-    exit;
-}
-
-set_exception_handler(function (Throwable $exception) {
-    throwFatalErrorIfFallback(true, "Unknown Error", "",$exception->getMessage() .
-        " in " . $exception->getFile() . " line " . $exception->getLine() .
-        "<br>" . $exception->getTraceAsString());
-});
-
 
 if (!count($_POST)) {
     try {
@@ -57,63 +26,36 @@ if (!isset($_POST)) {
     $_POST = (object)[];
 }
 
+global $PLUGINS, $MODULES, $CORE;
+require_once PHP_INCLUDES . "core.php";
+
+// todo try parsing params somehow and configuring from them
+$locale = setupI18n(false, "en");
 global $i18n;
 
-set_exception_handler(function (Throwable $exception) {
-    global $i18n;
-    if (!isset($i18n)) {
-        require_once __DIR__ . '/inc/i18m.class.php';
-        $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
-    }
-    throwFatalErrorIf(true, "error.unknown", "",$exception->getMessage() .
-        " in " . $exception->getFile() . " line " . $exception->getLine() .
-        "<br>" . $exception->getTraceAsString());
-});
-
-global $PLUGINS, $MODULES, $CORE;
-require_once __DIR__ . "/inc/core.php";
-
-function throwFatalErrorIf($condition, $title, $description, $details) {
-    if ($condition) {
-        try {
-            require_once(PHP_INCLUDES . "error.php");
-            show_error($title, $description, $details, $_GET["lang"] ?? 'en');
-            exit;
-        } catch (Throwable $e) {
-            throwFatalErrorIfFallback(true, $title, $description, $details);
-        }
-    }
-}
+//load plugins
+require_once PHP_INCLUDES . "plugins.php";
 
 //todo consider parsing at least plugins and loading active items -> the 'compile time element load' - otherwise fetched dynamically
 //$bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
 //
 //$pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 //
-//foreach ($PLUGINS as $key => &$plugin) {
+foreach ($PLUGINS as $key => &$plugin) {
 //    $hasParams = isset($parsedParams->plugins->{$plugin["id"]});
-//    $plugin["loaded"] = $plugin["loaded"] || !isset($plugin["error"]) && ($hasParams || in_array($plugin["id"], $pluginsInCookies));
-//
-//    //make sure all modules required by plugins are also loaded
-//    if ($plugin["loaded"]) {
+    $plugin["loaded"] &= !isset($plugin["error"]); // || ($hasParams || in_array($plugin["id"], $pluginsInCookies)
+    //make sure all modules required by plugins are also loaded
+    if ($plugin["loaded"]) {
 //        if (!$hasParams) {
 //            $parsedParams->plugins->{$plugin["id"]} = (object)array();
 //        }
-//        foreach ($plugin["modules"] as $modId) {
-//            $MODULES[$modId]["loaded"] = true;
-//        }
-//    }
-//}
-
-$locale = $_GET["lang"] ?? "en";
-
-//now we can translate - translation known
-require_once PHP_INCLUDES . 'i18n.class.php';
-//i18n::$debug = $is_debug;
-$i18n = i18n::default($locale, LOCALES_ROOT);
-
-//load plugins
-require_once PHP_INCLUDES . "plugins.php";
+        foreach ($plugin["modules"] as $modId) {
+            if (isset($MODULES[$modId])) {
+                $MODULES[$modId]["loaded"] = true;
+            }
+        }
+    }
+}
 
 $replacer = function($match) use ($i18n) {
     ob_start();

@@ -112,7 +112,7 @@ OSDAnnotations.PresetManager = class {
         this._colorSteps = 8;
         this._colorStep = 0;
         this._presetsImported = false;
-        this.modeOutline = this._context.getCache('drawOutline', true);
+        this.modeOutline = this._context.cache.get('drawOutline', true);
     }
 
     getActivePreset(isLeftClick) {
@@ -138,7 +138,7 @@ OSDAnnotations.PresetManager = class {
      */
     setModeOutline(isOutline) {
         if (this.modeOutline === isOutline) return;
-        this._context.setCache('drawOutline', isOutline);
+        this._context.cache.set('drawOutline', isOutline);
         this.modeOutline = isOutline;
         this.updateAllObjectsVisuals();
         this._context.canvas.requestRenderAll();
@@ -202,6 +202,14 @@ OSDAnnotations.PresetManager = class {
      */
     get(id) {
         return this._presets[id];
+    }
+
+    /**
+     * Presets getter
+     * @returns {Array<any>} preset ids
+     */
+    getExistingIds() {
+        return Object.keys(this._presets);
     }
 
     /**
@@ -398,8 +406,8 @@ OSDAnnotations.PresetManager = class {
 
         this._presetsImported = presets.length > 0;
 
-        const leftPresetId = await this._context.getCache('presets.left.id', undefined, false);
-        const rightPresetId = await this._context.getCache('presets.right.id', undefined, false);
+        const leftPresetId = await this._context.cache.get('presets.left.id', undefined, false);
+        const rightPresetId = await this._context.cache.get('presets.right.id', undefined, false);
         if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
             this.left = this._presets[leftPresetId];
         }
@@ -417,6 +425,7 @@ OSDAnnotations.PresetManager = class {
      * Select preset as active.
      * @param {string} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
+     * @param {boolean} cached
      */
     selectPreset(id, isLeftClick, cached) {
         let preset = undefined, cachedId = "__unset__";
@@ -427,10 +436,10 @@ OSDAnnotations.PresetManager = class {
         }
         if (isLeftClick) {
             this.left = preset;
-            if (cached) this._context.setCache('presets.left.id', cachedId);
+            if (cached) this._context.cache.set('presets.left.id', cachedId);
         } else {
             this.right = preset;
-            if (cached) this._context.setCache('presets.right.id', cachedId);
+            if (cached) this._context.cache.set('presets.right.id', cachedId);
         }
         this._context.raiseEvent('preset-select', {preset, isLeftClick});
     }

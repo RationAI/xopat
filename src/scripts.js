@@ -204,6 +204,15 @@ function initXopatScripts() {
     };
 
     /**
+     * Get current date as reversed ISO year first
+     * @param separator
+     * @returns {string}
+     */
+    window.UTILITIES.todayISOReversed = function(separator="/") {
+        return new Date().toJSON().slice(0,10).split('-').join(separator);
+    };
+
+    /**
      * Safely evaluate boolean parameter from JSON config, e.g. undefined | "false" | "True" | 0 | 1 | false
      * string values are treated as true except for 'false' literals and empty string
      * @param {any} value to evaluate
@@ -220,7 +229,7 @@ function initXopatScripts() {
      */
     window.UTILITIES.updateTheme = function(theme=undefined) {
         theme = theme || APPLICATION_CONTEXT.getOption("theme");
-        if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.defaultConfig.theme;
+        if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.config.defaultParams.theme;
         if (theme === "dark_dimmed") {
             document.documentElement.dataset['darkTheme'] = "dark_dimmed";
             document.documentElement.dataset['colorMode'] = "dark";
@@ -234,6 +243,7 @@ function initXopatScripts() {
      * Create the viewer configuration serialized
      */
     window.UTILITIES.serializeAppConfig = function(withCookies=false) {
+        //TODO consider bypassCache etc...
         let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
         if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
         APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
@@ -247,6 +257,7 @@ function initXopatScripts() {
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
+        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
         APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
         return app;
@@ -280,12 +291,12 @@ function initXopatScripts() {
         /**
          * Event to export your data within the viewer lifecycle
          * Event handler can by <i>asynchronous</i>, the event can wait.
+         * todo OSD v5.0 will support also async events
          *
          * @property {function} setSerializedData callback to call,
          *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
          * @memberOf VIEWER
          * @event export-data
-         * todo OSD v5.0 will support also async events
          */
         await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
             setSerializedData: (uniqueKey, data) => {
@@ -386,7 +397,11 @@ form.submit();
             height: height
         });
         //show result in a new window
-        canvas.toBlob((blob) => window.open(URL.createObjectURL(blob), '_blank'));
+        canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+            URL.revokeObjectURL(url);
+        });
     };
 
     /**
@@ -471,7 +486,7 @@ ${await UTILITIES.getForm()}
      * @param onUploaded function to handle the result
      * @param accept file types to accept, e.g. "image/png, image/jpeg"
      *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
-     * @param mode {("text"|"bytes"|"url")} in what mode to read the data; text results in string, bytes in array buffer
+     * @param mode {("text"|"bytes")} in what mode to read the data; text results in string, bytes in array buffer
      * @returns {Promise<void>}
      */
     window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
@@ -499,7 +514,6 @@ ${await UTILITIES.getForm()}
             fileReader.onload = e => resolve(e.target.result);
             if (mode === "text") fileReader.readAsText(file);
             else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
-            else if (mode === "url") resolve(URL.createObjectURL(file));
             else throw "Invalid read file mode " + mode;
         });
     };
@@ -509,7 +523,6 @@ ${await UTILITIES.getForm()}
         .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
 
     UTILITIES.updateTheme();
-
 
     //TODO: implementation of observing mouse position and pixel values: move to correct scripts (e.g. scalebar)
     VIEWER.addOnceHandler('open', () => {
@@ -559,7 +572,7 @@ ${await UTILITIES.getForm()}
         });
 
         /**
-         *
+         * @param screen
          * @param viewportPosition
          * @param {number|OpenSeadragon.TiledImage} tiledImage
          */
@@ -577,6 +590,10 @@ ${await UTILITIES.getForm()}
 
             if (Number.isInteger(tiledImage)) {
                 tiledImage = VIEWER.world.getItemAt(tiledImage);
+                if (!tiledImage) {
+                    //some error since we are missing the tiled image
+                    return undefined;
+                }
             }
             let tile;
             tile = changeTile();

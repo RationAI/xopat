@@ -38,4 +38,18 @@
 
 ##### export | ``{data: string}``
 
+#### mode-changed | ``{mode: OSDAnnotatinos.AnnotationState}``
+
+##### history-open | ``{inNewWindow: boolean, containerId: null|string}``
+If history is opened in detached (new) window, the contained ID is null:
+the DOM does not belong to this context. The container
+
+##### history-swap | ``{inNewWindow: boolean}``
+
+##### history-close | ``{inNewWindow: boolean}``
+
+##### canvas-nonprimary-release
+
+##### canvas-release
+
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

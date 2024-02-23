@@ -11,8 +11,8 @@
  *     static exportsObjects = false;
  *     static exportsPresets = false;
  *
- *     static getFileName(context) {
- *         return 'annotations_' + UTILITIES.todayISO("_") + '.awesome';
+ *     static getSuffix(context) {
+ *         return '.awesome';
  *     }
  *
  *     async encodePartial(annotationsGetter, presetsGetter) {*
@@ -134,13 +134,12 @@ OSDAnnotations.Convertor = class {
     }
 
     /**
-     * Filename getter for a given format
+     * Suffix getter for a given format
      * @param format format to use
-     * @param context annotations module reference
      * @return {string}
      */
-    static defaultFileName(format, context) {
-        return this.get(format).getFileName(context);
+    static getSuffix(format) {
+        return this.get(format).getSuffix();
     }
 
     /**

@@ -483,9 +483,22 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
 /**
  * Polygon Utilities that can help with points array simplification and more
- * todo move here more utils
+ * todo move here stuff from magic wand code
  */
 OSDAnnotations.PolygonUtilities = {
+
+    intersectAABB: function (a, b) {
+        const dx = a.x - b.x;
+        const px = (a.width + b.width) - Math.abs(dx);
+        if (px <= 0) {
+            return false;
+        }
+
+        const dy = a.y - b.y;
+        const py = (a.height + b.height) - Math.abs(dx);
+        return py > 0;
+
+    },
 
     simplify: function (points, highestQuality = false) {
         // both algorithms combined for performance, simplifies the object based on zoom level
@@ -516,23 +529,22 @@ OSDAnnotations.PolygonUtilities = {
         return { diffX: maxX - minX, diffY: maxY - minY };
     },
 
+    /**
+     *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
+     *  To detect intersection with another Polygon object, this
+     *  function uses the Separating Axis Theorem. It returns false
+     *  if there is no intersection, or an object if there is. The object
+     *  contains 2 fields, overlap and axis. Moving the polygon by overlap
+     *  on axis will get the polygons out of intersection.
+     *
+     *  @Aiosa Cleaned. Honestly, why people who are good at math cannot keep their code clean.
+     */
     polygonsIntersect(p1, p2) {
-        /**
-         *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
-         *  To detect intersection with another Polygon object, this
-         *  function uses the Separating Axis Theorem. It returns false
-         *  if there is no intersection, or an object if there is. The object
-         *  contains 2 fields, overlap and axis. Moving the polygon by overlap
-         *  on axis will get the polygons out of intersection.
-         *
-         *  @jirka Cleaned. Honestly, why people who are good at math cannot keep their code clean.
-         */
-
         let axis = {x: 0, y: 0},
             tmp, minA, maxA, minB, maxB, side, i,
             smallest = null,
             overlap = 99999999,
-            p1Pts = p1.points, p2Pts = p2.points;
+            p1Pts = p1.points || p1, p2Pts = p2.points || p2;
 
         /* test polygon A's sides */
         for (side = 0; side < p1Pts.length; side++) {
@@ -725,6 +737,7 @@ OSDAnnotations.PolygonUtilities = {
     }
 };
 
+//todo deprecate/remove this in favor of wand
 OSDAnnotations.AutoObjectCreationStrategy = class {
     constructor(selfName, context) {
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];

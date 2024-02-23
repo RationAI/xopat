@@ -64,7 +64,8 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
     //DFS assigns smaller numbers to children -> loaded earlier
     function scanDependencies(itemList, id, contextName) {
         let item = itemList[id];
-        item["_priority"] = -1;
+        if (Number.isInteger(item["_xoi"])) return item["_xoi"] > 0;
+        item["_xoi"] = -1;
 
         let valid = true;
         for (let dependency of item["requires"]) {
@@ -80,14 +81,14 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                 return false;
             }
 
-            if (!dep["_priority"]) {
+            if (!dep["_xoi"]) {
                 valid &= scanDependencies(itemList, dependency, contextName);
-            } else if (dep["_priority"] === -1) {
+            } else if (dep["_xoi"] === -1) {
                 item["error"] = i18n.t('php.cyclicDeps', {context: contextName, dependency: dependency});
                 return false;
             }
         }
-        item["_priority"] = order++;
+        item["_xoi"] = order++;
 
         if (!valid) {
             item["error"] = i18n.t('php.removedInvalidDeps', {dependencies: item["requires"].join(", ")});
@@ -118,9 +119,10 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
      * @param objectList
      */
     core.resolveDependencies = function (itemKeyOrder, objectList) {
+        //has to be in reverse order! (avoid param modification)
+        itemKeyOrder = [...itemKeyOrder].reverse();
         for (let modId of itemKeyOrder) {
             const mod = objectList[modId];
-            //has to be in reverse order!
             if (mod["loaded"]) {
                 for (let requirement of mod["requires"]) {
                     objectList[requirement]["loaded"] = true;
@@ -177,7 +179,7 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
         let mod = MODULES[id];
         //scan only if priority not set (not visited yet)
 
-        if (mod["_priority"] === undefined) {
+        if (mod["_xoi"] === undefined) {
             scanDependencies(MODULES, id, 'modules');
         }
     }

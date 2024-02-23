@@ -229,7 +229,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function(context) {
-                const abort = context.finish.bind(context, null, undefined);
+                const abort = context.finish.bind(context, null);
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
@@ -271,9 +271,13 @@ $.ExtendedDziTileSource = class extends $.TileSource {
                                     entry.blob().then(blob => {
                                         if (blob.size > 0) {
                                             const img = new Image();
-                                            img.onload = () => resolve(img);
+                                            const objUrl = URL.createObjectURL(blob);
+                                            img.onload = () => {
+                                                resolve(img);
+                                                URL.revokeObjectURL(objUrl);
+                                            };
                                             img.onerror = img.onabort = reject;
-                                            img.src = URL.createObjectURL(blob);
+                                            img.src = objUrl;
                                         } else blackImage(_this, resolve, reject);
                                     });
                                 });

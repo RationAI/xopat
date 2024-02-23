@@ -44,9 +44,6 @@
 function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
     initXopatUI();
 
-    //Prepare xopat core loading utilities and interfaces
-    const runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
-
     //Setup language and parse config if function provided
     function localizeDom() {
         jqueryI18next.init(i18next, $, {
@@ -85,23 +82,66 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     }
 
     //Perform initialization based on provided data
-    const defaultSetup = ENV.setup;
+    const defaultSetup = Object.freeze(ENV.setup);
     const viewerSecureMode = ENV.client.secureMode && ENV.client.secureMode !== "false";
-    const cookies = Cookies;
-    Cookies.withAttributes({
-        path: ENV.client.js_cookie_path,
-        expires: ENV.client.js_cookie_expire,
-        sameSite: ENV.client.js_cookie_same_site,
-        secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
-    });
-
     //default parameters not extended by CONFIG.params (would bloat link files)
     CONFIG.params = CONFIG.params || {};
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
     POST_DATA = POST_DATA || {};
-    const metaStore = new MetaStore(CONFIG.meta || {});
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
+
+    // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
+    if (!XOpatStorage.Cookies.registered()) {
+        const cookies = Cookies;
+        Cookies.withAttributes({
+            path: ENV.client.js_cookie_path,
+            expires: ENV.client.js_cookie_expire,
+            sameSite: ENV.client.js_cookie_same_site,
+            secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
+        });
+        XOpatStorage.Cookies.register(class extends XOpatStorage.Storage {
+            constructor() {
+                super();
+                this._options = undefined;
+            }
+            //todo try some project that implements the Storage API instead
+            get length() {
+                // not possible with current cookies lib
+                throw "Cookies do not support length property!";
+            }
+            clear() {
+                // not possible with current cookies lib
+                throw "Cookies do not support clear()!";
+            }
+            getItem(key) {
+                return cookies.get(key);
+            }
+            key(index) {
+                // not possible with current cookies lib
+                throw "Cookies do not support key()!";
+            }
+            removeItem(key) {
+                cookies.remove(key);
+            }
+            setItem(key, value) {
+                cookies.set(key, value, this._options);
+            }
+            with(options) {
+                this._options = options;
+            }
+        });
+    } else {
+        delete window.Cookies;
+    }
+
+    // DEFAULT BROWSER IMPLEMENTATION OF THE CACHE STORAGE
+    if (!XOpatStorage.Cache.registered()) {
+        XOpatStorage.Cache.registerInstance(localStorage);
+    }
+
+    //Prepare xopat core loading utilities and interfaces
+    const runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
     /**
      * @namespace APPLICATION_CONTEXT
@@ -120,11 +160,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 return CONFIG.params || {};
             },
             /**
+             * Get default (static) parameters of the viewer setup
+             * @return {unknown[]}
+             */
+            get defaultParams() {
+                return defaultSetup;
+            },
+            /**
              * Get meta data raw object from the viewer setup
-             * todo: remove?
              * @type {Object}
              */
             get meta() {
+                //todo deprecate? or by default feed meta here?
                 return CONFIG.meta || {};
             },
             /**
@@ -156,25 +203,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 return CONFIG.plugins || {};
             },
         },
+        /**
+         * Get sessionName value (fallback refereceId) from the configuration.
+         * @return {string|*}
+         */
         get sessionName() {
             const config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig() || {};
             if (config["sessionName"]) return config["sessionName"];
             if (sessionName) return sessionName;
             return this.referencedId();
-        },
-        /**
-         * The Metadata API
-         * @type {Window.MetaStore}
-         */
-        get metadata() {
-            return metaStore;
-        },
-        /**
-         * Default Viewer Configuration
-         * @type {xoParams}
-         */
-        get defaultConfig() {
-            return defaultSetup;
         },
         /**
          * Check if viewer requires secure mode execution.
@@ -199,14 +236,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             if (!domain.endsWith("/")) return domain + "/" + this.env.client.path;
             return domain + this.env.client.path;
         },
-        /**
-         * Get all the post data available to the current session
-         * @deprecated
-         * @type {Object}
-         */
-        get postData() {
-            return POST_DATA;
-        },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
         layersAvailable: false,
@@ -218,12 +247,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @return {string|*}
          */
         getOption(name, defaultValue=undefined, cache=true) {
-            if (cache) {
-                let cached = localStorage.getItem(name);
-                if (cached !== null) return cached;
+            if (cache && this.AppCache) {
+                let cached = this.AppCache.get(name);
+                if (cached !== null && cached !== undefined) {
+                    if (cached === "false") cached = false;
+                    else if (cached === "true") cached = true;
+                    return cached;
+                }
             }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
-                (defaultValue === undefined ? this.defaultConfig[name] : defaultValue);
+                (defaultValue === undefined ? this.config.defaultParams[name] : defaultValue);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
@@ -234,20 +267,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @param value
          * @param cache
          */
-        setOption(name, value, cache=false) {
-            if (cache) localStorage.setItem(name, value);
+        setOption(name, value, cache=true) {
+            if (cache && this.AppCache) this.AppCache.set(name, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             this.config.params[name] = value;
-        },
-        /**
-         * @deprecated
-         * @param key
-         * @return {*}
-         */
-        getData(key) {
-            //todo do some safe-access
-            return POST_DATA[key];
         },
         setDirty() {
             this.__cache.dirty = true;
@@ -295,7 +319,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         },
         /**
          * Get the current FILE ID viewed (zero-index item in stacked mode).
-         * @param stripSuffix
          * @return {string}
          */
         referencedId() {
@@ -305,26 +328,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
             if (bgConfig) return CONFIG.data[bgConfig.dataReference];
             return undefined;
-        },
-        _setCookie(key, value) {
-            if (!this.config.params.bypassCookies) {
-                cookies.set(key, value);
-            }
-        },
-        _getCookie(key, defaultValue=undefined, willParse=false) {
-            if (!this.config.params.bypassCookies) {
-                let value = cookies.get(key);
-
-                if (!willParse) {
-                    if (value === "false") value = false;
-                    else if (value === "true") value = true;
-                }
-                if (defaultValue !== undefined) {
-                    return value === undefined ? defaultValue : value;
-                }
-                return value;
-            }
-            return defaultValue;
         },
         _dangerouslyAccessConfig() {
             //remove in the future?
@@ -338,9 +341,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             dirty: false
         }
     };
-    //todo remove metastore
-    metaStore.initPersistentStore(ENV.client.meta_store);
-
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -368,14 +368,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
+        drawer: "canvas",
         ajaxHeaders: headers,
         splitHashDataForPost: true,
         subPixelRoundingForTransparency:
             navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                 OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-        debugMode: APPLICATION_CONTEXT.getOption("debugMode"),
-        maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount")
+        debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
+        maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     new OpenSeadragon.Tools(VIEWER);
@@ -466,7 +467,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             backgroundColor: "rgba(255, 255, 255, 0.5)",
             fontSize: "small",
             barThickness: 2,
-            destroy: !APPLICATION_CONTEXT.getOption("scaleBar")
+            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false)
         });
         VIEWER.scalebar.linkReferenceTileSourceIndex(index);
     }
@@ -615,13 +616,28 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
                 if (APPLICATION_CONTEXT.secure) delete image.protocolPreview;
 
-                const previewUrlmaker = new Function("path,data", "return " +
-                    (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
+                const eventArgs = {
+                    server: APPLICATION_CONTEXT.env.client.image_group_server,
+                    usesCustomProtocol: !!image.protocolPreview,
+                    image: imagePath,
+                    previewUrl: null,
+                };
+                VIEWER.raiseEvent('get-preview-url', eventArgs);
+
+                //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
+                VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {
+                    if (!eventArgs.previewUrl) {
+                        const previewUrlmaker = new Function("path,data", "return " +
+                            (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
+                        eventArgs.previewUrl = previewUrlmaker(eventArgs.server, imagePath);
+                    }
+                    $(`#tissue-preview-item-${idx}`).css('background',
+                        `url('${eventArgs.previewUrl}') center`);
+                });
+
                 html += `
-    <div onclick="UTILITIES.swapBackgroundImages(${idx});"
-    class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; background: url('${
-                    previewUrlmaker(APPLICATION_CONTEXT.env.client.image_group_server, imagePath)
-                }') center; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
+    <div id="tissue-preview-item-${idx}" onclick="UTILITIES.swapBackgroundImages(${idx});"
+    class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
             }
 
             //use switching panel
@@ -722,7 +738,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 VIEWER.tools.link( window.opener.VIEWER);
             }
 
-            const firstTimeVisit = APPLICATION_CONTEXT._getCookie("_shadersPin",
+            const firstTimeVisit = APPLICATION_CONTEXT.AppCookies.get("_shadersPin",
                 APPLICATION_CONTEXT.getOption("bypassCookies") ? false : null) === null;
             if (!USER_INTERFACE.Errors.active && firstTimeVisit) {
                 setTimeout(() => {
@@ -747,6 +763,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @event open
          */
         VIEWER.raiseEvent('open', opts);
+
+        //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
     }
 
@@ -761,6 +779,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
                                               background,
                                               visualizations=[]) {
+        /**
+         * Global Application Cache. Should not be used directly: cache is avaialble within
+         * plugins as this.cache object.
+         * @type XOpatStorage.Cache
+         * @memberOf APPLICATION_CONTEXT
+         */
+        APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
+        /**
+         * Global Application Cookies.
+         * @type XOpatStorage.Cookies
+         * @memberOf APPLICATION_CONTEXT
+         */
+        APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
+
+
         // First step: load plugins that were marked as to be loaded but were not yet loaded
         function loadPluginAwaits(pid, hasParams) {
             return new Promise((resolve) => {
@@ -772,7 +805,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             });
         }
 
-        const pluginKeys = cookies.get('_plugins').split(',') || [];
+        const pluginKeys = APPLICATION_CONTEXT.AppCookies.get('_plugins', '').split(',') || [];
         for (let pid in PLUGINS) {
             const hasParams = CONFIG.plugins[pid];
             const plugin = PLUGINS[pid];

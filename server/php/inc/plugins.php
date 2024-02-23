@@ -48,7 +48,7 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                             $data = array_merge_recursive_distinct($data, $ENV_PLUG[$data["id"]]);
                         }
 
-                        if (isset($data["permaLoad"]) && $data["permaLoad"]) {
+                        if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
                             $data["loaded"] = true;
                         }
                     } else {

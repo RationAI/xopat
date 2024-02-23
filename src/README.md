@@ -125,6 +125,8 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
     - [O]`fetchAsync` - by default uses generic multiplexing on tile protocols to support async fetching, overrideable behaviour
+    - [O]`bypassCache` - do not allow using cached values for the user, default `false`
+    - [O]`bypassCacheLoadTime` - TODO: better name also affects cookies
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
@@ -255,7 +257,7 @@ that everything is handled here using JSON.
 However, you might
 need to send and integrate these further in the viewer. To do so, you are
 encouraged to employ the global metadata API:
-
+todo docs
  - metadata can be set and read using the global ``APPLICATION_CONTEXT.metadata``
    - a ``MetaStore`` object you can configure the behaviour of in `config_meta.js`
    - this class can be re-used for internal metadata parsing as well
@@ -314,8 +316,6 @@ global $PLUGINS, $MODULES;
 
 //set up here which modules/plugins are to be
 //statically loaded by setting $item["loaded"] = true;
-//after you are done resolve dependencies
-resolveDependencies($MODULES);
 //and print them to the HTML:
 require_modules();
 require_plugins();

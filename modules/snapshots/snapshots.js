@@ -4,7 +4,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         super("snaphots");
         this.viewer = VIEWER;
 
-        this.initEventSource();
+        this.registerAsEventSource();
 
         this._idx = 0;
         this._steps = [];

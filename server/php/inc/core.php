@@ -2,45 +2,13 @@
 if (!defined( 'ABSPATH' )) {
     exit;
 }
-
 /**
  * Using the APP files require "core.php" for constants and core files definition.
  * Inclusion of "plugins.php" loads modules and plugins metadata into the system as well.
  */
 
-//todo detect if built and run from built
 use Ahc\Json\Comment;
 
-//Absolute Root Path to the php server
-define('PHP_INCLUDES', ABSPATH . 'server/php/inc/');
-define('VIEWER_SOURCES_ABS_ROOT', ABSPATH . 'src/');
-define('ABS_MODULES', ABSPATH . 'modules/');
-define('ABS_PLUGINS', ABSPATH . 'plugins/');
-
-//Relative Paths For the Viewer
-defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
-define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
-define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
-define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
-define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
-define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
-define('MODULES_FOLDER', PROJECT_ROOT . 'modules/');
-define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
-
-//fallback for php 7.1
-if (!function_exists("array_is_list")) {
-    function array_is_list(array $array): bool
-    {
-        $i = -1;
-        foreach ($array as $k => $v) {
-            ++$i;
-            if ($k !== $i) {
-                return false;
-            }
-        }
-        return true;
-    }
-}
 /**
  * array_merge_recursive merge second argument to the first, only
  *   allows overriding existing values
@@ -192,7 +160,8 @@ function print_css_single($files, $path) {
 
 function require_openseadragon() {
     global $CORE;
-    echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}\"></script>\n";
+    $version = VERSION;
+    echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}?v=$version\"></script>\n";
 }
 
 function require_lib($name) {
