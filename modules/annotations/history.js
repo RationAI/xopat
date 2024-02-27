@@ -23,7 +23,7 @@ OSDAnnotations.History = class {
         this._presets = presetManager;
         this.containerId = "history-board-for-annotations";
         this._focusWithScreen = true;
-        this._autoOpenTargetId = null;
+        this._autoDomRenderer = null;
         this._lastOpenedInDetachedWindow = false;
     }
 
@@ -39,28 +39,31 @@ OSDAnnotations.History = class {
         this._focusWithScreen = value;
     }
 
-    enableAutoOpenTargetId(id) {
-        this._autoOpenTargetId = id;
+    setAutoOpenDOMRenderer(renderer) {
+        this._autoDomRenderer = renderer;
     }
 
     /**
      * Open external menu window with the history toolbox
      * focuses window if already opened.
-     * @param {Element} target target for the content to render to, a DOM node or undefined to open in detached window
+     * @param {function} renderer function that takes:
+     *    - a container ID that should be set
+     *    - two HTML strings: a header and a body and attaches them
+     *  to the DOM where desired, the container SHOULD RECEIVE ID of the first argument
      */
-    openHistoryWindow(target=undefined) {
+    openHistoryWindow(renderer=undefined) {
 
-        if (target) {
+        if (renderer) {
             //preventive
             this.destroyHistoryWindow();
             this._lastOpenedInDetachedWindow = false;
             this._globalSelf = this.__self;
             this._canvasFocus = '';
-            target.innerHTML = `
-<div id="${this.containerId}" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative py-2">
-<div>${this._getHistoryWindowHeadHtml()}</div>
-<div>${this._getHistoryWindowBodyHtml()}</div>
-</div>`;
+            renderer(
+                this.containerId,
+                `<div id="${this.containerId}-header" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative">${this._getHistoryWindowHeadHtml()}</div>`,
+                `<div id="${this.containerId}-body" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative">${this._getHistoryWindowBodyHtml()}</div>`
+            );
             this._syncLoad();
         } else {
             let ctx = this._getDetachedWindow();
@@ -107,7 +110,7 @@ window.addEventListener("beforeunload", (e) => {
         let active = this._context.canvas.getActiveObject();
         if (active) this.highlight(active);
         this._context.raiseEvent('history-open', {
-            inNewWindow: !target,
+            inNewWindow: !renderer,
             containerId: this.containerId,
         });
     }
@@ -120,15 +123,14 @@ window.addEventListener("beforeunload", (e) => {
             });
             this.openHistoryWindow(undefined);
         } else {
-            const el = this._autoOpenTargetId && document.getElementById(this._autoOpenTargetId);
-            if (!el) {
+            if (!this._autoDomRenderer) {
                 console.error("History window cannot be swapped when auto target ID has not been set or is invalid!");
                 return;
             }
             this._context.raiseEvent('before-history-swap', {
                 inNewWindow: false,
             });
-            this.openHistoryWindow(el);
+            this.openHistoryWindow(this._autoDomRenderer);
         }
         this._context.raiseEvent('history-swap', {
             inNewWindow: willOpenNewWindow,
@@ -164,13 +166,13 @@ window.addEventListener("beforeunload", (e) => {
         let undoCss = this.canUndo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
 
-        let swapButton = this._autoOpenTargetId ? `<span id="history-swap-display" class="material-icons btn-pointer 
-position-absolute right-2 top-2 text-small" 
+        let swapButton = this._autoDomRenderer ? `<span id="history-swap-display" class="material-icons btn-pointer 
+position-absolute right-0 top-0 text-small" style="width: 22px;"
 onclick="${this._globalSelf}.swapHistoryWindowLocation()" id="history-refresh" 
 title="Refresh board (fix inconsistencies).">${this._lastOpenedInDetachedWindow ? "open_in_new_off" : "open_in_new_down"}</span>` : "";
 
 
-        return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Board</span> 
+        return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Annotation List</span> 
 <span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" onclick="${this._globalSelf}.back()">undo</span>
 <span id="history-redo" class="material-icons btn-pointer" style="${redoCss}" onclick="${this._globalSelf}.redo()">redo</span>
 <span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
@@ -518,11 +520,11 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         let color = this._context.getAnnotationColor(object);
         let name = this._context.getAnnotationDescription(object, "category", true);
         if (name) {
-            inputs.push('<span class="show-hint d-block p-2" data-hint="Category">',
+            inputs.push('<span class="show-hint d-block p-2" data-hint="Name">',
                 name || this._context.getDefaultAnnotationName(object), '</span>');
         } else {
             //with no meta name, object will receive 'category' on edit
-            inputs.push('<label class="show-hint d-block" data-hint="Category">',
+            inputs.push('<label class="show-hint d-block" data-hint="Name">',
                 '<input type="text" class="form-control border-0 width-full" readonly ',
                 'style="background:transparent;color: inherit;" value="',
                 this._context.getDefaultAnnotationName(object), '" name="category"></label>');

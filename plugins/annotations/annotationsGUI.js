@@ -133,20 +133,32 @@ load available sets manually</a>.`, 4000, Dialogs.MSG_WARN);
 	initHTML() {
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
-			'',
+			`<div class="float-right">
+<button class="btn btn-sm btn-primary ml-2 mr-4 pl-0 pr-2" id="show-annotation-board" title="${this.t('showBoard')}" onclick="${this.THIS}.openHistoryWindow();"><span class="material-icons px-1 text-small">assignment</span><span class="text-small">Show list</span></button>
+<button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><span class="material-icons pl-0 pr-1 v-align-text-top" style="font-size: 19px;">save</span>Save</button>
+<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
+</div>`,
 			this.mainMenuVisibleControls(),
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
 			`
-<div class="p-2"><span>Opacity: &emsp;</span>
-<input type="range" id="annotations-opacity" min="0" max="1" step="0.1">
-<span class="material-icons btn-pointer m-1" id="enable-disable-annotations" title="${this.t('onOff')}" style="float: right;" data-ref="on" onclick="${this.THIS}._toggleEnabled(this)"> visibility</span>
-<br>${UIComponents.Elements.checkBox({
-				label: this.t('outlineOnly'),
-				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
-				default: this.context.presets.getModeOutline()
-			})}</div>`,
+<div class="flex-row d-flex overflow-hidden" style="max-height: 150px">
+<div class="flex-1 pl-2 pr-1 mt-2"><h4>Presets <span class="btn-pointer float-right border-2 rounded-2 text-small mr-3" onclick="${this.THIS}.showPresets();">
+<span class="material-icons text-small">edit</span> Edit</span></h4><div id="preset-list-inner-mp"></div></div>
+<div class="flex-column flex-1 mt-4">
+<div class="btn-pointer flex-row d-flex" onclick="this.firstElementChild.click();">
+<span class="material-icons m-1 flex-1" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
+onclick="${this.THIS}._toggleEnabled(this)"> visibility</span>
+<span class="d-inline-block flex-2" style="line-height: 14px;">${this.t('onOff')}</span></div>
+<div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
+${UIComponents.Elements.checkBox({
+	label: this.t('outlineOnly'), 
+	classes: "pl-2",
+	onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
+	default: this.context.presets.getModeOutline()})}
+</div>
+</div><div id="annotation-list-inner-mp" class="mx-2" style="max-height: 150px;"></div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -161,13 +173,13 @@ load available sets manually</a>.`, 4000, Dialogs.MSG_WARN);
 		}
 
 		let factorySwitch = [];
-		for (let factoryId of this._allowedFactories) {
-			const factory = this.context.getAnnotationObjectFactory(factoryId);
+		for (let factoryID of this._allowedFactories) {
+			const factory = this.context.getAnnotationObjectFactory(factoryID);
 			if (factory) {
-				factorySwitch.push(`<span id="${factoryId}-annotation-factory-switch" data-factory="${factoryId}" 
+				factorySwitch.push(`<span id="${factoryID}-annotation-factory-switch" data-factory="${factoryID}" 
 class="label-annotation-mode position-relative d-inline-block rounded-2" style="border: 3px inset transparent;">
-<span class="material-icons btn-pointer p-1 rounded-2" onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryId}');" 
-oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryId}'); event.preventDefault(); return false;" 
+<span class="material-icons btn-pointer p-1 rounded-2" onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryID}');" 
+oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryID}'); event.preventDefault(); return false;" 
 title="${factory.title()}">${factory.getIcon()}</span></span>`);
 			}
 		}
@@ -179,9 +191,6 @@ title="${factory.title()}">${factory.getIcon()}</span></span>`);
 ${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
 vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&nbsp;<div id="mode-custom-items" class="d-inline-block">${this.context.mode.customHtml()}</div>
 <div class="px-2 mx-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
-
-		//history menu in advanced menu
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
@@ -229,17 +238,21 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		if (asModal) {
 			this.context.history.openHistoryWindow();
 		} else {
-			this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+			this.context.history.openHistoryWindow(this._annotationsDomRenderer);
 		}
 		this._afterHistoryWindowOpen(asModal);
 	}
 
 	_afterHistoryWindowOpen(asModal = this.isModalHistory) {
 		if (asModal) {
-			document.getElementById('annotations-board-in-advanced-menu').innerHTML =
-				`<button class="btn m-4" onclick="${this.THIS}.openHistoryWindow(false);">Opened in modal window. Re-open here.</button>`;
+			//document.getElementById('annotation-list-inner-mp').innerHTML = '';
 		} else {
-			USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+			USER_INTERFACE.MainMenu.open();
+			//todo better checks
+			const pin = $("#annotations-panel-pin");
+			if (!pin.hasClass("opened")) {
+				pin.click();
+			}
 		}
 		this.isModalHistory = asModal;
 	}
@@ -269,8 +282,9 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
 			this.context.createPresetsCookieSnapshot();
+			this._updateMainMenuPresetList();
 		});
-		this.context.history.enableAutoOpenTargetId("annotations-board-in-advanced-menu");
+		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer);
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 
 		//allways select primary button preset since context menu shows only on non-primary
@@ -280,9 +294,19 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 				return;
 			}
 
-			const actions = [{
-				title: `Select preset for left click.`
-			}];
+			let actions = [], handler;
+			let active = _this.context.canvas.findTarget(e.originalEvent);
+			if (active) {
+				actions.push({
+					title: `Change annotation to:`
+				});
+				handler = _this._clickAnnotationChangePreset.bind(_this, active);
+			} else {
+				actions.push({
+					title: `Select preset for left click:`
+				});
+				handler = _this._clickPresetSelect.bind(_this, true);
+			}
 			_this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || preset.objectFactory.title();
 				let icon = preset.objectFactory.getIcon();
@@ -292,14 +316,14 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 					title: category,
 					action: () => {
 						_this._presetSelection = preset.presetID;
-						_this._clickPresetSelect(true);
+						handler();
 					},
 				});
 			});
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		}
-		this.context.addHandler('canvas-nonprimary-release', showContextMenu);
+		this.context.addHandler('nonprimary-release-not-handled', showContextMenu);
 
 		// this.context.forEachLayerSorted(l => {
 		// 	_this.insertLayer(l);
@@ -505,6 +529,10 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 		}
 	}
 
+	_annotationsDomRenderer(containerId, header, body) {
+		$("#annotation-list-inner-mp").html(`<div id="${containerId}">${header}<div style="max-height: 130px; overflow-y: scroll;">${body}</div></div>`)
+	}
+
 	/******************** Free Form Tool ***********************/
 
 	freeFormToolControls() {
@@ -631,7 +659,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 
 	/**
 	 * Preset modification GUI part, used to show preset modification tab
-	 * @param {Number} id preset id
+	 * @param {string} id preset id
 	 * @param {boolean} isLeftClick true if the button is the left one
 	 * @param {Number} index if set, the element is assigned an ID in the HTML, should differ in each call if set
 	 * @returns {string} HTML
@@ -641,7 +669,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		if (!preset) {
 			return "";
 		}
-		return this.getPresetHTML(preset, isLeftClick, index);
+		return this.getPresetHTML(preset, this.context.presets.getActivePreset(isLeftClick), index);
 	}
 
 	/**
@@ -686,13 +714,6 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	mainMenuVisibleControls() {
 		return `
-<div class="mt-2 flex-row-reverse">
-<button class="btn btn-sm btn-primary ml-2 mr-5 pl-0 pr-2" id="show-annotation-board" title="${this.t('showBoard')}" onclick="${this.THIS}.openHistoryWindow();"><span class="material-icons px-1 text-small">assignment</span><span class="text-small">Show list</span></button>
-<div class="float-right">
-<button class="btn-pointer btn btn-sm mx-2 px-1" title="Export annotations" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><span class="text-small">Advanced I/O</span></button>
-<button class="btn btn-outline" id="server-primary-save" onclick="${this.THIS}.uploadDefault();"><span class="material-icons pl-0 pr-1">cloud_upload</span>Upload</button>
-</div>
-</div>
 <span id="annotations-left-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3"
 style="width: 170px; cursor:pointer;border-width:3px!important;"></span><span id="annotations-right-click" 
 class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="width: 170px; cursor:pointer;border-width:3px!important;"></span>
@@ -747,18 +768,30 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 			else if (this.dataset.factory === rid) this.style.borderColor = rightPreset.color;
 			else this.style.borderColor = 'transparent';
 		});
+		this._updateMainMenuPresetList();
+	}
+
+	_updateMainMenuPresetList() {
+		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
+		this.context.presets.foreach(preset => {
+			const icon = preset.objectFactory.getIcon();
+			html.push(`<div style="color: ${preset.color} !important;" class="d-flex flex-row flex-items-center"><span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
+			html.push(this._metaFieldHtml(preset.presetID, 'category', preset.meta['category'], false));
+			html.push('</div>');
+		});
+		html.push('</div>');
+		$("#preset-list-inner-mp").html(html.join(''));
 	}
 
 	/**
 	 * Preset modification GUI part, used to show preset modification tab
 	 * @param {OSDAnnotations.Preset} preset object
-	 * @param {boolean} isLeftClick true if the button is the left one
-	 * @param {Number} index if set, the element is assigned an ID in the HTML, should differ in each call if set
+	 * @param {OSDAnnotations.Preset} [defaultPreset=undefined] default to highlight
+	 * @param {Number} [index=undefined] if set, the element is assigned an ID in the HTML, should differ in each call if set
 	 * @returns {string} HTML
 	 */
-	getPresetHTML(preset, isLeftClick, index = undefined) {
+	getPresetHTML(preset, defaultPreset=undefined, index=undefined) {
 		let select = "",
-			currentPreset = this.context.getPreset(isLeftClick),
 			disabled = this.enablePresetModify ? "" : " disabled ";
 
 		const _this = this;
@@ -776,7 +809,7 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 		let id = index === undefined ? "" : `id="preset-no-${index}"`;
 
 		let html = [`<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `];
-		if (preset.presetID === currentPreset?.presetID) {
+		if (preset.presetID === defaultPreset?.presetID) {
 			html.push('highlighted-preset');
 			this._presetSelection = preset.presetID;
 		}
@@ -873,28 +906,32 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')">delete</span>` : "";
 
-		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1" type="text" onchange="
+		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 width-full" type="text" onchange="
 ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}" ${disabled}>${delButton}</div>`;
 	}
 
 	/**
 	 * Show the user preset modification tab along with the option to select an active preset for either
 	 * left or right mouse button
-	 * @param {boolean} isLeftClick true if the modification tab sets left preset
+	 * @param {boolean|undefined} isLeftClick true if the modification tab sets left preset, if undefined, selection
+	 *   of active preset is off
 	 */
 	showPresets(isLeftClick) {
 		if (this.context.disabledInteraction) {
 			Dialogs.show("Annotations are disabled. <a onclick=\"$('#enable-disable-annotations').click();\">Enable.</a>", 2500, Dialogs.MSG_WARN);
 			return;
 		}
+		const allowSelect = isLeftClick !== undefined;
 		this._presetSelection = undefined;
 
 		let html = ['<div style="min-width: 270px">'],
 			counter = 0,
 			_this = this;
 
+		let currentPreset = this.context.getPreset(isLeftClick) || this.context.presets.get();
+
 		this.context.presets.foreach(preset => {
-			html.push(_this.getPresetHTML(preset, isLeftClick, counter));
+			html.push(_this.getPresetHTML(preset, currentPreset, counter));
 			counter++;
 		});
 
@@ -908,12 +945,11 @@ onclick="${this.THIS}.createNewPreset(this, ${isLeftClick});"><span class="mater
 		Dialogs.showCustom("preset-modify-dialog",
 			"<b>Annotations presets</b>",
 			html.join(""),
-			`<div class="d-flex flex-row-reverse">
+			allowSelect ? `<div class="d-flex flex-row-reverse">
 <button id="select-annotation-preset-right" onclick="return ${this.THIS}._clickPresetSelect(false);" 
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false);" class="btn m-2">Set for right click </button>
 <button id="select-annotation-preset-left" onclick="return ${this.THIS}._clickPresetSelect(true);" 
-class="btn m-2">Set for left click </button>
-</div>`);
+class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2">Save</button></div>');
 	}
 
 	_clickPresetSelect(isLeft) {
@@ -929,11 +965,26 @@ class="btn m-2">Set for left click </button>
 		return false;
 	}
 
+	_clickAnnotationChangePreset(annotation) {
+		if (this._presetSelection === undefined) {
+			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
+			return false;
+		}
+		const _this = this;
+		setTimeout(function() {
+			Dialogs.closeWindow('preset-modify-dialog');
+			_this.context.changeAnnotationPreset(annotation, _this._presetSelection);
+			_this.context.canvas.requestRenderAll();
+		}, 150);
+		return false;
+	}
+
 	createNewPreset(buttonNode, isLeftClick) {
 		let id = this.context.presets.addPreset().presetID,
 			node = $(buttonNode);
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
 		this.context.createPresetsCookieSnapshot();
+		this._updateMainMenuPresetList();
 	}
 
 	getAnnotationsHeadMenu(error="") {
@@ -986,7 +1037,12 @@ class="btn m-2">Set for left click </button>
 		return undefined;
 	}
 
-	uploadDefault() {
+	saveDefault() {
+		if (!this._server) {
+			this.exportToFile();
+			return;
+		}
+
 		const id = this.getDefaultAnnotationItemId();
 		if (id === undefined && confirm("Store the current annotation workspace as the default set for this file?")) {
 			this.uploadAnnotation(true);

@@ -28,15 +28,15 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
 
     //default presets in quPath that are safe to export
     _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
-        {"name":"Category","value":"Ignore*"}}},{"color":"#c80000","factoryID":"polygon","presetID":"Tumor",
-        "meta":{"category":{"name":"Category","value":"Tumor"}}},{"color":"#96c896","factoryID":"polygon",
-        "presetID":"Stroma","meta":{"category":{"name":"Category","value":"Stroma"}}},{"color":"#a05aa0",
-        "factoryID":"polygon","presetID":"Immune cells","meta":{"category":{"name":"Category","value":"Immune cells"}}},
-        {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Category",
+        {"name":"Name","value":"Ignore*"}}},{"color":"#c80000","factoryID":"polygon","presetID":"Tumor",
+        "meta":{"category":{"name":"Name","value":"Tumor"}}},{"color":"#96c896","factoryID":"polygon",
+        "presetID":"Stroma","meta":{"category":{"name":"Name","value":"Stroma"}}},{"color":"#a05aa0",
+        "factoryID":"polygon","presetID":"Immune cells","meta":{"category":{"name":"Name","value":"Immune cells"}}},
+        {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Name",
         "value":"Necrosis"}}},{"color":"#0000b4","factoryID":"polygon","presetID":"Region*","meta":{"category":
-        {"name":"Category","value":"Region*"}}},{"color":"#fa3e3e","factoryID":"polygon","presetID":"Positive","meta":
-        {"category":{"name":"Category","value":"Positive"}}},{"color":"#7070e1","factoryID":"polygon","presetID":
-        "Negative","meta":{"category":{"name":"Category","value":"Negative"}}}];
+        {"name":"Name","value":"Region*"}}},{"color":"#fa3e3e","factoryID":"polygon","presetID":"Positive","meta":
+        {"category":{"name":"Name","value":"Positive"}}},{"color":"#7070e1","factoryID":"polygon","presetID":
+        "Negative","meta":{"category":{"name":"Name","value":"Negative"}}}];
 
     //linear ring has the first and last vertex equal, geojson uses arrays, we only for now support arrays of points,
     //no arrays of arrays of points
@@ -239,7 +239,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                         presetID: p.name,
                         meta: {
                             category: {
-                                name: 'Category',
+                                name: 'Name',
                                 value: p.name
                             }
                         }

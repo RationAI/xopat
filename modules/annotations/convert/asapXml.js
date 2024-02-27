@@ -175,7 +175,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
 
             if (!meta.category) {
                 meta.category = {
-                    name: 'Category',
+                    name: 'Name',
                     value: presetId
                 };
             }

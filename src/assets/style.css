@@ -322,6 +322,28 @@ input.switch:checked + label span {
     color: var(--color-state-focus-border);
 }
 
+/**
+todo remplace #cache snapshot with this:
+
+  Selectable multibutton shows on hover
+  Use:
+     <[container] class="hover-selectable">
+            <!-- anything you want to be visible without hover -->
+            <[container] class="position-absolute">
+                   <!-- anything you want to be visible with hover, position absolute as you like -->
+            </[container] >
+     </[container]>
+ */
+.hover-selectable {
+    position: relative;
+}
+.hover-selectable > .position-absolute {
+    display: none;
+}
+.hover-selectable:hover > .position-absolute, .hover-selectable > .position-absolute:hover {
+    display: flex !important;
+}
+
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
@@ -456,9 +478,6 @@ div {box-sizing: initial !important;}
 }
 #tissue-preview-container img:hover {
 
-}
-#cache-snapshot:hover + div, .cache-snapshot-visible:hover {
-    display: flex !important;
 }
 
 /*TODO implement switch button

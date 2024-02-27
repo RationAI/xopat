@@ -464,7 +464,7 @@ export default {
             "presetID":"1667399110721",
             "meta":{
                 "category":{
-                    "name":"Category",
+                    "name":"Name",
                     "value":"SOme"
                 }
             }
@@ -475,7 +475,7 @@ export default {
             "presetID":"1667399266180",
             "meta":{
                 "category":{
-                    "name":"Category",
+                    "name":"Name",
                     "value":""
                 },
                 "k1667399270907":{
@@ -490,7 +490,7 @@ export default {
             "presetID":"1667399273783",
             "meta":{
                 "category":{
-                    "name":"Category",
+                    "name":"Name",
                     "value":"はじめまして"
                 },
                 "k1667399331059":{
