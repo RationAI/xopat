@@ -158,7 +158,7 @@ ${UIComponents.Elements.checkBox({
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
 </div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2"><span class="btn-pointer float-right border-2 rounded-2 text-small mr-3" onclick="${this.THIS}.showPresets();">
+<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
 <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
 			"annotations-panel",
@@ -862,9 +862,9 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
-			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span>`);
-			html.push('<br>');
+			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;" class="d-inline-block">
+<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
+			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 		});
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
