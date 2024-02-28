@@ -39,8 +39,9 @@ OSDAnnotations.History = class {
         this._focusWithScreen = value;
     }
 
-    setAutoOpenDOMRenderer(renderer) {
+    setAutoOpenDOMRenderer(renderer, maxHeight="auto") {
         this._autoDomRenderer = renderer;
+        this._maxHeight = maxHeight;
     }
 
     /**
@@ -48,7 +49,7 @@ OSDAnnotations.History = class {
      * focuses window if already opened.
      * @param {function} renderer function that takes:
      *    - a container ID that should be set
-     *    - two HTML strings: a header and a body and attaches them
+     *    - two functions returning HTML strings: a header and a body and attaches them
      *  to the DOM where desired, the container SHOULD RECEIVE ID of the first argument
      */
     openHistoryWindow(renderer=undefined) {
@@ -59,11 +60,7 @@ OSDAnnotations.History = class {
             this._lastOpenedInDetachedWindow = false;
             this._globalSelf = this.__self;
             this._canvasFocus = '';
-            renderer(
-                this.containerId,
-                `<div id="${this.containerId}-header" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative">${this._getHistoryWindowHeadHtml()}</div>`,
-                `<div id="${this.containerId}-body" onkeydown="event.focusCanvas=true;" onkeyup="event.focusCanvas=true;" class="position-relative">${this._getHistoryWindowBodyHtml()}</div>`
-            );
+            renderer(this, this.containerId);
             this._syncLoad();
         } else {
             let ctx = this._getDetachedWindow();
@@ -77,8 +74,8 @@ OSDAnnotations.History = class {
             this._globalSelf = `opener.${this.__self}`;
             this._canvasFocus = 'window.opener.focus();';
 
-            Dialogs.showCustomModal(this.containerId, "Annotations Board", this._getHistoryWindowHeadHtml(),
-                `${this._getHistoryWindowBodyHtml()}
+            Dialogs.showCustomModal(this.containerId, "Annotations Board", this.getHistoryWindowHeadHtml(),
+                `${this.getHistoryWindowBodyHtml()}
 <script>
 window.addEventListener('load', (e) => {
     ${this._globalSelf}._syncLoad();
@@ -142,12 +139,16 @@ window.addEventListener("beforeunload", (e) => {
      */
     destroyHistoryWindow() {
         if (this._lastOpenedInDetachedWindow) {
-            Dialogs.closeWindow(this.containerId);
+            if (!Dialogs.closeWindow(this.containerId)) {
+                return;
+            }
         } else {
             let node = document.getElementById(this.containerId);
             if (node) {
                 if (this._editSelection) this._boardItemSave();
                 node.remove();
+            } else {
+                return;
             }
         }
         this._context.raiseEvent('history-close', {
@@ -155,29 +156,31 @@ window.addEventListener("beforeunload", (e) => {
         });
     }
 
-    _getHistoryWindowBodyHtml() {
-        return `<div id="annotation-logger" class="inner-panel px-0 py-2" style="flex-grow: 3;">
+    getWindowSwapButtonHtml(rightOffsetIndex=0) {
+        return this._autoDomRenderer ? `<span id="history-swap-display" class="material-icons btn-pointer 
+position-absolute right-${rightOffsetIndex} top-0 text-small" style="width: 22px; z-index: 99;"
+onclick="${this._globalSelf}.swapHistoryWindowLocation()" id="history-refresh" 
+title="Refresh board (fix inconsistencies).">${this._lastOpenedInDetachedWindow ? "open_in_new_off" : "open_in_new_down"}</span>` : "";
+    }
+
+    getHistoryWindowBodyHtml() {
+        return `<div id="history-board-for-annotations-body" class="inner-panel px-0 py-2" style="flex-grow: 3; 
+${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + this._maxHeight}">
 <div id="annotation-logs" class="height-full" style="cursor:pointer;"></div></div></div>`;
     }
 
-    _getHistoryWindowHeadHtml() {
+    getHistoryWindowHeadHtml() {
         let redoCss = this.canRedo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
         let undoCss = this.canUndo() ?
             "color: var(--color-icon-primary);" : "color: var(--color-icon-tertiary);";
-
-        let swapButton = this._autoDomRenderer ? `<span id="history-swap-display" class="material-icons btn-pointer 
-position-absolute right-0 top-0 text-small" style="width: 22px;"
-onclick="${this._globalSelf}.swapHistoryWindowLocation()" id="history-refresh" 
-title="Refresh board (fix inconsistencies).">${this._lastOpenedInDetachedWindow ? "open_in_new_off" : "open_in_new_down"}</span>` : "";
-
 
         return `<span class="f3 mr-2" style="line-height: 16px; vertical-align: text-bottom;">Annotation List</span> 
 <span id="history-undo" class="material-icons btn-pointer" style="${undoCss}" onclick="${this._globalSelf}.back()">undo</span>
 <span id="history-redo" class="material-icons btn-pointer" style="${redoCss}" onclick="${this._globalSelf}.redo()">redo</span>
 <span id="history-refresh" class="material-icons btn-pointer" onclick="${this._globalSelf}.refresh()" 
 title="Refresh board (fix inconsistencies).">refresh</span>
-${swapButton}
+${this.getWindowSwapButtonHtml()}
 <!--todo does not work<button class="btn btn-danger mr-2 position-absolute right-2 top-2" type="button" aria-pressed="false" 
 onclick="if (${this._globalSelf}._context.disabledInteraction || !window.confirm('Do you really want to delete all annotations?')) return; ${this._canvasFocus} 
 ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations">Delete All</button>-->
@@ -214,7 +217,6 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     back() {
         if (this._context.disabledInteraction) return;
 
-        const _this = this;
         if (this.canUndo()) {
             this._performSwap(this._context.canvas, this._buffer[this._buffidx].back,
                 this._buffer[this._buffidx].forward, true, true);
@@ -231,10 +233,11 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             }
 
             this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-primary)"));
+            this._context.raiseEvent('history-change');
         }
 
         this._performAtJQNode("history-undo", node => node.css("color",
-            _this._buffer[_this._buffidx] ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
+            this.canUndo() ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
         );
     }
 
@@ -250,13 +253,11 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             this._performSwap(this._context.canvas, this._buffer[this._buffidx].forward,
                 this._buffer[this._buffidx].back, true, true);
 
-            const _this = this;
             this._performAtJQNode("history-redo", node => node.css("color",
-                _this._lastValidIndex >= 0 && _this._buffidx !== _this._lastValidIndex ?
-                    "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
+                this.canRedo() ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")
             );
-
             this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
+            this._context.raiseEvent('history-change');
         }
     }
 
@@ -308,6 +309,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
         this._performAtJQNode("history-undo", node => node.css("color", "var(--color-icon-primary)"));
         this._performAtJQNode("history-redo", node => node.css("color", "var(--color-icon-tertiary)"));
+        this._context.raiseEvent('history-change');
     }
 
     /**
@@ -335,8 +337,19 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             if (node[0]) {
                 let bounds = node[0].getBoundingClientRect();
                 let ctx = this.winContext();
-                if (bounds.top < 0 || bounds.bottom > (ctx.innerHeight || ctx.document.documentElement.clientHeight)) {
-                    board.parents("#window-content").scrollTo(node, 150, {offset: -20});
+
+                if (this._lastOpenedInDetachedWindow) {
+                    if (bounds.top < 0 || bounds.bottom > (ctx.innerHeight || ctx.document.documentElement.clientHeight)) {
+                        board.parents("#window-content").scrollTo(node, 150, {offset: -20});
+                    }
+                } else {
+                    let parent = ctx && ctx.document && ctx.document.getElementById(this.containerId + "-body");
+                    if (parent) {
+                        let parentBounds = parent.getBoundingClientRect();
+                        if (bounds.top < parentBounds.top || bounds.bottom > parentBounds.bottom) {
+                            $(parent).scrollTo(node, 150, {offset: -20});
+                        }
+                    }
                 }
             }
         }
@@ -498,13 +511,14 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             object.incrementId = this._autoIncrement++;
         }
 
+        // Commented ability to edit
         // let preset = this._context.presets.get(object.presetID), color = 'black';
         // if (preset) {
         //     color = preset.color;
         //     for (let key in preset.meta) {
         //         let metaElement = preset.meta[key];
         //         if (key === "category") {
-        //             inputs.unshift('<span class="show-hint d-block p-2" data-hint="', metaElement.name,
+        //             inputs.unshift('<span class="show-hint d-block px-2 py-1" data-hint="', metaElement.name,
         //                 '">', metaElement.value || this._context.getDefaultAnnotationName(object), '</span>');
         //         } else {
         //             // from user-testing: disabled change of properties in the board...
@@ -517,18 +531,19 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         //         }
         //     }
         // }
-        let color = this._context.getAnnotationColor(object);
-        let name = this._context.getAnnotationDescription(object, "category", true);
+        let color = this._context.getAnnotationColor(object),
+            defaultName = this._context.getDefaultAnnotationName(object, false),
+            name = this._context.getAnnotationDescription(object, "category", true);
         if (name) {
-            inputs.push('<span class="show-hint d-block p-2" data-hint="Name">',
-                name || this._context.getDefaultAnnotationName(object), '</span>');
-        } else {
-            //with no meta name, object will receive 'category' on edit
-            inputs.push('<label class="show-hint d-block" data-hint="Name">',
-                '<input type="text" class="form-control border-0 width-full" readonly ',
-                'style="background:transparent;color: inherit;" value="',
-                this._context.getDefaultAnnotationName(object), '" name="category"></label>');
+            inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name}">${defaultName} ${object.incrementId}</span>`);
         }
+        // else {  //never happens: description shows at least default description
+        //     //with no meta name, object will receive 'category' on edit
+        //     inputs.push('<label class="show-hint d-block" data-hint="Name">',
+        //         '<input type="text" class="form-control border-0 width-full" readonly ',
+        //         'style="background:transparent;color: inherit;" value="',
+        //         this._context.getDefaultAnnotationName(object), '" name="category"></label>');
+        // }
 
         const _this = this;
         const focusBox = this._getFocusBBoxAsString(object, factory);

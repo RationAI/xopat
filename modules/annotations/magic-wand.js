@@ -46,9 +46,12 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     handleClickUp(o, point, isLeftClick, objectFactory) {
-        if (this.result) {
+        if (this._allowCreation && this.result) {
             this.context.promoteHelperAnnotation(this.result);
-            this._cleanUp();
+            this.result = null;
+            this._allowCreation = false;
+        } else {
+            this.context.setMode(this.context.Modes.AUTO);
         }
         return true;
     }
@@ -56,11 +59,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleClickDown(o, point, isLeftClick, objectFactory) {
         if (!objectFactory) return; // no preset - no op
 
+        this._allowCreation = true;
         this.context.canvas.discardActiveObject();
-        this.drawer.canvas.style.setProperty('display', 'block');
-        this.prepareViewportScreenshot();
         this._isLeft = isLeftClick;
-        this._process(o);
     }
 
     prepareViewportScreenshot(x, y, w, h) {
@@ -189,12 +190,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         };
     }
 
-    _cleanUp() {
-        this.result = null;
-        this.data = null;
-        this.drawer.canvas.style.setProperty('display', 'none');
-    }
-
     scroll(event, delta) {
         this.threshold = Math.min(this.maxThreshold,
             Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
@@ -206,11 +201,15 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this._invalidData = Date.now();
     }
 
-    handleMouseMove(event, point) {
+    handleMouseHover(event, point) {
+        this._isLeft = true;
         this._process(event);
     }
 
     setFromAuto() {
+        this.drawer.canvas.style.setProperty('display', 'block');
+        this.prepareViewportScreenshot();
+
         VIEWER.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
         this.context.canvas.hoverCursor = "crosshair";
@@ -219,6 +218,13 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     setToAuto(temporary) {
+        if (this.result) {
+            this.context.deleteHelperAnnotation(this.result);
+            this.result = null;
+        }
+        this.data = null;
+        this.drawer.canvas.style.setProperty('display', 'none');
+
         VIEWER.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);

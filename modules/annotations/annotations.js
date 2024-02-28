@@ -144,7 +144,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 
 		let guard = 0; const _this=this;
-		function editRoutine(force=false) {
+		function editRoutine(event, force=false) {
 			if (force || guard++ > 10) {
 				guard = 0;
 				_this.setCache('_unsaved', {
@@ -169,7 +169,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		window.addEventListener("beforeunload", event => {
 			if (guard === 0 || !_this.history.canUndo()) return;
-			editRoutine(true);
+			editRoutine(null, true);
 		});
 
 		if (await super.initIO()) {
@@ -846,6 +846,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.off('deselected');
 		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
+		if (Array.isArray(annotation._objects)) {
+			for (let child of annotation._objects) delete child.excludeFromExport;
+		}
 		annotation.sessionID = this.session;
 		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
 		annotation.created = Date.now();
@@ -942,10 +945,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {fabric.Object} annotation
 	 * @return {string} annotation name created by factory
 	 */
-	getDefaultAnnotationName(annotation) {
+	getDefaultAnnotationName(annotation, withCoordinates=true) {
 		let factory = annotation._factory();
 		if (factory !== undefined) {
-			return factory.getDescription(annotation);
+			return withCoordinates ? factory.getDescription(annotation) : factory.title();
 		}
 		return "Unknown annotation.";
 	}
@@ -1145,7 +1148,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.disabledInteraction = false;
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
-		this._extraProps = [];
+		this._extraProps = ["objects"];
 		this._wasModeFiredByKey = false;
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
@@ -1377,8 +1380,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		});
 
 		this.canvas.on('mouse:move', function (o) {
-			if (_this.disabledInteraction || !_this.cursor.isDown) return;
-			_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			if (_this.disabledInteraction) return;
+			if (_this.cursor.isDown) {
+				_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			} else {
+				_this.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			}
 		});
 
 		this.canvas.on('mouse:wheel', function (o) {
@@ -1630,6 +1637,15 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 */
 	handleMouseMove(event, point) {
+		//do nothing
+	}
+
+	/**
+	 * Handle mouse hovering event while the OSD navigation is disabled
+	 * @param {MouseEvent} event
+	 * @param {Point} point mouse position in image coordinates (pixels)
+	 */
+	handleMouseHover(event, point) {
 		//do nothing
 	}
 
@@ -2064,7 +2080,6 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-			this.abortClick(isLeftClick,true);
 			return;
 		}
 		this._init(point, isLeftClick, objectFactory);
@@ -2124,5 +2139,74 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	rejects(e) {
 		return e.key === "w";
+	}
+};
+
+
+OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
+
+	constructor(context) {
+		super(context, "fft-correct", "brush", "🆈  correction tool");
+		this.candidates = null;
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		this.candidates = null;
+		let result = this.context.freeFormTool.finish();
+		if (result) {
+			this.context.canvas.setActiveObject(result);
+			this.context.canvas.renderAll();
+		}
+		return true;
+	}
+
+	handleMouseMove(e, point) {
+		const ffTool = this.context.freeFormTool;
+		if (this.candidates) {
+			const target = ffTool.getCircleShape(point);
+			for (let i = 0; i < this.candidates.length; i++) {
+				let candidate = this.candidates[i];
+				if (OSDAnnotations.PolygonUtilities.polygonsIntersect(target, candidate.asPolygon)) {
+					this.candidates = null;
+					this.fftStartWith(point, ffTool, candidate, false);
+					return;
+				}
+			}
+		} else {
+			ffTool.recomputeRadius();
+			ffTool.update(point);
+		}
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		objectFactory = this.context.presets.left;
+		if (!objectFactory) {
+			this.abortClick(isLeftClick);
+			return;
+		}
+		this.context.freeFormTool.setModeAdd(isLeftClick);
+
+		const ffTool = this.context.freeFormTool,
+			newPolygonPoints = ffTool.getCircleShape(point);
+		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
+
+		if (this.fftFoundIntersection(candidates)) {
+			this.fftStartWith(point, ffTool, candidates, false);
+		} else {
+			// still allow selection just search for cached targets
+			this.candidates = candidates;
+		}
+	}
+
+	setFromAuto() {
+		return super.setFromAuto();
+	}
+
+	accepts(e) {
+		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+	}
+
+	rejects(e) {
+		return e.key === "r";
 	}
 };

@@ -1,22 +1,48 @@
-#annotation-logger input:disabled {
+#history-board-for-annotations-body input:disabled {
   cursor: pointer;
 }
 
 #annotations-left-click:hover::before {
-  content: "Left mouse button";
+  content: "Left mouse";
   position: absolute;
   font-size: smaller;
-  top: -7px;
-  left: 14px;
+  top: -9px;
+  left: 6px;
+  z-index: 21;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#annotations-left-click::after {
+  content: "L";
+  position: absolute;
+  font-size: smaller;
+  top: -9px;
+  left: 6px;
   z-index: 21;
 }
 
 #annotations-right-click:hover::before {
-  content: "Right mouse button";
+  content: "Right mouse";
   position: absolute;
   font-size: smaller;
-  top: -7px;
-  left: 14px;
+  top: -9px;
+  left: 6px;
+  z-index: 21;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#annotations-right-click::after {
+  content: "R";
+  position: absolute;
+  font-size: smaller;
+  top: -9px;
+  left: 6px;
   z-index: 21;
 }
 
@@ -58,8 +84,8 @@
 .highlighted-preset {
   border-width: 4px !important;
   border-color: var(--color-border-warning) !important;
-  border-style: solid !important;
-  margin: 2px !important;
+  border-style: inset !important;
+  box-sizing: border-box;
 }
 
 #annotation-status-bar {

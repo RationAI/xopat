@@ -121,7 +121,7 @@ function initXopatUI() {
          * Header is put into #window-header container
          * Content is put into #window-content container
          *
-         * @param parentId unique ID to the modals context (does not have to be unique in this DOM, it has a different one)
+         * @param parentId unique ID to the modals context (does not have to be unique in this DOM if detached)
          * @param title non-formatted title string (for messages, window title tag...)
          * @param header HTML content to put in the header
          * @param content HTML content
@@ -232,27 +232,33 @@ window.addEventListener("beforeunload", (e) => {
         /**
          * Closes any dialog (modal or not)
          * @param id id used to create the window
-         * @returns {boolean} true if managed to close
+         * @returns {boolean|undefined} true if managed to close, false if
+         *   nothing was opened, undefined if error
          */
         closeWindow: function(id) {
             if (!id) {
                 console.error("Invalid form: unique container id not defined.");
-                return false;
+                return undefined;
             }
 
             let node = document.getElementById(id);
             if (node && node.dataset.dialog !== "true") {
                 console.error("Invalid form: identifier not unique.");
-                return false;
+                return undefined;
             }
-            if (node) $(node).remove();
+            let returns = false;
+            if (node) {
+                $(node).remove();
+                returns = true;
+            }
 
             if (this._modals[id]) {
                 let ctx = this._modals[id].context;
                 if (ctx && ctx.window) ctx.window.close();
                 this._destroyModalWindow(id, ctx);
+                return true;
             }
-            return true;
+            return returns;
         },
 
         _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function() {}) {
@@ -325,7 +331,7 @@ window.addEventListener("beforeunload", (e) => {
 
         _buildComplexWindow: function(isModal, parentId, title, content, footer, positionStrategy, params) {
             //preventive close, applies to non-modals only
-            if (!isModal && !this.closeWindow(parentId)) return;
+            if (!isModal && this.closeWindow(parentId) === undefined) return;
             params = params || {};
             let height = params.defaultHeight === undefined ? "" :
                 (typeof params.defaultHeight === "string" ? params.defaultHeight : params.defaultHeight+"px");

@@ -29,6 +29,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
+		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 
 		await this.setupFromParams();
 
@@ -134,23 +135,17 @@ load available sets manually</a>.`, 4000, Dialogs.MSG_WARN);
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
-<button class="btn btn-sm btn-primary ml-2 mr-4 pl-0 pr-2" id="show-annotation-board" title="${this.t('showBoard')}" onclick="${this.THIS}.openHistoryWindow();"><span class="material-icons px-1 text-small">assignment</span><span class="text-small">Show list</span></button>
+<span class="material-icons p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
+onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><span class="material-icons pl-0 pr-1 v-align-text-top" style="font-size: 19px;">save</span>Save</button>
 <button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
 </div>`,
-			this.mainMenuVisibleControls(),
+			'',
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
 			`
-<div class="flex-row d-flex overflow-hidden" style="max-height: 150px">
-<div class="flex-1 pl-2 pr-1 mt-2"><h4>Presets <span class="btn-pointer float-right border-2 rounded-2 text-small mr-3" onclick="${this.THIS}.showPresets();">
-<span class="material-icons text-small">edit</span> Edit</span></h4><div id="preset-list-inner-mp"></div></div>
-<div class="flex-column flex-1 mt-4">
-<div class="btn-pointer flex-row d-flex" onclick="this.firstElementChild.click();">
-<span class="material-icons m-1 flex-1" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
-onclick="${this.THIS}._toggleEnabled(this)"> visibility</span>
-<span class="d-inline-block flex-2" style="line-height: 14px;">${this.t('onOff')}</span></div>
+<div class="d-flex flex-row mt-1">
 <div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 ${UIComponents.Elements.checkBox({
 	label: this.t('outlineOnly'), 
@@ -158,39 +153,68 @@ ${UIComponents.Elements.checkBox({
 	onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
 	default: this.context.presets.getModeOutline()})}
 </div>
-</div><div id="annotation-list-inner-mp" class="mx-2" style="max-height: 150px;"></div>`,
+
+<div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
+<button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
+<button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
+</div>
+<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2"><h4>Classes <span class="btn-pointer float-right border-2 rounded-2 text-small mr-3" onclick="${this.THIS}.showPresets();">
+<span class="material-icons text-small">edit</span> Edit</span></h4><div id="preset-list-inner-mp"></div></div>
+<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
 			"annotations-panel",
 			this.id
 		);
 
-		let modeOptions = [];
-		for (let mode in this.context.Modes) {
-			if (!this.context.Modes.hasOwnProperty(mode)) continue;
-			mode = this.context.Modes[mode];
+		const vertSeparator = '<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>';
+		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.back()">undo</span>
+<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.redo()">redo</span>`, vertSeparator],
+			modes = this.context.Modes;
+		const defaultModeControl = (mode) => {
 			let selected = mode.default() ? "checked" : "";
-			modeOptions.push(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
-<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.THIS}.context.setModeById('${mode.getId()}');" title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
+			return(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
+<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+ oncontextmenu="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+ title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
 		}
 
-		let factorySwitch = [];
+		//AutoMode
+		modeOptions.push(defaultModeControl(modes.AUTO));
+		modeOptions.push(vertSeparator);
+		// Custom shapes
+		let customMode = modes.CUSTOM;
 		for (let factoryID of this._allowedFactories) {
 			const factory = this.context.getAnnotationObjectFactory(factoryID);
 			if (factory) {
-				factorySwitch.push(`<span id="${factoryID}-annotation-factory-switch" data-factory="${factoryID}" 
-class="label-annotation-mode position-relative d-inline-block rounded-2" style="border: 3px inset transparent;">
-<span class="material-icons btn-pointer p-1 rounded-2" onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryID}');" 
-oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryID}'); event.preventDefault(); return false;" 
-title="${factory.title()}">${factory.getIcon()}</span></span>`);
+				modeOptions.push(`
+<input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="d-none switch" name="annotation-modes-selector">
+<label for="${factoryID}-annotation-mode" class="label-annotation-mode position-relative" 
+onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true); event.preventDefault(); return false;" 
+oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
+title="${customMode.getDescription()}: ${factory.title()}">
+<span class="material-icons btn-pointer p-1 rounded-2">${factory.getIcon()}</span></label>`);
 			}
 		}
+		modeOptions.push(vertSeparator);
+		// Brushes
+		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_ADD));
+		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_REMOVE));
+		// Wand + correction
+		modeOptions.push(vertSeparator);
+		modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
+		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
+
+		modeOptions.push(vertSeparator);
+		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
+		modeOptions.push(this.context.mode.customHtml());
+		modeOptions.push('</div>');
+
+		// L/R button
+		modeOptions.push(this.mainMenuVisibleControls());
 
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
 			`<div class="px-3 py-2" id="annotations-tool-bar-content" title="Hold keys or click to select. Scroll controls work with shift if hotkeys are not used.">
-<span class="position-absolute top-0" style="font-size: xx-small; color: var(--color-text-secondary)">Hold keys or click to select.</span>
-${modeOptions.join("")}<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); 
-vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&nbsp;<div id="mode-custom-items" class="d-inline-block">${this.context.mode.customHtml()}</div>
-<div class="px-2 mx-2 d-inline-block" id="annotations-fast-factory-switch" style="border-color: var(--color-border-tertiary) !important;">${factorySwitch.join("")}</div></div>`, 'draw');
+${modeOptions.join("")}</div>`, 'draw');
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
@@ -234,6 +258,45 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		);
 	}
 
+	switchModeActive(id, factory=undefined, isLeftClick) {
+		if (this.context.mode.getId() === id) {
+			if (id === "auto") return;
+
+			// manual mode check factory, which can be re-set only if matches
+			if (id === "custom") {
+				const preset = this.context.presets.getActivePreset(isLeftClick);
+				if (!preset || this.context.presets.getActivePreset(isLeftClick).objectFactory.factoryID !== factory) {
+					return;
+				}
+			}
+			this.context.setModeById("auto");
+			$('#auto-annotation-mode').prop('checked', true).trigger('change');
+		} else {
+			this.context.setModeById(id);
+		}
+	}
+
+	switchMenuList(type) {
+		if (type === "preset") {
+			$("#preset-list-button-mp").attr('aria-selected', true);
+			$("#annotation-list-button-mp").attr('aria-selected', false);
+			$("#preset-list-mp").css('display', 'block');
+			$("#annotation-list-mp").css('display', 'none');
+		} else {
+			if (!this.isModalHistory) {
+				$("#preset-list-mp").css('display', 'none');
+				$("#annotation-list-mp").css('display', 'block');
+			}
+			if (this._preventOpenHistoryWindowOnce) {
+				this._preventOpenHistoryWindowOnce = false;
+			} else {
+				this.openHistoryWindow(this.isModalHistory);
+			}
+			$("#preset-list-button-mp").attr('aria-selected', false);
+			$("#annotation-list-button-mp").attr('aria-selected', true);
+		}
+	}
+
 	openHistoryWindow(asModal = this.isModalHistory) {
 		if (asModal) {
 			this.context.history.openHistoryWindow();
@@ -245,7 +308,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 
 	_afterHistoryWindowOpen(asModal = this.isModalHistory) {
 		if (asModal) {
-			//document.getElementById('annotation-list-inner-mp').innerHTML = '';
+			$("#preset-list-button-mp").click();
 		} else {
 			USER_INTERFACE.MainMenu.open();
 			//todo better checks
@@ -253,6 +316,9 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			if (!pin.hasClass("opened")) {
 				pin.click();
 			}
+			//do not open history window! just focus
+			this._preventOpenHistoryWindowOnce = true;
+			$("#annotation-list-button-mp").click();
 		}
 		this.isModalHistory = asModal;
 	}
@@ -267,8 +333,24 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		});
 		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
 
-		this.context.addHandler('mode-changed', this.annotationModeChanged);
-		this.annotationModeChanged({mode: this.context.mode}); //force refresh manually
+		const modeChangeHandler = e => {
+			$("#mode-custom-items").html(e.mode.customHtml());
+			let id = e.mode.getId();
+			if (id === "custom") {
+				const pl = this.context.presets.left;
+				//todo PR cannot be checked too --> we have inputs with single check only
+				//  reprogram input switching to double modes...?
+				//  const pr = this.context.presets.right;
+				if (pl) {
+					$(`#${pl.objectFactory.factoryID}-annotation-mode`).prop('checked', true);
+				}
+			} else {
+				$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
+			}
+			USER_INTERFACE.Status.show(e.mode.getDescription());
+		};
+		this.context.addHandler('mode-changed', modeChangeHandler);
+		modeChangeHandler({mode: this.context.mode}); //force refresh manually
 
 		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
@@ -284,8 +366,15 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 			this.context.createPresetsCookieSnapshot();
 			this._updateMainMenuPresetList();
 		});
-		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer);
+		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
+		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
+		this.context.addHandler('history-change', e => {
+			$("#toolbar-history-redo").css('color', this.context.history.canRedo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+			$("#toolbar-history-undo").css('color', this.context.history.canUndo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		function showContextMenu(e) {
@@ -308,7 +397,7 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 				handler = _this._clickPresetSelect.bind(_this, true);
 			}
 			_this.context.presets.foreach(preset => {
-				let category = preset.getMetaValue('category') || preset.objectFactory.title();
+				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				actions.push({
 					icon: icon,
@@ -472,12 +561,6 @@ vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>&
 		);
 	}
 
-	annotationModeChanged(e) {
-		$("#mode-custom-items").html(e.mode.customHtml());
-		$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
-		USER_INTERFACE.Status.show(e.mode.getDescription()); //todo better description or another getter
-	}
-
 	annotationsEnabledHandler(e) {
 		if (e.isEnabled) {
 			$("#annotations-tool-bar").removeClass('disabled');
@@ -529,8 +612,9 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 		}
 	}
 
-	_annotationsDomRenderer(containerId, header, body) {
-		$("#annotation-list-inner-mp").html(`<div id="${containerId}">${header}<div style="max-height: 130px; overflow-y: scroll;">${body}</div></div>`)
+	_annotationsDomRenderer(history, containerId) {
+		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">
+${history.getWindowSwapButtonHtml(2)}${history.getHistoryWindowBodyHtml()}</div>`);
 	}
 
 	/******************** Free Form Tool ***********************/
@@ -637,7 +721,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	getMissingPresetHTML(isLeftClick) {
 		return `<div class="p-1" onclick="${this.THIS}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
-<span class="one-liner d-inline-block v-align-middle">Add</span></div>`;
+<span class="one-liner d-inline-block v-align-middle pr-2">Add</span></div>`;
 	}
 
 	/**
@@ -653,7 +737,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 <span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
  onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});">close</span>
 <span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
-<span class="one-liner d-inline-block v-align-middle" style="width: 115px;">${category}</span>
+<span class="one-liner d-inline-block v-align-middle pr-3">${category}</span>
 </div>`;
 	}
 
@@ -714,9 +798,12 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	mainMenuVisibleControls() {
 		return `
-<span id="annotations-left-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3"
-style="width: 170px; cursor:pointer;border-width:3px!important;"></span><span id="annotations-right-click" 
-class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="width: 170px; cursor:pointer;border-width:3px!important;"></span>
+<div style="float: right; transform: translateY(-5px);">
+<span id="annotations-left-click" class="d-inline-block position-relative mt-1 ml-2 border-md rounded-3"
+style="cursor:pointer;border-width:3px!important;"></span>
+<span id="annotations-right-click" 
+class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cursor:pointer;border-width:3px!important;"></span>
+</div>
 `;
 	}
 
@@ -775,12 +862,13 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<div style="color: ${preset.color} !important;" class="d-flex flex-row flex-items-center"><span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
-			html.push(this._metaFieldHtml(preset.presetID, 'category', preset.meta['category'], false));
-			html.push('</div>');
+			html.push(`<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
+			html.push(`<span class="d-inline-block" type="text">${preset.meta['category'].value || 'unknown'}</span>`);
+			html.push('<br>');
 		});
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
+		this.context.history.refresh();
 	}
 
 	/**
@@ -808,12 +896,12 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="wi
 
 		let id = index === undefined ? "" : `id="preset-no-${index}"`;
 
-		let html = [`<div ${id} class="position-relative border-md v-align-top border-dashed p-1 rounded-3 d-inline-block `];
+		let html = [`<div ${id} class="position-relative border v-align-top border-dashed p-1 rounded-3 d-inline-block mb-2 `];
 		if (preset.presetID === defaultPreset?.presetID) {
 			html.push('highlighted-preset');
 			this._presetSelection = preset.presetID;
 		}
-		html.push(`"style="cursor:pointer; margin: 5px;" 
+		html.push(`"style="cursor:pointer;margin: 7px;border-width:4px!important;" 
 onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).addClass('highlighted-preset');
 ${this.THIS}._presetSelection = '${preset.presetID}'">`);
 
@@ -821,13 +909,21 @@ ${this.THIS}._presetSelection = '${preset.presetID}'">`);
 			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
 onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>`);
 		}
-		html.push(`<span class="show-hint d-inline-block my-1" data-hint="Annotation"><select class="form-control" onchange="
-${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value);">${select}</select></span>
+
+		if (preset.meta.category) {
+			html.push(this._metaFieldHtml(preset.presetID, 'category',
+				preset.meta.category, false, "mr-5"));
+		}
+
+		html.push(`
 <span class="show-hint d-inline-block my-1" data-hint="Color"><input ${disabled} class="form-control" type="color" style="height:33px;" 
-onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.value);" value="${preset.color}"></span><br>`);
+onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.value);" value="${preset.color}"></span>
+<span class="show-hint d-inline-block my-1" style="width: 155px" data-hint="Annotation"><select class="form-control width-full" onchange="
+${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value);">${select}</select></span><br>`);
 
 		for (let key in preset.meta) {
-			html.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], key !== 'category'));
+			if (key === 'category') continue;
+			html.push(this._metaFieldHtml(preset.presetID, key, preset.meta[key], true));
 		}
 		html.push('<div>');
 		if (this.enablePresetModify) {
@@ -900,13 +996,13 @@ onchange="${this.THIS}.updatePresetWith('${preset.presetID}', 'color', this.valu
 		Dialogs.show("Failed to delete meta field.", 2500, Dialogs.MSG_ERR);
 	}
 
-	_metaFieldHtml(presetId, key, metaObject, allowDelete=true) {
+	_metaFieldHtml(presetId, key, metaObject, allowDelete=true, classes="width-full") {
 		const disabled = this.enablePresetModify ? "" : " disabled ";
 		let delButton = allowDelete && this.enablePresetModify ? `<span 
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')">delete</span>` : "";
 
-		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 width-full" type="text" onchange="
+		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 ${classes}" type="text" onchange="
 ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}" ${disabled}>${delButton}</div>`;
 	}
 
@@ -949,7 +1045,7 @@ onclick="${this.THIS}.createNewPreset(this, ${isLeftClick});"><span class="mater
 <button id="select-annotation-preset-right" onclick="return ${this.THIS}._clickPresetSelect(false);" 
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false);" class="btn m-2">Set for right click </button>
 <button id="select-annotation-preset-left" onclick="return ${this.THIS}._clickPresetSelect(true);" 
-class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2">Save</button></div>');
+class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2" onclick="Dialogs.closeWindow(\'preset-modify-dialog\');">Save</button></div>');
 	}
 
 	_clickPresetSelect(isLeft) {
