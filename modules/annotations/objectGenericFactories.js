@@ -370,7 +370,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "translate";
+        return "format_shapes";
     }
 
     fabricStructure() {
@@ -1290,7 +1290,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "share";
+        return "flash_on";
     }
 
     fabricStructure() {

@@ -17,14 +17,20 @@ And works with the env configuration:
 The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XO_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 
-To build image (using name `xopat` and tag `v1`):
+To build image (using `$XO_IMAGE_NAME`):
 
- ``docker build -t xopat:v1 -f Dockerfile .``
+ optionally: ``$XO_IMAGE_NAME=my-desired-name:my-tag``
 
-run image first time (at localhost:8000/xopat/index.php and mounting the volume so that we 
+ ``build.sh`` (or  ``build-dev.sh`` )
+
+To run the image, you can simply
+
+``docker run -d -p 8000:8000 --name xopat $XO_IMAGE_NAME``
+
+run the development image first time (at localhost:8000/xopat/index.php and mounting the volume so that we 
 can access this local repository _THIS REPOSITORY PATH_ and have direct changes applied):
 
- ``docker run -d -p 8000:8000 --name xopat -v [THIS REPOSITORY PATH]:/var/www/html/xopat xopat:v1``
+ ``docker run -d -p 8000:8000 --name xopat -v [THIS REPOSITORY PATH]:/var/www/html/xopat $XO_IMAGE_NAME``
 
 (you can add  ``--rm`` for run command to autoremove container after
 it was stopped); to

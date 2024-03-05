@@ -121,7 +121,7 @@ function initXopatUI() {
          * Header is put into #window-header container
          * Content is put into #window-content container
          *
-         * @param parentId unique ID to the modals context (does not have to be unique in this DOM, it has a different one)
+         * @param parentId unique ID to the modals context (does not have to be unique in this DOM if detached)
          * @param title non-formatted title string (for messages, window title tag...)
          * @param header HTML content to put in the header
          * @param content HTML content
@@ -232,27 +232,33 @@ window.addEventListener("beforeunload", (e) => {
         /**
          * Closes any dialog (modal or not)
          * @param id id used to create the window
-         * @returns {boolean} true if managed to close
+         * @returns {boolean|undefined} true if managed to close, false if
+         *   nothing was opened, undefined if error
          */
         closeWindow: function(id) {
             if (!id) {
                 console.error("Invalid form: unique container id not defined.");
-                return false;
+                return undefined;
             }
 
             let node = document.getElementById(id);
             if (node && node.dataset.dialog !== "true") {
                 console.error("Invalid form: identifier not unique.");
-                return false;
+                return undefined;
             }
-            if (node) $(node).remove();
+            let returns = false;
+            if (node) {
+                $(node).remove();
+                returns = true;
+            }
 
             if (this._modals[id]) {
                 let ctx = this._modals[id].context;
                 if (ctx && ctx.window) ctx.window.close();
                 this._destroyModalWindow(id, ctx);
+                return true;
             }
-            return true;
+            return returns;
         },
 
         _showCustomModalImpl: function(id, title, html, size='width=450,height=250', customCall=function() {}) {
@@ -325,7 +331,7 @@ window.addEventListener("beforeunload", (e) => {
 
         _buildComplexWindow: function(isModal, parentId, title, content, footer, positionStrategy, params) {
             //preventive close, applies to non-modals only
-            if (!isModal && !this.closeWindow(parentId)) return;
+            if (!isModal && this.closeWindow(parentId) === undefined) return;
             params = params || {};
             let height = params.defaultHeight === undefined ? "" :
                 (typeof params.defaultHeight === "string" ? params.defaultHeight : params.defaultHeight+"px");
@@ -340,9 +346,9 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             return `<div id="${parentId}" data-dialog="true" ${positionStrategy}>
 <details-dialog class="${diaClasses} d-flex flex-column" ${limits}>
-    <div id="window-header" class="Box-header noselect" id="${parentId}-header">
+    <div id="window-header" class="Box-header noselect d-flex flex-row" id="${parentId}-header">
+      <h3 class="Box-title position-relative flex-1">${title}</h3>
       ${close}
-      <h3 class="Box-title">${title}</h3>
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
       <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
@@ -355,7 +361,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
         },
 
         _getCloseButton: function(id) {
-            return `<button class="Box-btn-octicon btn-octicon float-right" type="button"
+            return `<button class="Box-btn-octicon btn-octicon position-relative" type="button"
 aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true">
 <path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77
@@ -652,8 +658,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-<span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
-<h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
+<span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
+<h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
 </div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
             },
             /**
@@ -673,9 +679,25 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-visible">${html}</div>`);
             },
             /**
+             * Open/close Main Menu Item todo: make cleaner
+             * @param {jQuery} jQSelf
+             * @param {jQuery} jQTargetParent
+             * @private
+             */
+            clickHeader: function(jQSelf, jQTargetParent) {
+                if (jQTargetParent.hasClass('force-visible')) {
+                    jQTargetParent.removeClass('force-visible');
+                    jQSelf.removeClass('opened');
+                } else {
+                    jQSelf.addClass('opened');
+                    jQTargetParent.addClass('force-visible');
+                }
+            },
+            /**
              * Open the menu
              */
             open() {
+                if (this.opened) return;
                 this.context.css("right", "0");
                 this.opened = true;
                 USER_INTERFACE.Margins.right = 400;
@@ -685,6 +707,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * Close the menu
              */
             close() {
+                if (!this.opened) return;
                 this.context.css("right", "-400px");
                 this.opened = false;
                 USER_INTERFACE.Margins.right = 0;
@@ -1082,23 +1105,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 console.error("Could not attach custom HTML.", e);
                 return false;
             }
-        },
-
-        /**
-         * Open/close Main Menu Item
-         * @param {JQuery} jQSelf
-         * @param {JQuery} jQTargetParent
-         * @private
-         */
-        clickMenuHeader: function(jQSelf, jQTargetParent) {
-            if (jQTargetParent.hasClass('force-visible')) {
-                jQTargetParent.removeClass('force-visible');
-                jQSelf.removeClass('opened');
-            } else {
-                jQSelf.addClass('opened');
-                jQTargetParent.addClass('force-visible');
-            }
-        },
+        }
     };
 
     /******************* ADVANCED MENUS *********************/

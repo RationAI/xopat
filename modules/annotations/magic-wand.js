@@ -5,13 +5,16 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         this.threshold = 10;
         this.minThreshold = 0;
-        this.maxThreshold = 200;
+        this.maxThreshold = 100;
         // single mouse scroll is +- 100 value
-        this.thStep = 5 / 100;
+        this.thStep = 3 / 100;
 
         this.addMode = false; //todo not tested yet
         this.oldMask = null;
         this.mask = null;
+        //this._buttonActive = false;
+
+        this._scrollZoom = this.scrollZooming.bind(this);
 
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
         APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
@@ -37,10 +40,18 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this.drawer.canvas.style.setProperty('display', 'none');
     }
 
+    setLayer(index, key) {
+        this._readingIndex = index;
+        this._readingKey = key;
+    }
+
     handleClickUp(o, point, isLeftClick, objectFactory) {
-        if (this.result) {
+        if (this._allowCreation && this.result) {
             this.context.promoteHelperAnnotation(this.result);
-            this._cleanUp();
+            this.result = null;
+            this._allowCreation = false;
+        } else {
+            this.context.setMode(this.context.Modes.AUTO);
         }
         return true;
     }
@@ -48,11 +59,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleClickDown(o, point, isLeftClick, objectFactory) {
         if (!objectFactory) return; // no preset - no op
 
+        this._allowCreation = true;
         this.context.canvas.discardActiveObject();
-        this.drawer.canvas.style.setProperty('display', 'block');
-        this.prepareViewportScreenshot();
         this._isLeft = isLeftClick;
-        this._process(o);
     }
 
     prepareViewportScreenshot(x, y, w, h) {
@@ -79,11 +88,16 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             rawData: data,
             binaryMask: new Uint8ClampedArray(data.width * data.height)
         }
+        this._invalidData = false;
         return this.data;
     }
 
     _process(o) {
         if (!this.data) return;
+
+        if (this._invalidData) {
+            this.prepareViewportScreenshot();
+        }
 
         if (this.addMode && !this.oldMask) {
             this.oldMask = this.mask;
@@ -176,12 +190,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         };
     }
 
-    _cleanUp() {
-        this.result = null;
-        this.data = null;
-        this.drawer.canvas.style.setProperty('display', 'none');
-    }
-
     scroll(event, delta) {
         this.threshold = Math.min(this.maxThreshold,
             Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
@@ -190,15 +198,19 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     scrollZooming(event, delta) {
-        if (this.result) this.context.deleteHelperAnnotation(this.result);
-        if (this.data) this._cleanUp();
+        this._invalidData = Date.now();
     }
 
-    handleMouseMove(event, point) {
+    handleMouseHover(event, point) {
+        this._isLeft = true;
         this._process(event);
     }
 
     setFromAuto() {
+        this.drawer.canvas.style.setProperty('display', 'block');
+        this.prepareViewportScreenshot();
+
+        VIEWER.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
         this.context.canvas.hoverCursor = "crosshair";
         this.context.canvas.defaultCursor = "crosshair";
@@ -206,6 +218,14 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     setToAuto(temporary) {
+        if (this.result) {
+            this.context.deleteHelperAnnotation(this.result);
+            this.result = null;
+        }
+        this.data = null;
+        this.drawer.canvas.style.setProperty('display', 'none');
+
+        VIEWER.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
         this.context.canvas.renderAll();
@@ -213,7 +233,15 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     accepts(e) {
-        return e.key === "t" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+        const accepts = e.key === "t" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+        // if (accepts) {
+        //     this._buttonActive = !this._buttonActive;
+        //     if (!this._buttonActive) {
+        //         this.context.setMode(this.context.Modes.AUTO);
+        //         return false;
+        //     }
+        // }
+        return accepts;
     }
 
     rejects(e) {
@@ -236,7 +264,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 <input type="range" id="a-magic-wand-threshold" style="width: 150px;" 
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
-</span><select class="form-control"
+</span><select class="ml-2 form-control text-small"
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].tiledImageIndex = Number.parseInt(this.value);">${options}</select>`;
     }
 };

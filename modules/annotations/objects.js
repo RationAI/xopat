@@ -500,11 +500,11 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, highestQuality = false) {
+    simplify: function (points, highestQuality = true) {
         // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
-        let tolerance = 7 / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = 15 / VIEWER.scalebar.imagePixelSizeOnScreen();
         points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
         return this._simplifyDouglasPeucker(points, tolerance);
     },
@@ -513,8 +513,8 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = Math.pow((10 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen(), 2);
-        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
+        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 
     approximatePolygonArea: function (points) {

@@ -117,7 +117,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		await this._initIoFromCache();
 
 		let guard = 0; const _this=this;
-		function editRoutine(force=false) {
+		function editRoutine(event, force=false) {
 			if (force || guard++ > 10) {
 				guard = 0;
 				//todo ensure cache can be non-persistent as a fallback
@@ -139,7 +139,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.addHandler('annotation-edit', editRoutine);
 		window.addEventListener("beforeunload", event => {
 			if (guard === 0 || !_this.history.canUndo()) return;
-			editRoutine(true);
+			editRoutine(null, true);
 		});
 
 		if (!this._avoidImport) {
@@ -777,6 +777,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.off('deselected');
 		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
+		if (Array.isArray(annotation._objects)) {
+			for (let child of annotation._objects) delete child.excludeFromExport;
+		}
 		annotation.sessionID = this.session;
 		annotation.author = XOpatUser.instance().name;
 		annotation.created = Date.now();
@@ -796,6 +799,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	addAnnotation(annotation, _raise=true) {
 		this.addHelperAnnotation(annotation);
 		this.promoteHelperAnnotation(annotation, _raise);
+	}
+
+	/**
+	 * Change the annotation
+	 * @param annotation
+	 * @param presetID
+	 * @param _raise
+	 */
+	changeAnnotationPreset(annotation, presetID, _raise=true) {
+		let factory = annotation._factory();
+		if (factory !== undefined) {
+			const options = this.presets.getAnnotationOptionsFromInstance(this.presets.get(presetID));
+			factory.configure(annotation, options);
+			if (_raise) this.raiseEvent('annotation-preset', {object: annotation, presetID: presetID});
+		}
 	}
 
 	/**
@@ -858,12 +876,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Get default annotation name
 	 * @param {fabric.Object} annotation
+	 * @param {boolean} [withCoordinates=true]
 	 * @return {string} annotation name created by factory
 	 */
-	getDefaultAnnotationName(annotation) {
+	getDefaultAnnotationName(annotation, withCoordinates=true) {
 		let factory = annotation._factory();
 		if (factory !== undefined) {
-			return factory.getDescription(annotation);
+			return withCoordinates ? factory.getDescription(annotation) : factory.title();
 		}
 		return "Unknown annotation.";
 	}
@@ -928,23 +947,25 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Find all objects that intersects with target bbox
 	 * @param bbox
+	 * @param {function} transformer transform object somehow, if falsey value returned the object is skipped
 	 * @returns {[fabric.Object]}
 	 */
-	findIntersectingObjectsByBBox(bbox) {
+	findIntersectingObjectsByBBox(bbox, transformer=x => x) {
 		// Cache all targets where their bounding box contains point.
 		const objects = this.canvas._objects;
 		let targets = [], i = objects.length;
 		while (i--) {
 			const object = objects[i];
-			if (!object.sessionID) continue;
 			const coords = object.aCoords;
 			if (OSDAnnotations.PolygonUtilities.intersectAABB(bbox, {
-				x: coords.tl.x,
-				y: coords.tl.y,
-				width: coords.br.x - coords.tl.x,
-				height: coords.br.y - coords.tl.y
-			})) {
-				targets.push(object);
+					x: coords.tl.x,
+					y: coords.tl.y,
+					width: coords.br.x - coords.tl.x,
+					height: coords.br.y - coords.tl.y
+				}
+			)) {
+				const result = transformer(object);
+				result && targets.push(result);
 			}
 		}
 		return targets;
@@ -1061,7 +1082,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.disabledInteraction = false;
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
-		this._extraProps = [];
+		this._extraProps = ["objects"];
 		this._wasModeFiredByKey = false;
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
@@ -1190,7 +1211,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (!_this.cursor.isDown) {
 				//todo in auto mode, this event is fired twice!! fix
 				if (_this.cursor.mouseTime === Infinity) {
-					_this.raiseEvent('canvas-nonprimary-release', {
+					_this.raiseEvent('nonprimary-release-not-handled', {
 						originalEvent: event,
 						pressTime: _this.cursor.abortedTime
 					});
@@ -1203,9 +1224,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, false, factory)) {
 				event.preventDefault();
-			} else /*if (!_this.isModeAuto())*/ {
+			} else {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
-				_this.raiseEvent('canvas-nonprimary-release', {
+				_this.raiseEvent('nonprimary-release-not-handled', {
 					originalEvent: event,
 					pressTime: _this.cursor.mouseTime === Infinity ? _this.cursor.abortedTime : _this.cursor.mouseTime
 				});
@@ -1293,8 +1314,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		});
 
 		this.canvas.on('mouse:move', function (o) {
-			if (_this.disabledInteraction || !_this.cursor.isDown) return;
-			_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			if (_this.disabledInteraction) return;
+			if (_this.cursor.isDown) {
+				_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			} else {
+				_this.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
+			}
 		});
 
 		this.canvas.on('mouse:wheel', function (o) {
@@ -1640,6 +1665,15 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
+	 * Handle mouse hovering event while the OSD navigation is disabled
+	 * @param {MouseEvent} event
+	 * @param {Point} point mouse position in image coordinates (pixels)
+	 */
+	handleMouseHover(event, point) {
+		//do nothing
+	}
+
+	/**
 	 * Handle scroll event while the OSD navigation is disabled including zoom
 	 * @param {Event} event original MouseWheel event
 	 * @param {number} delta event.deltaY property, copied out since this is the value we are interested in
@@ -1848,100 +1882,54 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
 	constructor(context, id, icon, description) {
 		super(context, id, icon, description);
-		this.allowDeselection = false;
 	}
 
-	handleClickUp(o, point, isLeftClick, objectFactory) {
-		this._finish()
-		return true;
+	fftStartWith(point, ffTool, reference, wasCreated) {
+		this.context.canvas.discardActiveObject();
+
+		if (reference.asPolygon) {
+			ffTool.init(reference.object, wasCreated.asPolygon);
+		} else {
+			ffTool.init(reference, wasCreated);
+		}
+		ffTool.update(point);
 	}
 
-	handleClickDown(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) this.abortClick(isLeftClick);
-		else this._init(o, point, isLeftClick, objectFactory);
-	}
-
-	handleMouseMove(o, point) {
-		this.context.freeFormTool.recomputeRadius();
-		this.context.freeFormTool.update(point);
-	}
-
-	objectDeselected(event, object) {
-		return this.allowDeselection;
-	}
-
-
-	_intersects(polygon, object) {
-		let	factory = object._factory();
-		if (!factory.isEditable()) return null;
-		const objAsPolygon = factory.isImplicit() ?
-			factory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : object;
-		return OSDAnnotations.PolygonUtilities.polygonsIntersect(polygon, objAsPolygon) ? objAsPolygon : null;
-	}
-
-	// find intersection and return as polygon
-	_findIntersects(pointer, pointerBbox, currentObject) {
-		if (currentObject && this._intersects(pointer, currentObject)) {
-			return currentObject; //todo consider active object
+	//find either array of points (intersection) or nested array of points /targets/
+	fftFindTarget(point, ffTool, brushPolygon, offset=0) {
+		function getObjectAsCandidateForIntersectionTest(o) {
+			if (!o.sessionID) return false;
+			let	factory = o._factory();
+			if (!factory.isEditable()) return false;
+			const result = factory.isImplicit() ?
+				factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : o.points;
+			if (!result) return false;
+			return {object: o, asPolygon: result};
 		}
 
-		const candidates = this.context.findIntersectingObjectsByBBox(pointerBbox);
-		for (let candidate of candidates) {
-			candidate = this._intersects(pointer, candidate);
-			if (candidate) {
+		const currentObject = this.context.canvas.getActiveObject();
+		let current = currentObject && getObjectAsCandidateForIntersectionTest(currentObject);
+		if (current && OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, current.asPolygon)) {
+			return current;
+		}
+
+		const candidates = this.context.findIntersectingObjectsByBBox({
+			x: point.x - ffTool.radius - offset,
+			y: point.y - ffTool.radius - offset,
+			width: ffTool.radius * 2 + offset,
+			height: ffTool.radius * 2 + offset
+		}, getObjectAsCandidateForIntersectionTest);
+		for (let i = 0; i < candidates.length; i++) {
+			let candidate = candidates[i];
+			if (OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, candidate.asPolygon)) {
 				return candidate;
 			}
 		}
-		return undefined;
+		return candidates; //converted array of arrays of points
 	}
 
-	_init(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) {
-			this.abortClick(isLeftClick, true);
-			return undefined;
-		}
-
-		let ffTool = this.context.freeFormTool,
-			newPolygonPoints = this._geCirclePoints(point),
-			currentObject = this._findIntersects(newPolygonPoints,
-				{
-					x: point.x - ffTool.radius,
-					y: point.y - ffTool.radius,
-					width: ffTool.radius * 2,
-					height: ffTool.radius * 2
-				},
-				this.context.canvas.getActiveObject()),
-			created = false;
-
-		if (!currentObject) {
-			if (!ffTool.modeAdd) {
-				//subtract needs active object
-				this.abortClick(isLeftClick);
-				return;
-			}
-			currentObject = this.context.polygonFactory.create(newPolygonPoints, this.context.presets.getAnnotationOptions(isLeftClick));
-			created = true;
-		}
-
-		if (currentObject) {
-			this.context.canvas.discardActiveObject();
-			ffTool.init(currentObject, created);
-			ffTool.update(point);
-		}
-	}
-
-	_geCirclePoints(point) {
-		return this.context.freeFormTool.getCircleShape(point);
-	}
-
-	_finish() {
-		let result = this.context.freeFormTool.finish();
-		if (result) {
-			this.allowDeselection = true;
-			this.context.canvas.setActiveObject(result);
-			this.context.canvas.renderAll();
-			this.allowDeselection = false;
-		}
+	fftFoundIntersection(result) {
+		return !Array.isArray(result);
 	}
 
 	scroll(event, delta) {
@@ -1973,6 +1961,37 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 		super(context, "fft-add", "brush", "🅴  brush to create/edit");
 	}
 
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		let result = this.context.freeFormTool.finish();
+		if (result) {
+			this.context.canvas.setActiveObject(result);
+			this.context.canvas.renderAll();
+		}
+		return true;
+	}
+
+	handleMouseMove(e, point) {
+		this.context.freeFormTool.recomputeRadius();
+		this.context.freeFormTool.update(point);
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) {
+			this.abortClick(isLeftClick);
+			return;
+		}
+		let created = false;
+		const ffTool = this.context.freeFormTool,
+			newPolygonPoints = ffTool.getCircleShape(point);
+		let targetIntersection = this.fftFindTarget(point, ffTool, newPolygonPoints, 0);
+		if (!this.fftFoundIntersection(targetIntersection)) {
+			targetIntersection = this.context.polygonFactory.create(newPolygonPoints,
+				this.context.presets.getAnnotationOptions(isLeftClick));
+			created = true;
+		}
+		this.fftStartWith(point, ffTool, targetIntersection, created);
+	}
+
 	setFromAuto() {
 		this.context.freeFormTool.setModeAdd(true);
 		return super.setFromAuto();
@@ -1991,6 +2010,52 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 	constructor(context) {
 		super(context, "fft-remove", "brush", "🆁  brush to remove");
+		this.candidates = null;
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		this.candidates = null;
+		let result = this.context.freeFormTool.finish();
+		if (result) {
+			this.context.canvas.setActiveObject(result);
+			this.context.canvas.renderAll();
+		}
+		return true;
+	}
+
+	handleMouseMove(e, point) {
+		const ffTool = this.context.freeFormTool;
+		if (this.candidates) {
+			const target = ffTool.getCircleShape(point);
+			for (let i = 0; i < this.candidates.length; i++) {
+				let candidate = this.candidates[i];
+				if (OSDAnnotations.PolygonUtilities.polygonsIntersect(target, candidate.asPolygon)) {
+					this.candidates = null;
+					this.fftStartWith(point, ffTool, candidate, false);
+					return;
+				}
+			}
+		} else {
+			ffTool.recomputeRadius();
+			ffTool.update(point);
+		}
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		if (!objectFactory) {
+			this.abortClick(isLeftClick);
+			return;
+		}
+		const ffTool = this.context.freeFormTool,
+			newPolygonPoints = ffTool.getCircleShape(point);
+		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
+
+		if (this.fftFoundIntersection(candidates)) {
+			this.fftStartWith(point, ffTool, candidates, false);
+		} else {
+			// still allow selection just search for cached targets
+			this.candidates = candidates;
+		}
 	}
 
 	setFromAuto() {
@@ -2020,7 +2085,6 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-			this.abortClick(isLeftClick,true);
 			return;
 		}
 		this._init(point, isLeftClick, objectFactory);
@@ -2080,5 +2144,73 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	rejects(e) {
 		return e.key === "w";
+	}
+};
+
+OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
+
+	constructor(context) {
+		super(context, "fft-correct", "brush", "🆈  correction tool");
+		this.candidates = null;
+	}
+
+	handleClickUp(o, point, isLeftClick, objectFactory) {
+		this.candidates = null;
+		let result = this.context.freeFormTool.finish();
+		if (result) {
+			this.context.canvas.setActiveObject(result);
+			this.context.canvas.renderAll();
+		}
+		return true;
+	}
+
+	handleMouseMove(e, point) {
+		const ffTool = this.context.freeFormTool;
+		if (this.candidates) {
+			const target = ffTool.getCircleShape(point);
+			for (let i = 0; i < this.candidates.length; i++) {
+				let candidate = this.candidates[i];
+				if (OSDAnnotations.PolygonUtilities.polygonsIntersect(target, candidate.asPolygon)) {
+					this.candidates = null;
+					this.fftStartWith(point, ffTool, candidate, false);
+					return;
+				}
+			}
+		} else {
+			ffTool.recomputeRadius();
+			ffTool.update(point);
+		}
+	}
+
+	handleClickDown(o, point, isLeftClick, objectFactory) {
+		objectFactory = this.context.presets.left;
+		if (!objectFactory) {
+			this.abortClick(isLeftClick);
+			return;
+		}
+		this.context.freeFormTool.setModeAdd(isLeftClick);
+
+		const ffTool = this.context.freeFormTool,
+			newPolygonPoints = ffTool.getCircleShape(point);
+		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
+
+		if (this.fftFoundIntersection(candidates)) {
+			this.fftStartWith(point, ffTool, candidates, false);
+		} else {
+			// still allow selection just search for cached targets
+			this.candidates = candidates;
+		}
+	}
+
+	setFromAuto() {
+		return super.setFromAuto();
+	}
+
+	accepts(e) {
+		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+	}
+
+	rejects(e) {
+		return e.key === "r";
 	}
 };

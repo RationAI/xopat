@@ -48,8 +48,11 @@ the DOM does not belong to this context. The container
 
 ##### history-close | ``{inNewWindow: boolean}``
 
-##### canvas-nonprimary-release
+##### canvas-nonprimary-release-not-handled
+Called when the annotation modes did not handle mouse release action.
 
-##### canvas-release
+##### canvas-release-not-handled
+Called when the annotation modes did not handle mouse release action.
+
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.
