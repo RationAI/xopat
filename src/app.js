@@ -220,7 +220,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         getOption(name, defaultValue=undefined, cache=true) {
             if (cache) {
                 let cached = localStorage.getItem(name);
-                if (cached !== null) return cached;
+                if (cached !== null && cached !== undefined) {
+                    if (cached === "false") cached = false;
+                    else if (cached === "true") cached = true;
+                    return cached;
+                }
             }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
                 (defaultValue === undefined ? this.defaultConfig[name] : defaultValue);
@@ -590,8 +594,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             }
             imageOpts.push(`<div class="inner-panel-content noselect" id="inner-panel-content-1">
             <div>
-                 <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.clickMenuHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                 <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.clickMenuHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
+                 <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
+                 <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
             </div>
             <div id="image-layer-options" class="inner-panel-hidden">`);
             imageOpts = imageOpts.reverse();

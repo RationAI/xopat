@@ -10,11 +10,12 @@ OSDAnnotations.Preset = class {
      */
     constructor(id, objectFactory = null, category = "", color = "") {
         this.color = color;
+        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
         this.meta.category = {
-            name: 'Category',
+            name: 'Name',
             value: category
         };
         this._used = false;
@@ -119,6 +120,12 @@ OSDAnnotations.PresetManager = class {
         return isLeftClick ? this.left : this.right;
     }
 
+    getAnnotationOptionsFromInstance(preset, asLeftClick=true) {
+        let result = this._populateObjectOptions(preset);
+        result.isLeftClick = asLeftClick;
+        return this._withDynamicOptions(result);
+    }
+
     /**
      * Get data to set as annotation properties (look, metadata...)
      * @param {boolean} isLeftClick true if the data should be with preset data bound to the left mouse button
@@ -126,10 +133,8 @@ OSDAnnotations.PresetManager = class {
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
-        let preset = this.getActivePreset(isLeftClick),
-            result = this._populateObjectOptions(preset);
-        result.isLeftClick = isLeftClick;
-        return this._withDynamicOptions(result);
+        let preset = this.getActivePreset(isLeftClick);
+        return this.getAnnotationOptionsFromInstance(preset, isLeftClick);
     }
 
     /**
@@ -197,11 +202,25 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Presets getter
-     * @param {string} id preset id
+     * @param {string} [id=undefined] preset id, if not set get the first preset
      * @returns {OSDAnnotations.Preset} preset instance
      */
-    get(id) {
+    get(id = undefined) {
+        if (!id) {
+            for (const k in this._presets) {
+                if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
+            }
+            return undefined;
+        }
         return this._presets[id];
+    }
+
+    /**
+     * Presets getter
+     * @returns {Array<any>} preset ids
+     */
+    getExistingIds() {
+        return Object.keys(this._presets);
     }
 
     /**

@@ -192,7 +192,8 @@ function print_css_single($files, $path) {
 
 function require_openseadragon() {
     global $CORE;
-    echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}\"></script>\n";
+    $version = VERSION;
+    echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}?v=$version\"></script>\n";
 }
 
 function require_lib($name) {

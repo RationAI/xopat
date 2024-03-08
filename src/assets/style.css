@@ -322,6 +322,28 @@ input.switch:checked + label span {
     color: var(--color-state-focus-border);
 }
 
+/**
+todo remplace #cache snapshot with this:
+
+  Selectable multibutton shows on hover
+  Use:
+     <[container] class="hover-selectable">
+            <!-- anything you want to be visible without hover -->
+            <[container] class="position-absolute">
+                   <!-- anything you want to be visible with hover, position absolute as you like -->
+            </[container] >
+     </[container]>
+ */
+.hover-selectable {
+    position: relative;
+}
+.hover-selectable > .position-absolute {
+    display: none;
+}
+.hover-selectable:hover > .position-absolute, .hover-selectable > .position-absolute:hover {
+    display: flex !important;
+}
+
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
@@ -372,7 +394,7 @@ div {box-sizing: initial !important;}
 .inner-panel-simple {padding-left: 9px;padding-right: 5px;}
 .inner-panel-visible {padding: 0 5px 0 9px;}
 .inner-panel-hidden {max-height: 0;padding: 0 5px 0 9px;transition: max-height 0.15s ease-in-out;overflow: hidden;
-    background-image: linear-gradient(to top, #85858514 , var(--color-bg-primary));border-radius: 6px;}
+    background-image: linear-gradient(to top, #85858514 , var(--color-bg-primary));border-radius: 6px; width: 100%}
 .inner-panel.loading::before {content: '';position: absolute;width: 100%;height: 100%;
     background: rgba(34, 34, 34, 0.68);top: 0;left: 0;}
 .inner-panel.loading::after {content: '';position: absolute;width: 75px;height: 75px;display: inline-block;
@@ -456,9 +478,6 @@ div {box-sizing: initial !important;}
 }
 #tissue-preview-container img:hover {
 
-}
-#cache-snapshot:hover + div, .cache-snapshot-visible:hover {
-    display: flex !important;
 }
 
 /*TODO implement switch button

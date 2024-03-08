@@ -60,6 +60,10 @@ function scanDependencies(&$itemList, $id, $contextName) {
     $item = &$itemList[$id];
     global $order;
 
+    if ($item["_priority"] > -1) {
+        return true;
+    }
+
     $item["_priority"] = -1;
 
     $valid = true;

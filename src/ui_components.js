@@ -99,7 +99,7 @@ placeholder="${options.placeholder}" value="${options.default}" ${options.onchan
             options.onchange = typeof options.onchange === "string" ? `onchange="${options.onchange}"` : "disabled";
         }
         if (options.default === "false") options.default = false;
-        return `<label style="font-weight: initial;"><input type="checkbox" 
+        return `<label style="font-weight: initial;" class="btn-pointer"><input type="checkbox" 
 class="${options.classes} form-control v-align-middle" ${options.default ? "checked" : ""} ${options.onchange}>&nbsp; 
 ${options.label}</label>`;
     },
