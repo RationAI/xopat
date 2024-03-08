@@ -265,10 +265,10 @@ vec4 lid_${layer._index}_xo() {
                         execution += `
     vec4 l${layer._index}_out = lid_${layer._index}_xo();
     l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
-    ${renderCtx.__mode}(l${layer._index}_out);`;
+    deferred_blend = ${renderCtx.__mode}(l${layer._index}_out, deferred_blend);`;
                     } else {
                         execution += `
-    ${renderCtx.__mode}(lid_${layer._index}_xo());`;
+    deferred_blend = ${renderCtx.__mode}(lid_${layer._index}_xo(), deferred_blend);`;
                     }
                     visible = true;
                     layer.rendering = true;
@@ -331,35 +331,34 @@ uniform float pixel_size_in_fragments;
 uniform float zoom_level;
 ${this.texture.declare(indicesOfImages)}
 varying vec2 tile_texture_coords;
-vec4 _last_rendered_color = vec4(.0);
 
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
 
-void show(vec4 color) {
-    vec4 fg = _last_rendered_color;
-    _last_rendered_color = color;
+vec4 show(vec4 color, vec4 deferred) {
+    vec4 fg = deferred;
     vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
     gl_FragColor = (pre_fg + gl_FragColor * (1.0-fg.a));
+    return color;
 }
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
 ${this.glslBlendCode}
 }
 
-void blend_clip(vec4 foreground) {
-    _last_rendered_color = blend_equation(foreground, _last_rendered_color);
+vec4 blend_clip(vec4 foreground, vec4 deferred) {
+    return blend_equation(foreground, deferred);
 }
 
-void blend(vec4 foreground) {
-    show(_last_rendered_color);
-    gl_FragColor = blend_equation(foreground, gl_FragColor);
-    _last_rendered_color = vec4(.0);
+vec4 blend(vec4 foreground, vec4 deferred) {
+    vec4 current_deferred = show(foreground, deferred);
+    gl_FragColor = blend_equation(current_deferred, gl_FragColor);
+    return vec4(.0);
 }
 
-void finalize() {
-    show(vec4(.0));
+void finalize(vec4 deferred) {
+    show(vec4(.0), deferred);
     
     if (close(gl_FragColor.a, 0.0)) {
         gl_FragColor = vec4(0.);
@@ -373,9 +372,11 @@ ${Object.values(globalScopeCode).join("\n")}
 ${definition}
 
 void main() {
+    vec4 deferred_blend = vec4(0.);
+
     ${execution}
     
-    finalize();
+    finalize(deferred_blend);
 }
 `;
     }
@@ -504,10 +505,10 @@ vec4 lid_${layer._index}_xo() {
                         execution += `
     vec4 l${layer._index}_out = lid_${layer._index}_xo();
     l${layer._index}_out.a *= ${renderCtx.opacity.sample()};
-    ${renderCtx.__mode}(l${layer._index}_out);`;
+    deferred_blend = ${renderCtx.__mode}(l${layer._index}_out, deferred_blend);`;
                     } else {
                         execution += `
-    ${renderCtx.__mode}(lid_${layer._index}_xo());`;
+    deferred_blend = ${renderCtx.__mode}(lid_${layer._index}_xo(), deferred_blend);`;
                     }
 
                     layer.rendering = true;
@@ -581,7 +582,6 @@ ${this.texture.declare(indicesOfImages)}
 uniform float pixel_size_in_fragments;
 uniform float zoom_level;
 uniform vec2 u_tile_size;
-vec4 _last_rendered_color = vec4(.0);
 
 in vec2 tile_texture_coords;
         
@@ -591,46 +591,48 @@ bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
         
-void show(vec4 color) {
+vec4 show(vec4 color, vec4 deferred) {
     //premultiplied alpha blending
-    vec4 fg = _last_rendered_color;
-    _last_rendered_color = color;
+    vec4 fg = deferred;
     vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
     final_color = (pre_fg + final_color * (1.0-fg.a));
+    return color;
 }
 
-void finalize() {
-    show(vec4(.0));
+void finalize(vec4 deferred) {
+    show(vec4(.0), deferred);
     
     if (close(final_color.a, 0.0)) {
         final_color = vec4(0.);
     } else {
         final_color = vec4(final_color.rgb/final_color.a, final_color.a);
     }
-}
+}    
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
 ${this.glslBlendCode}
 }
 
-void blend_clip(vec4 foreground) {
-    _last_rendered_color = blend_equation(foreground, _last_rendered_color);
+vec4 blend_clip(vec4 foreground, vec4 deferred) {
+    return blend_equation(foreground, deferred);
 }
 
-void blend(vec4 foreground) {
-    show(_last_rendered_color);
-    final_color = blend_equation(foreground, final_color);
-    _last_rendered_color = vec4(.0);
+vec4 blend(vec4 foreground, vec4 deferred) {
+    vec4 current_deferred = show(foreground, deferred);
+    final_color =blend_equation(current_deferred, final_color);
+    return vec4(.0);
 }
 
 ${Object.values(globalScopeCode).join("\n")}
         
 ${definition}
         
-void main() {        
+void main() {
+    vec4 deferred_blend = vec4(0.);
+        
     ${execution}
     
-    finalize();
+    finalize(deferred_blend);
 }`;
     }
 
