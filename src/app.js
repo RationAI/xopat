@@ -853,7 +853,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
                 form.appendChild(node);
                 form.style.visibility = 'hidden';
-                document.appendChild(form);
+                document.body.appendChild(form);
                 form.submit();
             }
         } else if (error) {

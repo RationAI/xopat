@@ -164,11 +164,11 @@ WebGLModule.DataLoader = {
          */
         loadersByType = {
             "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-                if (!this._canvas) {
-                    this._canvas = document.createElement('canvas');
-                    this._canvasReader = this._canvas.getContext('2d', {willReadFrequently: true});
-                    this._canvasConverter = document.createElement('canvas');
-                    this._canvasConverterReader = this._canvasConverter.getContext('2d', {willReadFrequently: true});
+                if (!self._canvas) {
+                    self._canvas = document.createElement('canvas');
+                    self._canvasReader = self._canvas.getContext('2d', {willReadFrequently: true});
+                    self._canvasConverter = document.createElement('canvas');
+                    self._canvasConverterReader = self._canvasConverter.getContext('2d', {willReadFrequently: true});
                 }
 
                 let index = 0;
@@ -176,17 +176,17 @@ WebGLModule.DataLoader = {
                 tileBounds.height = Math.round(tileBounds.height);
 
                 //we read from here
-                this._canvas.width = data.width;
-                this._canvas.height = data.height;
-                this._canvasReader.drawImage(data, 0, 0);
+                self._canvas.width = data.width;
+                self._canvas.height = data.height;
+                self._canvasReader.drawImage(data, 0, 0);
 
                 const NUM_IMAGES = Math.round(data.height / tileBounds.height);
                 //Allowed texture size dimension only 256+ and power of two...
 
                 //it worked for arbitrary size until we begun with image arrays... is it necessary?
                 const IMAGE_SIZE = data.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(data.width)));
-                this._canvasConverter.width = IMAGE_SIZE;
-                this._canvasConverter.height = IMAGE_SIZE;
+                self._canvasConverter.width = IMAGE_SIZE;
+                self._canvasConverter.height = IMAGE_SIZE;
 
                 //just load all images and let shaders reference them...
                 for (let i = 0; i < dataIndexMapping.length; i++) {
@@ -216,13 +216,13 @@ WebGLModule.DataLoader = {
 
                     let pixels;
                     if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                        this._canvasConverterReader.drawImage(this._canvas, 0, dataIndexMapping[i]*tileBounds.height,
+                        self._canvasConverterReader.drawImage(self._canvas, 0, dataIndexMapping[i]*tileBounds.height,
                             tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
-                        pixels = this._canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
+                        pixels = self._canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
                     } else {
                         //load data
-                        pixels = this._canvasReader.getImageData(0,
+                        pixels = self._canvasReader.getImageData(0,
                             dataIndexMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
                     }
 
@@ -332,7 +332,7 @@ WebGLModule.DataLoader = {
          */
         toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
             (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
-                    this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
+                this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
             );
         }
 

@@ -44,8 +44,9 @@ OpenSeadragon.Tools = class {
             eventArgs.eventSource = context;
             eventArgs.userData = events[ index ].userData;
             let result = events[ index ].handler( eventArgs );
-            if (!result || OpenSeadragon.type(result) !== "promise") return;
-            await result;
+            if (result && OpenSeadragon.type(result) === "promise") {
+                await result;
+            }
             await loop(index + 1);
         }
         return await loop(0);
