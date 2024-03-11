@@ -190,6 +190,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     };
 
     /**
+     * Get a module singleton reference if instantiated.
+     * @param id module id
+     * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated
+     */
+    window.singletonModule = function (id) {
+        return MODULES[id]?.instance;
+    };
+
+    /**
      * Register plugin. Plugin can be instantiated and embedded into the viewer.
      * @param id plugin id, should be unique in the system and match the id value in includes.json
      * @param PluginClass class/class-like-function to register (not an instance!)
@@ -539,6 +548,25 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         async importData(data) {}
 
         /**
+         *
+         * @param moduleId
+         * @param callback
+         * @return {boolean} true if finished immediatelly, false if registered handler for the
+         *   future possibility of the module being loaded
+         */
+        integrateWithSingletonModule(moduleId, callback) {
+            const targetModule = singletonModule(moduleId);
+            if (targetModule) {
+                callback(targetModule);
+                return true;
+            }
+            VIEWER.addHandler('module-singleton-created', e => {
+                if (e.id === moduleId) callback(e.module);
+            });
+            return false;
+        }
+
+        /**
          * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
          */
         registerAsEventSource(errorBindingOnViewer=true) {
@@ -723,6 +751,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
             }
             staticContext.__self = this;
+
+            MODULES.instance = this;
+            // Await event necessary to fire after instantiation
+            VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
+                id: id,
+                module: this
+            }).catch(/*no-op*/);
         }
     }
 

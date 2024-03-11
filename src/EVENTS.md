@@ -78,6 +78,11 @@ Fired when plugin is loaded within a system (at runtime).
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).
 
+#### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton}`
+Modules generally cannot be monitored as they might be any custom
+code used in any context. However, singleton modules are meant for shared
+access to functionality, therefore a handler for singletons is available.
+
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 

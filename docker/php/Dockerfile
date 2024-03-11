@@ -66,7 +66,7 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
     #for reverse proxy, enable: && a2enmod proxy proxy_http \
     # Auth: enable modules, prepare files/dirs
     && a2enmod rewrite headers expires ext_filter env dir proxy proxy_http \
-    && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache/  \
+    && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache /var/www/html/xopat  \
     # Other
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
     && chmod --recursive 777 /var/run
@@ -98,7 +98,9 @@ RUN git clone https://github.com/RationAI/openseadragon.git \
 ##################
 # VIEWER: PROD####
 ##################
-FROM ubuntu:jammy AS viewer
+
+# Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
+FROM ubuntu:jammy AS viewer-git
 
 ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
@@ -134,7 +136,7 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     #for reverse proxy, enable: && a2enmod proxy proxy_http \
     # Auth: enable modules, prepare files/dirs
     && a2enmod rewrite headers expires ext_filter env dir proxy proxy_http \
-    && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache/  \
+    && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache /var/www/html/xopat \
     # Other
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
     && chmod --recursive 777 /var/run
@@ -146,6 +148,13 @@ EXPOSE 8000
 USER www-data
 WORKDIR /var/www
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD apache2ctl -D FOREGROUND
+
+
+
+# Viewer with all the necessities
+FROM viewer-git AS viewer-standalone
 COPY .htaccess /var/www/html/xopat/
 COPY *.html /var/www/html/xopat/
 COPY *.php /var/www/html/xopat/
@@ -157,6 +166,3 @@ COPY plugins/ /var/www/html/xopat/plugins
 COPY modules/ /var/www/html/xopat/modules
 COPY env/ /var/www/html/xopat/env
 COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD apache2ctl -D FOREGROUND

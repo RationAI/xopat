@@ -11,6 +11,7 @@
     // See EmpationAPIOptions type for other optional properties
     "options": {
         "workbenchApiUrl": null,
-        "maxRetryCount": 5
+        "maxRetryCount": 0,
+        "anonymousUserId": "anonymous"
     }
 }

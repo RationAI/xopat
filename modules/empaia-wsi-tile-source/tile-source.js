@@ -30,6 +30,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      * @param {String} url
      */
     supports( data, url ){
+        if (!url) return false;
         //multi-tile or single tile access
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {

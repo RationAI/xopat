@@ -6,5 +6,5 @@
     "includes" : [
         "tile-source.js"
     ],
-    "requires": [],
+    "requires": []
 }
