@@ -76,12 +76,21 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
                 innerFormat: response.format,
                 multifetch: false,
                 ready: true,
+                metadata: {
+                    micronsX: response.pixel_size_nm?.x / 1000,
+                    micronsY: response.pixel_size_nm?.y / 1000,
+                },
                 data: response
             })
             this.raiseEvent('ready', {tileSource: this});
         }).catch(e => {
             this._fail(e);
+            this.metadata = {error: "Failed to load the slide data!" + e.message};
         });
+    }
+
+    getImageMetaAt(index) {
+        return this.metadata;
     }
 
     getLevelScale( level ) {

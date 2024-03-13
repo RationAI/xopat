@@ -26,6 +26,15 @@
  */
 
 /**
+ * @typedef TileSourceMetadata
+ * @type object
+ * @property {string} [error] error message, if the source should be treated as faulty one
+ * @property {number} [microns] pixel size in micrometers (used instead of X+Y variant, chose one)
+ * @property {number} [micronsX] pixel size in micrometers in X dimension (used together with micronsY instead of microns)
+ * @property {number} [micronsY] pixel size in micrometers in Y dimension
+ */
+
+/**
  * Init xOpat Viewer with static configuration data.
  * Split so that one can create different access points - e.g. from PHP or JS sever...
  * This function inits the loading system, the OpenSeadragon Viewer
@@ -487,7 +496,33 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue'));
         }
 
-        let ppm = imageData?.microns, ppmX = imageData?.micronsX, ppmY = imageData?.micronsY,
+        const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
+        if (!hasMicrons || !hasDimMicrons) {
+            const sourceMeta = typeof tiledImage?.source?.getImageMetaAt === "function" && tiledImage.source.getImageMetaAt();
+            if (sourceMeta) {
+                if (!hasMicrons) imageData.microns = sourceMeta.microns;
+                if (!hasDimMicrons) {
+                    imageData.micronsX = sourceMeta.micronsX;
+                    imageData.micronsY = sourceMeta.micronsY;
+                }
+            }
+        }
+
+        if (!VIEWER.scalebar) {
+            UTILITIES.setImageMeasurements(imageData?.microns, imageData?.micronsX, imageData?.micronsY);
+        }
+        VIEWER.scalebar.linkReferenceTileSourceIndex(index);
+    }
+
+    /**
+     * Set current viewer real world measurements. Set undefined values to fallback to pixels.
+     * todo rethink namespaces
+     * @param microns
+     * @param micronsX
+     * @param micronsY
+     */
+    window.UTILITIES.setImageMeasurements = function (microns, micronsX, micronsY) {
+        let ppm = microns, ppmX = micronsX, ppmY = micronsY,
             lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
         if (ppmX && ppmY) {
             ppm = undefined; //if both specified, just prefer the specific values
@@ -513,8 +548,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             barThickness: 2,
             destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false)
         });
-        VIEWER.scalebar.linkReferenceTileSourceIndex(index);
-    }
+    };
 
     let preventedSwap = false;
 
@@ -758,6 +792,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         handleSyntheticEventFinish(eventOpts);
     }
 
+    let loadTooLongTimeout = null;
     //fired when all TiledImages are on their respective places
     function handleSyntheticEventFinish(opts={}) {
 
@@ -808,6 +843,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          */
         VIEWER.raiseEvent('open', opts);
         UTILITIES.showLoading(false);
+        if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
 
         //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
@@ -913,6 +949,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         background,
         visualizations=[],
     ) {
+        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
         UTILITIES.showLoading(true);
         VIEWER.close();
 

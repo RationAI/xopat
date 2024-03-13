@@ -201,8 +201,13 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
     }
 
-    //TO-DOCS describe how meta is handled and error property treated
+    /**
+     * Retrieve image metadata for given image index - tilesources can fetch data or data-arrays.
+     * @param index index of the data if tilesource supports multi data fetching
+     * @return {TileSourceMetadata}
+     */
     getImageMetaAt(index) {
+        //not really compatible type, but carries over the error property
         return this.ImageArray[index];
     }
 

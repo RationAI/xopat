@@ -66,17 +66,22 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
                 tilesUrl: data.tilesUrl,
                 innerFormat: data.format,
                 multifetch: false,
-                data: data
+                data: data,
+                metadata: {
+                    micronsX: data.pixel_size_nm?.x / 1000,
+                    micronsY: data.pixel_size_nm?.y / 1000,
+                },
             };
         }
 
         if (data.length === 0) {
-            //todo some event
-            throw "Invalid data: no data available for given url " + url;
+            this.metadata = {error: "Invalid data: no data available for given url " + url}
+            return;
         }
 
         let width         = Infinity,
             height        = Infinity,
+            chosenMq      = undefined,
             tileSize      = undefined,
             maxLevel      = Infinity,
             tileOverlap   = 0;
@@ -104,6 +109,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
                 //possibly experiment with taking maximum
                 width = imageWidth;
                 height = imageHeight;
+                chosenMq = image.pixel_size_nm;
             }
             maxLevel = Math.min(maxLevel, image.levels.length);
         }
@@ -118,8 +124,16 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             innerFormat: data[0].format,
             tilesUrl: data[0].tilesUrl,
             multifetch: true,
-            data: data
+            data: data,
+            metadata: {
+                micronsX: chosenMq?.x / 1000,
+                micronsY: chosenMq?.y / 1000,
+            },
         };
+    }
+
+    getImageMetaAt(index) {
+        return this.metadata;
     }
 
     /**

@@ -26,7 +26,11 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
         return 'empty';
     }
 
-    //TO-DOCS describe how meta is handled and error property treated
+    /**
+     * Retrieve image metadata for given image index - tilesources can fetch data or data-arrays.
+     * @param index index of the data if tilesource supports multi data fetching
+     * @return {TileSourceMetadata}
+     */
     getImageMetaAt(index) {
         return {error: 'No data available. The layer is empty.'};
     }
