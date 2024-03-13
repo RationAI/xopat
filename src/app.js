@@ -807,7 +807,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @event open
          */
         VIEWER.raiseEvent('open', opts);
-        USER_INTERFACE.showLoading(false);
+        UTILITIES.showLoading(false);
 
         //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
@@ -913,7 +913,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         background,
         visualizations=[],
     ) {
-        USER_INTERFACE.showLoading(true);
+        UTILITIES.showLoading(true);
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
