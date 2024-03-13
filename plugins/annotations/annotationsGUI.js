@@ -322,7 +322,6 @@ ${modeOptions.join("")}</div>`, 'draw');
 		};
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
-		this.annotationModeChanged({mode: this.context.mode}); //force refresh manually
 
 		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);

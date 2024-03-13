@@ -11,9 +11,14 @@
       "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
       "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
       "nothingToRender": "No data to view.",
-      "nothingToRenderDetails": "The active session does not specify any image or layers to render.",
+      "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "renderTitle": "Rendering Warning",
-      "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended."
+      "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended.",
+      "slide": {
+        "404": "The data you are trying to open does not exist!",
+        "401": "Your login session has expired: please refresh the window to log in.",
+        "403": "You do not have necessary permission to access this data!"
+      }
     },
     "user": {
       "notConfigured": "User menu is not available."

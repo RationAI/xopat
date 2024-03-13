@@ -5,6 +5,13 @@
  * @returns {*|{error}}
  */
 function xOpatParseConfiguration(postData, i18n) {
+    function ensureDefined(object, property, defaultValue) {
+        if (!object.hasOwnProperty(property)) {
+            object[property] = defaultValue;
+            return false;
+        }
+        return true;
+    }
 
     function _parse(configuration) {
         function isBoolFlagInObject(object, key) {
@@ -16,14 +23,6 @@ function xOpatParseConfiguration(postData, i18n) {
 
         function getError(title, description, details) {
             return {error: title, description: description, details: details};
-        }
-
-        function ensureDefined(object, property, defaultValue) {
-            if (!object.hasOwnProperty(property)) {
-                object[property] = defaultValue;
-                return false;
-            }
-            return true;
         }
 
         if (!configuration) {
@@ -90,37 +89,42 @@ function xOpatParseConfiguration(postData, i18n) {
 
 
         if (!session) {
-            //try building the object from scratch
-            const handMadeConfiguration = {
-                data: [url.searchParams.get("slide")],
-                background: [{
-                    dataReference: 0,
-                    lossless: false,
-                }]
-            };
-            let masks = url.searchParams.get("masks");
-            if (masks) {
-                masks = masks.split(',');
-                const visConfig = {
-                    name: "Masks",
-                    lossless: true,
-                    shaders: {}
+            const slide = url.searchParams.get("slide");
+            if (slide) {
+                //try building the object from scratch
+                const handMadeConfiguration = {
+                    data: [url.searchParams.get("slide")],
+                    background: [{
+                        dataReference: 0,
+                        lossless: false,
+                    }]
                 };
-                handMadeConfiguration.visualizations = [visConfig];
+                let masks = url.searchParams.get("masks");
+                if (masks) {
+                    masks = masks.split(',');
+                    const visConfig = {
+                        name: "Masks",
+                        lossless: true,
+                        shaders: {}
+                    };
+                    handMadeConfiguration.visualizations = [visConfig];
 
-                let index = 1;
-                for (let mask of masks) {
-                    handMadeConfiguration.data.push(mask);
-                    visConfig.shaders[mask] = {
-                        type: "heatmap",
-                        fixed: false,
-                        visible: 1,
-                        dataReferences: [index++],
-                        params: { }
+                    let index = 1;
+                    for (let mask of masks) {
+                        handMadeConfiguration.data.push(mask);
+                        visConfig.shaders[mask] = {
+                            type: "heatmap",
+                            fixed: false,
+                            visible: 1,
+                            dataReferences: [index++],
+                            params: { }
+                        }
                     }
                 }
+                session = _parse(handMadeConfiguration);
+            } else {
+                session = {};
             }
-            session = _parse(handMadeConfiguration);
         }
 
         if (session.error) {
@@ -134,5 +138,9 @@ function xOpatParseConfiguration(postData, i18n) {
 
     //todo show error page if plausible
     //especially page with error 'error.nothingToRender'
+    ensureDefined(session, "params", {});
+    ensureDefined(session, "data", []);
+    ensureDefined(session, "background", []);
+    ensureDefined(session, "plugins", {});
     return session;
 }

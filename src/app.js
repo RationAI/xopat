@@ -426,6 +426,41 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
     VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
+    let notified = false;
+    //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
+    VIEWER.addHandler('add-item-failed', e => {
+        if (notified) return;
+        if (e.message && e.message.statusCode) {
+            //todo check if the first background
+            let title;
+            switch (e.message.statusCode) {
+                case 401:
+                    title = $("#tissue-title-header");
+                    title.children().last().html($.t('main.global.tissue'));
+                    Dialogs.show($.t('error.slide.401'),
+                        20000, Dialogs.MSG_ERR);
+                    XOpatUser.instance().logout();
+                    break;
+                case 403:
+                    title = $("#tissue-title-header");
+                    title.children().last().html($.t('main.global.tissue'));
+                    Dialogs.show($.t('error.slide.404'),
+                        20000, Dialogs.MSG_ERR);
+                    break;
+                case 404:
+                    Dialogs.show($.t('error.slide.404'),
+                        20000, Dialogs.MSG_ERR);
+                    break;
+                default:
+                    break;
+            }
+            notified = true;
+        } else {
+            console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
+        }
+    });
+
+
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
@@ -448,6 +483,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             title.children().last().html(name);
             title.attr('title', name);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
+            //todo merge tile sources with layers/background to simplify mapping, now we need to guess where error occurs on error event
             title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue'));
         }
 
@@ -771,6 +807,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @event open
          */
         VIEWER.raiseEvent('open', opts);
+        USER_INTERFACE.showLoading(false);
 
         //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
@@ -860,7 +897,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             //todo consider event
             throw error;
         }
-        UTILITIES.showLoading(false);
+
         this.openViewerWith(data, background, visualizations);
     };
 
@@ -876,6 +913,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         background,
         visualizations=[],
     ) {
+        USER_INTERFACE.showLoading(true);
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
@@ -978,6 +1016,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         }
 
         const openAll = (numOfVisLayersAtTheEnd) => {
+            if (toOpen.length < 1) {
+                USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
+                return;
+            }
+
             let i = 0;
             let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
             for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
