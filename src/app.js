@@ -813,8 +813,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
             window.onerror = null;
 
-            if (window.opener && window.opener.VIEWER) {
-                VIEWER.tools.link( window.opener.VIEWER);
+            try {
+                if (window.opener && window.opener.VIEWER) {
+                    VIEWER.tools.link( window.opener.VIEWER);
+                }
+            } catch (e) {
+                //pass opener access can throw exception - not available to us
             }
 
             const firstTimeVisit = APPLICATION_CONTEXT.AppCookies.get("_shadersPin",
@@ -874,6 +878,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          */
         APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
+        initXopatLayers();
 
         // First step: load plugins that were marked as to be loaded but were not yet loaded
         function loadPluginAwaits(pid, hasParams) {
@@ -915,7 +920,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 error = e;
             }
         );
-        if (!background.length || !visualizations.length) {
+        if (!background.length && !visualizations.length) {
             //Try parsing url for serialized config in the headers and redirect
             const url = new URL(window.location.href);
             if (url.hash) {
@@ -927,6 +932,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 form.appendChild(node);
                 form.style.visibility = 'hidden';
                 document.body.appendChild(form);
+                // prevents recursion
+                url.hash = "";
+                form.action = String(url);
                 form.submit();
             }
         } else if (error) {
@@ -1111,7 +1119,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     }
 
     initXopatScripts();
-    initXopatLayers();
 
     if (CONFIG.error) {
         USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,
