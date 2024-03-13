@@ -168,7 +168,7 @@ Also, for multi-tile fethching see ``src/external/dziexttilesource.js`` Extended
 
 
 ### Custom Synchronous And Asynchronous Protocols
-We prefer for the visualisation data to come in synchronous requests due to scalability.
+We prefer for the visualization data to come in synchronous requests due to scalability.
 It is a fact that most image servers do not support queries for multiple images at once;
 therefore it is possible to create custom protocols that implement desired approach.
 The best example is the ``ExtendedDZI`` protocol implementation that supports
@@ -359,7 +359,7 @@ to the tile source instance, as if we called this in some method that injects th
 
 ### Implemented, Out-of-box working Image Data Providers
 As discussed, the _data group_ is fetched as a single image array request
-for each tile in the visualisation, no matter how many data items are rendered. Our IIPServer modification supports Extended Deep Zoom protocol described below.
+for each tile in the visualization, no matter how many data items are rendered. Our IIPServer modification supports Extended Deep Zoom protocol described below.
 The image server can be found at https://github.com/RationAI/iipsrv.
 
 #### Extended DZI - the request

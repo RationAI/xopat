@@ -24,7 +24,7 @@ Note that the viewer is still in active development. If you wish to start
 using the viewer, please do not hesitate to reach us. Currently, it is used for versatile
 offline AI data inspection. We work now on integration workflows and in future
 the focus will be on services, namely non-standard integration with an ML pipeline for
-effective algorithm/network debugging and profiling with the help of powerful visualisation platform.
+effective algorithm/network debugging and profiling with the help of powerful visualization platform.
 
 
 (*except for the server deployment part, which is a must for scanning for modules, plugins and parsing HTTP requests)

@@ -1100,6 +1100,45 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 loader.css('display', 'none');
             }
         },
+
+        /**
+         * Serialize the Viewer
+         * @param includedPluginsList
+         * @param withCookies
+         * @return {Promise<{app: string, data: {}}>}
+         */
+        serializeApp: async function(includedPluginsList=undefined, withCookies=false) {
+            //reconstruct active plugins
+            let pluginsData = APPLICATION_CONTEXT.config.plugins;
+            let includeEvaluator = includedPluginsList ?
+                (p, o) => includedPluginsList.includes(p) :
+                (p, o) => o.loaded || o.permaLoad;
+
+            for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+                const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
+
+                if (!includeEvaluator(pid, plugin)) {
+                    delete pluginsData[pid];
+                } else if (!pluginsData.hasOwnProperty(pid)) {
+                    pluginsData[pid] = {};
+                }
+            }
+
+            let exportData = {};
+
+            /**
+             * Event to export your data within the viewer lifecycle
+             * Event handler can by <i>asynchronous</i>, the event can wait.
+             * todo OSD v5.0 will support also async events
+             *
+             * @property {function} setSerializedData callback to call,
+             *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
+             * @memberOf VIEWER
+             * @event export-data
+             */
+            await VIEWER.tools.raiseAwaitEvent(VIEWER, 'export-data');
+            return {app: UTILITIES.serializeAppConfig(withCookies), data: POST_DATA};
+        }
     };
 
     return function() {

@@ -120,7 +120,7 @@ style="text-align:right; text-decoration: line-through; vertical-align:sub;float
     async viewerToHTML() {
         return `<!DOCTYPE html>
 <html lang="en" dir="ltr">
-<head><meta charset="utf-8"><title>Visualisation export</title></head>
+<head><meta charset="utf-8"><title>Visualization export</title></head>
 <body>
 ${await UTILITIES.getForm()}
 </body></html>`;

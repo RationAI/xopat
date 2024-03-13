@@ -3,7 +3,7 @@
  *
  * data reference must contain one index to the data to render using identity
  */
-WebGLModule.TimeSeries = class extends WebGLModule.VisualisationLayer {
+WebGLModule.TimeSeries = class extends WebGLModule.VisualizationLayer {
 
     construct(options, dataReferences) {
         //todo supply options clone? options changes are propagated and then break things
@@ -14,7 +14,7 @@ WebGLModule.TimeSeries = class extends WebGLModule.VisualisationLayer {
             throw "";
         }
         this._renderer = new ShaderClass(`series_${this.uid}`, {
-            layer: this.__visualisationLayer,
+            layer: this.__visualizationLayer,
             webgl: this.webglContext,
             invalidate: this.invalidate,
             rebuild: this._rebuild,

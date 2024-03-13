@@ -82,7 +82,7 @@ onchange='${this.THIS}.targetImageSourceName = ${this.THIS}.getNameFromImagePath
 <div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.THIS}.reSendRequest();">Re-evaluate selected</button>
 <button class="btn" onclick="${this.THIS}.reRenderSelectedObject();">Repaint selected</button></div>`,
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
-onchange="${this.THIS}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
+onchange="${this.THIS}.viaGL.switchVisualization($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
         USER_INTERFACE.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
     }
@@ -382,7 +382,7 @@ experiment is '${params.experimentId}'.`);
             uniqueId: "histoviso_explain",
             ready: function() {
                 var i = 0;
-                _this.viaGL.foreachVisualisation(function (vis) {
+                _this.viaGL.foreachVisualization(function (vis) {
                     if (vis.error) {
                         shaderNames.append(`<option value="${i}" title="${vis.error}">&#9888; ${vis['name']}</option>`);
                     } else {
@@ -405,7 +405,7 @@ experiment is '${params.experimentId}'.`);
             }
         });
 
-        this.viaGL.addVisualisation({
+        this.viaGL.addVisualization({
                 name: "Identity",
                 params: {},
                 shaders: {

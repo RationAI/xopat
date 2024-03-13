@@ -15,7 +15,7 @@
  * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively
  */
 
-WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualisationLayer {
+WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.VisualizationLayer {
 
     static type() {
         return "bipolar-heatmap";

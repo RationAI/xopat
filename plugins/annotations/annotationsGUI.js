@@ -394,8 +394,8 @@ ${modeOptions.join("")}</div>`, 'draw');
 		let strategy = this.context.automaticCreationStrategy;
 		if (strategy && this.context.autoSelectionEnabled) {
 			this.context.Modes.AUTO.customHtml = this.getAutoCreationStrategyControls.bind(this);
-			//on visualisation change update auto UI
-			VIEWER.addHandler('visualisation-used', vis => this.updateAutoSelect(vis));
+			//on visualization change update auto UI
+			VIEWER.addHandler('visualization-used', vis => this.updateAutoSelect(vis));
 		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
@@ -629,7 +629,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 
 	/******************** AUTO DETECTION ***********************/
 
-	getDetectionControlOptions(visualisation) {
+	getDetectionControlOptions(visualization) {
 		let autoStrategy = this.context.automaticCreationStrategy;
 		if (!autoStrategy.running) return "";
 		let html = "";
@@ -637,9 +637,9 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		let index = -1;
 		let layer = null;
 		let key = "";
-		for (key in visualisation.shaders) {
-			if (!visualisation.shaders.hasOwnProperty(key)) continue;
-			layer = visualisation.shaders[key];
+		for (key in visualization.shaders) {
+			if (!visualization.shaders.hasOwnProperty(key)) continue;
+			layer = visualization.shaders[key];
 			if (isNaN(layer._index)) continue;
 
 			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
@@ -662,8 +662,8 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		return html;
 	}
 
-	updateAutoSelect(visualisation) {
-		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualisation));
+	updateAutoSelect(visualization) {
+		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualization));
 	}
 
 	getAutoCreationStrategyControls() {

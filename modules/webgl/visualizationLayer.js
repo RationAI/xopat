@@ -8,14 +8,14 @@ WebGLModule.ShaderMediator = class {
 
     /**
      * Register shader
-     * @param {function} LayerRendererClass class extends WebGLModule.VisualisationLayer
+     * @param {function} LayerRendererClass class extends WebGLModule.VisualizationLayer
      */
     static registerLayer(LayerRendererClass) {
         if (this._layers.hasOwnProperty(LayerRendererClass.type())) {
             console.warn("Registering an already existing layer renderer:", LayerRendererClass.type());
         }
-        if (!WebGLModule.VisualisationLayer.isPrototypeOf(LayerRendererClass)) {
-            throw `${LayerRendererClass} does not inherit from VisualisationLayer!`;
+        if (!WebGLModule.VisualizationLayer.isPrototypeOf(LayerRendererClass)) {
+            throw `${LayerRendererClass} does not inherit from VisualizationLayer!`;
         }
         this._layers[LayerRendererClass.type()] = LayerRendererClass;
     }
@@ -23,7 +23,7 @@ WebGLModule.ShaderMediator = class {
     /**
      * Get the shader class by type id
      * @param {string} id
-     * @return {function} class extends WebGLModule.VisualisationLayer
+     * @return {function} class extends WebGLModule.VisualizationLayer
      */
     static getClass(id) {
         return this._layers[id];
@@ -31,7 +31,7 @@ WebGLModule.ShaderMediator = class {
 
     /**
      * Get all available shaders
-     * @return {function[]} classes that extend WebGLModule.VisualisationLayer
+     * @return {function[]} classes that extend WebGLModule.VisualizationLayer
      */
     static availableShaders() {
         return Object.values(this._layers);
@@ -42,7 +42,7 @@ WebGLModule.ShaderMediator = class {
  * Abstract interface to any Shader.
  * @abstract
  */
-WebGLModule.VisualisationLayer = class {
+WebGLModule.VisualizationLayer = class {
 
     /**
      * Override **static** type definition
@@ -50,7 +50,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} unique id under which is the shader registered
      */
     static type() {
-        throw "VisualisationLayer::type() Type must be specified!";
+        throw "VisualizationLayer::type() Type must be specified!";
     }
 
     /**
@@ -58,7 +58,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} name of the shader (user-friendly)
      */
     static name() {
-        throw "VisualisationLayer::name() Name must be specified!";
+        throw "VisualizationLayer::name() Name must be specified!";
     }
 
     /**
@@ -66,7 +66,7 @@ WebGLModule.VisualisationLayer = class {
      * @returns {string} optional description
      */
     static description() {
-        return "VisualisationLayer::description() WebGL shader must provide description.";
+        return "VisualizationLayer::description() WebGL shader must provide description.";
     }
 
     /**
@@ -85,7 +85,7 @@ WebGLModule.VisualisationLayer = class {
      *  [optional] description: the description of the source - what it is being used for
      */
     static sources() {
-        throw "VisualisationLayer::sources() Shader must specify channel acceptance predicates for each source it uses!";
+        throw "VisualizationLayer::sources() Shader must specify channel acceptance predicates for each source it uses!";
     }
 
     /**
@@ -154,7 +154,7 @@ WebGLModule.VisualisationLayer = class {
         if (!WebGLModule.idPattern.test(this.uid)) {
             console.error("Invalid ID for the shader: id must match to the pattern", WebGLModule.idPattern, id);
         }
-        this._setContextVisualisationLayer(privateOptions.layer);
+        this._setContextVisualizationLayer(privateOptions.layer);
 
         //todo custom control names share namespace with this API - unique names or controls in seperate object?
         this.webglContext = privateOptions.webgl;
@@ -216,7 +216,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {string}
      */
     getFragmentShaderExecution() {
-        throw "VisualisationLayer::getFragmentShaderExecution must be implemented!";
+        throw "VisualizationLayer::getFragmentShaderExecution must be implemented!";
     }
 
     /**
@@ -387,7 +387,7 @@ WebGLModule.VisualisationLayer = class {
      *                  the reference is not valid
      */
     sampleChannel(textureCoords, otherDataIndex=0, raw=false) {
-        let refs = this.__visualisationLayer.dataReferences;
+        let refs = this.__visualizationLayer.dataReferences;
         const chan = this.__channels[otherDataIndex];
 
         if (otherDataIndex >= refs.length) {
@@ -410,7 +410,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {string} vec2 GLSL value with width and height of the texture
      */
     textureSize(index=0) {
-        let refs = this.__visualisationLayer.dataReferences;
+        let refs = this.__visualizationLayer.dataReferences;
         if (index >= refs.length) {
             return 'vec2(0.0)';
         }
@@ -422,7 +422,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {number} number of textures available
      */
     dataSourcesCount() {
-        return this.__visualisationLayer.dataReferences.length;
+        return this.__visualizationLayer.dataReferences.length;
     }
 
     /**
@@ -433,9 +433,9 @@ WebGLModule.VisualisationLayer = class {
      */
     loadProperty(name, defaultValue) {
         let selfType = this.constructor.type();
-        if (!this.__visualisationLayer) return defaultValue;
-        if (this.__visualisationLayer.cache[selfType].hasOwnProperty(name)) {
-            return this.__visualisationLayer.cache[selfType][name];
+        if (!this.__visualizationLayer) return defaultValue;
+        if (this.__visualizationLayer.cache[selfType].hasOwnProperty(name)) {
+            return this.__visualizationLayer.cache[selfType][name];
         }
         return defaultValue;
     }
@@ -446,7 +446,7 @@ WebGLModule.VisualisationLayer = class {
      * @param {*} value value
      */
     storeProperty(name, value) {
-        this.__visualisationLayer.cache[this.constructor.type()][name] = value;
+        this.__visualizationLayer.cache[this.constructor.type()][name] = value;
     }
 
     /**
@@ -475,7 +475,7 @@ WebGLModule.VisualisationLayer = class {
      * @return {number} number of textures available
      */
     get texturesCount() {
-        return this.__visualisationLayer.dataReferences.length;
+        return this.__visualizationLayer.dataReferences.length;
     }
 
     /**
@@ -652,11 +652,11 @@ WebGLModule.VisualisationLayer = class {
         }
     }
 
-    _setContextVisualisationLayer(visualisationLayer) {
-        this.__visualisationLayer = visualisationLayer;
-        if (!this.__visualisationLayer.hasOwnProperty("cache")) this.__visualisationLayer.cache = {};
-        if (!this.__visualisationLayer.cache.hasOwnProperty(this.constructor.type())) {
-            this.__visualisationLayer.cache[this.constructor.type()] = {};
+    _setContextVisualizationLayer(visualizationLayer) {
+        this.__visualizationLayer = visualizationLayer;
+        if (!this.__visualizationLayer.hasOwnProperty("cache")) this.__visualizationLayer.cache = {};
+        if (!this.__visualizationLayer.cache.hasOwnProperty(this.constructor.type())) {
+            this.__visualizationLayer.cache[this.constructor.type()] = {};
         }
     }
 };
@@ -714,7 +714,7 @@ WebGLModule.UIControls = class {
 
     /**
      * Build UI control object based on given parameters
-     * @param {WebGLModule.VisualisationLayer} context owner of the control
+     * @param {WebGLModule.VisualizationLayer} context owner of the control
      * @param {string} name name used for the layer, should be unique among different context types
      * @param {object|*} params parameters passed to the control (defined by the control) or set as default value if not object
      * @param {object} defaultParams default parameters that the shader might leverage above defaults of the control itself
@@ -961,7 +961,7 @@ WebGLModule.UIControls.IControl = class {
 
     /**
      * Sets common properties needed to create the controls:
-     *  this.context @extends WebGLModule.VisualisationLayer - owner context
+     *  this.context @extends WebGLModule.VisualizationLayer - owner context
      *  this.name - name of the parameter for this.context.[load/store]Property(...) call
      *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
      *      created as ${uniq}${name}-${context.uid}
@@ -980,7 +980,7 @@ WebGLModule.UIControls.IControl = class {
      *       this.params...
      *   }
      *
-     * @param {WebGLModule.VisualisationLayer} context shader context owning this control
+     * @param {WebGLModule.VisualizationLayer} context shader context owning this control
      * @param {string} name name of the control (key to the params in the shader configuration)
      * @param {string} webGLVariableName configuration parameters,
      *      depending on the params.type field (the only one required)

@@ -8,7 +8,7 @@ import {default as utils} from "../support/utilities"
 describe('Correct Active Indexes with stackedBackground:false', () => {
 
    it("Bindings of indices initial state", ()=>  {
-       let visualisation = {
+       let visualization = {
            params: config.params({
                viewport: config.viewport('tissue', 0),
                stackedBackground: false,
@@ -33,7 +33,7 @@ describe('Correct Active Indexes with stackedBackground:false', () => {
            ]
        };
 
-       cy.launch(visualisation);
+       cy.launch(visualization);
        utils.waitForViewer();
 
        testElements.getSwapBackgroundPlaceholder(1).should('have.class', 'selected');

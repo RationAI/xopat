@@ -790,7 +790,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
         });
         this._running = true;
-        this._renderEngine.addVisualisation({
+        this._renderEngine.addVisualization({
             shaders: {
                 _ : {
                     type: "heatmap",
@@ -820,10 +820,10 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 
     _beforeAutoMethod() {
         let vis = VIEWER.bridge.visualization();
-        this._renderEngine._visualisations[0] = {
+        this._renderEngine._visualizations[0] = {
             shaders: {}
         };
-        let toAppend = this._renderEngine._visualisations[0].shaders;
+        let toAppend = this._renderEngine._visualizations[0].shaders;
 
         for (let key in vis.shaders) {
             if (vis.shaders.hasOwnProperty(key)) {
@@ -871,7 +871,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 }
             }
         }
-        this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
+        this._renderEngine.rebuildVisualization(Object.keys(vis.shaders));
 
         this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
 
@@ -894,7 +894,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     _afterAutoMethod() {
-        delete this._renderEngine._visualisations[0];
+        delete this._renderEngine._visualizations[0];
     }
 
     approximateBounds(point, growY=true) {

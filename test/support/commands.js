@@ -72,7 +72,7 @@ Cypress.Commands.addAll({
      */
     launch(configuration, data={}) {
         cy.log("Launch Viewer with:", {
-            visualisation: configuration,
+            visualization: configuration,
             ...data
         });
 
@@ -86,7 +86,7 @@ Cypress.Commands.addAll({
             headers: Cypress.env('headers'),
             method: 'POST',
             body: {
-                visualisation: configuration,
+                visualization: configuration,
                 ...data
             }
         })

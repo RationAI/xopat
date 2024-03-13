@@ -9,7 +9,7 @@
  * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?string} name custom tissue name, default the tissue path
- * @property {?number} goalIndex preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+ * @property {?number} goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
  */
 /**
  * @typedef VisualizationItem
@@ -22,7 +22,7 @@
  * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?string} name custom tissue name, default the tissue path
- * @property {?number} goalIndex preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+ * @property {?number} goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
  */
 
 /**
@@ -220,6 +220,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 return CONFIG.plugins || {};
             },
         },
+        AppCache: {
+            get() {console.warn("AppCache used before initialization.")},
+            set() {console.warn("AppCache used before initialization.")},
+        },
+        AppCookies: {
+            get() {console.warn("AppCookies used before initialization.")},
+            set() {console.warn("AppCookies used before initialization.")},
+        },
         /**
          * Get sessionName value (fallback refereceId) from the configuration.
          * @return {string|*}
@@ -365,7 +373,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
     if (!OpenSeadragon.supportsCanvas) {
         window.location = `./src/error.php?title=${encodeURIComponent('Your browser is not supported.')}
-    &description=${encodeURIComponent('ERROR: The visualisation requires canvasses in order to work.')}`;
+    &description=${encodeURIComponent('ERROR: The visualization requires canvasses in order to work.')}`;
     }
 
     const headers = $.extend({}, ENV.client.headers, CONFIG.params.headers);
@@ -781,11 +789,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
-                Dialogs.show($.t('messages.visualisationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
 
-                APPLICATION_CONTEXT.disableVisualisation();
+                APPLICATION_CONTEXT.disableVisualization();
                 eventOpts.error = $.t('messages.overlaysDisabled');
             }
         }
@@ -927,7 +935,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 const form = document.createElement("form");
                 form.method = "POST";
                 const node = document.createElement("input");
-                node.name = "visualisation";
+                node.name = "visualization";
                 node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
                 form.appendChild(node);
                 form.style.visibility = 'hidden';
@@ -984,10 +992,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         config.visualizations = visualizations;
 
         if (reopenCounter > 0) {
-            APPLICATION_CONTEXT.disableVisualisation();
+            APPLICATION_CONTEXT.disableVisualization();
         } else {
             /**
-             * Fired before visualisation is initialized and loaded.
+             * Fired before visualization is initialized and loaded.
              * @memberOf VIEWER
              * @event before-canvas-reload
              */
@@ -1001,7 +1009,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             openedSources--;
             if (item) {
                 /**
-                 * Fired before visualisation is initialized and loaded.
+                 * Fired before visualization is initialized and loaded.
                  * @event tiled-image-created
                  * @memberOf VIEWER
                  * @property {OpenSeadragon.TiledImage} item
@@ -1062,6 +1070,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
         const openAll = (numOfVisLayersAtTheEnd) => {
             if (toOpen.length < 1) {
+                //todo two places where we need to remove loading screen make clear flow of the initialization!
+                UTILITIES.showLoading(false);
+                if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
                 USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
                 return;
             }
@@ -1092,7 +1103,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
             let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
             if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
-                // binding background config overrides active visualisation, only if not in stacked mode
+                // binding background config overrides active visualization, only if not in stacked mode
                 const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
                     defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
 

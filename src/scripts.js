@@ -264,53 +264,6 @@ function initXopatScripts() {
     };
 
     /**
-     * Serialize the Viewer
-     * @param includedPluginsList
-     * @param withCookies
-     * @return {Promise<{app: string, data: {}}>}
-     */
-    window.UTILITIES.serializeApp = async function(includedPluginsList=undefined, withCookies=false) {
-        //reconstruct active plugins
-        let pluginsData = APPLICATION_CONTEXT.config.plugins;
-        let includeEvaluator = includedPluginsList ?
-            (p, o) => includedPluginsList.includes(p) :
-            (p, o) => o.loaded || o.permaLoad;
-
-        for (let pid of APPLICATION_CONTEXT.pluginIds()) {
-            const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
-
-            if (!includeEvaluator(pid, plugin)) {
-                delete pluginsData[pid];
-            } else if (!pluginsData.hasOwnProperty(pid)) {
-                pluginsData[pid] = {};
-            }
-        }
-
-        let exportData = {};
-
-        /**
-         * Event to export your data within the viewer lifecycle
-         * Event handler can by <i>asynchronous</i>, the event can wait.
-         * todo OSD v5.0 will support also async events
-         *
-         * @property {function} setSerializedData callback to call,
-         *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
-         * @memberOf VIEWER
-         * @event export-data
-         */
-        await VIEWER.tools.raiseAwaitEvent(VIEWER,'export-data', {
-            setSerializedData: (uniqueKey, data) => {
-                if (typeof data !== "string") {
-                    console.warn("Skipping", uniqueKey, "the exported data is not stringified.");
-                    return;
-                }
-                exportData[uniqueKey] = data;
-            }
-        });
-        return {app: UTILITIES.serializeAppConfig(withCookies), data: exportData};
-    };
-
-    /**
      * Get the viewer form+script html that automatically redirects to the viewer
      * @param customAttributes
      * @param includedPluginsList
@@ -321,7 +274,7 @@ function initXopatScripts() {
         if (! APPLICATION_CONTEXT.env.client.supportsPost) {
             return `
     <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
-        <input type="hidden" id="visualisation" name="visualisation">
+        <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
         </form>
@@ -332,12 +285,12 @@ function initXopatScripts() {
 
         let form = `
     <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
-        <input type="hidden" id="visualisation" name="visualisation">
+        <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
     </form>
     <script type="text/javascript">
-        document.getElementById("visualisation").value = JSON.stringify(${app});
+        document.getElementById("visualization").value = JSON.stringify(${app});
         const form = document.getElementById("redirect");
         let node;`;
 
@@ -412,7 +365,7 @@ form.submit();
 
         let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
-<head><meta charset="utf-8"><title>Visualisation export</title></head>
+<head><meta charset="utf-8"><title>Visualization export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${console.appTrace.join("")}</pre></div>
 ${await UTILITIES.getForm()}

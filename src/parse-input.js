@@ -77,7 +77,7 @@ function xOpatParseConfiguration(postData, i18n) {
     try {
         const url = new URL(window.location.href);
 
-        //old data key was 'visualisation' todo consider 'session' as name instead
+        //old data key was 'visualization' todo consider 'session' as name instead
         session = _parse(postData["visualization"] || postData["visualisation"]);
         if (!session || session.error) {
             const data = url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'

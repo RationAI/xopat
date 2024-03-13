@@ -176,12 +176,6 @@ export something like:
 }
 ````
 TODO DOCS
-#####Note:
-It is possible (but not advised) to use internal core API to do custom exports: 
-``````javascript
-VIEWER.addHandler('export-data', e => e.setSerializedData(...));
-let data = APPLICATION_CONTEXT.getData(...);
-``````
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create

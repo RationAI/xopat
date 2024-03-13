@@ -16,7 +16,7 @@ const annotationId = "2";
  */
 describe('WebGL Shader Builtin Testing', () => {
     it('Start with identity, test out changes', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
             }),
@@ -44,7 +44,7 @@ describe('WebGL Shader Builtin Testing', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#shaders-pin").click();

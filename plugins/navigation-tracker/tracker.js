@@ -61,7 +61,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
                 }
             });
             this._running = true;
-            this._renderEngine.addVisualisation({
+            this._renderEngine.addVisualization({
                 shaders: {
                     _ : {
                         type: "heatmap",

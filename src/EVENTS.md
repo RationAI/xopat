@@ -52,11 +52,9 @@ as it has not been initialized yet. For example, if the application rendering
 is missing all the data, you can provide default values for the rendering.
 Note that exception thrown in this event is considered as a signal for aborting the rendering.
 TODO DOCS
-#### `export-data` | e: `{setSerializedData: function}`
-Submit your serialized data to the export event. The event gives you a callback to use to 
-save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value
-should be unique - a good idea is to make use of the plugin id value when creating the value.
-When loaded, you can access the data using `APPLICATION_CONTEXT.getData(myUniqueKey)` invoked on the main plugin object.
+#### `export-data` | e: `{}`
+Submit your serialized data to the export event. You should use the data storage instance you
+retrieve from ``initIO(...)`` call to set your data if you didn't do this already when this event fires.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
@@ -134,7 +132,7 @@ When a different image pyramid is loaded as a background, the viewer notifies yo
 measurements (aspect ratio, dimensions...) might have changed. It gives you the background setup objects from
 the viewer configuration and corresponding `TiledImage` instances.
 
-#### `visualisation-used` | e: _visualization goal_
+#### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.

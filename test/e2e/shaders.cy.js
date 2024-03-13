@@ -10,7 +10,7 @@ const annotationId = "2";
 for (let webglVersion of ["1.0", "2.0"]) {
     describe('WebGL::'+webglVersion+' Shader Menu Testing', () => {
         it('Start with identity, test out changes', () => {
-            let visualisation = {
+            let visualization = {
                 params: config.params({
                     viewport: config.viewport('tissue', 0),
                     webGlPreferredVersion: webglVersion
@@ -40,7 +40,7 @@ for (let webglVersion of ["1.0", "2.0"]) {
                 ]
             };
 
-            cy.launch(visualisation);
+            cy.launch(visualization);
             utils.waitForViewer();
 
             cy.get("#shaders-pin").click();

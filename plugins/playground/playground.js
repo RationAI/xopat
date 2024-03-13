@@ -45,10 +45,10 @@ class Playground extends XOpatPlugin {
             ready: function () {
 
             },
-            visualisationInUse: function (visualisation) {
+            visualizationInUse: function (visualization) {
 
             },
-            visualisationChanged: function (oldVis, newVis) {
+            visualizationChanged: function (oldVis, newVis) {
 
             },
             //called when this module is unable to run
@@ -351,8 +351,8 @@ Note that for this plugin to work, you need to run a python playground server by
         let factoryClass = WebGLModule.ShaderMediator.getClass(type);
         if (factoryClass !== undefined) {
             //todo valid? really each visualization...?
-            this.webglEngine.foreachVisualisation(vis => vis.shaders[layerID].type = type);
-            this.webglEngine.rebuildVisualisation(null);
+            this.webglEngine.foreachVisualization(vis => vis.shaders[layerID].type = type);
+            this.webglEngine.rebuildVisualization(null);
             VIEWER.world.draw();
             VIEWER.navigator.world.draw();
         }

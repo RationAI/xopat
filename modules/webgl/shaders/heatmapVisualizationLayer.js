@@ -19,7 +19,7 @@
  * supports thresholding - outputs color on areas above certain value
  * mapping html input slider 0-100 to .0-1.0
  */
-WebGLModule.HeatmapLayer = class extends WebGLModule.VisualisationLayer {
+WebGLModule.HeatmapLayer = class extends WebGLModule.VisualizationLayer {
 
     static type() {
         return "heatmap";

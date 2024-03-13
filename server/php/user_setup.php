@@ -28,7 +28,7 @@ include_once ABSPATH . "server/php/inc/core.php";
 <html lang="en" dir="ltr">
 <head>
     <meta charset="utf-8">
-    <title>Visualisation Developer Setup</title>
+    <title>Visualization Developer Setup</title>
 
     <?php require_core("env"); ?>
     <?php require_lib("primer"); ?>

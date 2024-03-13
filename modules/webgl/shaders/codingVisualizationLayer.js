@@ -2,7 +2,7 @@
  * Code shader
  * @class WebGLModule.CodingLayer
  */
-WebGLModule.CodingLayer = class extends WebGLModule.VisualisationLayer {
+WebGLModule.CodingLayer = class extends WebGLModule.VisualizationLayer {
 
     static type() {
         return "code";

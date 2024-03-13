@@ -17,7 +17,7 @@ include_once ABSPATH . "server/php/inc/core.php";
 
 <head>
   <meta charset="utf-8">
-  <title>Visualisation Developer Setup</title>
+  <title>Visualization Developer Setup</title>
 
     <?php require_lib("primer"); ?>
     <?php require_lib("jquery"); ?>
@@ -48,7 +48,7 @@ include_once ABSPATH . "server/php/inc/core.php";
 
 <div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
   <div class="Layout-main ">
-  <h1 class="f00-light">Developer visualisation setup</h1>
+  <h1 class="f00-light">Developer visualization setup</h1>
 <br><br>
 
       <br>
@@ -57,7 +57,7 @@ include_once ABSPATH . "server/php/inc/core.php";
               JSON.parse($(this).val());
           } catch (e) {
               console.warn(e, 'Data:', $(this).val());
-              alert(`Incorrect JSON in the custom visualisation: ${e} (see console).`);
+              alert(`Incorrect JSON in the custom visualization: ${e} (see console).`);
           }
 ">
 {
@@ -73,7 +73,7 @@ include_once ABSPATH . "server/php/inc/core.php";
     ],
     "visualizations": [
         {
-            "name": "A visualisation setup 1",
+            "name": "A visualization setup 1",
             "lossless": true,
             "shaders": {
                 "shader_id_1": {
@@ -90,7 +90,7 @@ include_once ABSPATH . "server/php/inc/core.php";
 }
 </textarea>
       <form method="POST" target="_blank" action="<?php echo PROJECT_ROOT ?>index.php" id="custom-request">
-          <input type="hidden" name="visualisation" id="custom-visualisation" value=''>
+          <input type="hidden" name="visualization" id="custom-visualization" value=''>
           <button class="btn pointer" type="submit" value="Ready!">Ready!</button>&emsp;
       </form>
 
@@ -108,7 +108,7 @@ include_once ABSPATH . "server/php/inc/core.php";
     $(document).off('submit');
 
     $('#custom-request').on('submit', evt => {
-        document.getElementById("custom-visualisation").value = $("#custom-params").val();
+        document.getElementById("custom-visualization").value = $("#custom-params").val();
     });
 
 </script>

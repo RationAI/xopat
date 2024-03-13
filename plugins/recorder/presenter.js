@@ -198,7 +198,7 @@ ${UIComponents.Elements.checkBox({
     }
 
     export() {
-        UTILITIES.downloadAsFile("visualisation-recording.json", JSON.stringify({
+        UTILITIES.downloadAsFile("visualization-recording.json", JSON.stringify({
             "snapshots": this.snapshots.exportJSON(false),
             "annotations": this.exportAnnotations(false)
         }));

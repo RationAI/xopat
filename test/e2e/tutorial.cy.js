@@ -10,7 +10,7 @@ function tutorialStep() {
 
 describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', () => {
     it('Init', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
                 stackedBackground: true
@@ -19,7 +19,7 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
             background: config.background({}, 0, 1, 2),
         }
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#global-help").click();
@@ -52,7 +52,7 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
 
 describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
     it('Init', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
                 stackedBackground: false
@@ -61,7 +61,7 @@ describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
             background: config.background({}, 0, 1, 2),
         }
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#global-help").click();
@@ -82,7 +82,7 @@ describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
 
 describe('Basic Tutorial Walkthrough With Layer', () => {
     it('Init', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
             }),
@@ -93,7 +93,7 @@ describe('Basic Tutorial Walkthrough With Layer', () => {
             )],
         }
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
 
         cy.get("#global-help").click();
         cy.get("#tutorials").children().eq(0).click();

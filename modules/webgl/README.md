@@ -9,13 +9,13 @@ Setting up:
 
 
 Constructor of `WebGLModule` accepts `options` argument
-- `options.ready()` function called once the visualisation is prepared to render, for the first time only
-- `options.htmlControlsId` id of a HTML container where to append visualisation UI controls (basically appends the output of `htmlShaderPartHeader`)
+- `options.ready()` function called once the visualization is prepared to render, for the first time only
+- `options.htmlControlsId` id of a HTML container where to append visualization UI controls (basically appends the output of `htmlShaderPartHeader`)
 - `options.htmlShaderPartHeader(title, html, dataId, isVisible, layer, isControllable = true)` function to customize HTML rendering of the shader controls (ignored if `htmlControlsId` not set)
 - `options.resetCallback()` function called when user changes a value using shader controls and the shader layer requests update: here OSD bridge registers redraw event 
-- `options.visualisationReady(i, visualisation)` function called once a visualisation is processed (which might result in error, in that case `visualisation.error` is set)
-- `options.visualisationInUse(visualisation)` called once every time if the visualisation was sucesfully compiled and linked (e.g. when user re-orders the layers or switches to this new goal)
-- `options.visualisationChanged(oldVis, newVis)` function called when visualisation goals are switched between
+- `options.visualizationReady(i, visualization)` function called once a visualization is processed (which might result in error, in that case `visualization.error` is set)
+- `options.visualizationInUse(visualization)` called once every time if the visualization was sucesfully compiled and linked (e.g. when user re-orders the layers or switches to this new goal)
+- `options.visualizationChanged(oldVis, newVis)` function called when visualization goals are switched between
 - `options.onError(error)` called when exception (usually some missing function) occurs and the visualization is somewhat able to continue
 - `options.onFatalError(error)` called when key functionality fails and the module is probably unusable
 - `options.debug` - boolean, outputs debug information if true
@@ -29,9 +29,9 @@ Constructor of `OpenSeadragon.BridgeGL` accepts `openSeaDragonInstance`, a refer
 to the webgl module that is being bridged; and `cachedMode` flag to enable or disable OSD caching for post-processed `TiledImage`s.
  
 
-### Setting up the visualisation
+### Setting up the visualization
 
-Visualisation and data must be set up. Then, you can also add custom shaders if you want and call `prepare()` and `init()`.
+Visualization and data must be set up. Then, you can also add custom shaders if you want and call `prepare()` and `init()`.
 A short example:
 
 ``````javascript
@@ -43,7 +43,7 @@ const webglProcessing = new WebGLModule({
 });
 
 const seaGL = viewer.bridge = new OpenSeadragon.BridgeGL(viewer, webglProcessing, true); //true to enable cache, false to disable
-seaGL.addVisualisation({
+seaGL.addVisualization({
     //here you want to add a visualization with compulsory member "shaders" - object that defines what postprocessing is applied
     //note that for vanilla OSD protocols, you will not use more than first dataReferences index, example:
     "name": "My first postprocessing",
@@ -70,17 +70,17 @@ seaGL.initBeforeOpen();
 seaGL.addLayer( index );
 ``````
 
-#### Visualisation settings
-You can run multiple visualisation goals (ways of pre-defined visualisation style, e.g. what shaders-layers are drawn with what data); 
+#### Visualization settings
+You can run multiple visualization goals (ways of pre-defined visualization style, e.g. what shaders-layers are drawn with what data); 
 and each goal can define arbitrary amount of layers to render into the output canvas, using highly customizable shaders 
 (downloadable from custom sources). These layers can be manually re-ordered, changed and further parametrized by the user 
 in the real time. For more information on dynamic shaders, see `./shaders/README.md`.
 
-An example of valid visualisation goal (object(s) passed to `addVisualisation()`):
+An example of valid visualization goal (object(s) passed to `addVisualization()`):
 
 ````JSON
 {    
-      "name": "A visualisation setup 1",
+      "name": "A visualization setup 1",
       "shaders": {
             "arbitrary_id": {
                    "name": "Probability layer",
@@ -104,9 +104,9 @@ An example of valid visualisation goal (object(s) passed to `addVisualisation()`
       }
 }
 ````
-- [O]`name` - visualisation goal name 
+- [O]`name` - visualization goal name 
 - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or 'jpg', this is not used but you can read this flag later to set up TileSource correctly
-- [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
+- [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 
 the key defines the data (e.g. path to the pyramidal tif such that that server can understand it)
     - [0]`name` - name of the layer: displayed to the user
     - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` (used when the data should be used in different shader); can be also one of custom-defined ones 
@@ -127,7 +127,7 @@ your parameters like this. For more detailed info and guidelines on writing shad
 
 
 ### Data settings
-Data must be loaded in compliance with indices used in `dataSources` elements across the visualisation (strings / image srouce paths passed to `addVisualisation()`)
+Data must be loaded in compliance with indices used in `dataSources` elements across the visualization (strings / image srouce paths passed to `addVisualization()`)
 - the module will automatically extract an ordered subset of the given data in the order in which it expects the data to arrive
     - see `WebGLModule.getSources()`
     
@@ -136,7 +136,7 @@ The idea of working with multiple data sources is:
   - read required data sources `WebGLModule::getSources()`, read other information necessary to fetch data such as `WebGlModule::visualization().lossless` flag
     - do not forget to update correctly (re-initialize tiled image) when UI requests viz goal changes:
 
-                visualisationChanged: function(oldVis, newVis) {
+                visualizationChanged: function(oldVis, newVis) {
                     const seaGL = viewer.bridge,
                         //we are rendering only on one TiledImage, so seaGL.getWorldIndex() will get us index to replace
                         index = seaGL.getWorldIndex(),
@@ -174,7 +174,7 @@ then simply call:
 
 ````js
 seaGl.setData(json.data); 
-seaGl.addVisualisation(...json.visualizations);
+seaGl.addVisualization(...json.visualizations);
 ````
 upon initialization.
 
@@ -201,7 +201,7 @@ the channels themselves. Note that better is reading one channel from multiple s
  - ``use_channel[X]`` for specific index X in `dataReferences` (e.g. for second element, set `use_channel1` to override)
 
 ### webGLWrapper.js
-The main file, definition of `WebGLModule` class, handles all the visualiser-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
+The main file, definition of `WebGLModule` class, handles all the visualizer-specific functionality, uses GlContextFactory to obtain an instance (GlContext) that renders the data.
 
 ### webGLContext.js
 Includes GlContextFactory definition and its default subclass that implements `getContext()` and returns either `WebGL20` or `WebGL10` that behave as a `State` pattern, providing either WebGL 2.0 (if supported) or WebGL 1.0 (fallback) functionality respectively.
@@ -225,12 +225,12 @@ Class that has the following interface (details are documented in the implementa
     /**
      * Called when the program is being loaded (set as active)
      */
-    toBuffers (context, gl, program, wrap, filter, visualisation);
+    toBuffers (context, gl, program, wrap, filter, visualization);
     
     /**
      * Called when tile is processed
      */
-    toCanvas (context, dataIndexMapping, visualisation, data, tileBounds, program, gl);
+    toCanvas (context, dataIndexMapping, visualization, data, tileBounds, program, gl);
     
     /**
      * Measure texture size
@@ -258,9 +258,9 @@ be easier than implementing the whole loader interface.
 
 ````js
 loadersByType = {
-    "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);,
+    "[object HTMLImageElement]": function (self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl);,
     //Image objects in Array, we assume image objects only
-    "[object Array]": function (self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl);
+    "[object Array]": function (self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl);
 }
 ````
 

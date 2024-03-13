@@ -31,7 +31,7 @@ var ShaderConfigurator = {
     /**
      * Run shader and controls selector
      * @param nodeId DOM ID or node to render the content into
-     * @param onFinish callback, argument is the visualisation config with given shader and controls
+     * @param onFinish callback, argument is the visualization config with given shader and controls
      */
     runShaderAndControlSelector: function(nodeId, onFinish) {
         const _this = this;
@@ -55,7 +55,7 @@ var ShaderConfigurator = {
      * Run controls selector for given shader
      * @param nodeId DOM ID or node to render the content into
      * @param shaderId shader ID to configure controls for
-     * @param onFinish callback, argument is the visualisation config with given shader and controls
+     * @param onFinish callback, argument is the visualization config with given shader and controls
      */
     runControlSelector: function(nodeId, shaderId, onFinish=undefined) {
         let node = typeof nodeId === "string" ? document.getElementById(nodeId) : nodeId;
@@ -402,7 +402,7 @@ ${renders.join("")}
         const finish = this._onControlSelectFinish ?
             `<button class="btn" onclick="${this.REF}._onControlSelectFinish(${this.REF}.getCurrentShaderConfig());">Done</button>` : '';
 
-        module.addVisualisation(this.setup.vis);
+        module.addVisualization(this.setup.vis);
         module.prepareAndInit(data.map(x => ""), this._renderData?.width, this._renderData?.height);
         return `<div><h3>Available controls and their parameters</h3><br><div id='${this._uniqueId}interactive-controls'></div></div>${finish}<br>`;
     },
@@ -419,7 +419,7 @@ ${renders.join("")}
         const uiControls = this._buildControls();
         let controls = shader.defaultControls;
 
-        //this is done with visualisation layer as hard-coded control option, include here as well
+        //this is done with visualization layer as hard-coded control option, include here as well
         if (controls.opacity === undefined || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
             controls.opacity = {
                 default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},

@@ -1,6 +1,6 @@
 # XOpat - OpenSeadragon-based histology data visualizer
 
-The visualisation is fully flexible. It, in fact, consists of two main logical groups. The first, **image** groups, 
+The visualization is fully flexible. It, in fact, consists of two main logical groups. The first, **image** groups, 
 is rendered AS-IS. It is meant for tissue scan to be shown. The second, **data** groups is rendered using our WebGL 
 extension. 
 
@@ -44,8 +44,8 @@ image server together with image queries. In case you change the image server UR
 a script that is able to provide the user with a link, for reference see how `redirect.php` works).
 
 ## Configuration
-Supported configuration for `index.php` - the visualisation itself, can be passed both in `POST` and `GET` requests.
-The name of the argument is **`visualisation`**, a JSON structure that sets up everything.
+Supported configuration for `index.php` - the visualization itself, can be passed both in `POST` and `GET` requests.
+The name of the argument is **`visualization`**, a JSON structure that sets up everything.
 
 > Direct URL's are not supported, except for those generated within the application and sent to `redirect.php`, 
 > _unless_ the post data is sent in `GET`. Note that this is not recommended as the size of the JSON configuration
@@ -69,12 +69,12 @@ Example configuration:
     ],
     "visualizations": [
         {
-            "name": "A visualisation setup 1",
+            "name": "A visualization setup 1",
             "lossless": true,
             "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
             "shaders": {
                 "shader_id_1": { 
-                    "name": "Advanced visualisation layer",
+                    "name": "Advanced visualization layer",
                     "type": "new_type", 
                     "fixed": false,
                     "visible": 1, 
@@ -102,7 +102,7 @@ Example configuration:
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
 - [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
-- [O]`params` - an object, visualisation parameters, supported:
+- [O]`params` - an object, visualization parameters, supported:
     - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
     - [O]`locale` - language locale, default `en`
     - [O]`customBlending` - allow to program custom blending, default `false`
@@ -138,19 +138,19 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`micronsY` - vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
-    - [O]`goalIndex` - preferred visualisation index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
-- [O]`visualization` - array of objects that define visualisations (sometimes we say _visualization goals_) of the **data** group,
+    - [O]`goalIndex` - preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+- [O]`visualization` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
 it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
-    - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualisation style (objects), the data layer composition is defined here, 
+    - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
         - [R]`dataReferences` - indices **array** to the `data` array
         - [O]`visible` -  `1` or `0`, `true` of `false`, whether by default the data layer is visible
         - [O]`name` - name of the layer: displayed to the user
-        - [O]`fixed` - if `false`, user is able to change the visualisation style, default `true`
+        - [O]`fixed` - if `false`, user is able to change the visualization style, default `true`
             - shaders can then reference `data` items using index to the `dataReferences` array
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
-    - [O]`name` - visualisation goal name 
+    - [O]`name` - visualization goal name 
     - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
@@ -160,9 +160,9 @@ it is an inherited configuration interface of the WebGL module extended by optio
  <summary>Advanced features:</summary>
 
 **Internal parameters** &emsp;
-The visualisation can internally support more parameters, these are set when the application is running and then used to
+The visualization can internally support more parameters, these are set when the application is running and then used to
 support various sharing and caching. Worth noting are
-- `order` parameter for each visualisation goal, which can be an array of shader ID's - this order define the order of rendering, note that all data that is being
+- `order` parameter for each visualization goal, which can be an array of shader ID's - this order define the order of rendering, note that all data that is being
 rendered must be present (e.g. all data where in the data settings `visible=1` is set and which has no problems such as incorrect 
 parameter values)
 - `cache` object inside each shader definition, contains cached values from the shader usage, its properties are dependent on the
@@ -231,7 +231,7 @@ this dependency is resolved and necessary items are included (in the right order
 See `./modules/README.md`. Modules are placed in `./modules/` folder.
 
 ### `../openseadragon/` 
-OpenSeadragon third-party javascript library the whole visualisation builds on. `debug` contains unminified version for debugging & OSD modifications.
+OpenSeadragon third-party javascript library the whole visualization builds on. `debug` contains unminified version for debugging & OSD modifications.
 These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.
 
 

@@ -464,7 +464,7 @@ class HistovisoImageRenderer extends HistovisoImage {
                 _this._renderer.setDimensions(myImage.width*2, myImage.height*2); //idk why 2* but it works
 
                 // Render a webGL canvas to an input canvas using cached version
-                // Only one image supported at the time, will be given to all shaders defined in visualisation, will change soon
+                // Only one image supported at the time, will be given to all shaders defined in visualization, will change soon
 
                 var output = _this._renderer.processImage(myImage, {width: myImage.width , height: myImage.height}, 0, 0);
                 fabric.Image.fromURL(output.toDataURL(), function (img) {
