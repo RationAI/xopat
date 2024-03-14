@@ -94,11 +94,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             if (allowUserPrompt) {
                 const refreshTokenExpiration = this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
+                    // window.open(this.configuration.redirect_uri, 'xopat-auth');
                     console.log("OIDC: Try to sign in via popup.");
+                    // await this.sleep(100);
                     await this.userManager.signinPopup({
                         popupWindowFeatures: {
+                            popupWindowTarget: "xopat-auth",
+                            popup: "no"
                         }
                     });
+
                 } else {
                     console.log("OIDC: Signing silently: refresh token available.");
                     await this.userManager.signinSilent();
@@ -113,31 +118,49 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         } catch (error) {
             if (firedManually) {
                 console.error("OIDC: ", error);
+                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue',
+                    20000, Dialogs.MSG_ERR);
                 return;
             }
             if (error.message.includes('Failed to fetch')) {
                 console.log('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
+                Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
+                    20000, Dialogs.MSG_WARN);
                 if (!preventRecurse) {
-                    Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true);">Retry now</a>.',
-                        20000, Dialogs.MSG_WARN);
                     await this.sleep(20000);
                     await this.trySignIn(false, this._connectionRetries > 5);
                 } else {
-                    //todo redirect to page
                     console.error("OIDC: MAX retry exceeded");
                 }
+            } else if (error.message.includes('disposed window')) {
+                console.log('OIDC: Signin failed due to popup window blocking.');
+                Dialogs.show('Login requires opening a popup window. Please, allow popup window in your browser. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
+                    20000, Dialogs.MSG_WARN);
+                if (!preventRecurse) {
+                    await this.sleep(20000);
+                    await this.trySignIn(false, this._connectionRetries > 5);
+                } else {
+                    console.error("OIDC: MAX retry exceeded");
+                }
+            } else {
+                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue',
+                    20000, Dialogs.MSG_ERR);
             }
             console.error("OIDC auth attempt: ", error);
         }
     };
 
+    getSessionData() {
+        return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+    }
+
     getRefreshTokenExpiration() {
         // Key used:
         //oidc.user:<authority>:<client>
         let refreshToken = '';
+        const token = this.getSessionData();
         // const token = APPLICATION_CONTEXT.AppCookies
         //     .get(`oidc.user:${this.configuration.authority}:${this.clientId}`);
-        const token = sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.clientId}`);
         try {
             if (token) {
                 const values = JSON.parse(token);

@@ -16,7 +16,6 @@
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'
-
         //Authority ID (url) the OIDC sets in the communication, url used for authorization
         "authority": "",
         //Client ID of this application, its auth secret (or null)

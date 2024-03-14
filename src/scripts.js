@@ -282,22 +282,26 @@ function initXopatScripts() {
         }
 
         const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
+        data.visualization = app;
 
         let form = `
     <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
-        <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
     </form>
     <script type="text/javascript">
-        document.getElementById("visualization").value = JSON.stringify(${app});
         const form = document.getElementById("redirect");
         let node;`;
 
         for (let id in data) {
+            // dots seem to be reserved names therefore use IDs differently
+            const sets = id.split('.');
+            if (sets.length < 1) continue;
+            let key = sets.length < 2 ? id : `${sets.shift()}[${sets.join('.')}]`;
+
             form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", \`${id}\`);
+node.setAttribute("name", \`${key}\`);
 node.setAttribute("value", JSON.stringify(${data[id]}));
 form.appendChild(node);`;
         }
