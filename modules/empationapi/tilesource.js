@@ -60,6 +60,8 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
         this.api.slides.slideInfo(options.slide).then(response => {
             let size = response.extent, tile = response.tile_extent;
             //apply necessary - setups internals
+            let chosenMq = response.pixel_size_nm;
+            if (chosenMq.x === 1000000) chosenMq = null;
             $.extend(this, {
                 width: size.x,
                 height: size.y,
@@ -77,8 +79,8 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
                 multifetch: false,
                 ready: true,
                 metadata: {
-                    micronsX: response.pixel_size_nm?.x / 1000,
-                    micronsY: response.pixel_size_nm?.y / 1000,
+                    micronsX: chosenMq?.x / 1000,
+                    micronsY: chosenMq?.y / 1000,
                 },
                 data: response
             })

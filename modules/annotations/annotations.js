@@ -557,13 +557,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Set mode by object
 	 * @event mode-changed
 	 * @param {OSDAnnotations.AnnotationState} mode
+	 * @param {boolean} [force=false]
 	 */
-	setMode(mode) {
+	setMode(mode, force=false) {
 		if (this.disabledInteraction || mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
-		} else if (mode !== this.Modes.AUTO) {
+		} else if (mode !== this.Modes.AUTO || force) {
 			this._setModeToAuto(true);
 			this._setModeFromAuto(mode);
 		} else {
@@ -575,14 +576,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Set current mode by mode id
 	 * @event mode-changed
 	 * @param {string} id
+	 * @param {boolean} [force=false]
 	 */
-	setModeById(id) {
+	setModeById(id, force=false) {
 		let _this = this;
 		for (let mode in this.Modes) {
 			if (!this.Modes.hasOwnProperty(mode)) continue;
 			mode = this.Modes[mode];
 			if (mode.getId() === id) {
-				_this.setMode(mode);
+				_this.setMode(mode, force);
 				break;
 			}
 		}
@@ -2150,7 +2152,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "brush", "🆈  correction tool");
+		super(context, "fft-correct", "brush", "🆉  correction tool");
 		this.candidates = null;
 	}
 
@@ -2207,10 +2209,10 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.key === "z" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "r";
+		return e.key === "z";
 	}
 };

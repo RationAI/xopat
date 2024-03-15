@@ -55,6 +55,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      */
     configure( data, url, postData ) {
         if (!Array.isArray(data)) {
+            //unset if default value
+            let chosenMq = data.pixel_size_nm;
+            if (chosenMq.x === 1000000) chosenMq = null;
             return {
                 width: data.extent.x,
                 height: data.extent.y,
@@ -68,8 +71,8 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
                 multifetch: false,
                 data: data,
                 metadata: {
-                    micronsX: data.pixel_size_nm?.x / 1000,
-                    micronsY: data.pixel_size_nm?.y / 1000,
+                    micronsX: chosenMq?.x / 1000,
+                    micronsY: chosenMq?.y / 1000,
                 },
             };
         }
@@ -113,6 +116,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             }
             maxLevel = Math.min(maxLevel, image.levels.length);
         }
+
+        //unset if default value
+        if (chosenMq.x === 1000000) chosenMq = null;
         return {
             width: width, /* width *required */
             height: height, /* height *required */

@@ -490,7 +490,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer, or possibly the rendering layers layer
         const tiledImage = VIEWER.world.getItemAt(index);
-        const imageData = tiledImage?.getBackgroundConfig();
+        const imageData = tiledImage?.getBackgroundConfig() || {};
 
         const title = $("#tissue-title-header").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {

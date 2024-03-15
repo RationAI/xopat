@@ -420,10 +420,10 @@ OSDAnnotations.PresetManager = class {
         const leftPresetId = await this._context.cache.get('presets.left.id', undefined, false);
         const rightPresetId = await this._context.cache.get('presets.right.id', undefined, false);
         if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
-            this.left = this._presets[leftPresetId];
+            this.selectPreset(leftPresetId, true, false);
         }
         if (rightPresetId && (rightPresetId === "__unset__" || this._presets[rightPresetId])) {
-            this.right = this._presets[rightPresetId];
+            this.selectPreset(rightPresetId, false, false);
         }
 
         if (!this.left && first) {

@@ -128,7 +128,7 @@ ${UIComponents.Elements.checkBox({
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
 </div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" onclick="${this.THIS}.showPresets();">
+<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
 <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
 			"annotations-panel",
@@ -150,6 +150,7 @@ ${UIComponents.Elements.checkBox({
 		//AutoMode
 		modeOptions.push(defaultModeControl(modes.AUTO));
 		modeOptions.push(vertSeparator);
+		modeOptions.push('<span id="annotations-custom-modes-panel">');
 		// Custom shapes
 		let customMode = modes.CUSTOM;
 		for (let factoryID of this._allowedFactories) {
@@ -158,16 +159,19 @@ ${UIComponents.Elements.checkBox({
 				modeOptions.push(`
 <input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="d-none switch" name="annotation-modes-selector">
 <label for="${factoryID}-annotation-mode" class="label-annotation-mode position-relative" 
-onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true); event.preventDefault(); return false;" 
-oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
+onclick="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true);" 
+oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false);"
 title="${customMode.getDescription()}: ${factory.title()}">
 <span class="material-icons btn-pointer p-1 rounded-2">${factory.getIcon()}</span></label>`);
 			}
 		}
+		modeOptions.push('</span>');
 		modeOptions.push(vertSeparator);
 		// Brushes
+		modeOptions.push('<span id="annotations-brush-modes-panel">');
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_ADD));
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_REMOVE));
+		modeOptions.push('</span>');
 		// Wand + correction
 		modeOptions.push(vertSeparator);
 		modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
@@ -205,7 +209,6 @@ ${modeOptions.join("")}</div>`, 'draw');
 </div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
-		this.updatePresetsHTML();
 	}
 
 	getIOFormatRadioButton(format) {
@@ -235,13 +238,21 @@ ${modeOptions.join("")}</div>`, 'draw');
 			// manual mode check factory, which can be re-set only if matches
 			if (id === "custom") {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				if (!preset || this.context.presets.getActivePreset(isLeftClick).objectFactory.factoryID !== factory) {
+				if (!preset) {
+					return;
+				}
+				if (preset.objectFactory.factoryID !== factory) {
+					this.updatePresetWith(preset.presetID, 'objectFactory', factory);
 					return;
 				}
 			}
 			this.context.setModeById("auto");
 			$('#auto-annotation-mode').prop('checked', true).trigger('change');
 		} else {
+			if (id === "custom" && factory) {
+				const preset = this.context.presets.getActivePreset(isLeftClick);
+				this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+			}
 			this.context.setModeById(id);
 		}
 	}
@@ -412,11 +423,29 @@ ${modeOptions.join("")}</div>`, 'draw');
 				{
 					"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
 				}, {
-					"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some class (<b>preset</b>) and start annotating!"
+					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
 				}, {
-					"click #annotations-right-click": "To open <b>Presets dialog window</b>, click on one of these buttons<br>."
+					"next #server-primary-save": "Depending on the viewer settings <br>the annotations can be saved here (either locally or to a server). <br> The right button opens additional settings options."
 				}, {
-					"next #preset-no-0": "This is an example of an annotation preset."
+					"click #annotations-panel-pin": "Open additional configuration options."
+				}, {
+					"next #preset-list-button-mp": "Existing annotation classes are here."
+				}, {
+					"next #preset-list-mp-edit": "You can edit them using this button."
+				}, {
+					"next #annotation-list-button-mp": "Existing annotations list can be opened here. <br> It can open both in the menu and in a new window."
+				}, {
+					"next #annotations-panel": "This was the main panel menu. Now let's move to the toolbar."
+				}, {
+					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
+				},{
+					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
+				},  {
+					"next #annotations-left-click": "Switching can be done by mouse or with shortcuts by holding a keyboard key. <br>Modes are closely described in other tutorials."
+				}, {
+					"click #annotations-right-click": "To open <b>Annotation Class dialog window</b>, click on the button."
+				}, {
+					"next #preset-no-0": "This is an example of an annotation class."
 				}, {
 					"next #preset-add-new": "Here you create a new class."
 				}, {
@@ -426,15 +455,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 				}, {
 					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
 				}, {
-					"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
-				}, {
-					"next #annotations-fast-factory-switch": "To change current annotation object type, <br>select it with (and for) left or right mouse button. <br> The button needs to have a preset assigned."
-				}, {
-					"click #annotations-panel-pin": "Open additional configuration options."
-				}, {
-					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
-				}, {
-					"next #enable-disable-annotations": "This tutorial is finished.<br>To learn more, follow other annotation tutorials!"
+					"next #viewer-container": "This tutorial is finished.<br>To learn more, follow other annotation tutorials!"
 				}], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
 			}
@@ -463,13 +484,17 @@ ${modeOptions.join("")}</div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in the manual creation mode. <br> We recommend holding 'W' key instead of switching modes with a mouse."
+					"next #annotations-custom-modes-panel": "Manual creation modes are available for each object type. <br> We recommend holding 'W' key instead of switching modes<br>with a mouse for faster workflow."
 				}, {
-					"next #polygon-annotation-factory-switch": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
+					"next #ellipse-annotation-mode + label": "To switch to a different object type, <br>you can click using either left (for left mouse class) or right mouse button.<br>Note that you need active class preset on that button."
 				}, {
-					"next #polyline-annotation-factory-switch": "The same for a polyline."
+					"next #polygon-annotation-mode + label": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
-					"next #text-annotation-factory-switch": "A text (and a point) can be created by clicking."
+					"next #polyline-annotation-mode + label": "The same for a polyline."
+				}, {
+					"next #ruler-annotation-mode + label": "A ruler is able to measure distances. <br> Ruler is not modifiable by a brush."
+				},{
+					"next #text-annotation-mode + label": "A text (and a point) can be created by clicking."
 				}, {
 					"next #viewer-container": "Most other objects (such as a rectangle)<br>can be created by mouse dragging (click+move).<br>Now you can try it out."
 				}
@@ -479,7 +504,25 @@ ${modeOptions.join("")}</div>`, 'draw');
 		);
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Free form tool", "painting with your mouse", "gesture", [
+			this.id, "Magic Wand", "automatically select similar regions", "blur_on", [
+				{
+					"click #magic-wand-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'T' key <br> instead in the future."
+				}, {
+					"next #viewer-container": "By hovering over the canvas you can already see proposed regions."
+				}, {
+					"next #mode-custom-items select": "The target layer to detect from can be set here."
+				}, {
+					"next #mode-custom-items span": "The sensitivity can be modified here, or by a wheel <br> (or shift+wheel if you don't use key shortcut)."
+				}, {
+					"next #viewer-container": "By clicking on the canvas, the annotation is created. <br> You can now try it out."
+				}
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
+		);
+
+		USER_INTERFACE.Tutorials.add(
+			this.id, "Brushing", "painting with your mouse", "gesture", [
 				{
 					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'E' key <br> instead in the future."
 				}, {
@@ -489,11 +532,13 @@ ${modeOptions.join("")}</div>`, 'draw');
 				}, {
 					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
 				}, {
-					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
+					"next #fft-size": "The brush size can be changed here or with a mouse wheel <br>(shift+wheel if not using key shortcuts)."
 				}, {
 					"click #fft-remove-annotation-mode + label": "Click here to switch to the removal.<br>We recommend holding 'R' key <br> instead in the future."
 				}, {
-					"next #viewer-container": "You can now try to erase areas from existing annotations.<br>To start erasing, make sure the object you want to modify is selected."
+					"next #viewer-container": "You can now try to erase areas from existing annotations."
+				}, {
+					"next #fft-correct-annotation-mode + label": "The annotation correction brush behaves in a similar way. <br>But, it ignores mouse buttons class presets: <br> left adds (+) while right button removes (-)."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -691,7 +736,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	getMissingPresetHTML(isLeftClick) {
 		return `<div class="p-1" onclick="${this.THIS}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
-<span class="one-liner d-inline-block v-align-middle pr-2">Add</span></div>`;
+<span class="one-liner d-inline-block v-align-middle pr-2">Set</span></div>`;
 	}
 
 	/**
@@ -793,15 +838,11 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		this.context.createPresetsCookieSnapshot();
 	}
 
-	/**
-	 * Update main HTML GUI part of presets upon preset change
-	 */
-	updatePresetsHTML() {
-		//TODO verify this does not misbehave
+	updatePresetsMouseButtons() {
 		if (Object.keys(this.context.presets._presets).length < 1) {
 			const p = this.context.presets.addPreset();
 			if (!this.context.presets.getActivePreset(true)) {
-				this.context.presets.selectPreset(p.presetID, true);
+				this.context.presets.selectPreset(p.presetID, true, false);
 			}
 		}
 
@@ -818,14 +859,13 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 			this.validatePresetFactory(rightPreset);
 			right.html(this.getPresetControlHTML(rightPreset, false));
 		} else right.html(this.getMissingPresetHTML(false));
+	}
 
-		const lid = leftPreset?.objectFactory.factoryID,
-			rid = rightPreset?.objectFactory.factoryID;
-		$("#annotations-fast-factory-switch").children().each(function () {
-			if (this.dataset.factory === lid) this.style.borderColor = leftPreset.color;
-			else if (this.dataset.factory === rid) this.style.borderColor = rightPreset.color;
-			else this.style.borderColor = 'transparent';
-		});
+	/**
+	 * Update main HTML GUI part of presets upon preset change
+	 */
+	updatePresetsHTML() {
+		this.updatePresetsMouseButtons();
 		this._updateMainMenuPresetList();
 	}
 
