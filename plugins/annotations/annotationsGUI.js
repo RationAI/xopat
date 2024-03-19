@@ -1105,7 +1105,7 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 			this.exportToFile();
 			return;
 		}
-
+		Dialogs.show("Server-side storage is in the process of implementation. Please, save the data locally for now.");
 		//todo server upload!!!
 	}
 }

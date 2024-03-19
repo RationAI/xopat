@@ -295,8 +295,17 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
      * @type {PostDataStore}
      */
     class PostDataStore extends XOpatStorage.Data {
+        /**
+         * @param options the options used in super class XOpatStorage.Data
+         * @param options.xoType type of the owner
+         */
         constructor(options) {
-            super(options);
+            super({...options,
+                id: (options.id || "").split(".").filter((v, i) => i > 0).join(".")});
+            if (options.xoType !== "plugin" && options.xoType !== "module") throw "Invalid xoType for PostDataStore!";
+            this.contextType = options.xoType;
+            //write target
+            this.__storage._withReference(this.contextType);
         }
 
         /**
@@ -326,25 +335,43 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         static register(Class) {
             super.register(class extends XOpatStorage.AsyncStorage {
                 async getItem(key) {
-                    return POST_DATA[key];
+                    let storage = POST_DATA[this.ref];
+                    // backward non-namespaced compatibility
+                    return POST_DATA[key] || (storage && storage[key]);
                 }
                 async setItem(key, value) {
-                    POST_DATA[key] = value;
+                    let storage = POST_DATA[this.ref];
+                    if (!storage) {
+                        storage = POST_DATA[this.ref] = {};
+                    }
+                    storage[key] = value;
                 }
                 async removeItem(key) {
                     delete POST_DATA[key];
+                    let storage = POST_DATA[this.ref];
+                    if (storage) {
+                        delete storage[key];
+                    }
                 }
                 async clear() {
-                    POST_DATA = {};
+                    if (POST_DATA[this.ref]) {
+                        POST_DATA[this.ref] = {};
+                    }
                 }
                 get length() {
-                    return Object.keys(POST_DATA).length;
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {}).length;
                 }
                 async key(index) {
-                    return Object.keys(POST_DATA)[index];
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {})[index];
                 }
-                _keys() {
-                    return Object.keys(POST_DATA);
+                _keys() { //internal loader use
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {});
+                }
+                _withReference(ref) {  //internal loader use
+                    this.ref = ref;
                 }
             });
         }
@@ -506,6 +533,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             if (store) return store;
 
             options.id = this.uid;
+            options.xoType = this.__xoContext;
             const dataStore = this[STORE_TOKEN] = new PostDataStore(options);
 
             try {

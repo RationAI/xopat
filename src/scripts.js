@@ -293,17 +293,32 @@ function initXopatScripts() {
         const form = document.getElementById("redirect");
         let node;`;
 
-        for (let id in data) {
-            // dots seem to be reserved names therefore use IDs differently
-            const sets = id.split('.');
-            if (sets.length < 1) continue;
-            let key = sets.length < 2 ? id : `${sets.shift()}[${sets.join('.')}]`;
-
+        function addExport(key, data) {
             form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", \`${key}\`);
-node.setAttribute("value", JSON.stringify(${data[id]}));
+node.setAttribute("name", "${key}");
+node.setAttribute("value", JSON.stringify(${data}));
 form.appendChild(node);`;
+        }
+
+        for (let id in data) {
+            // dots seem to be reserved names therefore use IDs differently
+            const sets = id.split('.'), dataItem = data[id];
+            // namespaced export within "modules" and "plugins"
+            if (sets.length === 1) {
+                //handpicked allowed namespaces
+                if (id === "module" || id === "plugin" || id === "visualization") {
+                    if (typeof dataItem === "object") {  //nested object
+                        for (let nId in dataItem) addExport(`${id}[${nId}]`, dataItem[nId]);
+                    } else {  //plain
+                        addExport(id, dataItem);
+                    }
+                    //todo consider type checks so that we dont serialize array toString is not a good serializer
+                }
+            } else if (sets.length > 1) {
+                //namespaced in id, backward compatibility
+                addExport(`${sets.shift()}[${sets.join('.')}]`, dataItem);
+            }
         }
 
         return `${form}
