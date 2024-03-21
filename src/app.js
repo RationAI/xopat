@@ -691,7 +691,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             return;
         }
 
-        $("#panel-images").html("").css('display', 'none');
 
         const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
         if (confBackground.length > 1) {
@@ -706,28 +705,55 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                     server: APPLICATION_CONTEXT.env.client.image_group_server,
                     usesCustomProtocol: !!image.protocolPreview,
                     image: imagePath,
-                    previewUrl: null,
+                    imagePreview: null,
                 };
                 VIEWER.raiseEvent('get-preview-url', eventArgs);
 
                 //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
                 VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {
-                    if (!eventArgs.previewUrl) {
+                    let blobUrl;
+                    if (!eventArgs.imagePreview) {
                         const previewUrlmaker = new Function("path,data", "return " +
                             (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
-                        eventArgs.previewUrl = previewUrlmaker(eventArgs.server, imagePath);
+                        eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
+                    } else if (typeof eventArgs.imagePreview !== "string") {
+                        //treat as blob
+                        blobUrl = eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
                     }
-                    $(`#tissue-preview-item-${idx}`).css('background',
-                        `url('${eventArgs.previewUrl}') center`);
+
+                    const img = new Image();
+                    img.onload = () => {
+                        let child = img;
+                        if (img.width < img.height) {
+                            child = document.createElement("canvas"),
+                                context = child.getContext("2d");
+                            child.width = img.height;
+                            child.height = img.width;
+                            context.setTransform(0,-1, 1,0, 0, child.width/2);
+                            context.drawImage(img, 0, 0);
+                        }
+                        child.style.width = '180px';
+                        $(`#tissue-preview-item-${idx}`).append(child);
+                        if (blobUrl) URL.revokeObjectURL(blobUrl);
+                    };
+                    img.onerror = img.onabort = () => {
+                        //todo some error image?
+                        if (blobUrl) URL.revokeObjectURL(blobUrl);
+                    };
+                    img.src = eventArgs.imagePreview;
                 });
 
                 html += `
     <div id="tissue-preview-item-${idx}" onclick="UTILITIES.swapBackgroundImages(${idx});"
-    class="${activeIndex == idx ? 'selected' : ''} pointer position-relative" style="width: 100px; height: 100%; border-bottom: 1px solid var(--color-bg-backdrop);"></div>`;
+    class="${activeIndex == idx ? 'selected' : ''} pointer position-relative mx-2 my-2 color-bg-canvas overflow-hidden" 
+    style="width: 180px; height: 90px; border-bottom: 1px solid var(--color-bg-backdrop); border-radius: 21px;">
+    <span class="tissue-label">${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])}</span>
+</div>`;
             }
 
-            //use switching panel
-            USER_INTERFACE.Tools.setMenu('__viewer', '__tisue_list', $.t('common.Tissues'), `<div id="tissue-preview-container">${html}</div>`);
+            $("#panel-images").html(`<div id="tissue-preview-container">${html}</div>`);
+        } else {
+            $("#panel-images").html("").css('display', 'none');
         }
 
         if (confBackground.length > 0) {

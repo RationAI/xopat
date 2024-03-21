@@ -160,7 +160,7 @@ ${UIComponents.Elements.checkBox({
 <input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="d-none switch" name="annotation-modes-selector">
 <label for="${factoryID}-annotation-mode" class="label-annotation-mode position-relative" 
 onclick="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true);" 
-oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false);"
+oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
 title="${customMode.getDescription()}: ${factory.title()}">
 <span class="material-icons btn-pointer p-1 rounded-2">${factory.getIcon()}</span></label>`);
 			}
@@ -438,9 +438,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 					"next #annotations-panel": "This was the main panel menu. Now let's move to the toolbar."
 				}, {
 					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
-				},{
-					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
-				},  {
+				}, {
 					"next #annotations-left-click": "Switching can be done by mouse or with shortcuts by holding a keyboard key. <br>Modes are closely described in other tutorials."
 				}, {
 					"click #annotations-right-click": "To open <b>Annotation Class dialog window</b>, click on the button."
@@ -508,7 +506,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 				{
 					"click #magic-wand-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'T' key <br> instead in the future."
 				}, {
-					"next #viewer-container": "By hovering over the canvas you can already see proposed regions."
+					"next #viewer-container": "By hovering over the canvas you can already see proposed annotations."
 				}, {
 					"next #mode-custom-items select": "The target layer to detect from can be set here."
 				}, {
@@ -538,7 +536,11 @@ ${modeOptions.join("")}</div>`, 'draw');
 				}, {
 					"next #viewer-container": "You can now try to erase areas from existing annotations."
 				}, {
-					"next #fft-correct-annotation-mode + label": "The annotation correction brush behaves in a similar way. <br>But, it ignores mouse buttons class presets: <br> left adds (+) while right button removes (-)."
+					"click #fft-correct-annotation-mode + label": "Click here to switch to the annotation correction brush."
+				}, {
+					"next #fft-correct-annotation-mode + label": "It is similar, but: <br> it cannot create new annotations, and<br>it ignores mouse buttons class presets: <br> left adds (+) while right button removes (-)."
+				}, {
+					"next #viewer-container": "You can now try to append to (left) or erase from (right) existing annotations."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -548,26 +550,19 @@ ${modeOptions.join("")}</div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Other UI Controls", "annotations management", "dashboard_customize", [
 				{
-					"next #viewer-container": "There are much more features included."
-				},
-				{
-					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>The board opens in a separate window.<br>It allows you to edit and manage annotations."
-				},
-				{
-					"next #viewer-container": "A history is also available.<br> Shortcut is undo:Ctrl+Z and redo:Ctrl+Shift+Z<br>(or use the annotation board)."
-				},
-				{
-					"click #show-annotation-export": "Click here to open export options."
-				},
-				{
-					"next #annotations-shared": "You can export or import different annotation formats. <br>"
-				},
-				{
+					"next #viewer-container": "An annotation history is available."
+				}, {
+					"next #toolbar-history-undo": "Shortcut are undo: Ctrl+Z..."
+				}, {
+					"next #toolbar-history-redo": "...and redo: Ctrl+Shift+Z."
+				}, {
+					"click #show-annotation-export": "There are also various export options. Click here to open the menu."
+				}, {
+					"next #annotations-shared": "You can export or import different annotation formats via files.<br>"
+				}, {
 					"next #annotations-local-export-panel": "Importing is dependent on the active format!<br>It is possible to export annotations themselves;<br> some formats allow also exporting presets only."
 				},
-				{
-					"next #available-annotations": "If configured, it is possible to also upload annotations to the server."
-				},
+				//todo server upload tutorial
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
 			}

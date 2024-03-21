@@ -115,10 +115,10 @@ fully re-usable for your purposes, **using custom annotation objects to perform 
 
 ### Rendering-Related Events
 
-#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, previewUrl: null}`
+#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
 Fired when the UI wants to know what is a slide _preview url_, which can be constructed
-from ``server`` on which `image` slide identification lives. If `previewUrl`
-is not set to be a valid string URL value, it is created automatically based on server and image
+from ``server`` on which `image` slide identification lives. If `imagePreview`
+is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
 values using the ``image_group_preview`` configuration specification.
 
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)

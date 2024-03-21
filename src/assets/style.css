@@ -487,13 +487,10 @@ div {box-sizing: initial !important;}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
 #tissue-preview-container {
-    height: 50px;
     flex-direction: row;
     display: flex;
 }
-#tissue-preview-container:hover {
-    height: 200px;
-}
+
 #tissue-preview-container .selected::before {
     content: '';
     width: 100%;
@@ -504,9 +501,7 @@ div {box-sizing: initial !important;}
     top: 0;
     z-index: 2;
 }
-#tissue-preview-container .pointer:hover::before {
-    z-index: 4;
-}
+
 #tissue-title-header {
     font-size: 16px;
     font-weight: bold;
@@ -523,10 +518,12 @@ div {box-sizing: initial !important;}
     box-shadow: var(--color-shadow-medium);
     z-index: 3;
 }
-
-#tissue-preview-container img {
-    height: 200px;
-
+#tissue-preview-container .tissue-label {
+    position: absolute;
+    bottom: 2px;
+    text-wrap: nowrap;
+    font-size: xx-small;
+    color: var(--color-text-link);
 }
 #tissue-preview-container img:hover {
 

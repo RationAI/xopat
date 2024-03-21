@@ -39,17 +39,8 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
             OpenSeadragon.EmpationAPIV3TileSource._initializedPreviewHandler = true;
             VIEWER.addHandler('get-preview-url', async e => {
                 if (!e.usesCustomProtocol && e.server === "xo.module://empation-api") {
-                    EmpationAPI.V3.get().slideThumbnail(e.image, 500, 500).then(blob => {
-                        const img = new Image();
-                        const objUrl = URL.createObjectURL(blob);
-                        img.onload = () => {
-                            e.previewUrl = objUrl;
-                            setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
-                        };
-                        img.onerror = img.onabort = () => {
-                            URL.revokeObjectURL(objUrl);
-                        };
-                        img.src = objUrl;
+                    return EmpationAPI.V3.get().slides.slideThumbnail(e.image, 500, 500).then(blob => {
+                        e.imagePreview = blob;
                     }).catch(console.error);
                 }
             });
