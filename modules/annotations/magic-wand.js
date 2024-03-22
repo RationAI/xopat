@@ -233,7 +233,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     accepts(e) {
-        const accepts = e.key === "t" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+        const accepts = e.code === "KeyT" && !e.ctrlKey && !e.shiftKey && !e.altKey;
         // if (accepts) {
         //     this._buttonActive = !this._buttonActive;
         //     if (!this._buttonActive) {
@@ -245,7 +245,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     rejects(e) {
-        return e.key === "t";
+        return e.code === "KeyT";
     }
 
     customHtml() {

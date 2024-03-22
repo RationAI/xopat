@@ -1429,9 +1429,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				}
 			}
 
-			if (e.ctrlKey) {
-				if (e.key === "z") return this.history.back();
-				if (e.key === "Z") return this.history.redo();
+			if (e.ctrlKey && !e.altKey && e.code === "KeyZ") {
+				return e.shiftKey ? this.history.redo() : this.history.back();
 			}
 		}
 
@@ -1815,6 +1814,7 @@ OSDAnnotations.AnnotationState = class {
 	 *
 	 * NOTE: these methods should be as specific as possible, e.g. test also that
 	 * no ctrl/alt/shift key is held if you do not require them to be on
+	 *       these methods should ignore CapsLock, e.g. test e.code not e.key
 	 * @param {KeyboardEvent} e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
@@ -1873,7 +1873,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	accepts(e) {
-		return e.key === "q" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyQ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -2000,11 +2000,11 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	}
 
 	accepts(e) {
-		return e.key === "e" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyE" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "e";
+		return e.code === "KeyE";
 	}
 };
 
@@ -2066,11 +2066,11 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyR" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "r";
+		return e.code === "KeyR";
 	}
 };
 
@@ -2141,11 +2141,11 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.key === "w" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyW" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "w";
+		return e.code === "KeyW";
 	}
 };
 
@@ -2209,10 +2209,10 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	}
 
 	accepts(e) {
-		return e.key === "z" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyZ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "z";
+		return e.code === "KeyZ";
 	}
 };
