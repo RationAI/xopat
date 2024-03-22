@@ -142,6 +142,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 } else {
                     console.error("OIDC: MAX retry exceeded");
                 }
+            } else if (error.message.includes('closed by user')) {
+                console.log('OIDC: Signin failed due to user cancel.');
+                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
+                    300000, Dialogs.MSG_WARN);
             } else {
                 Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue',
                     20000, Dialogs.MSG_ERR);

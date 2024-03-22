@@ -573,7 +573,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
             return;
         }
-        let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+        let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
         if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
         if (activeBackground === bgIndex) return;
         const image = APPLICATION_CONTEXT.config.background[bgIndex],
@@ -692,7 +692,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         }
 
 
-        const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+        const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
         if (confBackground.length > 1) {
             let html = "";
             for (let idx = 0; idx < confBackground.length; idx++ ) {
@@ -1080,7 +1080,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 };
             });
         } else if (background.length > 0) {
-            const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0);
+            const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
             let selectedImage = background[selectedIndex];
             if (isSecureMode) delete selectedImage.protocol;
             const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
@@ -1130,7 +1130,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
             if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
                 // binding background config overrides active visualization, only if not in stacked mode
-                const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0)],
+                const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false)],
                     defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
 
                 if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
