@@ -172,6 +172,7 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                 result += `    <script>console.warn('Invalid include:', '${item["id"]}', '${file}');</script>`;
             }
         }
+        return result;
     }
 
     //resolve dependencies

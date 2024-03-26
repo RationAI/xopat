@@ -271,7 +271,7 @@ function initXopatScripts() {
      * @return {Promise<string>}
      */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
-        if (! APPLICATION_CONTEXT.env.client.supportsPost) {
+        if (! APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
             return `
     <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
         <input type="hidden" id="visualization" name="visualization">

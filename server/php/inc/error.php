@@ -2,6 +2,34 @@
 if (!defined( 'ABSPATH' )) {
     exit;
 }
+
+function throwFatalErrorIfFallback($condition, $title, $description, $details) {
+
+    if (!file_exists(ABSPATH . "error.html")) {
+        //try to reach the file externally
+        header("Location error.html");
+        exit;
+    }
+    //try to add additional info to the file
+
+    echo preg_replace_callback(HTML_TEMPLATE_REGEX, function ($match) use ($title, $description, $details) {
+        switch ($match[1]) {
+            case "error":
+                return <<<EOF
+<div class="collapsible" onclick="toggleContent()">Detailed Information</div>
+<div class="content">
+  <p>$description</p>
+  <code>$details</code>
+</div>
+EOF;
+            default:
+                break;
+        }
+        return "";
+    }, file_get_contents(ABSPATH . "error.html"));
+    exit;
+}
+
 /**
  * @param $err_title string translation key
  * @param $err_desc string translation key
@@ -11,85 +39,63 @@ if (!defined( 'ABSPATH' )) {
  */
 function show_error(string $err_title, string $err_desc, string $err_details, string $locale='en') {
 
-$title = $err_title ?? false;
-$description = $err_desc ?? false;
-$techNFO = $err_details ?? false;
+    $title = $err_title ?? false;
+    $description = $err_desc ?? false;
+    $techNFO = $err_details ?? false;
 
-global $i18n;
-if (!isset($i18n)) {
-    require_once PHP_INCLUDES . 'i18n.class.php';
-    $i18n = i18n::default($locale, LOCALES_ROOT);
-}
-
-$title = $title ? $i18n->t($title) : $title;
-$description = $description ? $i18n->t($description) : $description;
-
-?>
-
-<!DOCTYPE html>
-<html lang="en" dir="ltr">
-
-<head>
-    <meta charset="utf-8">
-    <title>Error</title>
-
-    <?php
-    require_lib("primer");
-    if (defined('VERSION')) {
-        require_core("env");
+    global $i18n;
+    if (!isset($i18n)) {
+        require_once PHP_INCLUDES . 'i18n.class.php';
+        $i18n = i18n::default($locale, LOCALES_ROOT);
     }
-    require_lib("jquery");
-    ?>
-</head>
 
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
+    $title = $title ? $i18n->t($title) : $title;
+    $description = $description ? $i18n->t($description) : $description;
+    if (!$description) $description = $i18n->t('error.noDetails');
+    if ($techNFO) $description .= "<br><code>".$techNFO."</code>";
 
+    $template_file = ABSPATH . "server/templates/error.html";
+    if (!file_exists($template_file)) {
+        throwFatalErrorIfFallback(true, $err_title, $err_desc, $err_details);
+    }
 
-<!-- System messaging -->
-<div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<?php echo $i18n->t('error.title') ?></div>
-    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary mb-3"></div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><?php echo $i18n->t('error.detailsBtn') ?></button>
-    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
+    $replacer = function($match) use ($i18n, $title, $description, $techNFO) {
+        ob_start();
 
-    <?php
-        if (defined('GATEWAY')) {
-            ?><button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button"><?php echo $i18n->t('error.back') ?></button><?php
+        switch ($match[1]) {
+            case "head":
+                require_lib("primer");
+                if (defined('VERSION')) {
+                    require_core("env");
+                }
+                require_lib("jquery");
+                break;
+
+            case "text-title":
+                echo $i18n->t('error.title');
+                break;
+
+            case "text-details":
+                echo $i18n->t('error.detailsBtn');
+                break;
+
+            case "custom":
+                if (defined('GATEWAY')) {
+                    ?><button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" type="button"><?php echo $i18n->t('error.back') ?></button><?php
+                }
+                break;
+
+            case "display-error-call":
+                echo <<<EOF
+<script>
+DisplayError.show('$title', `$description`);
+</script>
+EOF;
+            default:
+                 break;
         }
-    ?>
-
-</div>
-
-
-<!-- DEFAULT SETUP SCRIPTING -->
-<script type="text/javascript">
-
-    /*---------------------------------------------------------*/
-    /*------------ System error messenger ---------------------*/
-    /*---------------------------------------------------------*/
-
-    var DisplayError = {
-        msgTitle: $("#system-message-title"),
-        msgDetails: $("#system-message-details"),
-        msgContainer: $("#system-message"),
-        screenContainer: $("#viewer-container"),
-
-        show: function(title, description) {
-            this.msgTitle.html(title);
-            this.msgDetails.html(description);
-            this.msgContainer.removeClass("d-none");
-            this.screenContainer.addClass("disabled");
-        },
-
-        hide: function() {
-            this.msgContainer.addClass("d-none");
-            this.screenContainer.removeClass("disabled");
-        }
+        return ob_get_clean();
     };
 
-    DisplayError.show('<?php echo $title; ?>', `<?php echo $description; if ($techNFO) echo "<br><code>".$techNFO."</code>"; ?>` || '<?php echo $i18n->t('error.noDetails') ?>');
-</script>
-</body>
-</html>
- <?php
+    echo preg_replace_callback(HTML_TEMPLATE_REGEX, $replacer, file_get_contents($template_file));
 }

@@ -7,111 +7,51 @@ if (!defined( 'ABSPATH' )) {
 //disable autoload on pages that use custom modules
 define('ENABLE_PERMA_LOAD', false);
 require_once ABSPATH . "server/php/inc/init.php";
-$locale = setupI18n(false, "en");
+$i18n = setupI18n(false, "en");
 
 include_once ABSPATH . "server/php/inc/core.php";
-?>
 
-<!DOCTYPE html>
-<html lang="en" dir="ltr">
+$replacer = function($match) use ($i18n) {
+    ob_start();
 
-<head>
-  <meta charset="utf-8">
-  <title>Visualization Developer Setup</title>
+    switch ($match[1]) {
+        case "head":
+            require_lib("primer");
+            require_lib("jquery");
+            require_core("env");
+            require_core("deps");
 
-    <?php require_lib("primer"); ?>
-    <?php require_lib("jquery"); ?>
-    <?php require_core("env"); ?>
-    <?php require_core("deps"); ?>
+            include_once(PHP_INCLUDES . "plugins.php");
+            global $MODULES;
+            $MODULES["webgl"]["loaded"] = true;
+            require_modules();
+            break;
 
-    <script>
-        var OpenSeadragon = {};
+        case "form-init":
+            $viewer_root = PROJECT_ROOT;
+            echo <<<EOF
+    <script type="text/javascript">
+    window.formInit = {
+        location: "$viewer_root/",
+        lang: {
+            ready: "Ready!"
+        }
+    }
     </script>
+EOF;
+            break;
 
-    <?php
+        default:
+            //todo some warn?
+            break;
+    }
+    return ob_get_clean();
+};
 
-    include_once(PHP_INCLUDES . "plugins.php");
-
-    $webglPath = "";
-    $version = VERSION;
-
-    $MODULES["webgl"]["loaded"] = true;
-    require_modules();
-
-    $root = PROJECT_ROOT;
-
-    ?>
-
-</head>
-
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
-
-<div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
-  <div class="Layout-main ">
-  <h1 class="f00-light">Developer visualization setup</h1>
-<br><br>
-
-      <br>
-          <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
-          try {
-              JSON.parse($(this).val());
-          } catch (e) {
-              console.warn(e, 'Data:', $(this).val());
-              alert(`Incorrect JSON in the custom visualization: ${e} (see console).`);
-          }
-">
-{
-    "params": {
-        "customBlending": true
-    },
-    "data": [],
-    "background": [
-        {
-            "dataReference": 0,
-            "lossless": false
-        }
-    ],
-    "visualizations": [
-        {
-            "name": "A visualization setup 1",
-            "lossless": true,
-            "shaders": {
-                "shader_id_1": {
-                    "name": "Layer 1",
-                    "type": "identity",
-                    "visible": 1,
-                    "fixed": false,
-                    "dataReferences": [],
-                    "params": { }
-                }
-            }
-        }
-    ]
+$template_file = ABSPATH . "server/templates/dev-setup.html";
+if (!file_exists($template_file)) {
+    throwFatalErrorIf(true, "error.unknown", "error.noDetails",
+        "File not found: " . ABSPATH . "server/templates/dev-setup.html");
 }
-</textarea>
-      <form method="POST" target="_blank" action="<?php echo PROJECT_ROOT ?>index.php" id="custom-request">
-          <input type="hidden" name="visualization" id="custom-visualization" value=''>
-          <button class="btn pointer" type="submit" value="Ready!">Ready!</button>&emsp;
-      </form>
-
-          <br><br>
-          <div id="documentation"></div>
-      </div>
-  </div>
-</div>
-
-
-<script type="text/javascript">
-
-    ShaderConfigurator.buildShadersAndControlsDocs("documentation");
-
-    $(document).off('submit');
-
-    $('#custom-request').on('submit', evt => {
-        document.getElementById("custom-visualization").value = $("#custom-params").val();
-    });
-
-</script>
-</body>
-
-</html>
+echo preg_replace_callback(HTML_TEMPLATE_REGEX, $replacer, file_get_contents($template_file));
+?>

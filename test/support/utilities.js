@@ -17,6 +17,7 @@ export default {
 
         if (beforeLoadEvent) {
             cy.window().then((win) => {
+                if (!win.VIEWER) throw "Viewer was not found on the window context!";
                 conf.window = win;
                 conf.window.VIEWER.addHandler('open', () => conf.initialized = true);
             });

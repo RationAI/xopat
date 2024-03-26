@@ -23,6 +23,8 @@ if (!defined('DISABLE_PERMA_LOAD')) {
     define('ENABLE_PERMA_LOAD', true);
 }
 
+define('HTML_TEMPLATE_REGEX', "/<template\s+id=\"template-([a-zA-Z0-9-_]+)\">\s*<\/template>/");
+
 //fallback for php 7.1
 if (!function_exists("array_is_list")) {
     function array_is_list(array $array): bool
@@ -63,57 +65,30 @@ function ensureDefined($object, $property, $default) {
 
 function throwFatalErrorIf($condition, $title, $description, $details) {
     if ($condition) {
+        require_once(PHP_INCLUDES . "error.php");
         try {
-            require_once(PHP_INCLUDES . "error.php");
             show_error($title, $description, $details, $_GET["lang"] ?? 'en');
             exit;
         } catch (Throwable $e) {
             throwFatalErrorIfFallback(true, $title, $description, $details);
         }
     }
-}
-
-
-function throwFatalErrorIfFallback($condition, $title, $description, $details) {
-
-    if (!file_exists(ABSPATH . "error.html")) {
-        //try to reach the file externally
-        header("Location error.html");
-        exit;
-    }
-    //try to add additional info to the file
-
-    echo preg_replace_callback(HTML_TEMPLATE_REGEX, function ($match) use ($title, $description, $details) {
-        switch ($match[1]) {
-            case "error":
-                return <<<EOF
-<div class="collapsible" onclick="toggleContent()">Detailed Information</div>
-<div class="content">
-  <p>$description</p>
-  <code>$details</code>
-</div>
-EOF;
-            default:
-                break;
-        }
-        return "";
-    }, file_get_contents(ABSPATH . "error.html"));
-    exit;
+    return $condition;
 }
 
 set_exception_handler(function (Throwable $exception) {
     global $i18n;
-   try {
-       if (!isset($i18n)) {
-           require_once ABSPATH . "server/php/inc/i18m.class.php";
-           $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
-       }
-       throwFatalErrorIf(true, "error.unknown", "",$exception->getMessage() .
-           " in " . $exception->getFile() . " line " . $exception->getLine() .
-           "<br>" . $exception->getTraceAsString());
-   } catch (Throwable $e) {
-       print_r($e);
-   }
+    try {
+        if (!isset($i18n)) {
+            require_once ABSPATH . "server/php/inc/i18m.class.php";
+            $i18n = i18n_mock::default($_GET["lang"] ?? "en", LOCALES_ROOT);
+        }
+        throwFatalErrorIf(true, "error.unknown", "",$exception->getMessage() .
+            " in " . $exception->getFile() . " line " . $exception->getLine() .
+            "<br>" . $exception->getTraceAsString());
+    } catch (Throwable $e) {
+        print_r($e);
+    }
 });
 
 function setupI18n($debugMode, $fallbackLocale) {

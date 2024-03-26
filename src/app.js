@@ -1,4 +1,10 @@
 /**
+ * @typedef  { import("./config.json").xoEnv } xoEnv
+ * @typedef  { import("./config.json").xoParams } xoParams
+ * @typedef  { import("./config.json").xoClientSetup } xoClientSetup
+ * @typedef  { import("./config.json").xoServerState } xoServerState
+ */
+/**
  * @typedef BackgroundItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
@@ -247,7 +253,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         },
         /**
          * Get the ENV configuration used to run the viewer.
-         * @type {xoEnv}
+         * @type xoEnv
          */
         get env() {
             return ENV;

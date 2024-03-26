@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+
+<head>
+    <meta charset="utf-8">
+    <title>Error</title>
+
+    <!-- template Head -->
+    <template id="template-head"></template>
+</head>
+
+<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
+
+
+<!-- System messaging -->
+<div id="system-message" class="d-none system-container">
+    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<template id="template-text-title"></template></div>
+    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary mb-3"></div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><template id="template-text-details"></template></button>
+    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
+
+    <template id="template-custom"></template>
+</div>
+
+
+<!-- DEFAULT SETUP SCRIPTING -->
+<script type="text/javascript">
+
+    /*---------------------------------------------------------*/
+    /*------------ System error messenger ---------------------*/
+    /*---------------------------------------------------------*/
+
+    var DisplayError = {
+        msgTitle: $("#system-message-title"),
+        msgDetails: $("#system-message-details"),
+        msgContainer: $("#system-message"),
+        screenContainer: $("#viewer-container"),
+
+        show: function(title, description) {
+            this.msgTitle.html(title);
+            this.msgDetails.html(description);
+            this.msgContainer.removeClass("d-none");
+            this.screenContainer.addClass("disabled");
+        },
+
+        hide: function() {
+            this.msgContainer.addClass("d-none");
+            this.screenContainer.removeClass("disabled");
+        }
+    };
+</script>
+<template id="template-display-error-call"></template>
+</body>
+</html>

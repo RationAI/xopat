@@ -10,7 +10,25 @@
     "gateway": "../",
     /* Active configuration in the "client" */
     "active_client": "dev",
-    /* Client Server dependent configurations, at runtime "client" is replaced by its "active_client" child  */
+    /**
+     * The Client App static configuration
+     * @typedef {{
+     *   domain: string
+     *   path: string,
+     *   image_group_server: string,
+     *   image_group_protocol: string,
+     *   image_group_preview: string,
+     *   data_group_server: string,
+     *   data_group_protocol: string,
+     *   headers: ?Object,
+     *   js_cookie_expire: ?number,
+     *   js_cookie_path: ?string,
+     *   js_cookie_same_site: ?string,
+     *   js_cookie_secure: ?boolean,
+     *   secureMode: ?boolean,
+     *   redirectUrl: ?string
+     * }} xoClientSetup
+     */
     "client": {
         "dev": {
             /* The Viewer Domain Full URL including protocol NOTE: should end with a slash */
@@ -48,10 +66,9 @@
             "js_cookie_secure": false, //boolean - true/false
             "secureMode": false,
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "redirectUrl": "redirect.php",
-            // Disable for servers that do not support POST parsing: will not support direct data sharing
-            "supportsPost": true //todo server should set this manually
+            "redirectUrl": "redirect.php"
         },
+        // We can keep multiple configurations within the file and switch between them...
         "prod": {
             "domain": "https://rationai-vis.ics.muni.cz/",
             "path": null,
@@ -66,8 +83,7 @@
             "js_cookie_same_site": "strict",
             "js_cookie_secure": true,
             "secureMode": true,
-            "redirectUrl": "redirect.php",
-            "supportsPost": true
+            "redirectUrl": "redirect.php"
         }
     },
     /**
@@ -136,6 +152,20 @@
         // ExtendedDZI supports "png", "zip", "jpg"
         "preferredFormat": "zip",
         "fetchAsync": false
+    },
+    /**
+     * The Server status. This object is here just for the reference and
+     * to provide default values; the server shall set up these properties accordingly.
+     * DO NOT modify these
+     * @typedef {{
+     *   name: string
+     *   supportsPost: boolean
+     * }} xoServerState
+     */
+    "serverStatus": {
+        "name": null,
+        // Disable for servers that do not support POST parsing: will not support direct data sharing
+        "supportsPost": true
     },
 
     /**

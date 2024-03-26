@@ -11,8 +11,6 @@ if (!defined( 'ABSPATH' )) {
 
 require_once ABSPATH . "server/php/inc/init.php";
 
-define('HTML_TEMPLATE_REGEX', "/<template\s+id=\"template-([a-zA-Z0-9-_]+)\">\s*<\/template>/");
-
 if (!count($_POST)) {
     try {
         $_POST = (array)json_decode(file_get_contents("php://input"), true);
@@ -56,6 +54,9 @@ foreach ($PLUGINS as $key => &$plugin) {
         }
     }
 }
+
+$CORE["serverStatus"]["name"] = "php";
+$CORE["serverStatus"]["supportsPost"] = true;
 
 $replacer = function($match) use ($i18n) {
     ob_start();

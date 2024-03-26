@@ -34,10 +34,8 @@ module.exports.registerStaticServerTask = function (grunt, message) {
         });
         throwIfError(core, "Failed to parse the CORE inicialization!");
 
-        if (core.CORE.client.supportsPost) {
-            grunt.log.warn('Support for POST data enabled in the ENV: forcefully disabling as static index pages do not support POST...');
-            core.CORE.client.supportsPost = false;
-        }
+        core.CORE.serverStatus.name = "static";
+        core.CORE.serverStatus.supportsPost = false;
 
         //todo o18n and locale
         //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
@@ -45,9 +43,9 @@ module.exports.registerStaticServerTask = function (grunt, message) {
         loadPlugins(core, grunt.file.isFile, grunt.file.read, dirName => {
             return grunt.file.expand({filter: "isDirectory", cwd: dirName}, ["*"])
         }, {t: function () {return "Dummy trasnlation function";}});
-        throwIfError(core, "Failed to parse the MODULES or PLUGINS inicialization!");
+        throwIfError(core, "Failed to parse the MODULES or PLUGINS initialization!");
 
-console.log(core)
+
         const replacer = function(match, p1) {
             try {
                 switch (p1) {

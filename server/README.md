@@ -13,7 +13,8 @@ then provides an HTML static page.
 
 ## Available Servers / Entrypoints
  - [x] PHP Server
- - [ ] Node.js Server [in development]
+ - [x] Node.js Server
+   - cornercases might be not handled well yet (e.g. supplying POST data in different ways) 
  - [x] HTML static index page
 
 ## Implementation
@@ -21,6 +22,13 @@ then provides an HTML static page.
 There are no implementation constraints, and so the server implementations might behave
 slightly differently depending on what is possible in the given environment, and
 how the server was implemented. But the server should be able to:
+
+### Provide basic entrypoints
+ - ``/`` location that opens up the viewer
+ - ``/dev_setup`` that opens the developer session manual editor
+
+All such entrypoints should be implemented using the prepared HTML templates.
+See ``templates/README.md``. 
 
 ### Provide Static Configuration
 

@@ -8,7 +8,8 @@
     "build-static": "grunt html",
     "env": "grunt env",
     "docs": "grunt docs",
-    "test": "npx cypress run --browser chrome --e2e"
+    "test": "npx cypress run --browser chrome --e2e",
+    "test-w": "npx cypress open"
   },
   "repository": {
     "type": "git",
