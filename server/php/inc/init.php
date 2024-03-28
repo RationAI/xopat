@@ -100,3 +100,16 @@ function setupI18n($debugMode, $fallbackLocale) {
     $i18n = i18n::default($locale, LOCALES_ROOT);
     return $locale;
 }
+
+if (! function_exists('str_ends_with')) {
+    function str_ends_with(string $haystack, string $needle): bool
+    {
+        $needle_len = strlen($needle);
+        return ($needle_len === 0 || 0 === substr_compare($haystack, $needle, - $needle_len));
+    }
+}
+if (! function_exists('str_starts_with')) {
+    function str_starts_with($haystack, $needle) {
+        return (string)$needle !== '' && strncmp($haystack, $needle, strlen($needle)) === 0;
+    }
+}

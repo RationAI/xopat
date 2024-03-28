@@ -39,21 +39,6 @@ require_once PHP_INCLUDES . "plugins.php";
 //
 //$pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 //
-foreach ($PLUGINS as $key => &$plugin) {
-//    $hasParams = isset($parsedParams->plugins->{$plugin["id"]});
-    $plugin["loaded"] &= !isset($plugin["error"]); // || ($hasParams || in_array($plugin["id"], $pluginsInCookies)
-    //make sure all modules required by plugins are also loaded
-    if ($plugin["loaded"]) {
-//        if (!$hasParams) {
-//            $parsedParams->plugins->{$plugin["id"]} = (object)array();
-//        }
-        foreach ($plugin["modules"] as $modId) {
-            if (isset($MODULES[$modId])) {
-                $MODULES[$modId]["loaded"] = true;
-            }
-        }
-    }
-}
 
 $CORE["serverStatus"]["name"] = "php";
 $CORE["serverStatus"]["supportsPost"] = true;

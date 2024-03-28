@@ -20,8 +20,19 @@ class V3Integration extends XOpatModule {
             }
             return connector;
         }
-        XOpatUser.instance().addHandler('login', e => connector.use(e.userId));
-        XOpatUser.instance().addHandler('logout', e => connector.reset());
+
+        const user = XOpatUser.instance();
+        user.addHandler('secret-updated', e => {
+            if (e.type === "jwt") {
+                connector.from(e.secret);
+            }
+        });
+        user.addHandler('secret-removed', e => e.type === "jwt" && connector.reset());
+        user.addHandler('logout', e => connector.reset());
+        connector.addHandler('token-refresh', async e => {
+            await user.requestSecretUpdate();
+            e.newToken = user.getSecret('jwt');
+        });
 
         // this.integrateWithSingletonModule('annotations', e => {
         //     const annotations = e.module;

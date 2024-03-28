@@ -462,7 +462,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                     title.children().last().html($.t('main.global.tissue'));
                     Dialogs.show($.t('error.slide.401'),
                         20000, Dialogs.MSG_ERR);
-                    XOpatUser.instance().logout();
+                    XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
                     break;
                 case 403:
                     title = $("#tissue-title-header");
@@ -713,7 +713,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                     image: imagePath,
                     imagePreview: null,
                 };
-                VIEWER.raiseEvent('get-preview-url', eventArgs);
 
                 //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
                 VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {

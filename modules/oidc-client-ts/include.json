@@ -7,12 +7,10 @@
         "oidc-client-ts.js",
         "oidc-auth.js"
     ],
-    "requires": ["pollyjs", "jwt-decode"],
+    "requires": ["jwt-decode"],
     "permaLoad": false,
     //Event (login) priority
     "eventBeforeOpenPriority": 0,
-    //Forces auth token (overwrites) if true
-    "forceUseToken": false,
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'

@@ -5,7 +5,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         super("oidc-client-ts");
 
         this.configuration = this.getStaticMeta('oidc', {});
-        this.forceToken = this.getStaticMeta('forceUseToken', false);
         this._connectionRetries = 0;
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
@@ -80,6 +79,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         };
         this.userManager.events.addSilentRenewError(renewError);
         this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
+        this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
         return returns;
     }
 
@@ -183,40 +183,28 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return 0;
     }
 
-    setupTrafficInterception() {
-        if (this.server) return;
-
-        this.server = new pollyjs.Polly('xopat', {
-            adapters: [pollyjs.XHRAdapter, pollyjs.FetchAdapter],
-            persister: pollyjs.NoPersister
-        }).server;
-        const user = XOpatUser.instance();
-        const interceptor = (req, res) => {
-            if (user.secret && (this.forceToken || !req.headers['Authorization'])) {
-                req.headers['Authorization'] = user.secret;
-            }
-        };
-        this.server.any().on('request', interceptor);
-    }
-
     async handleUserDataChanged() {
         const user = XOpatUser.instance();
 
         const oidcUser = await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
-            user.secret = oidcUser.access_token;
             if (!user.isLogged) {
                 const decodedToken = jwtDecode(oidcUser.access_token);
+                //todo: try to check more props to get the best username
                 const username = decodedToken.given_name + ' ' + decodedToken.family_name;
                 const userid = decodedToken.sub;
                 user.login(userid, username, "");
-                this.setupTrafficInterception();
                 user.addOnceHandler('logout', () => {
-
                     //todo should also notify user about leaving page :/
                     this.userManager.signoutRedirect();
                 });
+                user.addHandler('secret-needs-update', async event => {
+                    if (event.type === "jwt") {
+                        await this.trySignIn(false, true);
+                    }
+                });
             }
+            user.setSecret(oidcUser.access_token, "jwt");
             return true;
         }
         if (user.isLogged) {

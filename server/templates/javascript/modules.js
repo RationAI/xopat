@@ -29,11 +29,11 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                         if (!isType(ENV["modules"], "object")) ENV["modules"] = {};
                         const ENV_MOD = ENV["modules"];
 
-                        if (isType(ENV_MOD[data["id"]], "string")) {
+                        if (isType(ENV_MOD[data["id"]], "object")) {
                             data = core.objectMergeRecursiveDistinct(data, ENV_MOD[data["id"]]);
                         }
 
-                        if (isType(data["permaLoad"], "boolean") && core.parseBool(data["permaLoad"])) {
+                        if (core.parseBool(data["permaLoad"]) === true) {
                             data["loaded"] = true;
                         }
                     } else {
@@ -187,6 +187,6 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
 
     let moduleList = Object.values(MODULES);
     //ascending
-    moduleList.sort((a, b) => a["_priority"] - b["_priority"])
+    moduleList.sort((a, b) => a["_priority"] - b["_priority"]);
     core._MODULE_ORDER = moduleList.map(mod => mod.id);
 }

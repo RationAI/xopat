@@ -1,11 +1,14 @@
 class XOpatUser extends OpenSeadragon.EventSource {
 
     login(id, name, icon="") {
+        if (this.isLogged) throw "User needs to be first logged out!";
+
         if (!id) {
             throw "XOpatUser.login user ID not supplied!";
         }
         this._id = id;
         this._name = name;
+        this._secret = {};
         $("#user-name").html(name);
 
         this.icon = icon;
@@ -16,9 +19,11 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     logout() {
+        if (!this.isLogged) return;
         this._id = null;
-        this._name = name;
-        $("#user-name").html("____");
+        this._name = $.t('user.anonymous');
+        this._secret = {};
+        $("#user-name").html(this.name);
         this.icon = null;
         this.secret = null;
         this.raiseEvent('logout', null);
@@ -28,12 +33,24 @@ class XOpatUser extends OpenSeadragon.EventSource {
         return !!this._id;
     }
 
-    get secret() {
-        return this._secret;
+    getSecret(type="jwt") {
+        return this._secret && this._secret[type];
     }
 
-    set secret(secret) {
-        this._secret = secret;
+    setSecret(secret, type="jwt") {
+        if (!this.isLogged) throw "User needs to be first logged in to set a secret!";
+        this._secret = this._secret || {};
+        if (secret) {
+            this._secret[type] = secret;
+            this.raiseEvent('secret-updated', {secret: secret, type: type});
+        } else if (this._secret[type]) {
+            delete this._secret[type];
+            this.raiseEvent('secret-removed', {type: type});
+        }
+    }
+
+    async requestSecretUpdate(type="jtw") {
+        await VIEWER.tools.raiseAwaitEvent(this, 'secret-needs-update', {type: type});
     }
 
     get id() {

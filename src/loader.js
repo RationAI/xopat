@@ -88,7 +88,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              */
             window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailed'),
+                message: $.t('messages.pluginLoadFailedNamed', {plugin: id}),
             });
             cleanUpPlugin(id, e);
             return;

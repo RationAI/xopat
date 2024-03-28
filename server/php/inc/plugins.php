@@ -8,7 +8,7 @@ if (!PHP_INCLUDES) throw new Exception("Plugins must be loaded with active core!
 require_once PHP_INCLUDES . "modules.php";
 use Ahc\Json\Comment;
 
-global $i18n, $PLUGINS;
+global $i18n, $PLUGINS, $MODULES;
 $PLUGINS = array();
 
 foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
@@ -74,6 +74,18 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     "includes" => array(),
                     "modules" => array(),
                 );
+            }
+        }
+    }
+}
+
+foreach ($PLUGINS as $key => &$plugin) {
+    $plugin["loaded"] &= !isset($plugin["error"]); // || ($hasParams || in_array($plugin["id"], $pluginsInCookies)
+    //make sure all modules required by plugins are also loaded
+    if ($plugin["loaded"]) {
+        foreach ($plugin["modules"] as $modId) {
+            if (isset($MODULES[$modId])) {
+                $MODULES[$modId]["loaded"] = true;
             }
         }
     }

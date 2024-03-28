@@ -22,7 +22,8 @@
       }
     },
     "user": {
-      "notConfigured": "User menu is not available."
+      "notConfigured": "User menu is not available.",
+      "anonymous": "Not logged in."
     },
     "main": {
       "global": {
@@ -73,7 +74,6 @@
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualization layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
-      "pluginLoadFailed": "Plugin could not be loaded.",
       "pluginLoadFailedNamed": "Plugin {{plugin}} could not be loaded: please, contact administrator.",
       "pluginLoadedNamed": "Plugin {{plugin}} has been loaded.",
       "pluginScriptSrcMissing": "Script property must contain 'src' attribute!",
