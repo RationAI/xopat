@@ -6,6 +6,7 @@
   "scripts": {
     "build": "grunt all",
     "build-static": "grunt html",
+    "node": "node index.js",
     "env": "grunt env",
     "docs": "grunt docs",
     "test": "npx cypress run --browser chrome --e2e",
