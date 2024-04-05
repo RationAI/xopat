@@ -15,7 +15,7 @@ And works with the env configuration:
 "image_group_preview": "`${path}v3/slides/${data}/thumbnail/max_size/1024/1024`", //the thumbnail query
 ````
 The env configuration is read from relevant location, either the default
-`env/env.json` or location specified with the `XO_ENV` variable.
+`env/env.json` or location specified with the `XOPAT_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 
 To build image (using `$XO_IMAGE_NAME`):
 

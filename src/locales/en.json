@@ -87,7 +87,8 @@
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
-      "stillLoadingSwap": "Another image is still being loaded - please wait."
+      "stillLoadingSwap": "Another image is still being loaded - please wait.",
+      "pluginsDisabled": "Plugins are disabled."
     },
     "php": {
       "invalidDeps": "Invalid dependency in {{context}}: {{dependency}}",

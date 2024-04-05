@@ -22,6 +22,7 @@ const {getCore} = require("../templates/javascript/core");
 const {loadPlugins} = require("../templates/javascript/plugins");
 const {throwFatalErrorIf} = require("./error");
 const constants = require("./constants");
+const {files} = require("../../docs/include");
 
 const rawReqToString = async (req) => {
     const buffers = [];
@@ -211,7 +212,6 @@ ${core.requireModules()}`;
     res.end();
 }
 
-
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
@@ -242,5 +242,12 @@ const server = http.createServer(async (req, res) => {
     }
 });
 server.listen(9000, 'localhost', () => {
-    console.log(`The server is listening on localhost:9000`);
+    const ENV = process.env.XOPAT_ENV;
+    if (ENV) {
+        if (fs.existsSync(ENV)) console.log("Using static ENV from ", ENV);
+        else console.log("Using static ENV directly from the variable data: ", ENV.substring(0, 31) + "...");
+    } else {
+        console.log("Using default ENV (no overrides).");
+    }
+    console.log(`The server is listening on localhost:9000 ...`);
 });

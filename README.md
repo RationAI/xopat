@@ -16,7 +16,7 @@ AI development.
 
 ### Behaves as an enhanced OpenSeadragon*, a popular (feature-less) flexible viewer.
 <ul>
-:floppy_disk: Full data protocol flexibility. Access any server.<br>
+:floppy_disk: Full data & API protocol flexibility. No backend services are hardcoded.<br>
 :bar_chart: Powerful visualization capabilities, similar to Photoshop layers.<br>
 :gear: Configurability: static & runtime.<br>
 :package: Annotations, and other plugins introduce an unusual set of additional features
@@ -53,14 +53,21 @@ effective algorithm/network debugging and profiling with the help of powerful vi
 
 
 ## Setup
-There is _docker_ available: https://github.com/RationAI/xopat-docker. Although very versatile, setting up
-the viewer correctly requires web development knowledge. The docker system is standalone ready to use environment.
-Each Dockerfile also shows how to configure a component so that the system (the viewer, browser and image server) work together - it is a great example on how to configure 
-your servers properly.
+First, install development dependencies. You need ``node`` and `npm`. Then just run `npm install`.
+
+
+Although very versatile, setting up the viewer correctly requires xOpat configuration & web development knowledge.
+To configure the viewer for deployment, run ``grunt env`` and provide `env/env.json` file with the desired configuration.
+For more, see ``env/README.md``.
+
+> PHP server has available _docker image_. Node server can be run e.g. locally via ``npm run node``.
+> However, to really open the viewer with a meaningful data and visualization, you need to provide the data,
+> configure a WSI server and open the viewer session. To simplify all of this, we work on example deployment docker
+> compose we will soon publish.
 
 ## Environment, Build & Test
 
-The visualization itself is not based on any framework, it is pure JavaScript application that integrates
+xOpat itself is not based on any framework, it is pure JavaScript application that integrates
 various libraries. That is true for the running deployed application. 
 However, testing and documentation uses ``npm``, `grunt` and `cypress`.
 

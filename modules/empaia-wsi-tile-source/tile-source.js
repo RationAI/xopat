@@ -26,19 +26,21 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     /**
      * Determine if the data and/or url imply the image service is supported by
      * this tile source.
-     * @param {(Object|Array)} data
+     * @param {(Object|Array<Object>)} data
      * @param {String} url
      */
     supports( data, url ){
-        if (!url) return false;
+        if (!url || !Array.isArray(data) || typeof data !== "object") return false;
         //multi-tile or single tile access
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
+            data = data || [{}];
             data[0].tilesUrl = match[1];
             return true;
         }
         match = url.match(/^(\/?[^\/].*\/v3\/slides)\/[^\/\s]+\/info/i);
         if (match) {
+            data = data || {};
             data.tilesUrl = match[1];
             return true;
         }

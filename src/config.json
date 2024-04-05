@@ -113,6 +113,7 @@
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
+     *   disablePluginsUi: ?boolean,
      * }} xoParams
      */
     "setup": {
@@ -151,7 +152,9 @@
         // can be anything that supports the protocol of your choice,
         // ExtendedDZI supports "png", "zip", "jpg"
         "preferredFormat": "zip",
-        "fetchAsync": false
+        "fetchAsync": false,
+        // Do not render plugin selection in GUI, but they can still be active
+        "disablePluginsUi": false
     },
     /**
      * The Server status. This object is here just for the reference and

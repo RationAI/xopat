@@ -78,17 +78,22 @@ Cypress.Commands.addAll({
 
         //unfortunately it has to manually reattach the headers
         cy.intercept(Cypress.env('interceptDomain'), (req) => {
-            req.headers['authorization'] = Cypress.env('headers').authorization;
+            const viewerContentType = Cypress.env('headers')['content-type'],
+                viewerAuth = Cypress.env('headers')['authorization'];
+            if (viewerContentType) req.headers['content-type'] = viewerContentType;
+            if (viewerAuth) req.headers['authorization'] = viewerAuth;
         })
+
+        console.log(Cypress.env('headers'))
 
         return cy.visit({
             url: Cypress.env('viewer'),
             headers: Cypress.env('headers'),
             method: 'POST',
-            body: {
+            body: JSON.stringify({
                 visualization: configuration,
                 ...data
-            }
+            })
         })
     },
     /**

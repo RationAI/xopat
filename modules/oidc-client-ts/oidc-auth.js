@@ -91,8 +91,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
         this._connectionRetries++;
         try {
+            const refreshTokenExpiration = this.getRefreshTokenExpiration();
+            // attempt login automatically if refresh token expiration set but outdated
+            allowUserPrompt = allowUserPrompt || refreshTokenExpiration;
             if (allowUserPrompt) {
-                const refreshTokenExpiration = this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
                     // window.open(this.configuration.redirect_uri, 'xopat-auth');
                     console.log("OIDC: Try to sign in via popup.");
@@ -161,11 +163,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     getRefreshTokenExpiration() {
         // Key used:
         //oidc.user:<authority>:<client>
-        let refreshToken = '';
-        const token = this.getSessionData();
-        // const token = APPLICATION_CONTEXT.AppCookies
-        //     .get(`oidc.user:${this.configuration.authority}:${this.clientId}`);
         try {
+            const token = this.getSessionData();
+            // const token = APPLICATION_CONTEXT.AppCookies
+            //     .get(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+            let refreshToken = '';
             if (token) {
                 const values = JSON.parse(token);
                 if ('refresh_token' in values) {

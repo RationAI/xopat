@@ -936,7 +936,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.selfContext.menuWith1Element = true;
                 this.selfContext.isFullSize = true;
 
-                buildPluginsMenu(this);
+                if (APPLICATION_CONTEXT.getOption("disablePluginsUi")) {
+                    $("#add-plugins").attr({
+                        title: $.t('messages.pluginsDisabled'),
+                        disabled: true
+                    });
+                } else {
+                    buildPluginsMenu(this);
+                }
                 buildSettingsMenu(this);
 
                 $(this.selfContext.head).prepend('<span class="material-icons btn-pointer mb-2" id="advanced-menu-close-button" onclick="USER_INTERFACE.AdvancedMenu.close();">close</span>');
