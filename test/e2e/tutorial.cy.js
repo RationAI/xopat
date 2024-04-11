@@ -73,7 +73,6 @@ describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
         tutorialStep(); //global controls
         tutorialStep(); //tollbar stacked
         tutorialStep(); //url
-        tutorialStep(); //export
         cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
     })
@@ -119,7 +118,6 @@ describe('Basic Tutorial Walkthrough With Layer', () => {
         tutorialStep(); //data layer explanation #2
         tutorialStep(); //render layers explanation
         tutorialStep(); //url
-        tutorialStep(); //export
         tutorialStep(); //finish
         tutorialStep(); //finish
         cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');

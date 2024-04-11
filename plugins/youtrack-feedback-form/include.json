@@ -1,0 +1,13 @@
+{
+  "id": "youtrack-feedback",
+  "name": "Feedback Form for xOpat",
+  "description": "Provide direct feedback about xOpat to YouTrack Dashboard",
+  "includes" : [
+    "feedback-form.js"
+  ],
+  "version": "1.0.0",
+  "modules": [],
+  "permaLoad": false,
+  "youtrackURL": "https://youtrack.domain",
+  "formUUID": "form-uuid-from-the-youtrack-webpage"
+}
