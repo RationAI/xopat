@@ -646,7 +646,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             let i = 0, selectedImageLayer = 0;
             let imageOpts = [];
-            let largestWidth = 0,
+            let largestWidth = -1,
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
@@ -670,14 +670,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
     <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
     onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
     <span class="pr-1" style="color: var(--color-text-tertiary)">${$.t('common.Image')}</span>
-    ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
     max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
                         imageOpts.push(`
     <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
     <span class="pr-1" style="color: var(--color-text-danger)">${$.t('common.Faulty')}</span>
-    ${UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
     max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
                 }
@@ -693,7 +693,24 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             $("#panel-images").html(imageOpts.join("")).css('display', 'block');
 
             $("#global-tissue-visibility").css("display", "none");
-            handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
+
+            if (largestWidth === -1) {
+                VIEWER.addTiledImage({
+                    tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                    index: 0,
+                    opacity: $("#global-opacity input").val(),
+                    replace: false,
+                    success: (event) => {
+                        event.item.getBackgroundConfig = () => {
+                            return undefined;
+                        }
+                        //standard
+                        handleSyntheticEventFinishWithValidData(0, 1);
+                    }
+                });
+            } else {
+                handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
+            }
             return;
         }
 
@@ -797,7 +814,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             }
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
-            $("#global-tissue-visibility").css("display", "none");
+            // We can leave it here, it shows default white image..
+            // $("#global-tissue-visibility").css("display", "none");
             handleSyntheticEventFinishWithValidData(-1, 0);
         }
     }

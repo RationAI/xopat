@@ -813,7 +813,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         ctx.fillStyle = "rgba(80, 80, 90, 120)"; ctx.fillRect(1, 1, 1, 1);
 
         // Render a webGL canvas to an input canvas using cached version
-        const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 0.1);
+        const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 1);
         if (!output) throw "Failed to process WebGL output: null returned.";
         ctx.drawImage(output, 0, 0, 2, 2);
         const data = ctx.getImageData(0, 0, 2, 2).data;
@@ -830,7 +830,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         }
         // Remove subsequent tests
         UTILITIES.testRendering = function () {};
-        console.log("Rendering test output:", data);
+        console.log("Rendering test output:", data, "pixel", OpenSeadragon.pixelDensityRatio);
         // Test pixels [0, 0], [1, 0], [0, 1], [1, 1]
         testPixel(0, [0, 0, 0, 0]); // R0 -> alpha 0, output zeroed out (no-op)
         testPixel(1, [67, 255, 100, 255]); // R255 -> alpha 0

@@ -20,9 +20,11 @@ export default {
                 if (!win.VIEWER) throw "Viewer was not found on the window context!";
                 conf.window = win;
                 conf.window.VIEWER.addHandler('open', () => conf.initialized = true);
+                // conf.window.VIEWER.addHandler('open', () => conf.initialized = true);  was problematic...
+                conf.initialized = true;
             });
         } else {
-            //give some space to the viewer so that image loader is not still without job
+            //give some space to the viewer so that image loader is not still without a job
             cy.wait(300);
             cy.window().then((win) => {
                 conf.window = win;
@@ -31,9 +33,11 @@ export default {
         }
 
         // ... && window is a trick to return that value on success
-        return cy.waitUntil(() =>  conf.initialized
+        return cy.waitUntil(() => {
+            return conf.initialized
                 && conf.window.VIEWER.imageLoader.jobsInProgress < 2 //we allow 1 unfinished element
-                && conf.window, {
+                && conf.window; //returns the window ref upon success
+        }, {
             description: "Waiting for the images to load.",
             timeout: 30000,
             interval: 600,

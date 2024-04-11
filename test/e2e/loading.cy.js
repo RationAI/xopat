@@ -82,6 +82,7 @@ describe('Faulty data', () => {
         cy.launch(visualization);
         utils.waitForViewer().then(x => {
             testElements.systemNotification("Failed to load overlays");
+            testElements.closeDialog();
             testBasic.mainMenu(visualization);
         });
     })
@@ -136,10 +137,10 @@ describe('Faulty data', () => {
 
         cy.get("#images-pin").click();
         cy.get("#image-layer-options").children().should('have.length', 3)
-            .should('contain.text', 'tissue')
-            .should('contain.text', 'annotation')
-            .should('contain.text', 'probability')
-            .should('not.contain.text', 'Faulty');
+            .should('contain.text', 'FirstIndex')
+            .should('contain.text', 'SecondIndex')
+            .should('contain.text', 'ThirdIndex')
+            .should('not.contain.text', 'FourthIndex');
     })
 
     it('Stacked mode no valid data.', () => {
@@ -185,6 +186,8 @@ describe('Faulty data', () => {
         cy.launch(visualization);
         utils.waitForViewer();
 
+        //failed image load dialog prevents click
+        testElements.closeDialog();
         cy.get("#images-pin").click();
 
         //first shown is the last rendered - the most visible

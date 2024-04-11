@@ -11,7 +11,7 @@
     "env": "grunt env",
     "docs": "grunt docs",
     "test": "npx cypress run --browser chrome --e2e",
-    "test-w": "npx cypress open"
+    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open"
   },
   "repository": {
     "type": "git",

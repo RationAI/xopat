@@ -10,7 +10,7 @@ The only thing you have to ensure is that the WSI server can access the correct 
 and that the slide paths/IDs are provided. Typically, you have to:
  - create **``cypress.env.json``** file in the project root, it defines where and how to access the viewer, see example files in this directory
  - run ``npm install`` if you haven't already, it installs build and test tools
- - run ``npx cypress open`` to run the interactive test framework
+ - run ``npm run test-w`` (alias to ``npx cypress open``) to run the interactive test framework
 
 Configuring the test correctly might be a bit more difficult
 than you would expect; therefore we provide almost out-of-box setup for localhost.
@@ -42,7 +42,7 @@ forget to download and build OpenSeadragon - the default location is
 The viewer must understand the WSI server you are going to use. You can use
 ``viewer.env.wsi-service.json``, simply run `npm run s-node-test` (server node for tests).
 
-Now you are done and you can start testing.
+Now you are done and you can start testing (e.g. `npm run test-w` for interactive tests).
 
 ### HEADERS object in cypress.env.json
 These headers used for cypress access to the viewer domain
