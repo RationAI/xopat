@@ -6,6 +6,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
         this.configuration = this.getStaticMeta('oidc', {});
         this._connectionRetries = 0;
+        this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
+        this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
+
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
             return;
@@ -120,27 +123,27 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         } catch (error) {
             if (firedManually) {
                 console.error("OIDC: ", error);
-                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue',
-                    20000, Dialogs.MSG_ERR);
+                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue.',
+                    this.retryTimeout + 2000, Dialogs.MSG_ERR);
                 return;
             }
             if (error.message.includes('Failed to fetch')) {
                 console.log('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
                 Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
-                    20000, Dialogs.MSG_WARN);
+                    this.retryTimeout + 2000, Dialogs.MSG_WARN);
                 if (!preventRecurse) {
-                    await this.sleep(20000);
-                    await this.trySignIn(false, this._connectionRetries > 5);
+                    await this.sleep(this.retryTimeout);
+                    await this.trySignIn(false, this._connectionRetries >= this.maxRetryCount);
                 } else {
                     console.error("OIDC: MAX retry exceeded");
                 }
             } else if (error.message.includes('disposed window')) {
                 console.log('OIDC: Signin failed due to popup window blocking.');
                 Dialogs.show('Login requires opening a popup window. Please, allow popup window in your browser. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
-                    20000, Dialogs.MSG_WARN);
+                    this.retryTimeout + 2000, Dialogs.MSG_WARN);
                 if (!preventRecurse) {
-                    await this.sleep(20000);
-                    await this.trySignIn(false, this._connectionRetries > 5);
+                    await this.sleep(this.retryTimeout);
+                    await this.trySignIn(false, this._connectionRetries > this.maxRetryCount);
                 } else {
                     console.error("OIDC: MAX retry exceeded");
                 }
@@ -149,8 +152,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
             } else {
-                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue',
-                    20000, Dialogs.MSG_ERR);
+                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue.',
+                    this.retryTimeout + 2000, Dialogs.MSG_ERR);
             }
             console.error("OIDC auth attempt: ", error);
         }

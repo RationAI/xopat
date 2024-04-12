@@ -505,9 +505,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             );
             title.children().last().html(name);
             title.attr('title', name);
+            USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
             //todo merge tile sources with layers/background to simplify mapping, now we need to guess where error occurs on error event
             title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue'));
+            USER_INTERFACE.toggleDemoPage(true);
+        } else {
+            USER_INTERFACE.toggleDemoPage(false);
         }
 
         const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
@@ -805,6 +809,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                         handleSyntheticEventFinishWithValidData(0, 1);
                     }
                 });
+
                 return;
             } else {
                 //todo not very flexible...
@@ -815,8 +820,20 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
             // We can leave it here, it shows default white image..
-            // $("#global-tissue-visibility").css("display", "none");
-            handleSyntheticEventFinishWithValidData(-1, 0);
+            VIEWER.addTiledImage({
+                tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                index: 0,
+                opacity: $("#global-opacity input").val(),
+                replace: false,
+                success: (event) => {
+                    event.item.getBackgroundConfig = () => {
+                        return undefined;
+                    }
+                    //standard
+                    handleSyntheticEventFinishWithValidData(0, 1);
+                }
+            });
+            //handleSyntheticEventFinishWithValidData(-1, 0);
         }
     }
 
@@ -995,8 +1012,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 form.submit();
             }
         } else if (error) {
-            //todo consider event
-            throw error;
+            // //todo consider event
+            // throw error;
         }
 
         this.openViewerWith(data, background, visualizations);
@@ -1119,10 +1136,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
         const openAll = (numOfVisLayersAtTheEnd) => {
             if (toOpen.length < 1) {
-                //todo two places where we need to remove loading screen make clear flow of the initialization!
-                UTILITIES.showLoading(false);
-                if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
-                USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
+                // //todo two places where we need to remove loading screen make clear flow of the initialization!
+                // UTILITIES.showLoading(false);
+                // if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
+                // USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
+                //
+                handleFinishOpenImageEvent();
                 return;
             }
 

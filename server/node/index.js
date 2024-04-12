@@ -23,6 +23,7 @@ const {loadPlugins} = require("../templates/javascript/plugins");
 const {throwFatalErrorIf} = require("./error");
 const constants = require("./constants");
 const {files} = require("../../docs/include");
+const {ABSPATH} = require("./constants");
 
 const rawReqToString = async (req) => {
     const buffers = [];
@@ -33,7 +34,8 @@ const rawReqToString = async (req) => {
 };
 
 const initViewerCoreAndPlugins = (req, res) => {
-    const core = getCore("", PROJECT_PATH,
+
+    const core = getCore(ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key]);
@@ -243,7 +245,10 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(9000, 'localhost', () => {
     const ENV = process.env.XOPAT_ENV;
-    if (ENV) {
+    const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
+    if (!ENV && existsDefaultLocation) {
+        console.log("Using env/env.json..");
+    } else if (ENV) {
         if (fs.existsSync(ENV)) console.log("Using static ENV from ", ENV);
         else console.log("Using static ENV directly from the variable data: ", ENV.substring(0, 31) + "...");
     } else {

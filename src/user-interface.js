@@ -1112,6 +1112,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 console.error("Could not attach custom HTML.", e);
                 return false;
             }
+        },
+
+        toggleDemoPage: function (enable) {
+            const overlay = document.getElementById('viewer-demo-advertising');
+            if (enable) {
+                VIEWER.addOverlay(overlay, new OpenSeadragon.Rect( 0, 0, 1, 1));
+                overlay.style.display = 'block';
+            } else {
+                VIEWER.removeOverlay(overlay);
+                overlay.style.display = 'none';
+            }
         }
     };
 

@@ -12,7 +12,7 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
         super(options);
         this.tilesUrl = 'empty';
         this.fileFormat = ".jpg";
-        this.color = "white";
+        this.color = "rgba(0,0,0,0)";
     }
     supports( data, url ){
         return false; //we want explicit use

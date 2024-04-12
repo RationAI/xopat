@@ -1,17 +1,16 @@
 const path = require('node:path');
 
 _ABSPATH = path.dirname(path.dirname(__dirname));
-ABSPATH = _ABSPATH + "/";
+ABSPATH = _ABSPATH + path.sep;
 PROJECT_ROOT = process.env.PROJECT_ROOT || "";
 
 module.exports = Object.freeze({
     _ABSPATH_NO_SLASH: _ABSPATH,
     ABSPATH: ABSPATH,
-    //Absolute Root Path to the php server
-    PHP_INCLUDES: ABSPATH + 'server/php/inc/',
-    VIEWER_SOURCES_ABS_ROOT: ABSPATH + 'src/',
-    ABS_MODULES: ABSPATH + 'modules/',
-    ABS_PLUGINS: ABSPATH + 'plugins/',
+    //Absolute Root Path for the node server
+    VIEWER_SOURCES_ABS_ROOT: ABSPATH + 'src' + path.sep,
+    ABS_MODULES: ABSPATH + 'modules' + path.sep,
+    ABS_PLUGINS: ABSPATH + 'plugins' + path.sep,
 
     //Relative Paths For the Viewer
     PROJECT_ROOT: PROJECT_ROOT,

@@ -9,6 +9,10 @@
     ],
     "requires": ["jwt-decode"],
     "permaLoad": false,
+    //How many login retry attempts to perform
+    "errorLoginRetry": 2,
+    //Retry timeout in seconds
+    "retryTimeout": 20,
     //Event (login) priority
     "eventBeforeOpenPriority": 0,
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
