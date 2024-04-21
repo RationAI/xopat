@@ -83,6 +83,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.userManager.events.addSilentRenewError(renewError);
         this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
         this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
+        window.addEventListener("focus", e =>
+            this._signInUserInteractive(this.getRefreshTokenExpiration(), false), false);
         return returns;
     }
 
@@ -90,7 +92,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return new Promise(_ => setTimeout(_, time));
     }
 
-    //todo verify args if n
     async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
         this._connectionRetries++;
         try {
@@ -98,26 +99,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             // attempt login automatically if refresh token expiration set but outdated
             allowUserPrompt = allowUserPrompt || refreshTokenExpiration;
             if (allowUserPrompt) {
-                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
-                    // window.open(this.configuration.redirect_uri, 'xopat-auth');
-                    console.log("OIDC: Try to sign in via popup.");
-                    // await this.sleep(100);
-                    await this.userManager.signinPopup({
-                        popupWindowFeatures: {
-                            popupWindowTarget: "xopat-auth",
-                            popup: "no"
-                        }
-                    });
-
-                } else {
-                    console.log("OIDC: Signing silently: refresh token available.");
-                    await this.userManager.signinSilent();
-                }
+                await this._signInUserInteractive(refreshTokenExpiration);
             } else {
                 console.log("OIDC: Signing silently..");
                 await this.userManager.signinSilent();
             }
-
             await this.handleUserDataChanged();
             this._connectionRetries = 0;
         } catch (error) {
@@ -159,6 +145,27 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
     };
 
+    //returns true if no user interaction required
+    async _signInUserInteractive(refreshTokenExpiration, alwaysSignIn=true) {
+        if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
+            // window.open(this.configuration.redirect_uri, 'xopat-auth');
+            console.log("OIDC: Try to sign in via popup.");
+            // await this.sleep(100);
+            await this.userManager.signinPopup({
+                popupWindowFeatures: {
+                    popupWindowTarget: "xopat-auth",
+                    popup: "no"
+                }
+            });
+            return false;
+        }
+        if (alwaysSignIn) {
+            console.log("OIDC: Signing silently: refresh token available.");
+            await this.userManager.signinSilent();
+        }
+        return true;
+    }
+
     getSessionData() {
         return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.clientId}`);
     }
@@ -176,6 +183,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 if ('refresh_token' in values) {
                     refreshToken = values.refresh_token;
                 }
+            } else {
+                //todo consume refresh token from cookies if available
             }
             if (refreshToken) {
                 const refresh = jwtDecode(refreshToken);

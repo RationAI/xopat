@@ -1,5 +1,5 @@
 addPlugin("user-session", class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.authServer = this.getStaticMeta('authServer');
         this.performAuthServer = this.getStaticMeta('performAuth');

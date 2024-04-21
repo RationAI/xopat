@@ -160,6 +160,7 @@ COPY *.html /var/www/html/xopat/
 COPY *.php /var/www/html/xopat/
 COPY *.json /var/www/html/xopat/
 COPY *.md /var/www/html/xopat/
+COPY docs/assets/ /var/www/html/xopat/docs/assets
 COPY src/ /var/www/html/xopat/src
 COPY server/ /var/www/html/xopat/server
 COPY plugins/ /var/www/html/xopat/plugins

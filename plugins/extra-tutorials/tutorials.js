@@ -1,8 +1,8 @@
 addPlugin("extra-tutorials", class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.id = id;
-        this.data = params.data || [];
+        this.data = this.getOption('data', []);
     }
 
     pluginReady() {

@@ -1,5 +1,5 @@
 addPlugin("nav-tracker", class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.id = id;
         this.records = {};

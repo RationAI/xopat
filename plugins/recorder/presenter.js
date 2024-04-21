@@ -1,10 +1,10 @@
 class Presenter extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this._toolsMenuId = "presenter-tools-menu";
 
         //todo document option, get via getOption instead
-        this.playOnEnter = params.playEnterDelay ?? -1;
+        this.playOnEnter = this.getOption('playEnterDelay', -1);
         this._delay = true;
         this._annotationRefs = {}; //consider WeakMap
     }

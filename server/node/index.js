@@ -49,7 +49,7 @@ const initViewerCoreAndPlugins = (req, res) => {
     loadPlugins(core, fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
-        {t: function () {return "Dummy translation function";}});
+        {t: function () {return "Unknown Error (e-translate).";}});
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!")) return null;
     return core;
 }
@@ -168,6 +168,7 @@ ${core.requireCore("app")}`;
 
     const html = fs.readFileSync(constants.ABSPATH + "server/templates/index.html", { encoding: 'utf8', flag: 'r' })
         .replace(constants.TEMPLATE_PATTERN, replacer);
+    console.log(html)
     res.write(html);
     res.end();
 }

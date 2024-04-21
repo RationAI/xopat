@@ -1,12 +1,10 @@
 class Playground extends XOpatPlugin {
 
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         //todo move params to 'plugins' ? probably yes...
-        this.setup = params;
         this.strategy = null;
-
-        if (!this.setup.hasOwnProperty("server")) this.setup.server = "http://test.muni:8080";
+        this.serverUrl = this.getOption('server', "http://test.muni:8080");
         this.imageSources = [...APPLICATION_CONTEXT.config.data]; //copy
 
         USER_INTERFACE.MainMenu.appendExtended("Python Playground", `
@@ -79,7 +77,7 @@ class Playground extends XOpatPlugin {
         this.menu = new Playground.AlgorithmMenu(this, "menu");
         //this.workflow = new Playground.WorkFlow(this, "workflow");
 
-        if (this.setup.localStrategy) {
+        if (this.getOption('localStrategy', true)) {
             this.localStrategy = new Playground.LocalStrategy(this);
             this.strategy = this.localStrategy;
         } else {
@@ -172,7 +170,7 @@ class Playground extends XOpatPlugin {
         algoSelect.html("");
 
         const _this = this;
-        UTILITIES.fetchJSON(`${this.setup.server}/prepare?Deepzoom=${data}.dzi`).then(json => {
+        UTILITIES.fetchJSON(`${this.server}/prepare?Deepzoom=${data}.dzi`).then(json => {
             _this.underlyingData = data;
             this._algoJSON = json.algorithms;
             delete json.algorithms;
@@ -280,7 +278,7 @@ class Playground extends XOpatPlugin {
         this.lastConfig = jsonConfig;
         this.activeAlgorithm = algId;
 
-        UTILITIES.fetchJSON(`${this.setup.server}/init/${algId}`, {
+        UTILITIES.fetchJSON(`${this.server}/init/${algId}`, {
             api: ["render", "overlap", "render_type"]
         }).then(json => {
             json = $.extend(true, {output: {"data": "pixels", "layers": 1, "rendering": []}}, json);
@@ -313,7 +311,7 @@ class Playground extends XOpatPlugin {
         if (error instanceof HTTPError) {
             switch (error.response.code) {
                 case 503:
-                    details = "No response: is the server running? <br>URL:&nbsp;<code>\" + this.setup.server + \"</code>\"";
+                    details = "No response: is the server running? <br>URL:&nbsp;<code>" + this.server + "</code>";
                     Dialogs.show("Playground: " + details, 5000, Dialogs.MSG_ERR);
                     this.setStatus(details, {error: true});
                     break;

@@ -1,9 +1,8 @@
 class HistovisoExplain extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.setupData = {};
         this.model_list = {};
-        this.params = params;
         this.current_method = undefined;
         this.current_model = undefined;
     }
@@ -282,20 +281,17 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         //todo add annotation objects at runtime to avoid interaction in failure
 
         let notification = "";
-        let params = this.params;
-        if (params) {
-            //todo hardcoded
-            if (params.experimentId && params.experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
-                this.createErrorMenu(`This method works only for experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>. Your
-experiment is '${params.experimentId}'.`);
-                return;
-            }
-            if (!params.experimentId) {
-                notification = "NOTE: We could not identify the experiment: we inspect <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
-            }
-        } else {
+        let experimentId = this.getOption('experimentId');
+        //todo hardcoded
+        if (experimentId && experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
+            this.createErrorMenu(`This method works only for experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>. Your
+experiment is '${experimentId}'.`);
+            return;
+        }
+        if (!experimentId) {
             notification = "NOTE: We could not identify the experiment: we inspect <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
         }
+
 
         if (!notification) notification = "Experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
         this._initParamParsers();

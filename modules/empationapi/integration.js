@@ -22,11 +22,8 @@ class V3Integration extends XOpatModule {
         }
 
         const user = XOpatUser.instance();
-        user.addHandler('secret-updated', e => {
-            if (e.type === "jwt") {
-                connector.from(e.secret);
-            }
-        });
+        user.addHandler('login', e => connector.reset());
+        user.addHandler('secret-updated', e => connector.use(e.userId));
         user.addHandler('secret-removed', e => e.type === "jwt" && connector.reset());
         user.addHandler('logout', e => connector.reset());
         connector.addHandler('token-refresh', async e => {

@@ -5,7 +5,7 @@ CONTEXT_TARGET=$(dirname $CONTEXT_TARGET)
 
 cd $CONTEXT_TARGET
 
-: "${XO_IMAGE_NAME:=cerit.io/rationai/production/xopat-test:v0.0.1}"
+: "${XO_IMAGE_NAME:=cerit.io/rationai/production/xopat-git:v0.0.1}"
 
 echo
 echo "Starting build: docker build -t \"$XO_IMAGE_NAME\" -f $BASEDIR/Dockerfile ."

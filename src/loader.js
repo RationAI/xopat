@@ -72,12 +72,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         let plugin;
         try {
-            let parameters = APPLICATION_CONTEXT.config.plugins[id];
-            if (!parameters) {
-                parameters = {};
-                APPLICATION_CONTEXT.config.plugins[id] = parameters;
+            if (!APPLICATION_CONTEXT.config.plugins[id]) {
+                APPLICATION_CONTEXT.config.plugins[id] = {};
             }
-            plugin = new PluginClass(id, parameters);
+            plugin = new PluginClass(id);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
             /**
@@ -847,7 +845,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
-         * Read the plugin online configuration parameters/options
+         * Read the plugin online configuration parameters/options.
+         * The defaultValue is read from a static configuration if not provided.
+         * Note that this behavior will read static values such as 'permaLoad', 'includes' etc..
          * @param {string} key
          * @param {*} defaultValue
          * @param {boolean} cache
@@ -856,10 +856,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         getOption(key, defaultValue=undefined, cache=true) {
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
 
-            //todo make invalid IDs: module and plugin
             //options are stored only for plugins, so we store them at the lowest level
             let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
             if (value === null) {
+                // read default value from static context if exists
+                if (defaultValue === undefined && key !== "instance") {
+                    defaultValue = PLUGINS[this.id]?.[key];
+                }
+
                 value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
                     APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             }

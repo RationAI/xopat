@@ -1,5 +1,5 @@
 addPlugin('hotkeys', class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
 
         this.keys = {

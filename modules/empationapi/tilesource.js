@@ -12,7 +12,7 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
 
     supports( data, url ){
         //todo fix OSD api and make type a standardized selector (e.g. map to class names)
-        return data.type && data.type === "leav3";
+        return data.type && data.type === "leav3" && data.slide;
     }
 
     _fail(message) {
