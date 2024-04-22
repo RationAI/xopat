@@ -34,6 +34,7 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
     instead of creating a module for it
 - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
 - `enabled` is an option to allow or disallow the plugin in the system, default `true`
+- `hidden` is an option to hide plugin from the user-available selection
 
 ### Must do's
 - A plugin must register itself using the name of its parent class. For more information see below.

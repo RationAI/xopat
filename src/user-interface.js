@@ -1212,6 +1212,7 @@ Theme &emsp; ${inputs.select({
 
             //permaLoad plugins are not available for interaction
             if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
+                (plugin.hasOwnProperty("hidden") && plugin.hidden) ||
                 (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) continue;
 
             let errMessage = plugin.error ? `<div class="p-1 rounded-2 error-container">${plugin.error}</div>` : "";

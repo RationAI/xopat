@@ -8,6 +8,7 @@
     "includes" : ["frontend.js", "storage.js"],
     "modules": ["annotations"],
     "permaLoad": false,
+    "hidden": true,
     //Annotation server API endpoint to store annotations at
     "server": null
 }

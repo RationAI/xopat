@@ -7,6 +7,7 @@
     "icon": null,
     "includes" : ["session.js", "annotationDataStore.js"],
     "modules": [],
+    "hidden": true,
     "permaLoad": false,
     //API Url: auth prompt
     "authServer": null,

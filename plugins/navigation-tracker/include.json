@@ -8,5 +8,6 @@
     "includes" : ["tracker.js"],
     "modules": ["webgl"],
     "permaLoad": true,
+    "hidden": true,
     "animate": true
 }

@@ -8,6 +8,7 @@
     "modules": ["empationapi"],
     "version": "1.0.0",
     "permaLoad": false,
+    "hidden": true,
     // Selected scope parameters to use by default
     "caseId": null,
     "appId": null

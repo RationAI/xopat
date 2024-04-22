@@ -13,5 +13,6 @@
         "ppprotocol.js"
     ],
     "modules": ["webgl"],
+    "hidden": true,
     "permaLoad": false
 }

@@ -8,5 +8,6 @@
     "includes" : ["pages.js"],
     "modules": ["menu-pages"],
     "permaLoad": false,
+    "hidden": true,
     "sanitizeConfig": false
 }
