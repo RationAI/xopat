@@ -969,8 +969,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         for (let pid in PLUGINS) {
             const hasParams = CONFIG.plugins[pid];
             const plugin = PLUGINS[pid];
-            if (!plugin.loaded && !plugin.error && (hasParams || pluginKeys.includes(pid))) {
-                await loadPluginAwaits(pid, hasParams);
+            if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
+                if (plugin.error) {
+                    console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
+                } else {
+                    await loadPluginAwaits(pid, hasParams);
+                }
             }
         }
 

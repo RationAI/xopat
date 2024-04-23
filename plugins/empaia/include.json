@@ -3,9 +3,10 @@
     "name": "Empaia",
     "description": "Empaia Integration: viewing and annotating slides, running analysis jobs.",
     "includes" : [
-        "empaia.js"
+        "empaia.js",
+        "tilesource-pixelmap.js"
     ],
-    "modules": ["empationapi"],
+    "modules": ["empation-api"],
     "version": "1.0.0",
     "permaLoad": false,
     "hidden": true,

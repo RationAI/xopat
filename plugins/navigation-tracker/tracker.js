@@ -1,7 +1,6 @@
 addPlugin("nav-tracker", class extends XOpatPlugin {
     constructor(id) {
         super(id);
-        this.id = id;
         this.records = {};
         this.canvasWidth = 250;
         this.animates = this.getStaticMeta("animate", true);
