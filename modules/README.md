@@ -189,7 +189,7 @@ the functionality appropriately. This includes:
  - visualization swapping
  
 Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ of a Tiled Image: an image wrt. which
+Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
 all measures should be done.
 
 ## Gotchas

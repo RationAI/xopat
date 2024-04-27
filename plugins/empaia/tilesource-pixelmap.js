@@ -8,6 +8,7 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
     constructor(options) {
         // todo fix OSD API here we rely on url string missing check and passing config object
         super(options);
+        this._failedCanvasDataCache = {};
     }
 
     supports( data, url ){
@@ -16,10 +17,12 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
     }
 
     _fail(message) {
-        this.raiseEvent('open-failed', {
-            message: message,
-            source: '[Empaia Plugin Internal URL]'
-        });
+        throw message;
+        //TODO: OSD does not respect this handler see https://github.com/openseadragon/openseadragon/issues/2474
+        // this.raiseEvent('open-failed', {
+        //     message: message,
+        //     source: '[Empaia Plugin Internal URL]'
+        // });
     }
 
     configure( data, url, postData ) {
@@ -30,45 +33,56 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
 
     getImageInfo(options) {
         // TODO consider multi tile support (test performance first)
-        if (!options || !options.slide) {
+        if (!options || !options.pixelmap) {
             this._fail("Invalid usage: slide ID must be provided");
             return;
         }
 
         this.api = EmpationAPI.V3.get();
-
-        const scopeAPI = this.api.scopes[this.api.defaultScopeKey];
-
-        const underlyingSource = VIEWER.tools.referencedImage().tileSource;
-        this.maxLevel = underlyingSource.maxLevel;
-        this.width = underlyingSource.width;
-        this.height = underlyingSource.height;
-        this.dimensions = new OpenSeadragon.Point(this.width, this.height);
-        this.aspectRatio = underlyingSource.aspectRatio;
         this.pixelmapIds = [];
-
-        Promise.all(
-            options.pixelmap.split(',').map(pixelmapId => this._fetchPixelmapInfo.bind(this, scopeAPI, pixelmapId))
-        ).then(_ => {
+        //todo dirty __scope_def
+        this.api.getScopeUse(...this.api.__scope_def).then(scopes => Promise.all(
+                options.pixelmap.split(',').map(pixelmapId => this._fetchPixelmapInfo.call(this, scopes, pixelmapId))
+        )).then(async _ => {
             if (this.pixelmapIds.length === 0) {
                 //todo if ids empty:
-                this._fail("Failed to load the slide data!");
-                this.metadata = {error: "Failed to load the slide data!"};
+                this._fail("Failed to load the pixelmap data!");
+                this.metadata = {error: "Failed to load the pixelmap data!"};
                 return;
             }
+
+            try {
+                //fetch the relevant slide info and inherit dimensions
+                const info = await this.api.slides.slideInfo(this._targetSlide);
+
+                this.maxLevel = info.levels.length-1;
+                this.width = info.extent.x;
+                this.height = info.extent.y;
+                this.dimensions = new OpenSeadragon.Point(this.width, this.height);
+                this.aspectRatio = this.width / this.height;
+            } catch (e) {
+                this._fail("Failed to load the parent slide data!");
+                this.metadata = {error: "Failed to load the parent slide data!"};
+                return;
+            }
+
             this.ready = true;
             this.raiseEvent('ready', {tileSource: this});
         });
+
     }
 
     async _fetchPixelmapInfo(scope, pixelmapId) {
         try {
+
             const info = await scope.pixelmaps.get(pixelmapId);
             this.pixelmapIds.push(info.id);
             $.extend(this, {
                 tileSize: info.tilesize,
                 _tileWidth: info.tilesize,
                 _tileHeight: info.tilesize,
+                //todo possibly issue if multiple references used...
+                _targetSlide: info.reference_id,
                 minLevel: 0,
                 tileOverlap: 0,
             });
@@ -105,10 +119,9 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
 
     downloadTileStart(context) {
         const data = context.postData;
-        const scopeAPI = this.api.scopes[this.api.defaultScopeKey];
-        Promise.all(
-            this.pixelmapIds.map(id => this._fetchPixelmapTile.bind(this, scopeAPI, id, data.level, data.x, data.y))
-        ).then(data => {
+        this.api.getScopeUse(...this.api.__scope_def).then(scopes => Promise.all(
+            this.pixelmapIds.map(id => this._fetchPixelmapTile.call(this, scopes, id, data.level, data.x, data.y))
+        )).then(data => {
             context.finish(data, {}, undefined);
         });
     }
@@ -127,23 +140,38 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
                     URL.revokeObjectURL(objUrl);
                     //todo cause?
                     console.warn("Failed to build image from a pixelmap blob!");
-                    resolve(this._getFallbackErrorTile(404));
+                    resolve(this._getFallbackErrorTile(500));
                 };
                 img.src = objUrl;
             }).catch(e => {
-                resolve(this._getFallbackErrorTile(e.statusCode || 500));
+                resolve(this._getFallbackErrorTile(e.statusCode));
             })
         })
     }
 
     _getFallbackErrorTile(httpErr) {
-        //TODO based on error code draw error icon left top corner
+        const key = `${httpErr}-${this._tileWidth}`;
+        if (this._failedCanvasDataCache[key]) return this._failedCanvasDataCache[key];
+
         const canvas = document.createElement( 'canvas' );
         canvas.width = this._tileWidth;
         canvas.height = this._tileHeight;
         const ctx = canvas.getContext('2d');
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.font = '48px Material Icons';
+        switch (httpErr) {
+            case 404:
+                //OK, sparse tree
+                break;
+            default:
+                //todo better icons, also provide either a legend or allow some action (hover/draw text)
+                //todo crop if tile size exceeds the dimension (webgl), draw this instead in webgl (or as a postprocess)
+                ctx.fillStyle = ctx.strokeStyle = "#cc0000";
+                ctx.fillText('warning',20,88);
+                ctx.lineWidth = 4;
+                ctx.strokeRect(2,2,canvas.width, canvas.height);
+                break;
+        }
+        this._failedCanvasDataCache[key] = canvas;
         return canvas;
-        //todo warn only in unexpected cases (404 is expected --> sparse)
     }
 };

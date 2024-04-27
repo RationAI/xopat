@@ -299,7 +299,7 @@ using ``APPLICATION_CONTEXT.setDirty()`` so that the user gets notified if they 
 Furthermore, the layout canvas setup can vary - if you work with canvas in any way relying on dimensions
 or certain tile sources, make sure you subscribe to events related to modification of the canvas and update
 the functionality appropriately. Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ Tiled Image: an image wrt. which
+Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
 all measures should be done.
 
  

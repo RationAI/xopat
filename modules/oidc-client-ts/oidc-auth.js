@@ -83,8 +83,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.userManager.events.addSilentRenewError(renewError);
         this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
         this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
-        window.addEventListener("focus", e =>
-            this._signInUserInteractive(this.getRefreshTokenExpiration(), false), false);
+        // TODO: this makes infinite reload :/
+        // window.addEventListener("focus", e =>
+        //     this._signInUserInteractive(this.getRefreshTokenExpiration(), false), false);
         return returns;
     }
 
