@@ -32,7 +32,7 @@
         "clone": "Clone the viewer and synchronize"
       },
       "navigator": {
-        "faultyTissue": "Faulty (background) image"
+        "faultyTissue": "Faulty {{slide}}"
       },
       "shaders": {
         "saveCookies": "Remember settings",

@@ -508,7 +508,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
             //todo merge tile sources with layers/background to simplify mapping, now we need to guess where error occurs on error event
-            title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue'));
+            //todo better naming logics
+            const name = imageData.name || UTILITIES.fileNameFromPath(
+                APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                || 'unknown'
+            );
+            title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue', {slide: name}));
             USER_INTERFACE.toggleDemoPage(true);
         } else {
             USER_INTERFACE.toggleDemoPage(false);

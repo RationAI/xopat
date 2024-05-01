@@ -114,6 +114,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     this.retryTimeout + 2000, Dialogs.MSG_ERR);
                 return;
             }
+            if (typeof error === "string") error = {message: error};
+            error.message = error.message || "";
             if (error.message.includes('Failed to fetch')) {
                 console.log('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
                 Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',

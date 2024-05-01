@@ -69,27 +69,29 @@
 
 <script type="text/javascript">
 
-    window.formInit = $.extend(true, window.formInit || {}, {
-        location: "/",
-        lang: {
-            ready: "Ready!"
-        }
-    });
+    window.addEventListener('load', _ => {
+        window.formInit = $.extend(true, {
+            location: "/",
+            lang: {
+                ready: "Ready!"
+            }
+        }, window.formInit || {});
 
-    $("#form-submit-container").html(
-`    <form method="POST" target="_blank" action="${formInit.location}" id="custom-request">
+        $("#form-submit-container").html(
+            `    <form method="POST" target="_blank" action="${formInit.location}" id="custom-request">
         <input type="hidden" name="visualization" id="custom-visualization" value=''>
         <button class="btn pointer" type="submit" value="${formInit.lang.ready}">${formInit.lang.ready}</button>
     &emsp;
     </form>`
-    );
+        );
 
-    ShaderConfigurator.buildShadersAndControlsDocs("documentation");
+        ShaderConfigurator.buildShadersAndControlsDocs("documentation");
 
-    $(document).off('submit');
+        $(document).off('submit');
 
-    $('#custom-request').on('submit', evt => {
-        document.getElementById("custom-visualization").value = $("#custom-params").val();
+        $('#custom-request').on('submit', evt => {
+            document.getElementById("custom-visualization").value = $("#custom-params").val();
+        });
     });
 
 </script>

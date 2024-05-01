@@ -7,7 +7,8 @@ if (!defined( 'ABSPATH' )) {
 //disable autoload on pages that use custom modules
 define('ENABLE_PERMA_LOAD', false);
 require_once ABSPATH . "server/php/inc/init.php";
-$i18n = setupI18n(false, "en");
+$locale = setupI18n(false, "en");
+global $i18n;
 
 include_once ABSPATH . "server/php/inc/core.php";
 
@@ -28,11 +29,12 @@ $replacer = function($match) use ($i18n) {
             break;
 
         case "form-init":
-            $viewer_root = PROJECT_ROOT;
+            global $CORE;
+            $viewer_root = $CORE["client"]["domain"] . $CORE["client"]["path"];
             echo <<<EOF
     <script type="text/javascript">
     window.formInit = {
-        location: "$viewer_root/",
+        location: "$viewer_root",
         lang: {
             ready: "Ready!"
         }

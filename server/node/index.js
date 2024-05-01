@@ -168,7 +168,6 @@ ${core.requireCore("app")}`;
 
     const html = fs.readFileSync(constants.ABSPATH + "server/templates/index.html", { encoding: 'utf8', flag: 'r' })
         .replace(constants.TEMPLATE_PATTERN, replacer);
-    console.log(html)
     res.write(html);
     res.end();
 }
@@ -256,4 +255,9 @@ server.listen(9000, 'localhost', () => {
         console.log("Using default ENV (no overrides).");
     }
     console.log(`The server is listening on localhost:9000 ...`);
+    console.log(`  To manually create and run a session, open localhost:9000/dev_setup`);
+    console.log(`  To open using GET, provide localhost:9000?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide localhost:9000#urlEncodedSessionJSONHere`);
+    console.log(`                                      or sent the data using HTTP POST`);
+    console.log(`  The session description is available in src/README.md`);
 });

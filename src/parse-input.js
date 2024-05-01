@@ -89,15 +89,18 @@ function xOpatParseConfiguration(postData, i18n) {
 
 
         if (!session) {
-            const slide = url.searchParams.get("slide");
+            const slide = url.searchParams.get("slides");
             if (slide) {
+                const slideList = slide.split(",");
                 //try building the object from scratch
                 const handMadeConfiguration = {
-                    data: [url.searchParams.get("slide")],
-                    background: [{
-                        dataReference: 0,
-                        lossless: false,
-                    }]
+                    data: slideList,
+                    background: slideList.map((slide, index) => {
+                        return {
+                            dataReference: index,
+                            lossless: false,
+                        }
+                    })
                 };
                 let masks = url.searchParams.get("masks");
                 if (masks) {
