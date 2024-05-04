@@ -19,7 +19,17 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         //     let level = options.levels[i];
         //     level_meta[i] = OSD_level++;
         // }
-        this._setDownloadHandler(options.multifetch);
+        if (!this.__configuredDownload) {
+            this._setDownloadHandler(options.multifetch);
+        }
+
+        if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
+            const user = XOpatUser.instance();
+            user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
+            user.addHandler('secret-updated', e => this.ajaxHeaders["Authorization"] = e.secret);
+            user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
+            user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
+        }
     }
 
 
@@ -29,7 +39,17 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      * @param {(Object|Array<Object>)} data
      * @param {String} url
      */
-    supports( data, url ){
+    supports( data, url ) {
+        if (data.url && data.type && data.type === "empaia-standalone") {
+            data.ajaxHeaders = data.ajaxHeaders || {};
+            const user = XOpatUser.instance();
+            const secret = user.getSecret();
+            if (secret) {
+                data.ajaxHeaders["Authorization"] = user.getSecret();
+            }
+            return true;
+        }
+
         if (!url || !Array.isArray(data) || typeof data !== "object") return false;
         //multi-tile or single tile access
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
@@ -56,26 +76,40 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      *      to configure this tile sources constructor.
      */
     configure( data, url, postData ) {
+        if (data.type === "empaia-standalone" && !data.id) {
+            // data.url is set, which will trigger getImageInfo() and call configure second time with real data
+            data._handlesOwnImageLoadLogics = true;
+            return data;
+        }
+
+        const user = XOpatUser.instance();
+        const secret = user.getSecret();
+        const headers = secret ? {"Authorization": user.getSecret()} : {};
+
         if (!Array.isArray(data)) {
             //unset if default value
             let chosenMq = data.pixel_size_nm;
+            let size = data.extent, tile = data.tile_extent;
             if (chosenMq.x === 1000000) chosenMq = null;
             return {
-                width: data.extent.x,
-                height: data.extent.y,
-                tileSize: data.tile_extent.x,
-                maxLevel: data.levels.length,
-                minLevel: 1,
+                width: size.x,
+                height: size.y,
+                _tileWidth: tile.x,
+                _tileHeight: tile.y,
+                tileSize: tile.x,
+                maxLevel: data.levels.length-1,
+                minLevel: 0,
                 tileOverlap: 0,
                 fileId: data.id,
                 tilesUrl: data.tilesUrl,
                 innerFormat: data.format,
+                ajaxHeaders: headers,
                 multifetch: false,
-                data: data,
                 metadata: {
                     micronsX: chosenMq?.x / 1000,
                     micronsY: chosenMq?.y / 1000,
                 },
+                data: data
             };
         }
 
@@ -87,7 +121,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         let width         = Infinity,
             height        = Infinity,
             chosenMq      = undefined,
-            tileSize      = undefined,
+            represent     = undefined,
+            tileSizeX      = undefined,
+            tileSizeY      = undefined,
             maxLevel      = Infinity,
             tileOverlap   = 0;
 
@@ -95,18 +131,20 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             let image = data[i],
                 imageWidth = parseInt( image.extent.x, 10 ),
                 imageHeight = parseInt( image.extent.y, 10 ),
-                imageTileSize = parseInt( image.tile_extent.x, 10 );
+                imageTileSizeX = parseInt( image.tile_extent.x, 10 ),
+                imageTileSizeY = parseInt( image.tile_extent.y, 10 );
 
             if (imageWidth < 1 || imageHeight < 1) {
                 image.error = "Missing image data.";
                 continue;
             }
 
-            if (tileSize === undefined) {
-                tileSize = imageTileSize;
+            if (tileSizeX === undefined) {
+                tileSizeX = imageTileSizeX;
+                tileSizeY = imageTileSizeY;
             }
 
-            if (imageTileSize !== tileSize) {
+            if (imageTileSizeX !== tileSizeX || imageTileSizeY !== tileSizeY) {
                 image.error = "Incompatible layer: the rendering might contain artifacts.";
             }
 
@@ -114,6 +152,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
                 //possibly experiment with taking maximum
                 width = imageWidth;
                 height = imageHeight;
+                represent = image;
                 chosenMq = image.pixel_size_nm;
             }
             maxLevel = Math.min(maxLevel, image.levels.length);
@@ -124,20 +163,63 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         return {
             width: width, /* width *required */
             height: height, /* height *required */
-            tileSize: tileSize, /* tileSize *required */
+            _tileWidth: tileSizeX,
+            _tileHeight: tileSizeY,
+            tileSize: tileSizeX, /* tileSize *required */
             tileOverlap: tileOverlap, /* tileOverlap *required */
-            minLevel: 1, /* minLevel */
-            maxLevel: maxLevel, /* maxLevel */
+            minLevel: 0, /* minLevel */
+            maxLevel: maxLevel-1, /* maxLevel */
             fileId: data.map(image => image.id).join(','),
             innerFormat: data[0].format,
             tilesUrl: data[0].tilesUrl,
+            ajaxHeaders: headers,
             multifetch: true,
-            data: data,
+            data: represent,
+            dataSet: data,
             metadata: {
                 micronsX: chosenMq?.x / 1000,
                 micronsY: chosenMq?.y / 1000,
             },
         };
+    }
+
+    getLevelScale( level ) {
+        level = this.maxLevel-level;
+        const levels = this.data.levels;
+        return levels[level].extent.x / levels[0].extent.x;
+    }
+
+    getImageInfo(url) {
+        if (!this._handlesOwnImageLoadLogics) return super.getImageInfo(url);
+
+        let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
+        if (match) {
+            this._setDownloadHandler(true);
+            return this._getInfo(url, match[1]);
+        }
+        match = url.match(/^(\/?[^\/].*\/v3\/slides)\/[^\/\s]+\/info/i);
+        if (match) {
+            this._setDownloadHandler(false);
+            return this._getInfo(url, match[1]);
+        }
+        throw "The empaia standalone tile source is not configured with a proper URL!";
+    }
+
+    _getInfo(url, tilesUrl) {
+        fetch(url, {
+            headers: this.ajaxHeaders || {}
+        }).then(res => res.json()).then(imageInfo => {
+            const data = this.configure(imageInfo, url, null);
+            data.tilesUrl = tilesUrl;
+            OpenSeadragon.extend(this, data);
+            this.raiseEvent('ready', {tileSource: this});
+        }).catch(e => {
+            this.raiseEvent( 'open-failed', {
+                message: e,
+                source: url,
+                postData: null
+            });
+        });
     }
 
     getImageMetaAt(index) {
@@ -202,7 +284,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
                 }
 
                 var dataStore = context.userData;
+                if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
                 const _this = this;
+
                 dataStore.request = OpenSeadragon.makeAjaxRequest({
                     url: context.src,
                     withCredentials: context.ajaxWithCredentials,
@@ -274,9 +358,16 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             this.downloadTileStart = this.__cached_downloadTileStart;
             this.downloadTileAbort = this.__cached_downloadTileAbort;
         }
+        this.__configuredDownload = true;
+    }
+
+    downloadTileStart(context) {
+        if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
+        super.downloadTileStart(context);
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
+        level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
         return `${x}_${y}/${level}/${this.tilesUrl}`;
     }
 
