@@ -210,7 +210,11 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             headers: this.ajaxHeaders || {}
         }).then(res => res.json()).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
+            // necessary TileSource props that wont get set manually
+            data.dimensions  = new OpenSeadragon.Point( data.width, data.height );
+            data.aspectRatio = data.width / data.height;
             data.tilesUrl = tilesUrl;
+            data.ready = true;
             OpenSeadragon.extend(this, data);
             this.raiseEvent('ready', {tileSource: this});
         }).catch(e => {
