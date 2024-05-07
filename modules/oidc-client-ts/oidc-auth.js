@@ -207,7 +207,26 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         if (oidcUser && oidcUser.access_token) {
             if (!user.isLogged) {
                 const decodedToken = jwtDecode(oidcUser.access_token);
-                //todo: try to check more props to get the best username
+
+                const endpoint = this.getStaticMeta('oidcUserInfo');
+
+                //todo: make this not awaiting
+                if (endpoint && (!decodedToken.family_name) || (!!decodedToken.given_name)) {
+                    try {
+                        const data = (await fetch(endpoint, {
+                            headers: {
+                                'Authorization': `Bearer ${oidcUser.access_token}`,
+                                'Content-Type': 'application/json'
+                            }
+                        })).json();
+
+                        decodedToken.given_name = decodedToken.given_name || data.given_name;
+                        decodedToken.family_name = decodedToken.family_name || data.family_name;
+                    } catch (e) {
+                        console.error("OIDC: Could not fetch user info!", e);
+                    }
+                }
+
                 const username = decodedToken.given_name + ' ' + decodedToken.family_name;
                 const userid = decodedToken.sub;
                 user.login(userid, username, "");

@@ -87,6 +87,11 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         const headers = secret ? {"Authorization": user.getSecret()} : {};
 
         if (!Array.isArray(data)) {
+            if (!data) {
+                this.metadata = {error: "Invalid data: no data available for given url " + url}
+                return;
+            }
+
             //unset if default value
             let chosenMq = data.pixel_size_nm;
             let size = data.extent, tile = data.tile_extent;
@@ -208,7 +213,12 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     _getInfo(url, tilesUrl) {
         fetch(url, {
             headers: this.ajaxHeaders || {}
-        }).then(res => res.json()).then(imageInfo => {
+        }).then(res => {
+            if (res.status !== 200) {
+                throw new HTTPError("Empaia standalone failed to fetch image info!", res, res.error);
+            }
+            return res.json();
+        }).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
             // necessary TileSource props that wont get set manually
             data.dimensions  = new OpenSeadragon.Point( data.width, data.height );

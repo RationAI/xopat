@@ -9,6 +9,7 @@ window.HTTPError = class extends Error {
         this.message = message;
         this.response = response;
         this.textData = textData;
+        this.statusCode = response && response.status || 500;
     }
 };
 
