@@ -17,6 +17,19 @@ And works with the env configuration:
 The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XOPAT_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 
+
+
+### Simple Setup
+
+Run ``docker compose up`` with optionally detached mode `-d`
+to spin up a standalone php deployment. Note that environmental
+variables are copied from ``/env`` and must be set up beforehand.
+Optionally, you can modify the compose file and override ``XOPAT_ENV``
+with custom env file path, or providing directly the string contents.
+
+### Custom Setup
+
+
 To build image (using `$XO_IMAGE_NAME`):
 
  optionally: ``$XO_IMAGE_NAME=my-desired-name:my-tag``
@@ -39,6 +52,10 @@ stop and start existing container:
 ``docker start xopat``
 
  ``docker stop xopat``
+
+> Note: ``build-git.sh`` is meant for runtime cloning of xopat: for example,
+> kubernetes init container can pull the latest xopat branch to an image that is ready
+> to run it, which means up-to-date deployments per a pod restart wrt. target branch.
 
 ### Issue Solving
 
