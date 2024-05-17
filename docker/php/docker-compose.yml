@@ -10,7 +10,5 @@ services:
     # Uncomment to debug container if it fails to start
     #entrypoint: ["sleep"]
     #command: ["infinity"]
-    volumes:
-      - ${COMPOSE_CONF_SSL_CERT}:/usr/local/apache2/conf/server.crt:rw
-      - ${COMPOSE_CONF_SSL_KEY}:/usr/local/apache2/conf/server.key:rw
-      - ${COMPOSE_CONF_SITES_AVAILABLE}:/usr/local/apache2/sites-enabled:rw
+    # Optionally mount any parts of xopat (to /var/www/html/xopat) you want to keep up to date with the host system
+    #volumes:

@@ -36,6 +36,17 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     && nvm alias default $NODE_VERSION \
     && nvm use default
 
+##################
+# VIEWER: BUILD###
+##################
+FROM viewer-build-deps AS viewer-build
+WORKDIR /tmp
+RUN git clone https://github.com/RationAI/openseadragon.git \
+    && cd openseadragon \
+    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
+    && npm i \
+    && cd ..
+
 
 ##################
 # VIEWER: DEV  ###
@@ -80,25 +91,9 @@ WORKDIR /var/www
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD apache2ctl -D FOREGROUND
 
-
-
-##################
-# VIEWER: BUILD###
-##################
-FROM viewer-build-deps AS viewer-build
-WORKDIR /tmp
-RUN git clone https://github.com/RationAI/openseadragon.git \
-    && cd openseadragon \
-    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
-    && npm i \
-    && cd ..
-
-
-
-##################
-# VIEWER: PROD####
-##################
-
+#############################
+# VIEWER: PROD STANDALONE####
+#############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 FROM ubuntu:jammy AS viewer-git
 
@@ -152,7 +147,9 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD apache2ctl -D FOREGROUND
 
 
-
+#############################
+# VIEWER: PROD GIT       ####
+#############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
 COPY .htaccess /var/www/html/xopat/
