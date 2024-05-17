@@ -21,8 +21,9 @@ The WSI server proxy configuration can be changed in the apache configuration fi
 
 ### Simple Setup
 
-Run ``docker compose up`` with optionally detached mode `-d`
-to spin up a standalone php deployment. Note that environmental
+Run ``docker compose -f docker/php/docker-compose.yml up`` from the project
+root with optionally detached mode `-d`
+to spin up a standalone php deployment (or run `compose.sh`)`. Note that environmental
 variables are copied from ``/env`` and must be set up beforehand.
 Optionally, you can modify the compose file and override ``XOPAT_ENV``
 with custom env file path, or providing directly the string contents.
