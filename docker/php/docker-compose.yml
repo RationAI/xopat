@@ -3,7 +3,8 @@ version: "3.8"
 services:
   xopat-php:
     build:
-      context: .
+      context: ../../
+      dockerfile: docker/php/Dockerfile
       target: viewer-standalone
     ports:
       - "8080:8000"
@@ -12,3 +13,10 @@ services:
     #command: ["infinity"]
     # Optionally mount any parts of xopat (to /var/www/html/xopat) you want to keep up to date with the host system
     #volumes:
+    # - path/to/xopat/env:/var/www/html/xopat/env:ro
+    # You can set-up xopat directly using env, but remember to prefix $ --> $$ to avoid issues
+    #environment:
+    #  XOPAT_ENV: |
+    #   {
+    #     deployment-configuration-goes-here
+    #   }
