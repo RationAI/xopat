@@ -8,6 +8,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this._connectionRetries = 0;
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
+        this.authMethod = this.getStaticMeta('method', 'popup');
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
@@ -49,13 +50,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     resolve();
                     resolves = null;
                 };
-
+                debugger;
                 //try if we can cache-load the user info...
                 if (!await this.handleUserDataChanged()) {
                     if (urlParams.get('state') !== null) {
+
+                        const callback = this.authMethod === "popup" ? "signinPopupCallback" : "signinRedirectCallback";
                         return (async () => {
-                            await this.userManager.signinPopupCallback(window.location.href);
+                            await this.userManager[callback](window.location.href);
                             await this.handleUserDataChanged();
+                            resolves && resolves();
                         })();
                     } else {
                         await this.trySignIn(true);
@@ -152,14 +156,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     async _signInUserInteractive(refreshTokenExpiration, alwaysSignIn=true) {
         if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
             // window.open(this.configuration.redirect_uri, 'xopat-auth');
-            console.log("OIDC: Try to sign in via popup.");
-            // await this.sleep(100);
-            await this.userManager.signinPopup({
+            const signIn = this.authMethod === "popup" ? "signinPopup" : "signinRedirect";
+            const configuration = this.authMethod === "popup" ? {
                 popupWindowFeatures: {
                     popupWindowTarget: "xopat-auth",
-                    popup: "no"
+                    popup: "no" //open new tab instead of popup window
                 }
-            });
+            } : undefined;
+            console.log(`OIDC: Try to sign in via ${this.authMethod}.`);
+            // await this.sleep(100);
+            await this.userManager[signIn](configuration);
             return false;
         }
         if (alwaysSignIn) {

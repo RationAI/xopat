@@ -255,9 +255,9 @@ server.listen(9000, 'localhost', () => {
         console.log("Using default ENV (no overrides).");
     }
     console.log(`The server is listening on localhost:9000 ...`);
-    console.log(`  To manually create and run a session, open localhost:9000/dev_setup`);
-    console.log(`  To open using GET, provide localhost:9000?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide localhost:9000#urlEncodedSessionJSONHere`);
+    console.log(`  To manually create and run a session, open http://localhost:9000/dev_setup`);
+    console.log(`  To open using GET, provide http://localhost:9000?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide http://localhost:9000#urlEncodedSessionJSONHere`);
     console.log(`                                      or sent the data using HTTP POST`);
     console.log(`  The session description is available in src/README.md`);
 });
