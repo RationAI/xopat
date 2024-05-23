@@ -1194,9 +1194,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
                 activeVisIndex,
                 function() {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
-                    const async = APPLICATION_CONTEXT.getOption("fetchAsync");
+                    //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
                     let data = VIEWER.bridge.dataImageSources();
-                    if (async && data.length > 0) data = data[0];
+                    //if (async && data.length > 0) data = data[0];
                     toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, data));
                     openAll(1);
                 }

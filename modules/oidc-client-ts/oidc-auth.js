@@ -236,8 +236,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 const userid = decodedToken.sub;
                 user.login(userid, username, "");
                 user.addOnceHandler('logout', () => {
-                    //todo should also notify user about leaving page :/
-                    this.userManager.signoutRedirect();
+                    Dialogs.show('You have been logged out. Please, <a onclick="UTILITIES.refreshPage()">log-in</a> again.',
+                        50000, Dialogs.MSG_ERR);
                 });
                 user.addHandler('secret-needs-update', async event => {
                     if (event.type === "jwt") {
