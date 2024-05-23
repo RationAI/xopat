@@ -50,7 +50,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     resolve();
                     resolves = null;
                 };
-                debugger;
                 //try if we can cache-load the user info...
                 if (!await this.handleUserDataChanged()) {
                     if (urlParams.get('state') !== null) {
