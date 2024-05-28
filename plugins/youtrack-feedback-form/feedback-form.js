@@ -27,8 +27,21 @@ addPlugin('youtrack-feedback', class extends XOpatPlugin {
                 //theme: APPLICATION_CONTEXT.getOption('theme'),
                 language: APPLICATION_CONTEXT.getOption('locale')
             });
-            USER_INTERFACE.addHtml(`<span class="position-absolute bottom-5 left-3 py-2 pr-2 d-flex box-shadow btn-pointer" 
-style="background: var(--color-bg-primary); border-radius: 5px;" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}')"><span class="material-icons">feedback</span>Feedback</span>`, this.id);
+            // hide 'Plugins' title
+            const pluginsButton = document.getElementById("add-plugins");
+            pluginsButton.children[1].style.display = 'none';
+
+            //todo a bit hacky, we should ensure each plugin does not damage dom by this procedure, e.g. it is reversible, we use ${pluginId}-plugin-root which gets trimmed
+            const formNode = $(`<span id="add-plugins" class="btn-pointer py-2 pr-1 ${this.id}-plugin-root" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');" data-i18n="[title]main.bar.explainPlugins">
+                <span class="material-icons pr-0" style="font-size: 22px;">feedback</span>
+                <span class="pl-1">Feedback</span>
+            </span>`);
+
+            pluginsButton.parentNode.insertBefore(formNode[0], pluginsButton);
+
+            const nextPos = pluginsButton.nextSibling.nextSibling;
+            pluginsButton.parentNode.insertBefore(nextPos, pluginsButton);
+
         } else {
             USER_INTERFACE.AdvancedMenu.setMenu(this.id, "youtrack-feedback", "Feedback Form", `
 <h2>Feedback Form</h2>

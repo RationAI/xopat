@@ -220,7 +220,7 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
         this.format = format;
     }
 
-    placeholderTile(resolve, reject) {
+    placeholderTile(index, resolve, reject) {
         const canvas = document.createElement('canvas');
         canvas.width = this.getTileWidth();
         canvas.height = this.getTileHeight();
@@ -230,8 +230,8 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
         const img = new Image(canvas.width, canvas.height);
         img.onload = () => {
             //next promise just returns the created object
-            this.placeholderTile = (ready, _) => ready(img, 1);
-            resolve(img, 1);
+            this.placeholderTile = (index, ready, _) => ready(index, img, 1);
+            resolve(index, img, 1);
         };
         img.onerror = img.onabort = reject;
         img.src = canvas.toDataURL();
@@ -245,11 +245,12 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
             image => this.api.slides.loadTile.call(this.api.slides, image.id, data.level, data.x, data.y, this.format)
         )).then(blobList => {
             const self = this;
-            let images = [], fails = 0;
-            function finish(data, failCount=0) {
-                images.push(data);
+            let images = new Array(this.data.length), fails = 0, fills = 0;
+            function finish(index, data, failCount=0) {
+                images[index] = data;
+                fills++;
                 fails += failCount;
-                if (images.length === blobList.length) {
+                if (fills === blobList.length) {
                     if (fails >= images.length) abort("All images failed to load from blob!");
                     else {
                         //reference background must receive non-array
@@ -263,17 +264,18 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
                 }
             }
 
-            for (let blob of blobList) {
-                const img = new Image();
+            for (let i = 0; i < blobList.length; i++) {
+                const img = new Image(),
+                    blob = blobList[i];
                 const objUrl = URL.createObjectURL(blob);
                 img.onload = () => {
                     URL.revokeObjectURL(objUrl);
-                    finish(img);
+                    finish(i, img);
                 };
                 img.onerror = img.onabort = e => {
                     URL.revokeObjectURL(objUrl);
                     console.warn("Failed to load image", e);
-                    this.placeholderTile(finish, abort);
+                    this.placeholderTile(i, finish, abort);
                 };
                 img.src = objUrl;
             }

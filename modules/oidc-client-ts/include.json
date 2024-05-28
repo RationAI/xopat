@@ -33,6 +33,8 @@
         "redirectMethod": "replace",
         "redirectTarget": "top"
     },
-    // optional endpoint to read user info from (if the token e.g. does not cover username)
-    "oidcUserInfo": null
+    // endpoint to read user info from (if the token e.g. does not cover username)
+    "oidcUserInfo": null,
+    // if the refresh token is stored in cookies, provide the name to sync apps
+    "cookieRefreshTokenName": "_sharedEmpaiaRefreshToken"
 }

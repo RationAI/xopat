@@ -52,6 +52,7 @@
         <ul class="ml-3">
             <li>you have an invalid link, or</li>
             <li>the server that should deliver data is not responding</li>
+            <li>the data is not available due to authorization issues</li>
         </ul>
         <br><br>
         <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>
@@ -131,7 +132,7 @@
             <div class="inner-panel-content noselect" id="inner-panel-content-1">
                 <div>
                     <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-                    APPLICATION_CONTEXT.AppCookies.set('_shadersPin', `\${jqSelf.hasClass('opened')}`);" style="padding: 0;">navigate_next</span>
+                    APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
                     <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
                         <!--populated with shaders from the list -->
                     </select>

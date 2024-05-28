@@ -9,6 +9,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'popup');
+        this.cookieRefreshTokenName = this.getStaticMeta('cookieRefreshTokenName');
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
@@ -45,13 +46,13 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         let resolves = null;
         const returns = new Promise(async (resolve, reject) => {
             try {
-                const urlParams = new URLSearchParams(window.location.search);
                 resolves = () => {
                     resolve();
                     resolves = null;
                 };
                 //try if we can cache-load the user info...
                 if (!await this.handleUserDataChanged()) {
+                    const urlParams = new URLSearchParams(window.location.search);
                     if (urlParams.get('state') !== null) {
 
                         const callback = this.authMethod === "popup" ? "signinPopupCallback" : "signinRedirectCallback";
@@ -60,7 +61,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                             await this.handleUserDataChanged();
                             resolves && resolves();
                         })();
-                    } else {
+                    } else if (! await this.tryManualSignInCookie()) {
+                        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
+                        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
+                        this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
                         await this.trySignIn(true);
                     }
                 }
@@ -84,8 +88,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             await this.trySignIn();
         };
         this.userManager.events.addSilentRenewError(renewError);
-        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
-        this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
         // TODO: this makes infinite reload :/
         // window.addEventListener("focus", e =>
         //     this._signInUserInteractive(this.getRefreshTokenExpiration(), false), false);
@@ -94,6 +96,43 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
     sleep(time) {
         return new Promise(_ => setTimeout(_, time));
+    }
+
+    async tryManualSignInCookie() {
+        const cookie = this.cookieRefreshTokenName &&
+            APPLICATION_CONTEXT.AppCookies.get(this.cookieRefreshTokenName, false);
+        if (cookie) {
+            const metadataService = this.userManager.metadataService;
+            const tokenEndpoint = await metadataService.getTokenEndpoint();
+
+            const response = await fetch(tokenEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: new URLSearchParams({
+                    grant_type: 'refresh_token',
+                    refresh_token: cookie,
+                    client_id: this.configuration.client_id,
+                    client_secret: this.configuration.client_secret
+                })
+            });
+
+            const data = await response.json();
+            if (data.access_token) {
+                await this.userManager.storeUser(new oidc.User({
+                    access_token: data.access_token,
+                    refresh_token: data.refresh_token,
+                    expires_in: data.expires_in,
+                    token_type: 'Bearer'
+                }));
+                APPLICATION_CONTEXT.AppCookies.set(this.cookieRefreshTokenName, data.refresh_token);
+                await this.handleUserDataChanged();
+                return true;
+            }
+            console.warn('OIDC: Failed to log in user via cookie refresh token', data);
+            return false;
+        }
     }
 
     async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
@@ -143,8 +182,13 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 console.log('OIDC: Signin failed due to user cancel.');
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
+            } else if (error.message.includes('Invalid refresh token')) {
+                return await this.trySignIn(false, this._connectionRetries > this.maxRetryCount);
+            } else if (error.message.includes('Popup closed by user')) {
+                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Log-in in a new window</a>.',
+                    300000, Dialogs.MSG_WARN);
             } else {
-                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue.',
+                Dialogs.show('Login failed due to unknown reasons. Please, <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">try again</a> or notify us about the issue.',
                     this.retryTimeout + 2000, Dialogs.MSG_ERR);
             }
             console.error("OIDC auth attempt: ", error);
@@ -175,7 +219,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     }
 
     getSessionData() {
-        return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+        return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
     }
 
     getRefreshTokenExpiration() {
@@ -184,7 +228,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         try {
             const token = this.getSessionData();
             // const token = APPLICATION_CONTEXT.AppCookies
-            //     .get(`oidc.user:${this.configuration.authority}:${this.clientId}`);
+            //     .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
             let refreshToken = '';
             if (token) {
                 const values = JSON.parse(token);
@@ -207,11 +251,27 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
     async handleUserDataChanged() {
         const user = XOpatUser.instance();
+        function returnNeedsRefresh() {
+            if (user.isLogged) {
+                user.logout();
+            }
+            return false;
+        }
 
         const oidcUser = await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
+
+            const refreshTokenExpiration = this.getRefreshTokenExpiration();
+            if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
+                return returnNeedsRefresh();
+            }
+
             if (!user.isLogged) {
                 const decodedToken = jwtDecode(oidcUser.access_token);
+
+                if (!decodedToken?.exp || decodedToken.exp < Date.now() / 1000) {
+                    return returnNeedsRefresh();
+                }
 
                 const endpoint = this.getStaticMeta('oidcUserInfo');
 
@@ -248,11 +308,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             user.setSecret(oidcUser.access_token, "jwt");
             return true;
         }
-        if (user.isLogged) {
-            user.logout();
-            return true;
-        }
-        return false;
+        return returnNeedsRefresh();
     }
 }
 oidc.xOpatUser.instance(); //todo consider just executing private code...
