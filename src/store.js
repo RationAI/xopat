@@ -255,6 +255,15 @@ class SyncAPIProxy extends APIProxy {
         key = this.validateKey(key);
         this.__storage.setItem(key, value);
     }
+
+    /**
+     * @param {string} key
+     * @param key
+     */
+    delete(key) {
+        key = this.validateKey(key);
+        this.__storage.removeItem(key);
+    }
 }
 
 /**
@@ -298,6 +307,15 @@ class AsyncAPIProxy extends APIProxy {
     async set(key, value) {
         key = this.validateKey(key);
         await this.__storage.setItem(key, value);
+    }
+
+    /**
+     * @param {string} key
+     * @param key
+     */
+    async delete(key) {
+        key = this.validateKey(key);
+        await this.__storage.removeItem(key);
     }
 }
 

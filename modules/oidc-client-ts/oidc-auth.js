@@ -124,7 +124,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 })
             });
             // Used token is invalidated
-            APPLICATION_CONTEXT.AppCookies.set(this.cookieRefreshTokenName, "");
+            APPLICATION_CONTEXT.AppCookies.delete(this.cookieRefreshTokenName);
 
             const data = await response.json();
             if (data.access_token) {
