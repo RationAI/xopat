@@ -50,37 +50,43 @@ function initXopatUI() {
          * @param delayMS miliseconds to wait before auto close
          *          use values < 1000 to not to close at all
          * @param importance Dialogs.MSG_[INFO/WARN/ERR] object
-         * @param queued this message is ignored if another is shown and queued=false
+         * @param {object} props other optional parameters
+         * @param {object} [props.queued]
+         * @param {object} [props.onShow]
+         * @param {object} [props.onHide]
          */
-        show: function(text, delayMS=5000, importance=Dialogs.MSG_INFO, queued=true) {
-            if (queued && this._timer) {
-                this._notifQueue.add({text, delayMS, importance});
-            } else this._showImpl(text, delayMS, importance);
+        show: function(text, delayMS=5000, importance=Dialogs.MSG_INFO, props={}) {
+            props = $.extend({}, props, {queued: true})
+
+            if (props.queued && this._timer) {
+                this._notifQueue.add({text, delayMS, importance, props});
+            } else this._showImpl(text, delayMS, importance, props);
         },
 
         /**
          * Hide notification
          */
-        hide: function() {
-            this._hideImpl(false);
+        hide: function(withCallback=true) {
+            this._hideImpl(false, withCallback);
         },
 
-        _hideImpl: function(timeoutCleaned) {
+        _hideImpl: function(timeoutCleaned, callOnHide = true) {
             this._body.removeClass("popUpEnter");
             this._body.addClass("popUpHide");
 
             if (!timeoutCleaned && this._timer) {
                 clearTimeout(this._timer);
+                callOnHide && this._opts.onHide && this._opts.onHide();
             }
             this._timer = null;
-
+            this._opts = null;
             const elem = this._notifQueue.pop();
             if (elem) {
-                this._showImpl(elem.text, elem.delayMS, elem.importance);
+                this._showImpl(elem.text, elem.delayMS, elem.importance, elem.onFinish);
             }
         },
 
-        _showImpl: function(text, delayMS, importance) {
+        _showImpl: function(text, delayMS, importance, opts) {
             this._board.html(text);
             this._icon.html(importance.icon);
             this._toast.removeClass(); //all
@@ -92,6 +98,8 @@ function initXopatUI() {
             if (delayMS >= 1000) {
                 if (this._timer) clearTimeout(this._timer);
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
+                this._opts = opts;
+                this._opts.onShow && this._opts.onShow();
             }
         },
 
@@ -992,6 +1000,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             isVisible: function () {
                 return this._visible;
             },
+            /**
+             * Show or hide full-page loading.
+             * @param loading
+             */
             show: function(loading) {
                 const loader = $("#fullscreen-loader");
                 if (this._visible === loading) return;
@@ -999,25 +1011,29 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     loader.css('display', 'block');
                 } else {
                     loader.css('display', 'none');
-                    this.text("");
+                    this.text(false);
                 }
                 this._visible = loading;
             },
-            text: function (titleText="", descriptionText="") {
+            /**
+             * Show title for loading screen. Not performed if the loading screen is not visible.
+             * @param {boolean|string} titleText boolean to show/hide default text, string to show custom title
+             * @param {string} descriptionText optionally details
+             */
+            text: function (titleText=true, descriptionText="") {
                 if (!this.isVisible()) return;
 
                 const title = document.getElementById("fullscreen-loader-title");
                 const description = document.getElementById("fullscreen-loader-description");
-                title.innerText = titleText;
+                titleText = titleText === true ? title.innerText || $.t('messages.loading') : titleText;
+                title.innerText = titleText || "";
                 description.innerText = descriptionText;
                 if (this._allowDescription) {
-                    if (titleText) {
-                        title.classList.add('loading-text-style');
-                        description.classList.add('loading-text-style');
-                    } else {
-                        title.classList.remove('loading-text-style');
-                        description.classList.remove('loading-text-style');
-                    }
+                    if (titleText) title.classList.add('loading-text-style');
+                    else title.classList.remove('loading-text-style');
+
+                    if (descriptionText) description.classList.add('loading-text-style');
+                    else description.classList.remove('loading-text-style');
                 }
             }
         },
@@ -1170,7 +1186,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         const loader = USER_INTERFACE.Loading;
         // Only after some time show texts to users - taking too long time
         loader._allowDescription = true;
-        if (loader.isVisible()) loader.text($.t('messages.loading'));
+        if (loader.isVisible()) loader.text(true);
     }, 3000);
 
     /******************* ADVANCED MENUS *********************/

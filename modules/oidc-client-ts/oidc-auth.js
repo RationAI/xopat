@@ -68,10 +68,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     }
 
                     if (! await this.tryManualSignInCookie()) {
-                        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
-                        this.userManager.events.addAccessTokenExpiring(() => this.trySignIn(false, true));
-                        this.userManager.events.addAccessTokenExpired(() => this.trySignIn(false, true));
-                        await this.trySignIn(true);
+                        this.userManager.events.addAccessTokenExpiring(() => this._trySignIn(false, true));
+                        this.userManager.events.addAccessTokenExpiring(() => this._trySignIn(false, true));
+                        this.userManager.events.addAccessTokenExpired(() => this._trySignIn(false, true));
+                        await this._trySignIn(true);
                     }
                 }
                 resolves && resolves();
@@ -91,17 +91,13 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 return;
             }
             console.log('Silent renew failed. Retrying with signin.');
-            await this.trySignIn();
+            await this._trySignIn();
         };
         this.userManager.events.addSilentRenewError(renewError);
         // TODO: this makes infinite reload :/
         // window.addEventListener("focus", e =>
         //     this._signInUserInteractive(this.getRefreshTokenExpiration(), false), false);
         return returns;
-    }
-
-    sleep(time) {
-        return new Promise(_ => setTimeout(_, time));
     }
 
     async tryManualSignInCookie() {
@@ -143,7 +139,18 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
     }
 
-    async trySignIn(allowUserPrompt = false, preventRecurse = false, firedManually = false) {
+    /**
+     * Method meant for manual sign-in. Can interact with automated sign-in routine & retries.
+     */
+    signIn() {
+        this._manualCoroutine = new Promise(async (resolve) => {
+            await this._trySignIn(true, true);
+            this._manualCoroutine = null;
+            resolve();
+        });
+    }
+
+    async _trySignIn(allowUserPrompt = false, preventRecurse = false) {
         if (this._signinProgress) return;
 
         this._connectionRetries++;
@@ -155,59 +162,56 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             if (allowUserPrompt) {
                 await this._signInUserInteractive(refreshTokenExpiration);
             } else {
+                USER_INTERFACE.Loading.text("Attempting to log in...");
                 console.log("OIDC: Signing silently..");
                 await this.userManager.signinSilent();
             }
             await this.handleUserDataChanged();
             this._connectionRetries = 0;
-        } catch (error) {
             this._signinProgress = false;
 
-            if (firedManually) {
-                console.error("OIDC: ", error);
-                Dialogs.show('Login failed due to unknown reasons. Please, notify us about the issue.',
-                    this.retryTimeout + 2000, Dialogs.MSG_ERR);
-                return;
-            }
+        } catch (error) {
+            this._signinProgress = false;
+            USER_INTERFACE.Loading.text("Login not successful! Waiting...");
             if (typeof error === "string") error = {message: error};
             error.message = error.message || "";
             if (error.message.includes('Failed to fetch')) {
                 console.log('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
-                Dialogs.show('Failed to login, retrying in 20 seconds. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
-                    this.retryTimeout + 2000, Dialogs.MSG_WARN);
-                if (!preventRecurse) {
-                    // don't sleep first time, might be error on a disposed window which succeeds on subsequent attempt
-                    await this.sleep(this.authMethod === "popup" && this._connectionRetries === 0 ? 0 : this.retryTimeout);
-                    await this.trySignIn(false, this._connectionRetries >= this.maxRetryCount);
-                } else {
-                    console.error("OIDC: MAX retry exceeded");
-                }
+                await this._safeRetrySignIn('Failed to login, retrying in 20 seconds.',
+                    'Retry now.', preventRecurse);
             } else if (error.message.includes('disposed window')) {
                 console.log('OIDC: Signin failed due to popup window blocking.');
-                Dialogs.show('Login requires opening a popup window. Please, allow popup window in your browser. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
-                    this.retryTimeout + 2000, Dialogs.MSG_WARN);
-                if (!preventRecurse) {
-                    await this.sleep(this.retryTimeout);
-                    await this.trySignIn(false, this._connectionRetries > this.maxRetryCount);
-                } else {
-                    console.error("OIDC: MAX retry exceeded");
-                }
+                await this._safeRetrySignIn('Login requires opening a popup window. Please, allow popup window in your browser.',
+                    'Retry now.', preventRecurse);
+            } else if (error.message.includes('Popup closed by user')) {
+                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Log-in in a new window</a>.',
+                    300000, Dialogs.MSG_WARN);
             } else if (error.message.includes('closed by user')) {
                 console.log('OIDC: Signin failed due to user cancel.');
-                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
+                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
             } else if (error.message.includes('Invalid refresh token')) {
-                return await this.trySignIn(false, this._connectionRetries > this.maxRetryCount);
-            } else if (error.message.includes('Popup closed by user')) {
-                Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">Log-in in a new window</a>.',
-                    300000, Dialogs.MSG_WARN);
+                return await this._trySignIn(false, this._connectionRetries > this.maxRetryCount);
             } else {
-                Dialogs.show('Login failed due to unknown reasons. Please, <a onclick="oidc.xOpatUser.instance().trySignIn(true, true, true); Dialogs.hide();">try again</a> or notify us about the issue.',
+                Dialogs.show('Login failed due to unknown reasons. Please, <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">try again</a> or notify us about the issue.',
                     this.retryTimeout + 2000, Dialogs.MSG_ERR);
             }
             console.error("OIDC auth attempt: ", error);
         }
     };
+
+    async _safeRetrySignIn(message, retryMessage, preventRecurse) {
+        let resolved, dialogWait = new Promise((resolve) => resolved = resolve);
+        Dialogs.show(`${message} <a onclick="oidc.xOpatUser.instance().signIn(); Dialogs.hide();">${retryMessage}</a>`,
+            this.retryTimeout, Dialogs.MSG_WARN, {onHide: resolved});
+        await dialogWait;
+        if (this._manualCoroutine) await this._manualCoroutine;
+        if (!preventRecurse) {
+            await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
+        } else {
+            console.error("OIDC: MAX retry exceeded");
+        }
+    }
 
     //returns true if no user interaction required
     async _signInUserInteractive(refreshTokenExpiration, alwaysSignIn=true) {
@@ -223,7 +227,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 popupWindowTarget: "xopat-auth",
             } : undefined;
             console.log(`OIDC: Try to sign in via ${this.authMethod}.`);
-            // await this.sleep(100);
             await this.userManager[signIn](configuration);
             return false;
         }
@@ -318,7 +321,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 });
                 user.addHandler('secret-needs-update', async event => {
                     if (event.type === "jwt") {
-                        await this.trySignIn(false, true);
+                        await this._trySignIn(false, true);
                     }
                 });
             }
