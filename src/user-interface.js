@@ -984,6 +984,45 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
+         * UI Fullscreen Loading
+         */
+        Loading: {
+            _visible: $("#fullscreen-loader").css('display') !== 'none',
+            _allowDescription: false,
+            isVisible: function () {
+                return this._visible;
+            },
+            show: function(loading) {
+                const loader = $("#fullscreen-loader");
+                if (this._visible === loading) return;
+                if (loading) {
+                    loader.css('display', 'block');
+                } else {
+                    loader.css('display', 'none');
+                    this.text("");
+                }
+                this._visible = loading;
+            },
+            text: function (titleText="", descriptionText="") {
+                if (!this.isVisible()) return;
+
+                const title = document.getElementById("fullscreen-loader-title");
+                const description = document.getElementById("fullscreen-loader-description");
+                title.innerText = titleText;
+                description.innerText = descriptionText;
+                if (this._allowDescription) {
+                    if (titleText) {
+                        title.classList.add('loading-text-style');
+                        description.classList.add('loading-text-style');
+                    } else {
+                        title.classList.remove('loading-text-style');
+                        description.classList.remove('loading-text-style');
+                    }
+                }
+            }
+        },
+
+        /**
          * Tutorial system
          * @namespace USER_INTERFACE.Tutorials
          */
@@ -1125,6 +1164,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         }
     };
+
+    // Make loading show
+    setTimeout(() => {
+        const loader = USER_INTERFACE.Loading;
+        // Only after some time show texts to users - taking too long time
+        loader._allowDescription = true;
+        if (loader.isVisible()) loader.text($.t('messages.loading'));
+    }, 3000);
 
     /******************* ADVANCED MENUS *********************/
 

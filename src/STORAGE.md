@@ -50,7 +50,7 @@ Async drivers are usable only within async providers and vice versa.
 
 When a provider is crated, it uses the last driver it was registered with.
 Registration checks the direct interface inheritance and can be:
- - ``Provider.register(class extends $Driver {...})`` registered as a class for custom implementations, or
+ - ``Provider.registerClass(class extends $Driver {...})`` registered as a class for custom implementations, or
  - ``Provider.registerInstance(localStorage)`` registered as an instance.
 
 Registered instances are shared drivers between providers. Registered classes depend on the implementation.

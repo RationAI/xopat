@@ -116,9 +116,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
     if (!XOpatStorage.Cookies.registered()) {
+        // const storage = new CookieStorage({
+        //     path: ENV.client.js_cookie_path,
+        //     domain: ENV.client.js_cookie_domain || ENV.client.domain,
+        //     expires: new Date(new Date() + ENV.client.js_cookie_expire * 86400000),
+        //     secure:  typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : true,
+        //     sameSite: ENV.client.js_cookie_same_site,
+        // });
+        // XOpatStorage.Cookies.registerInstance(storage);
+
         const cookies = Cookies;
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
+            domain: ENV.client.js_cookie_domain || ENV.client.domain,
             expires: ENV.client.js_cookie_expire,
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
@@ -925,7 +935,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
          * @event open
          */
         VIEWER.raiseEvent('open', opts);
-        UTILITIES.showLoading(false);
+        USER_INTERFACE.Loading.show(false);
         if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
 
         //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
@@ -1041,7 +1051,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         visualizations=[],
     ) {
         loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-        UTILITIES.showLoading(true);
+        USER_INTERFACE.Loading.show(true);
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
@@ -1146,7 +1156,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         const openAll = (numOfVisLayersAtTheEnd) => {
             if (toOpen.length < 1) {
                 // //todo two places where we need to remove loading screen make clear flow of the initialization!
-                // UTILITIES.showLoading(false);
+                // USER_INTERFACE.Loading.show(false);
                 // if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
                 // USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
                 //

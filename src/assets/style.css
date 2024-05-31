@@ -559,7 +559,12 @@ input.selectable-image-row-context:checked + div {
 .popUpEnter{opacity: 1 !important;animation: popUpEnter 0.2s;-webkit-animation: popUpEnter 0.2s;}
 .popUpHide{opacity: 0;display: none !important;animation: popUpHide 0.2s;-webkit-animation: popUpHide 0.2s;
     -webkit-animation-fill-mode: forwards;animation-fill-mode: forwards;}
-
+.loading-text-style {display: block !important;animation: pulsing 2s linear infinite;}
+@keyframes pulsing {
+    from { opacity: 1; }
+    50% { opacity: 0.5; }
+    to { opacity: 1; }
+}
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/

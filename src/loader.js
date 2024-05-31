@@ -332,7 +332,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param Class ignored argument, this class hardcodes POST DATA 'driver'
          */
         static register(Class) {
-            super.register(class extends XOpatStorage.AsyncStorage {
+            super.registerClass(class extends XOpatStorage.AsyncStorage {
                 async getItem(key) {
                     let storage = POST_DATA[this.ref];
                     // backward non-namespaced compatibility
@@ -1119,19 +1119,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 return plugin.loaded && plugin.instance;
             }
             return MODULES[id].loaded;
-        },
-
-        /**
-         * Set loading
-         * @param loading
-         */
-        showLoading: function (loading) {
-            const loader = $("#fullscreen-loader");
-            if (loading) {
-                loader.css('display', 'block');
-            } else {
-                loader.css('display', 'none');
-            }
         },
 
         /**

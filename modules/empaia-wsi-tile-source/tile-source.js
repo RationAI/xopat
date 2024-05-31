@@ -82,6 +82,8 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             return data;
         }
 
+        //todo if previews have token then it is not being used to fetch thumbnails!
+
         const user = XOpatUser.instance();
         const secret = user.getSecret();
         const headers = secret ? {"Authorization": user.getSecret()} : {};

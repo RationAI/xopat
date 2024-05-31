@@ -64,6 +64,7 @@
             "js_cookie_path": "/",
             "js_cookie_same_site": "", //string value, lowercase
             "js_cookie_secure": false, //boolean - true/false
+            "js_cookie_domain": null, //by default the viewer domain
             "secureMode": false,
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
             "redirectUrl": "redirect.php"
@@ -82,6 +83,7 @@
             "js_cookie_path": "/",
             "js_cookie_same_site": "strict",
             "js_cookie_secure": true,
+            "js_cookie_domain": null,
             "secureMode": true,
             "redirectUrl": "redirect.php"
         }
@@ -198,6 +200,7 @@
             ],
             "common": [
                 "enjoyhint.js",
+                //"cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",

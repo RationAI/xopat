@@ -29,7 +29,7 @@
       "global": {
         "tissue": "Tissue",
         "layerOpacity": "Opacity",
-        "clone": "Clone the viewer and synchronize"
+        "clone": "Clone the viewer and synchronize",
       },
       "navigator": {
         "faultyTissue": "Faulty {{slide}}"
@@ -65,6 +65,7 @@
       }
     },
     "messages": {
+      "loading": "Loading...",
       "urlInvalid": "Invalid link",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualization setup is not parse-able.",

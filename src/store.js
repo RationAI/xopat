@@ -95,6 +95,20 @@ class xoAsyncStorage {
     }
 }
 
+const storageAPI = Object.keys(window.Storage.prototype);
+function errInstanceApi(instance, keys) {
+    for (let key of keys) {
+        if (!key in instance) return `method ${key} is not implemented!`;
+    }
+    return false;
+}
+function errClassApi(cls, keys) {
+    for (let key of keys) {
+        if (!key in cls) return `method ${key} is not implemented!`;
+    }
+    return false;
+}
+
 /**
  * Data Api Proxy Base Class. Private class.
  */
@@ -108,11 +122,15 @@ class APIProxy {
             throw "Data Store: invalid configuration: missing options.id!";
         }
 
+        const staticSelf = this.constructor;
+        if (!staticSelf._implementation) {
+            throw "Data Store: invalid configuration: no implementation was registered for the storage!";
+        }
+
         const uid = options.id;
         this.__id = (uid && !uid.endsWith(".")) ? (uid+".") : uid;
         this.constructor._used = true;
 
-        const staticSelf = this.constructor;
         this.__storage = staticSelf._implementsClass ? new staticSelf._implementation() : staticSelf._implementation;
         const schema = options.schema;
 
@@ -165,18 +183,26 @@ class APIProxy {
      * @param {function(new:Storage)|function(new:AsyncStorage)} Class
      */
     static register(Class) {
+        console.warn("Storage::register() is depreacted: use registerClass!");
+        return this.registerClass(Class);
+    }
+
+    /**
+     * Register a storage implementation for the particular data proxy.
+     * @param {function(new:Storage)|function(new:AsyncStorage)} Class
+     */
+    static registerClass(Class) {
         if (this._used) throw "Cannot register a storage implementation after it had been already used!";
-        if (Class.name === "DataInterfaceBase") throw "XOpatStorage.<*>:register can be called only on child classes!";
+        const err = errClassApi(Class, storageAPI);
+        if (err) throw `XOpatStorage.<*>:registerClass ${err} - ${Class}`;
         this._implementation = Class;
         this._implementsClass = true;
     }
 
     static registerInstance(instance) {
         if (this._used) throw "Cannot register a storage implementation after it had been already used!";
-        if (!(instance instanceof window.Storage
-        //    || instance instanceof window.AsyncStorage
-            || instance instanceof XOpatStorage.Storage
-            || instance instanceof XOpatStorage.AsyncStorage)) throw "XOpatStorage.<*>:register can be called only on child classes!";
+        const err = errInstanceApi(instance, storageAPI);
+        if (err) throw `XOpatStorage.<*>:registerInstance ${err} - ${instance}`;
         this._implementation = instance;
         this._implementsClass = false;
     }
@@ -192,14 +218,8 @@ class APIProxy {
  * @private
  */
 class SyncAPIProxy extends APIProxy {
-    constructor(options, ...additionalAllowedClasses) {
+    constructor(options) {
         super(options);
-        if (! (this.__storage instanceof window.Storage
-            || this.__storage instanceof XOpatStorage.Storage
-            || additionalAllowedClasses.some(Cls => Cls && this.__storage instanceof Cls)
-        )) {
-            throw `${this.constructor.name}: registered storage implementation must be a type of Storage!`;
-        }
     }
 
     /**
@@ -243,14 +263,8 @@ class SyncAPIProxy extends APIProxy {
  * @private
  */
 class AsyncAPIProxy extends APIProxy {
-    constructor(options, ...additionalAllowedClasses) {
+    constructor(options) {
         super(options);
-        if (! ( this.__storage instanceof XOpatStorage.AsyncStorage
-          //  || this.__storage instanceof window.AsyncStorage
-            || additionalAllowedClasses.some(Cls => Cls && this.__storage instanceof Cls)
-        )) {
-            throw `${this.constructor.name}: registered storage implementation must be a type of AsyncStorage!`;
-        }
     }
 
     /**
