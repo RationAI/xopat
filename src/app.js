@@ -84,7 +84,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             localizeDom();
         });
     }
-    let CONFIG = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.serverStatus.supportsPost);
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.serverStatus.supportsPost);
+    let CONFIG = POST_DATA.visualization;
     if (!CONFIG) {
         CONFIG = {
             error: $.t('error.nothingToRender'),
@@ -1003,6 +1004,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             );
             this.openViewerWith(data, background, visualizations || []);
         } catch (e) {
+            USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
             console.error(e);
         }
