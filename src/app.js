@@ -226,10 +226,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 return CONFIG.plugins || {};
             },
         },
+        /**
+         * Global Application Cache. Should not be used directly: cache is avaialble within
+         * plugins as this.cache object.
+         * @type XOpatStorage.Cache
+         * @memberOf APPLICATION_CONTEXT
+         */
         AppCache: {
             get() {console.warn("AppCache used before initialization.")},
             set() {console.warn("AppCache used before initialization.")},
         },
+        /**
+         * Global Application Cookies.
+         * @type XOpatStorage.Cookies
+         * @memberOf APPLICATION_CONTEXT
+         */
         AppCookies: {
             get() {console.warn("AppCookies used before initialization.")},
             set() {console.warn("AppCookies used before initialization.")},
@@ -943,20 +954,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
                                               background,
                                               visualizations=undefined) {
-        /**
-         * Global Application Cache. Should not be used directly: cache is avaialble within
-         * plugins as this.cache object.
-         * @type XOpatStorage.Cache
-         * @memberOf APPLICATION_CONTEXT
-         */
-        APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
-        /**
-         * Global Application Cookies.
-         * @type XOpatStorage.Cookies
-         * @memberOf APPLICATION_CONTEXT
-         */
-        APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
-
         try {
             initXopatLayers();
 
@@ -1187,6 +1184,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             openAll(0);
         }
     }
+
+    // Initialize middleware before we run scripts initialization
+    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
+    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
     initXopatScripts();
 
