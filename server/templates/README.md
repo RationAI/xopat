@@ -45,9 +45,8 @@ all the details it needs for running:
 initXopat(
     <PLUGINS: json object describing available plugins and their meta>,
     <MODULES: json object describing available modules and their meta>,
-    <CORE: json object describing xOpat metadata configuration>,
-    <POST: post data: key value map that plugins might export data to>,
-    <session: the xOpat session JSON or callback (see xOpatParseConfiguration(..))>,
+    <CORE: json object describing static xOpat configuration, see the existing core config parsing implementations>,
+    <DATA: the viewer data: key value map that plugins might export data to; 'visualization': {viewer session}>,
     '<PLUGINS_FOLDER: the path to plugins so that browser can import scripts>',
     '<MODULES_FOLDER: the path to modules so that browser can import scripts>',
     '<VERSION: the version tag>',
@@ -59,7 +58,12 @@ initXopat(
 );
 ````
 The i18next configuration can be omitted, then we assume the initialization was done
-and expect ``i18next`` object ready to be used.
+and expect ``i18next`` object ready to be used. The data object:
+ - must be an object, the available POST DATA if the server implementation supports POST
+ - can be empty otherwise
+ - can contain anything the server considers crucial, but must keep the structure:
+   - key ``visualization`` describes the viewer dynamic session (see `/src/README.md`)
+   - custom keys of plugins that store their data
 
 ### The error page
 

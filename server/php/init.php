@@ -67,7 +67,6 @@ $replacer = function($match) use ($i18n) {
             <?php echo json_encode((object)$MODULES) ?>,
             <?php echo json_encode((object)$CORE) ?>,
             <?php echo json_encode($_POST); ?>,
-            xOpatParseConfiguration,
             '<?php echo PLUGINS_FOLDER ?>',
             '<?php echo MODULES_FOLDER ?>',
             '<?php echo VERSION ?>',

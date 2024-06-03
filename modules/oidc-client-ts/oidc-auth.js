@@ -254,8 +254,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 if ('refresh_token' in values) {
                     refreshToken = values.refresh_token;
                 }
-            } else {
-                //todo consume refresh token from cookies if available
             }
             if (refreshToken) {
                 const refresh = jwtDecode(refreshToken);
@@ -295,7 +293,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
                 const endpoint = this.getStaticMeta('oidcUserInfo');
 
-                //todo: make this not awaiting
                 if (endpoint && (!decodedToken.family_name) || (!!decodedToken.given_name)) {
                     try {
                         const data = await (await fetch(endpoint, {

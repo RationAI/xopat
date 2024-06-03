@@ -71,7 +71,6 @@ ${core.requireCore("app")}`;
         ${JSON.stringify(core.MODULES)},
         ${JSON.stringify(core.CORE)},
         {},
-        xOpatParseConfiguration,
         '${core.PLUGINS_FOLDER}',
         '${core.MODULES_FOLDER}',
         '${core.VERSION}',

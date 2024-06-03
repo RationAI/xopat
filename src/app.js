@@ -49,14 +49,13 @@
  * @param MODULES
  * @param ENV
  * @param POST_DATA
- * @param {object|function} CONFIG configuration or function that gets postData and i18next param and returns the configuration
  * @param PLUGINS_FOLDER
  * @param MODULES_FOLDER
  * @param VERSION
  * @param I18NCONFIG
  * @private
  */
-function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
     initXopatUI();
 
     //Setup language and parse config if function provided
@@ -85,9 +84,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
             localizeDom();
         });
     }
-    if (typeof CONFIG === "function") {
-        CONFIG = CONFIG(POST_DATA, $.i18n);
-    }
+    let CONFIG = xOpatParseConfiguration(POST_DATA, $.i18n);
     if (!CONFIG) {
         CONFIG = {
             error: $.t('error.nothingToRender'),
@@ -198,14 +195,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
              */
             get defaultParams() {
                 return defaultSetup;
-            },
-            /**
-             * Get meta data raw object from the viewer setup
-             * @type {Object}
-             */
-            get meta() {
-                //todo deprecate? or by default feed meta here?
-                return CONFIG.meta || {};
             },
             /**
              * Get all the data WSI identifiers list
@@ -952,7 +941,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
                                               background,
-                                              visualizations=[]) {
+                                              visualizations=undefined) {
         /**
          * Global Application Cache. Should not be used directly: cache is avaialble within
          * plugins as this.cache object.
@@ -1010,30 +999,32 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, CONFIG, PLUGINS_FOLDER, MOD
         await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', null).catch(e =>
             {
                 //todo UI Update
+                console.error(e);
                 error = e;
             }
         );
-        if (!background.length && !visualizations.length) {
-            //Try parsing url for serialized config in the headers and redirect
-            const url = new URL(window.location.href);
-            if (url.hash) {
-                const form = document.createElement("form");
-                form.method = "POST";
-                const node = document.createElement("input");
-                node.name = "visualization";
-                node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
-                form.appendChild(node);
-                form.style.visibility = 'hidden';
-                document.body.appendChild(form);
-                // prevents recursion
-                url.hash = "";
-                form.action = String(url);
-                form.submit();
-            }
-        } else if (error) {
-            // //todo consider event
-            // throw error;
-        }
+        visualizations = visualizations || [];
+        // if (!background.length && !visualizations.length) {
+        //     const url = new URL(window.location.href);
+        //     if (url.hash) {
+        //         //Try parsing url for serialized config in the headers and redirect
+        //         const form = document.createElement("form");
+        //         form.method = "POST";
+        //         const node = document.createElement("input");
+        //         node.name = "visualization";
+        //         node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
+        //         form.appendChild(node);
+        //         form.style.visibility = 'hidden';
+        //         document.body.appendChild(form);
+        //         // prevents recursion
+        //         url.hash = "";
+        //         form.action = String(url);
+        //         form.submit();
+        //     }
+        // } else if (error) {
+        //     // //todo consider event
+        //     // throw error;
+        // }
 
         this.openViewerWith(data, background, visualizations);
     };

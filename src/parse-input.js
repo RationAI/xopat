@@ -77,73 +77,120 @@ function xOpatParseConfiguration(postData, i18n) {
     try {
         const url = new URL(window.location.href);
 
-        //old data key was 'visualization' todo consider 'session' as name instead
+        // First priority has post (or other) data given
         session = _parse(postData["visualization"] || postData["visualisation"]);
+
+        // In case we could not retrieve the session from data, we try URL
         if (!session || session.error) {
             const data = url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'
                 url.searchParams.get("visualization");
             if (data) {
-                session = _parse(data);
+                // Prefer redirect due to server-side logics
+                if (APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
+                    //Try parsing url for serialized config in the headers and redirect
+                    const form = document.createElement("form");
+                    form.method = "POST";
+                    const node = document.createElement("input");
+                    node.name = "visualization";
+                    node.value = data;
+                    form.appendChild(node);
+                    form.style.visibility = 'hidden';
+                    document.body.appendChild(form);
+                    // prevents recursion
+                    url.hash = "";
+                    form.action = String(url);
+                    form.submit();
+
+                    //todo return?
+                } else {
+                    session = _parse(data);
+                }
             }
         }
 
-
+        // Try parsing slides & visualization GET params
         if (!session) {
+            const handMadeConfiguration = {
+                data: []
+            };
+
             const slide = url.searchParams.get("slides");
+            let processed = false;
             if (slide) {
                 const slideList = slide.split(",");
-                //try building the object from scratch
-                const handMadeConfiguration = {
-                    data: slideList,
-                    background: slideList.map((slide, index) => {
-                        return {
-                            dataReference: index,
-                            lossless: false,
-                        }
-                    })
+                handMadeConfiguration.data = slideList;
+                handMadeConfiguration.background = slideList.map((slide, index) => {
+                    return {
+                        dataReference: index,
+                        lossless: false,
+                    }
+                });
+                processed = true;
+            }
+            let masks = url.searchParams.get("masks");
+            if (masks) {
+                masks = masks.split(',');
+                const visConfig = {
+                    name: "Masks",
+                    lossless: true,
+                    shaders: {}
                 };
-                let masks = url.searchParams.get("masks");
-                if (masks) {
-                    masks = masks.split(',');
-                    const visConfig = {
-                        name: "Masks",
-                        lossless: true,
-                        shaders: {}
-                    };
-                    handMadeConfiguration.visualizations = [visConfig];
+                handMadeConfiguration.visualizations = [visConfig];
 
-                    let index = 1;
-                    for (let mask of masks) {
-                        handMadeConfiguration.data.push(mask);
-                        visConfig.shaders[mask] = {
-                            type: "heatmap",
-                            fixed: false,
-                            visible: 1,
-                            dataReferences: [index++],
-                            params: { }
-                        }
+                let index = 1;
+                for (let mask of masks) {
+                    handMadeConfiguration.data.push(mask);
+                    visConfig.shaders[mask] = {
+                        type: "heatmap",
+                        fixed: false,
+                        visible: 1,
+                        dataReferences: [index++],
+                        params: { }
                     }
                 }
+                processed = true;
+            }
+
+            if (processed) {
                 session = _parse(handMadeConfiguration);
-            } else {
-                session = {};
             }
         }
 
+        if (!session) {
+            // Try to restore past state
+            const strData = window.localStorage.getItem("xoSessionCache");
+            if (strData) {
+                const data = JSON.parse(strData);
+                // consider the session alive for at most 30 minutes
+                if (session.__age && Date.now() - session.__age < 1800e3) {
+                    postData = data; // override post
+                    delete session.__age;
+                    session = _parse(data.visualization);
+                }
+                window.localStorage.removeItem("xoSessionCache");
+            }
+        } else if (!session.error) {
+            // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)
+            const data = postData || {};
+            session.__age = Date.now();
+            data.visualization = session;
+            window.localStorage.setItem("xoSessionCache", JSON.stringify(data));
+        }
+
+        // Needs to be solo condition, the above could create the session object
         if (session.error) {
             session.error = i18n.t(session.error);
             if (session.description) session.description = i18n.t(session.description);
         }
     } catch (e) {
-        //todo error
         session = {error: e};
     }
 
-    //todo show error page if plausible
     //especially page with error 'error.nothingToRender'
     ensureDefined(session, "params", {});
     ensureDefined(session, "data", []);
     ensureDefined(session, "background", []);
     ensureDefined(session, "plugins", {});
-    return session;
+    postData.visualization = session;
+    return postData;
 }
