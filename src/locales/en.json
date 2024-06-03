@@ -6,6 +6,7 @@
       "detailsBtn": "details",
       "dismissBtn": "dismiss",
       "unknown": "Unknown error",
+      "reachUs": "The viewer has run into an unexpected error. Please contact us and provide the error details.",
       "back": "Go back",
       "noDetails": "No details provided",
       "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",

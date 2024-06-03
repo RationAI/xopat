@@ -84,7 +84,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             localizeDom();
         });
     }
-    let CONFIG = xOpatParseConfiguration(POST_DATA, $.i18n);
+    let CONFIG = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.serverStatus.supportsPost);
     if (!CONFIG) {
         CONFIG = {
             error: $.t('error.nothingToRender'),
@@ -956,77 +956,56 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          */
         APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
-        initXopatLayers();
+        try {
+            initXopatLayers();
 
-        // First step: load plugins that were marked as to be loaded but were not yet loaded
-        function loadPluginAwaits(pid, hasParams) {
-            return new Promise((resolve) => {
-                UTILITIES.loadPlugin(pid, resolve);
-                if (!hasParams) {
-                    //todo consider doing this automatically
-                    CONFIG.plugins[pid] = {};
-                }
-            });
-        }
+            // First step: load plugins that were marked as to be loaded but were not yet loaded
+            function loadPluginAwaits(pid, hasParams) {
+                return new Promise((resolve) => {
+                    UTILITIES.loadPlugin(pid, resolve);
+                    if (!hasParams) {
+                        //todo consider doing this automatically
+                        CONFIG.plugins[pid] = {};
+                    }
+                });
+            }
 
-        const pluginKeys = APPLICATION_CONTEXT.AppCookies.get('_plugins', '').split(',') || [];
-        for (let pid in PLUGINS) {
-            const hasParams = CONFIG.plugins[pid];
-            const plugin = PLUGINS[pid];
-            if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
-                if (plugin.error) {
-                    console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
-                } else {
-                    await loadPluginAwaits(pid, hasParams);
+            const pluginKeys = APPLICATION_CONTEXT.AppCookies.get('_plugins', '').split(',') || [];
+            for (let pid in PLUGINS) {
+                const hasParams = CONFIG.plugins[pid];
+                const plugin = PLUGINS[pid];
+                if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
+                    if (plugin.error) {
+                        console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
+                    } else {
+                        await loadPluginAwaits(pid, hasParams);
+                    }
                 }
             }
+
+            /*---------------------------------------------------------*/
+            /*------------ Initialization of UI -----------------------*/
+            /*---------------------------------------------------------*/
+
+            USER_INTERFACE.AdvancedMenu._build();
+            USER_INTERFACE.MainMenu._sync();
+
+            /**
+             * First loading of the viewer from a clean state.
+             * @memberOf VIEWER
+             * @event before-first-open
+             */
+            await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', null).catch(e =>
+                {
+                    //todo something meaningful
+                    console.error(e);
+                }
+            );
+            this.openViewerWith(data, background, visualizations || []);
+        } catch (e) {
+            USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
+            console.error(e);
         }
-
-        /*---------------------------------------------------------*/
-        /*------------ Initialization of UI -----------------------*/
-        /*---------------------------------------------------------*/
-
-        USER_INTERFACE.AdvancedMenu._build();
-        USER_INTERFACE.MainMenu._sync();
-
-        let error = null;
-        //todo show loading screen
-        /**
-         * First loading of the viewer from a clean state.
-         * @memberOf VIEWER
-         * @event before-first-open
-         */
-        await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', null).catch(e =>
-            {
-                //todo UI Update
-                console.error(e);
-                error = e;
-            }
-        );
-        visualizations = visualizations || [];
-        // if (!background.length && !visualizations.length) {
-        //     const url = new URL(window.location.href);
-        //     if (url.hash) {
-        //         //Try parsing url for serialized config in the headers and redirect
-        //         const form = document.createElement("form");
-        //         form.method = "POST";
-        //         const node = document.createElement("input");
-        //         node.name = "visualization";
-        //         node.value = decodeURIComponent(url.hash.substring(1)); //remove '#'
-        //         form.appendChild(node);
-        //         form.style.visibility = 'hidden';
-        //         document.body.appendChild(form);
-        //         // prevents recursion
-        //         url.hash = "";
-        //         form.action = String(url);
-        //         form.submit();
-        //     }
-        // } else if (error) {
-        //     // //todo consider event
-        //     // throw error;
-        // }
-
-        this.openViewerWith(data, background, visualizations);
     };
 
     let _allowRecursionReload = true;

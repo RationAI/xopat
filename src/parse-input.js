@@ -2,9 +2,10 @@
  * Client-side parsing of the viewer session configuration
  * @param {object} postData post data available to the viewer if any
  * @param i18n i18next translation context
+ * @param supportsPost whether the server implementation supports post data
  * @returns {*|{error}}
  */
-function xOpatParseConfiguration(postData, i18n) {
+function xOpatParseConfiguration(postData, i18n, supportsPost) {
     function ensureDefined(object, property, defaultValue) {
         if (!object.hasOwnProperty(property)) {
             object[property] = defaultValue;
@@ -86,7 +87,7 @@ function xOpatParseConfiguration(postData, i18n) {
                 url.searchParams.get("visualization");
             if (data) {
                 // Prefer redirect due to server-side logics
-                if (APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
+                if (supportsPost) {
                     //Try parsing url for serialized config in the headers and redirect
                     const form = document.createElement("form");
                     form.method = "POST";
