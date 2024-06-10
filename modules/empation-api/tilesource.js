@@ -1,3 +1,68 @@
+//TODO: Add this patch/feature to OSD: Empaia data elements are by default padded to full tile size
+OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
+    function fixImage(image, tileWidth, tileHeight) {
+        // This approach does not treat well tiles that are both shorter and narrower, but does not need tile max w/h
+        // let tileAr = tile.sourceBounds.width / tile.sourceBounds.height,
+        //     imageAr = image.width / image.height,
+        //     d = Math.abs(tileAr - imageAr);
+        //
+        // console.log(tile.sourceBounds.width, image.width,  tile.sourceBounds.height, image.height)
+        //
+        // //significant change
+        // if (d > 1e-3) {
+        //     const canvas = document.createElement('canvas'),
+        //         context = canvas.getContext('2d'),
+        //         desiredWidth = tileAr > 1 ? image.width : image.width * tileAr,
+        //         desiredHeight = tileAr > 1 ? image.height / tileAr : image.height;
+        //     canvas.width = desiredWidth;
+        //     canvas.height = desiredHeight;
+        //     context.drawImage(image, 0, 0, desiredWidth, desiredHeight, 0, 0, desiredWidth, desiredHeight);
+        //     return canvas;
+        // }
+
+        // Treats tiles correctly, supposing all tiles have the same size (or smaller if they do not fit)
+        let dw = tile.sourceBounds.width / tileWidth,
+            dh = tile.sourceBounds.height / tileHeight;
+
+        //the value is expected to be up to 1 if sizes equal
+        if (dw < 0.999 || dh < 0.999) {
+            const canvas = document.createElement('canvas'),
+                context = canvas.getContext('2d'),
+                desiredWidth = image.width * dw,
+                desiredHeight = image.height * dh;
+            canvas.width = desiredWidth;
+            canvas.height = desiredHeight;
+            context.drawImage(image, 0, 0, desiredWidth, desiredHeight, 0, 0, desiredWidth, desiredHeight);
+            return canvas;
+        }
+        return image;
+    }
+
+    var _this = this;
+    tile.loading = true;
+    this._imageLoader.addJob({
+        src: tile.getUrl(),
+        tile: tile,
+        source: this.source,
+        postData: tile.postData,
+        loadWithAjax: tile.loadWithAjax,
+        ajaxHeaders: tile.ajaxHeaders,
+        crossOriginPolicy: this.crossOriginPolicy,
+        ajaxWithCredentials: this.ajaxWithCredentials,
+        callback: function( data, errorMsg, tileRequest ){
+            const w = _this.source.getTileWidth(), h = _this.source.getTileHeight();
+            if (Array.isArray(data)) {
+                _this._onTileLoad(tile, time, data.map(x => fixImage(x, w, h)), errorMsg, tileRequest);
+            } else {
+                _this._onTileLoad( tile, time, fixImage(data, w, h), errorMsg, tileRequest );
+            }
+        },
+        abort: function() {
+            tile.loading = false;
+        }
+    });
+};
+
 /**
  * Within LibEmpationAPI we provide the slide access for the OpenSeadragon.
  * @class OpenSeadragon.EmpationAPIV3TileSource

@@ -7,12 +7,11 @@
 
 ![The XOpat Viewer](docs/assets/xopat-banner.png)
 
-### Why xOpat?
+## Why xOpat?
 
 Configure the viewer to your needs, not vice versa! Here, you can take a half-ready solution
 and bring it to something that covers all your needs. With the focus on flexibility, extensibility and modularity, the xOpat
-viewer tries to address issues in digital pathology related to analysis and 
-AI development.
+viewer tries to address issues in digital pathology related to AI adoption.
 
 ### Behaves as an enhanced OpenSeadragon*, a popular (feature-less) flexible viewer.
 <ul>
@@ -32,7 +31,7 @@ AI development.
 :bookmark_tabs: EMPAIA Integration<br>
 :keyboard: Screenshot or viewport copy/paste shortcuts<br>
 ...<br>
-:fast_forward: And more including anything you add!<br>
+:fast_forward: And more including custom functionality!<br>
 </ul>
 
 ### Servers
@@ -44,13 +43,9 @@ we try to cover it all!
 :heavy_check_mark: Server-less: compiled once, used statically!<br>
 </ul>
 
-
-Note that the viewer is still in active development. If you wish to start
-using the viewer, please do not hesitate to reach us. Currently, it is used for versatile
-offline AI data inspection. We work now on integration workflows and in future
-the focus will be on services, namely non-standard integration with an ML pipeline for
-effective algorithm/network debugging and profiling with the help of powerful visualization platform.
-
+### Having Issues?
+Please do not hesitate to reach us. We have yet to work in documentation & deployment
+simplification.
 
 ## Setup
 First, install development dependencies. You need ``node`` and `npm`. Then just run `npm install`.
@@ -63,7 +58,7 @@ For more, see ``env/README.md``.
 > PHP server has available _docker image_. Node server can be run e.g. locally via ``npm run node``.
 > However, to really open the viewer with a meaningful data and visualization, you need to provide the data,
 > configure a WSI server and open the viewer session. To simplify all of this, we work on example deployment docker
-> compose we will soon publish.
+> compose we will soon publish. To test the session manually, you can use ``viewer.url/dev_setup``.
 
 ## Environment, Build & Test
 
