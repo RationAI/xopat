@@ -20,6 +20,11 @@ OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
         //     return canvas;
         // }
 
+        //hotfix - if some data comes as rendering context 2d
+        if (image instanceof CanvasRenderingContext2D) {
+            image = image.canvas;
+        }
+
         // Treats tiles correctly, supposing all tiles have the same size (or smaller if they do not fit)
         let dw = tile.sourceBounds.width / tileWidth,
             dh = tile.sourceBounds.height / tileHeight;
