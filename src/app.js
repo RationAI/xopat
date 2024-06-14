@@ -123,7 +123,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         // });
         // XOpatStorage.Cookies.registerInstance(storage);
 
-        const cookies = Cookies;
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -131,35 +130,28 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-        XOpatStorage.Cookies.register(class extends XOpatStorage.Storage {
-            constructor() {
-                super();
-                this._options = undefined;
-            }
-            //todo try some project that implements the Storage API instead
-            get length() {
-                // not possible with current cookies lib
-                throw "Cookies do not support length property!";
-            }
-            clear() {
-                // not possible with current cookies lib
-                throw "Cookies do not support clear()!";
-            }
+        XOpatStorage.Cookies.register(class {
             getItem(key) {
-                return cookies.get(key);
-            }
-            key(index) {
-                // not possible with current cookies lib
-                throw "Cookies do not support key()!";
-            }
-            removeItem(key) {
-                cookies.remove(key);
+                return Cookies.get(key) || null;
             }
             setItem(key, value) {
-                cookies.set(key, value, this._options);
+                Cookies.set(key, value);
             }
-            with(options) {
-                this._options = options;
+            removeItem(key) {
+                Cookies.remove(key);
+            }
+            clear() {
+                const allCookies = Cookies.get();
+                for (let key in allCookies) {
+                    Cookies.remove(key);
+                }
+            }
+            get length() {
+                return Object.keys(Cookies.get()).length;
+            }
+            key(index) {
+                const keys = Object.keys(Cookies.get());
+                return keys[index] || null;
             }
         });
     } else {
@@ -478,7 +470,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 case 403:
                     title = $("#tissue-title-header");
                     title.children().last().html($.t('main.global.tissue'));
-                    Dialogs.show($.t('error.slide.404'),
+                    Dialogs.show($.t('error.slide.403'),
                         20000, Dialogs.MSG_ERR);
                     break;
                 case 404:

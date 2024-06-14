@@ -39,9 +39,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         //Create OIDC User Manager
         this.userManager = new oidc.UserManager({
             ...this.configuration,
-            // Due to cross-site cookies do not work :/
-            //stateStore: new oidc.WebStorageStateStore({ store: APPLICATION_CONTEXT.AppCookies.getStore() }),
-            //userStore: new oidc.WebStorageStateStore({ store: APPLICATION_CONTEXT.AppCookies.getStore() }),
+            userStore: new oidc.WebStorageStateStore({ store: APPLICATION_CONTEXT.AppCookies.getStore() }),
         });
 
         //Resolve once we know if we handle login
@@ -61,7 +59,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                             await this.userManager.signinPopupCallback(window.location.href);
                         } else {
                             await this.userManager.signinRedirectCallback(window.location.href);
-                            await this.handleUserDataChanged();
+                            await this.handleUserDataChanged(false);
                         }
                         resolves && resolves();
                         return;
@@ -131,8 +129,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     token_type: 'Bearer'
                 }));
                 APPLICATION_CONTEXT.AppCookies.set(this.cookieRefreshTokenName, data.refresh_token);
-                await this.handleUserDataChanged();
-                return true;
+                return await this.handleUserDataChanged(false);
             }
             console.warn('OIDC: Failed to log in user via cookie refresh token', data);
             return false;
@@ -166,7 +163,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 console.log("OIDC: Signing silently..");
                 await this.userManager.signinSilent();
             }
-            await this.handleUserDataChanged();
+            // TODO singing might fail here, e.g. refresh token not issued... maybe do not log out user
+            await this.handleUserDataChanged(false);
             this._connectionRetries = 0;
             this._signinProgress = false;
 
@@ -238,16 +236,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     }
 
     getSessionData() {
-        return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
+        // Key used:  oidc.user:<authority>:<client>
+        return APPLICATION_CONTEXT.AppCookies
+             .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
+        //return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
     }
 
     getRefreshTokenExpiration() {
-        // Key used:
-        //oidc.user:<authority>:<client>
         try {
             const token = this.getSessionData();
-            // const token = APPLICATION_CONTEXT.AppCookies
-            //     .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
+
             let refreshToken = '';
             if (token) {
                 const values = JSON.parse(token);
@@ -266,7 +264,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return 0;
     }
 
-    async handleUserDataChanged() {
+    async handleUserDataChanged(withLogout = true) {
         const user = XOpatUser.instance();
         function returnNeedsRefresh() {
             if (user.isLogged) {
@@ -278,9 +276,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         const oidcUser = await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
 
-            const refreshTokenExpiration = this.getRefreshTokenExpiration();
-            if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
-                return returnNeedsRefresh();
+            if (withLogout){
+                const refreshTokenExpiration = this.getRefreshTokenExpiration();
+                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
+                    return returnNeedsRefresh();
+                }
             }
 
             if (!user.isLogged) {
