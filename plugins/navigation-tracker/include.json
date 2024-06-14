@@ -4,8 +4,10 @@
     "author": "Jirka Horák",
     "version": "1.0.0",
     "description": "Record the movement of navigator in the viewer.",
-    "icon": "",
+    "icon": null,
     "includes" : ["tracker.js"],
     "modules": ["webgl"],
-    "permaLoad": true
+    "permaLoad": true,
+    "hidden": true,
+    "animate": true
 }

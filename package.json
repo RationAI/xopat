@@ -4,7 +4,14 @@
   "description": "A flexible multipurose browser-based WSI viewer.",
   "main": "index.php",
   "scripts": {
-    "test": "test"
+    "build": "grunt all",
+    "s-static": "grunt html",
+    "s-node": "node index.js",
+    "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js",
+    "env": "grunt env",
+    "docs": "grunt docs",
+    "test": "npx cypress run --browser chrome --e2e",
+    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open"
   },
   "repository": {
     "type": "git",
@@ -32,6 +39,7 @@
   "devDependencies": {
     "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
     "comment-json": "^4.2.3",
+    "cross-env": "^7.0.3",
     "cypress": "^10.9.0",
     "cypress-real-events": "^1.7.1",
     "cypress-wait-until": "^1.7.2",
@@ -41,8 +49,8 @@
     "grunt-contrib-watch": "^1.1.0",
     "grunt-git-describe": "^2.4.4",
     "highlight.js": "^11.7.0",
+    "i18n": "^0.15.1",
     "jsdoc": "^4.0.2",
-    "jsdoc-class-hierarchy": "^1.1.2",
-    "taffydb": "^2.7.3"
+    "jsdoc-class-hierarchy": "^1.1.2"
   }
 }

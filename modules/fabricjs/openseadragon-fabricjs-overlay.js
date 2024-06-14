@@ -2,7 +2,6 @@
 
 (function() {
 
-
     // fabric.Object.prototype.ignoreZoom = false;
     // const originalTransform = fabric.Object.prototype.transform;
     // fabric.Object.prototype.transform = function(ctx, fromLeft) {
@@ -33,8 +32,53 @@
     //     }
     // };
 
+
+
     fabric.Object.prototype.objectCaching = false;
+    fabric.Object.NUM_FRACTION_DIGITS = 2;
     fabric.Group.prototype.objectCaching = false;
+    //fabric cannot minify points in IO, replace
+    fabric.Polygon.prototype.toObject =
+        fabric.Polyline.prototype.toObject = function(propertiesToInclude) {
+        const digits = fabric.Object.NUM_FRACTION_DIGITS;
+        const data = this.callSuper('toObject', propertiesToInclude);
+        data.points = this.points.concat().map(p => ({
+            x: parseFloat(Number(p.x).toFixed(digits)),
+            y: parseFloat(Number(p.y).toFixed(digits))
+        }));
+        return data;
+    };
+    /**
+     * Find object under mouse by iterating
+     * @param e mouse event
+     * @param objectToAvoid (usually active) object to avoid
+     * @return {number}
+     * @memberOf fabric.Canvas
+     */
+    fabric.Canvas.prototype.findNextObjectUnderMouse = function(e, objectToAvoid) {
+        const pointer = this.getPointer(e, true);
+        //necessary only for groups
+            // normalizedPointer = this._normalizePointer(this, pointer);
+        let i = this._objects.length;
+        while (i--) {
+            const object = this._objects[i];
+
+            if (object !== objectToAvoid && this._checkTarget(pointer, object)) {
+                return object;
+            }
+        }
+        return null;
+    };
+
+    /**
+     * Compute more visually-pleasing zoom value for rendering.
+     * @memberOf fabric.Canvas
+     * @param zoom
+     * @return {number}
+     */
+    fabric.Canvas.prototype.computeGraphicZoom = function (zoom) {
+        return Math.sqrt(zoom) / 2
+    };
 
     if (!window.OpenSeadragon) {
         console.error('[openseadragon-canvas-overlay] requires OpenSeadragon');
@@ -121,13 +165,13 @@
 
         resizecanvas(updateObjects=true) {
             this._fabricCanvas.setDimensions({width: this._containerWidth, height: this._containerHeight});
-            // this._fabricCanvas.setHeight(this._containerHeight);
-            // this._fabricCanvas.setWidth(this._containerWidth);
-            let zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
+            const zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
             this._fabricCanvas.setZoom(zoom);
 
+            //square root will make closer zoom a bit larger (wrt linear scale) -> nicer
+            const smallZoom = Math.sqrt(zoom) / 2;
             this._fabricCanvas._objects.forEach(x => {
-                x.zooming?.(zoom);
+                x.zooming?.(smallZoom, zoom);
             });
             this._lastZoomUpdate = zoom;
 
@@ -139,7 +183,6 @@
                     canvasOffset.top - viewportOrigin.y + pageScroll.y
                 )
             );
-
 
             // Potential rotation logics implementaiton, together with fabric Layers could work....
             // {
@@ -161,8 +204,6 @@
             //     this._node.setAttribute('transform',
             //         'translate(' + p.x + ',' + p.y + ') scale(' + scaleX + ',' + scaleY + ') rotate(' + rotation + ')');
             // }
-
-
 
             this._fabricCanvas.renderAll();
             return zoom;

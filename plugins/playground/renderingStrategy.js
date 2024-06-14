@@ -12,7 +12,7 @@ Playground.ServerPixelStrategy = class {
     prepareVisualization(visualization, source, imageCount) {
         if (this.fractal)  return;
         this.seaGL.reset();
-        this.seaGL.addVisualisation(visualization);
+        this.seaGL.addVisualization(visualization);
         //todo allow just not setting at all if not needed
         this.seaGL.setData(...new Array(imageCount).fill("_g_"));
     }
@@ -291,7 +291,7 @@ Playground.LocalStrategy = class {
 
     prepareVisualization(visualization, souce, imageCount) {
         this.engine.reset();
-        this.engine.addVisualisation(visualization);
+        this.engine.addVisualization(visualization);
         this._sourcesCount = imageCount;
         this._source = souce;
     }

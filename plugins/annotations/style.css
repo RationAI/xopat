@@ -1,61 +1,91 @@
-#annotation-logger input:disabled {
+#history-board-for-annotations-body input:disabled {
   cursor: pointer;
 }
 
 #annotations-left-click:hover::before {
-  content: "Left mouse button";
+  content: "Left mouse";
   position: absolute;
   font-size: smaller;
-  top: -7px;
-  left: 14px;
+  top: -9px;
+  left: 6px;
+  z-index: 21;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#annotations-left-click::after {
+  content: "L";
+  position: absolute;
+  font-size: smaller;
+  top: -9px;
+  left: 6px;
   z-index: 21;
 }
 
 #annotations-right-click:hover::before {
-  content: "Right mouse button";
+  content: "Right mouse";
   position: absolute;
   font-size: smaller;
-  top: -7px;
-  left: 14px;
+  top: -9px;
+  left: 6px;
   z-index: 21;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-#annotations-right-click:hover .quick_selection {
-  display: block;
-}
-
-#annotations-right-click .quick_selection {
+#annotations-right-click::after {
+  content: "R";
   position: absolute;
-  display: none;
-  width: 151px;
-  overflow-y: scroll;
-  max-height: 80px;
-  border-width: 3px !important;
-  border-top: none;
-  top: 33px;
+  font-size: smaller;
+  top: -9px;
+  left: 6px;
   z-index: 21;
 }
 
-#annotations-left-click:hover .quick_selection {
-  display: block;
+.format-selector:checked button {
+  background: var(--color-diff-blob-comment-button-bg);
 }
-#annotations-left-click .quick_selection {
-  position: absolute;
-  display: none;
-  width: 151px;
-  overflow-y: scroll;
-  max-height: 80px;
-  border-width: 3px !important;
-  border-top: none;
-  top: 33px;
-  z-index: 21;
-}
+
+/*#annotations-right-click:hover .quick_selection {*/
+/*  display: block;*/
+/*}*/
+
+/*#annotations-right-click .quick_selection {*/
+/*  position: absolute;*/
+/*  display: none;*/
+/*  width: 151px;*/
+/*  overflow-y: scroll;*/
+/*  max-height: 80px;*/
+/*  border-width: 3px !important;*/
+/*  border-top: none;*/
+/*  top: 33px;*/
+/*  z-index: 21;*/
+/*}*/
+
+/*#annotations-left-click:hover .quick_selection {*/
+/*  display: block;*/
+/*}*/
+/*#annotations-left-click .quick_selection {*/
+/*  position: absolute;*/
+/*  display: none;*/
+/*  width: 151px;*/
+/*  overflow-y: scroll;*/
+/*  max-height: 80px;*/
+/*  border-width: 3px !important;*/
+/*  border-top: none;*/
+/*  top: 33px;*/
+/*  z-index: 21;*/
+/*}*/
 
 .highlighted-preset {
   border-width: 4px !important;
   border-color: var(--color-border-warning) !important;
-  border-style: solid !important;
-  margin: 2px !important;
+  border-style: inset !important;
+  box-sizing: border-box;
 }
 
 #annotation-status-bar {

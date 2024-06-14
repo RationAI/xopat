@@ -66,11 +66,11 @@ WebGLModule.DataLoader = {
          * @param {WebGLProgram} program
          * @param {GLint} wrap required texture GL wrap value
          * @param {GLint} filter required texture GL filter value
-         * @param {object} visualisation reference to the visualization object
+         * @param {object} visualization reference to the visualization object
          * @instance
          * @memberOf WebGLModule.DataLoader.V1_0
          */
-        toBuffers(context, gl, program, wrap, filter, visualisation) {
+        toBuffers(context, gl, program, wrap, filter, visualization) {
             this.wrap = wrap;
             this.filter = filter;
 
@@ -83,7 +83,7 @@ WebGLModule.DataLoader = {
          * @param {WebGLModule} context
          * @param {array} dataIndexMapping mapping of array indices to data indices, e.g. texture 0 for
          *   this shader corresponds to index dataIndexMapping[0] in the data array, -1 value used for textures not loaded
-         * @param {object} visualisation reference to the current active visualisation object
+         * @param {object} visualization reference to the current active visualization object
          * @param {*} data data object, must contain all the data listed in WebGLModule.prototype.getSources() in
          *   the respective order, dataIndexMapping then points with index to this data; by default an Image object
          * @param {object} tileBounds tile size in pixels
@@ -94,9 +94,9 @@ WebGLModule.DataLoader = {
          * @memberOf WebGLModule.DataLoader.V1_0
          * @instance
          */
-        toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+        toCanvas(context, dataIndexMapping, visualization, data, tileBounds, program, gl) {
             (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 1.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
-                this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
+                this, context, dataIndexMapping, visualization, data, tileBounds, program, gl
             );
         }
 
@@ -105,7 +105,7 @@ WebGLModule.DataLoader = {
          * Texture not necessary to re-initialize since we can reuse it straight away
          * @param context
          * @param dataIndexMapping
-         * @param visualisation
+         * @param visualization
          * @param data
          * @param tileBounds
          * @param program
@@ -113,7 +113,7 @@ WebGLModule.DataLoader = {
          * @memberOf WebGLModule.DataLoader.V1_0
          * @instance
          */
-        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+        toCanvasFinish(context, dataIndexMapping, visualization, data, tileBounds, program, gl) {
 
         }
 
@@ -163,12 +163,12 @@ WebGLModule.DataLoader = {
          * to re-define the whole API.
          */
         loadersByType = {
-            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
-                if (!this._canvas) {
-                    this._canvas = document.createElement('canvas');
-                    this._canvasReader = this._canvas.getContext('2d', {willReadFrequently: true});
-                    this._canvasConverter = document.createElement('canvas');
-                    this._canvasConverterReader = this._canvasConverter.getContext('2d', {willReadFrequently: true});
+            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl) {
+                if (!self._canvas) {
+                    self._canvas = document.createElement('canvas');
+                    self._canvasReader = self._canvas.getContext('2d', {willReadFrequently: true});
+                    self._canvasConverter = document.createElement('canvas');
+                    self._canvasConverterReader = self._canvasConverter.getContext('2d', {willReadFrequently: true});
                 }
 
                 let index = 0;
@@ -176,17 +176,17 @@ WebGLModule.DataLoader = {
                 tileBounds.height = Math.round(tileBounds.height);
 
                 //we read from here
-                this._canvas.width = data.width;
-                this._canvas.height = data.height;
-                this._canvasReader.drawImage(data, 0, 0);
+                self._canvas.width = data.width;
+                self._canvas.height = data.height;
+                self._canvasReader.drawImage(data, 0, 0);
 
                 const NUM_IMAGES = Math.round(data.height / tileBounds.height);
                 //Allowed texture size dimension only 256+ and power of two...
 
                 //it worked for arbitrary size until we begun with image arrays... is it necessary?
                 const IMAGE_SIZE = data.width < 256 ? 256 : Math.pow(2, Math.ceil(Math.log2(data.width)));
-                this._canvasConverter.width = IMAGE_SIZE;
-                this._canvasConverter.height = IMAGE_SIZE;
+                self._canvasConverter.width = IMAGE_SIZE;
+                self._canvasConverter.height = IMAGE_SIZE;
 
                 //just load all images and let shaders reference them...
                 for (let i = 0; i < dataIndexMapping.length; i++) {
@@ -194,7 +194,7 @@ WebGLModule.DataLoader = {
                         continue;
                     }
                     if (index >= NUM_IMAGES) {
-                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
+                        console.warn("The visualization contains less data than layers. Skipping layers ...");
                         return;
                     }
 
@@ -216,13 +216,13 @@ WebGLModule.DataLoader = {
 
                     let pixels;
                     if (tileBounds.width !== IMAGE_SIZE || tileBounds.height !== IMAGE_SIZE)  {
-                        this._canvasConverterReader.drawImage(this._canvas, 0, dataIndexMapping[i]*tileBounds.height,
+                        self._canvasConverterReader.drawImage(self._canvas, 0, dataIndexMapping[i]*tileBounds.height,
                             tileBounds.width, tileBounds.height, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
 
-                        pixels = this._canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
+                        pixels = self._canvasConverterReader.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
                     } else {
                         //load data
-                        pixels = this._canvasReader.getImageData(0,
+                        pixels = self._canvasReader.getImageData(0,
                             dataIndexMapping[i]*tileBounds.height, tileBounds.width, tileBounds.height);
                     }
 
@@ -236,7 +236,7 @@ WebGLModule.DataLoader = {
                 }
             },
             //Image objects in Array, we assume image objects only
-            "[object Array]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object Array]": function(self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl) {
                 let index = 0;
                 const NUM_IMAGES = data.length;
                 //just load all images and let shaders reference them...
@@ -245,7 +245,7 @@ WebGLModule.DataLoader = {
                         continue;
                     }
                     if (index >= NUM_IMAGES) {
-                        console.warn("The visualisation contains less data than layers. Skipping layers ...");
+                        console.warn("The visualization contains less data than layers. Skipping layers ...");
                         return;
                     }
 
@@ -306,10 +306,10 @@ WebGLModule.DataLoader = {
          * @param {WebGL2RenderingContext} gl WebGL context
          * @param {GLint} wrap required texture GL wrap value
          * @param {GLint} filter required texture GL filter value
-         * @param {object} visualisation reference to the visualization object
+         * @param {object} visualization reference to the visualization object
          * @memberOf WebGLModule.DataLoader.V2_0
          */
-        toBuffers(context, gl, program, wrap, filter, visualisation) {
+        toBuffers(context, gl, program, wrap, filter, visualization) {
             this.wrap = wrap;
             this.filter = filter;
         }
@@ -319,7 +319,7 @@ WebGLModule.DataLoader = {
          * @param {WebGLModule} context context renderer reference
          * @param {array} dataIndexMapping mapping of array indices to data indices, e.g. texture 0 for
          *   this shader corresponds to index dataIndexMapping[0] in the data array, -1 value used for textures not loaded
-         * @param {object} visualisation reference to the current active visualisation object
+         * @param {object} visualization reference to the current active visualization object
          * @param {*} data data object, must contain all the data listed in WebGLModule.prototype.getSources() in
          *   the respective order, dataIndexMapping then points with index to this data; by default an Image object
          * @param {object} tileBounds tile size in pixels
@@ -330,9 +330,9 @@ WebGLModule.DataLoader = {
          * @memberOf WebGLModule.DataLoader.V2_0
          * @instance
          */
-        toCanvas(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+        toCanvas(context, dataIndexMapping, visualization, data, tileBounds, program, gl) {
             (this.loadersByType[toString.apply(data)] || (() => {throw "WebGL 2.0 Renderer cannot load data as texture: " + toString.apply(data)}))(
-                    this, context, dataIndexMapping, visualisation, data, tileBounds, program, gl
+                this, context, dataIndexMapping, visualization, data, tileBounds, program, gl
             );
         }
 
@@ -340,7 +340,7 @@ WebGLModule.DataLoader = {
          *
          * @param context
          * @param dataIndexMapping
-         * @param visualisation
+         * @param visualization
          * @param data
          * @param tileBounds
          * @param program
@@ -348,7 +348,7 @@ WebGLModule.DataLoader = {
          * @memberOf WebGLModule.DataLoader.V2_0
          * @instance
          */
-        toCanvasFinish(context, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+        toCanvasFinish(context, dataIndexMapping, visualization, data, tileBounds, program, gl) {
             if (Array.isArray(data)) {
                 //need to re-initialize the texture
                 gl.deleteTexture(this.textureId);
@@ -402,7 +402,7 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
          */
         loadersByType = {
             //Vertically Concatenated Images
-            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object HTMLImageElement]": function(self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl) {
                 const NUM_IMAGES = Math.round(data.height / tileBounds.height);
 
                 // Texture checking disabled due to performance reasons
@@ -433,7 +433,7 @@ int _vis_data_sampler_array_indices[${indicesOfImages.length}] = int[${indicesOf
                 );
             },
             //Image objects in Array, we assume image objects only
-            "[object Array]": function(self, webglModule, dataIndexMapping, visualisation, data, tileBounds, program, gl) {
+            "[object Array]": function(self, webglModule, dataIndexMapping, visualization, data, tileBounds, program, gl) {
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D_ARRAY, self.textureId);
                 gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, data[0].width, data[0].height, data.length+1);

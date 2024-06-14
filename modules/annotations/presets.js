@@ -9,12 +9,13 @@ OSDAnnotations.Preset = class {
      * @param {string} color fill color
      */
     constructor(id, objectFactory = null, category = "", color = "") {
+        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
         this.meta.category = {
-            name: 'Category',
+            name: 'Name',
             value: category
         };
         this._used = false;
@@ -23,15 +24,15 @@ OSDAnnotations.Preset = class {
     /**
      * Create the object from JSON representation
      * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
-     * @param {function} factoryGetter function able to get object factory from id
+     * @param {OSDAnnotations} context function able to get object factory from id
      * @return {OSDAnnotations.Preset} instantiated preset
      */
-    static fromJSONFriendlyObject(parsedObject, factoryGetter) {
-        let factory = factoryGetter(parsedObject.factoryID);
+    static fromJSONFriendlyObject(parsedObject, context) {
+        let factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
         if (factory === undefined) {
             console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
                 "No factory for such object available.");
-            factory = factoryGetter("polygon"); //rely on polygon presence
+            factory = context.getAnnotationObjectFactory("polygon"); //rely on polygon presence
         }
 
         const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
@@ -112,10 +113,17 @@ OSDAnnotations.PresetManager = class {
         this._colorSteps = 8;
         this._colorStep = 0;
         this._presetsImported = false;
+        this.modeOutline = this._context.cache.get('drawOutline', true);
     }
 
     getActivePreset(isLeftClick) {
         return isLeftClick ? this.left : this.right;
+    }
+
+    getAnnotationOptionsFromInstance(preset, asLeftClick=true) {
+        let result = this._populateObjectOptions(preset);
+        result.isLeftClick = asLeftClick;
+        return this._withDynamicOptions(result);
     }
 
     /**
@@ -125,10 +133,8 @@ OSDAnnotations.PresetManager = class {
      * in AnnotationObjectFactory::create(..))
      */
     getAnnotationOptions(isLeftClick) {
-        let preset = this.getActivePreset(isLeftClick),
-            result = this._populateObjectOptions(preset);
-        result.isLeftClick = isLeftClick;
-        return this._withDynamicOptions(result);
+        let preset = this.getActivePreset(isLeftClick);
+        return this.getAnnotationOptionsFromInstance(preset, isLeftClick);
     }
 
     /**
@@ -137,6 +143,7 @@ OSDAnnotations.PresetManager = class {
      */
     setModeOutline(isOutline) {
         if (this.modeOutline === isOutline) return;
+        this._context.cache.set('drawOutline', isOutline);
         this.modeOutline = isOutline;
         this.updateAllObjectsVisuals();
         this._context.canvas.requestRenderAll();
@@ -148,11 +155,13 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Add new preset with default values
+     * @param {string?} id to create, generates random otherwise
+     * @param {string?} categoryName custom name
      * @event preset-create
      * @returns {OSDAnnotations.Preset} newly created preset
      */
-    addPreset() {
-        let preset = new OSDAnnotations.Preset(Date.now().toString(), this._context.polygonFactory, "", this._randomColorHexString());
+    addPreset(id=undefined, categoryName="") {
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this._randomColorHexString());
         this._presets[preset.presetID] = preset;
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
@@ -193,11 +202,35 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Presets getter
-     * @param {string} id preset id
+     * @param {string} [id=undefined] preset id, if not set get the first preset
      * @returns {OSDAnnotations.Preset} preset instance
      */
-    get(id) {
+    get(id = undefined) {
+        if (!id) {
+            for (const k in this._presets) {
+                if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
+            }
+            return undefined;
+        }
         return this._presets[id];
+    }
+
+    /**
+     * Presets getter
+     * @returns {Array<any>} preset ids
+     */
+    getExistingIds() {
+        return Object.keys(this._presets);
+    }
+
+    /**
+     * Presets getter, creates if it does not exist
+     * @param {string} id preset id
+     * @param {string?} categoryName name to set
+     * @returns {OSDAnnotations.Preset} preset instance
+     */
+    getOrCreate(id, categoryName="") {
+        return this.get(id) || this.addPreset(id, categoryName);
     }
 
     /**
@@ -324,18 +357,19 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Export presets
-     * todo rename to asJSON(...)
-     * @param serialized whether to return serialized string or not
+     * @param usedOnly whether to return only subset for which exist annotations
      * @returns {string|[object]} JSON-friendly representation
      */
-    toObject(serialized=false) {
+    toObject(usedOnly=false) {
         let exported = [];
         for (let preset in this._presets) {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
-            exported.push(preset.toJSONFriendlyObject());
+
+            if (!usedOnly || this._context.canvas._objects.some(x => x.presetID === preset.presetID)) {
+                exported.push(preset.toJSONFriendlyObject());
+            }
         }
-        if (serialized) return JSON.stringify(exported);
         return exported;
     }
 
@@ -346,7 +380,7 @@ OSDAnnotations.PresetManager = class {
      * @param {boolean} clear true if existing presets should be replaced upon ID match
      * @return {OSDAnnotations.Preset|undefined} preset
      */
-    import(presets, clear=false) {
+    async import(presets, clear=false) {
         const _this = this;
 
         if (clear) {
@@ -369,9 +403,7 @@ OSDAnnotations.PresetManager = class {
         }
 
         if (Array.isArray(presets)) {
-            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(
-                p, _this._context.getAnnotationObjectFactory.bind(_this._context)
-            )).forEach(p => {
+            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
                 if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
@@ -383,12 +415,19 @@ OSDAnnotations.PresetManager = class {
             throw "Invalid presets data provided as an input for import.";
         }
 
-        if (presets.length > 0) {
-            this.selectPreset(undefined, false);
-            this.selectPreset(first?.presetID, true);
-            this._presetsImported = true;
-        } else {
-            this._presetsImported = false;
+        this._presetsImported = presets.length > 0;
+
+        const leftPresetId = await this._context.cache.get('presets.left.id', undefined, false);
+        const rightPresetId = await this._context.cache.get('presets.right.id', undefined, false);
+        if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
+            this.selectPreset(leftPresetId, true, false);
+        }
+        if (rightPresetId && (rightPresetId === "__unset__" || this._presets[rightPresetId])) {
+            this.selectPreset(rightPresetId, false, false);
+        }
+
+        if (!this.left && first) {
+            this.selectPreset(first.presetID, true, false);
         }
         return first;
     }
@@ -397,29 +436,43 @@ OSDAnnotations.PresetManager = class {
      * Select preset as active.
      * @param {string} id preset id
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
+     * @param {boolean} cached
      */
-    selectPreset(id, isLeftClick) {
-        let preset = undefined;
+    selectPreset(id, isLeftClick, cached) {
+        let preset = undefined, cachedId = "__unset__";
         if (id) {
             if (!this._presets[id]) return;
             preset = this._presets[id];
+            cachedId = preset.presetID;
         }
-        if (isLeftClick) this.left = preset;
-        else this.right = preset;
+        if (isLeftClick) {
+            this.left = preset;
+            if (cached) this._context.cache.set('presets.left.id', cachedId);
+        } else {
+            this.right = preset;
+            if (cached) this._context.cache.set('presets.right.id', cachedId);
+        }
         this._context.raiseEvent('preset-select', {preset, isLeftClick});
     }
 
     _withDynamicOptions(options) {
-        let zoom = this._context.canvas.getZoom();
+        const canvas = this._context.canvas,
+            zoom = canvas.getZoom(),
+            gZoom = canvas.computeGraphicZoom(zoom);
+
         return $.extend(options, {
             layerID: this._context.getLayer().id,
             opacity: this._context.getOpacity(),
             zoomAtCreation: zoom,
-            strokeWidth: 3 / zoom
+            strokeWidth: 3 / gZoom
         });
     }
 
     _populateObjectOptions(withPreset) {
+        if (!withPreset) {
+            console.warn("Attempt to retrieve metadata without a preset!");
+            return {};
+        }
         if (this.modeOutline) {
             return $.extend({fill: ""},
                 OSDAnnotations.PresetManager._commonProperty,
@@ -472,17 +525,14 @@ OSDAnnotations.Layer = class {
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context
-     * @param {number} id
+     * @param {string} id
      */
-    constructor(context, id=Date.now()) {
+    constructor(context, id=String(Date.now())) {
         this._context = context;
         this.id = id;
-
         this.position = -1;
-        for (let id in context._layers) {
-            this.position = Math.max(this.position, context._layers[id]);
-        }
-        this.position++;
+        this.position = Object.values(this._context._layers)
+            .reduce((result, current) => Math.max(result, current.position), 0) + 1;
     }
 
     /**

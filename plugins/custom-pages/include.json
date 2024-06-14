@@ -4,9 +4,10 @@
     "author": "Jirka Horák",
     "version": "1.0.0",
     "description": "Populate the advanced menu with custom content.",
-    "icon": "",
+    "icon": null,
     "includes" : ["pages.js"],
     "modules": ["menu-pages"],
     "permaLoad": false,
+    "hidden": true,
     "sanitizeConfig": false
 }

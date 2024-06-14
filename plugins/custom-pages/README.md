@@ -64,7 +64,7 @@ Example configurations (contents of ``data`` property):
         "content": "This is page on the same level as the first page. Moreover, it contains a graph!"
       }, {
         "type": "vega",
-        "specs": {
+        "vega": {
           ...
         }
       }

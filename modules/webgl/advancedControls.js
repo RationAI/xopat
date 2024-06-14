@@ -14,6 +14,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
 
     init() {
         const _this = this;
+        this._c2._params = this._c1._params;
         this._c1.init();
         this._c2.init();
         this._c1.on("default", function(value, encoded, context) {

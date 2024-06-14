@@ -1,6 +1,7 @@
 {
     "id": "fabricjs",
     "name": "Graphics canvas FabricJS over OSD",
+    "version": "0.1.0",
     "includes" : [
         "fabric.min.js",
         "openseadragon-fabricjs-overlay.js"

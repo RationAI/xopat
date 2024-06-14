@@ -6,8 +6,8 @@ The complex functionality will be described later. This plugin allows to create,
 ### Formats
 The native format used comes from the underlying library and available features. To support multiple formats, 
 you can either use supported formats implemented as a build-in convertors, or provide a new convertor. 
-Supported formats are `ASAP XML` annotations from the ASAP Viewer, and `GeoJSON` annotations. 
-Note that although supported, these are possibly lossy formats.
+Supported formats are `ASAP XML` annotations from the ASAP Viewer, and `GeoJSON` annotations. For Qpath, `qupath`
+GeoJSON annotation format is available too. Note that although supported, these are possibly lossy formats.
 More information can be found in `convert/README.md`.
 
 ### API
@@ -35,3 +35,24 @@ Factories govern how object behave - it is the module API over annotations. They
 set of methods to create, copy, iterate and process annotations easily.
 
 todo finish description
+
+### The Data Schema
+
+You can access the data persitency module like this: ``persistor = module.initIO()``. The
+persistor is configured to strictly check the following key schema:
+````js
+schema: {
+    format: {deprecated: ["annotations-format"]},
+    version: {},
+    user: {},
+    created: {},
+    name: {deprecated: ["annotations-name"]},
+    session: {},
+    default: {},
+    annotation: {},
+    annotationList: {},
+    preset: {},
+    presetList: {}
+}
+````
+So that you can for example call ``await persistor.get('name')`` or `await persistor.get('annotations-name')` (deprecated name value which should be avoided).

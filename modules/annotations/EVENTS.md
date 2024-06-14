@@ -32,7 +32,27 @@
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
 
-##### import | ``{format: string, clear: boolean, data: object}``
+##### import | ``{options: object, clear: boolean, data: object}``
+
+##### export-partial | ``{options: object, data: object}``
+
+##### export | ``{data: string}``
+
+#### mode-changed | ``{mode: OSDAnnotatinos.AnnotationState}``
+
+##### history-open | ``{inNewWindow: boolean, containerId: null|string}``
+If history is opened in detached (new) window, the contained ID is null:
+the DOM does not belong to this context. The container
+
+##### history-swap | ``{inNewWindow: boolean}``
+
+##### history-close | ``{inNewWindow: boolean}``
+
+##### canvas-nonprimary-release-not-handled
+Called when the annotation modes did not handle mouse release action.
+
+##### canvas-release-not-handled
+Called when the annotation modes did not handle mouse release action.
 
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.

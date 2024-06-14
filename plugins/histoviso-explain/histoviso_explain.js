@@ -1,9 +1,8 @@
 class HistovisoExplain extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.setupData = {};
         this.model_list = {};
-        this.params = params;
         this.current_method = undefined;
         this.current_model = undefined;
     }
@@ -82,7 +81,7 @@ onchange='${this.THIS}.targetImageSourceName = ${this.THIS}.getNameFromImagePath
 <div style="text-align: right" class="mt-1"><button class="btn" onclick="${this.THIS}.reSendRequest();">Re-evaluate selected</button>
 <button class="btn" onclick="${this.THIS}.reRenderSelectedObject();">Repaint selected</button></div>`,
             `<br><h4 class="d-inline-block" style="width: 80px;">Rendering </h4>&emsp;<select class="form-control" id="histoviso-explain-rendering" 
-onchange="${this.THIS}.viaGL.switchVisualisation($(this).val())"></select><div id='histoviso-explain-html'></div>`,
+onchange="${this.THIS}.viaGL.switchVisualization($(this).val())"></select><div id='histoviso-explain-html'></div>`,
             "feature-maps", this.id);
         USER_INTERFACE.addHtml("<div id='histoviso-explain-scripts'></div>", this.id);
     }
@@ -282,20 +281,17 @@ max="${maxFeatureMapCount-1}" value="0"> out of ${maxFeatureMapCount-1}`);
         //todo add annotation objects at runtime to avoid interaction in failure
 
         let notification = "";
-        let params = this.params;
-        if (params) {
-            //todo hardcoded
-            if (params.experimentId && params.experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
-                this.createErrorMenu(`This method works only for experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>. Your
-experiment is '${params.experimentId}'.`);
-                return;
-            }
-            if (!params.experimentId) {
-                notification = "NOTE: We could not identify the experiment: we inspect <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
-            }
-        } else {
+        let experimentId = this.getOption('experimentId');
+        //todo hardcoded
+        if (experimentId && experimentId !== "VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69") {
+            this.createErrorMenu(`This method works only for experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>. Your
+experiment is '${experimentId}'.`);
+            return;
+        }
+        if (!experimentId) {
             notification = "NOTE: We could not identify the experiment: we inspect <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
         }
+
 
         if (!notification) notification = "Experiment <b>VGG16-TF2-DATASET-e95b-4e8f-aeea-b87904166a69</b>.";
         this._initParamParsers();
@@ -382,7 +378,7 @@ experiment is '${params.experimentId}'.`);
             uniqueId: "histoviso_explain",
             ready: function() {
                 var i = 0;
-                _this.viaGL.foreachVisualisation(function (vis) {
+                _this.viaGL.foreachVisualization(function (vis) {
                     if (vis.error) {
                         shaderNames.append(`<option value="${i}" title="${vis.error}">&#9888; ${vis['name']}</option>`);
                     } else {
@@ -405,7 +401,7 @@ experiment is '${params.experimentId}'.`);
             }
         });
 
-        this.viaGL.addVisualisation({
+        this.viaGL.addVisualization({
                 name: "Identity",
                 params: {},
                 shaders: {

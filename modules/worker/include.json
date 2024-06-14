@@ -1,7 +1,0 @@
-{
-    "id": "xopat-worker",
-    "name": "xOpat Thread Worker",
-    "description": "Generic asynchronous detached worker for offscreen computation.",
-    "includes" : ["interface.js"],
-    "requires": []
-}

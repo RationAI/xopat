@@ -10,6 +10,7 @@ OpenSeadragon.Tools = class {
      * @param context OpenSeadragon instance
      */
     constructor(context) {
+        //todo initialize explicitly outside to help IDE resolution
         if (context.tools) throw "OSD Tools already instantiated on the given viewer instance!";
         context.tools = this;
         this.viewer = context;
@@ -43,8 +44,9 @@ OpenSeadragon.Tools = class {
             eventArgs.eventSource = context;
             eventArgs.userData = events[ index ].userData;
             let result = events[ index ].handler( eventArgs );
-            if (!result || OpenSeadragon.type(result) !== "promise") return;
-            await result;
+            if (result && OpenSeadragon.type(result) === "promise") {
+                await result;
+            }
             await loop(index + 1);
         }
         return await loop(0);
@@ -221,6 +223,7 @@ OpenSeadragon.Tools = class {
                         onfail(data, tile);
                         return;
                     }
+                    tile.tiledImage = tiledImage;
                     onload(data, tile);
                 },
                 abort: function() {
@@ -270,16 +273,14 @@ OpenSeadragon.Tools = class {
                     sDy = -sy;
                     sy = 0;
                 }
-                //todo what about raising events
-                if (tile.context2D) {
-                    c2d.drawImage(tile.context2D.canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-                } else {
-                    //cache can be an empty object, it correctly processes the data and returns operate-able object
-                    let cache = {};
-                    source.createTileCache(cache, data, tile);
-                    c2d.drawImage(source.getTileCacheDataAsContext2D(cache).canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-                    source.destroyTileCache(cache);
-                }
+
+                //prepares all underlying workings
+                tile.setCache(data, tile.cacheKey);
+                const canvas = tile.getCanvasContext ? tile.getCanvasContext()?.canvas : tile.getImage();
+                c2d.drawImage(canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
+
+                //frees the unused tile
+                //TODO allow destruction: source.destroyTileCache(cache);
                 finish();
             }
 

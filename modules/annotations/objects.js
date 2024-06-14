@@ -70,7 +70,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
-        "color"
+        "color",
+        "author",
+        "created",
     ];
 
     /**
@@ -115,8 +117,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Get currently eddited object
-     * @returns
+     * Get currently edited or created object.
+     * If the mode is editing, it returns the currently edited object. It is a full-fledged annotation.
+     *
+     * If the mode is creating (not yet finished), it returns a helper annotation (or their list) instead.
+     * Such a helper annotation must be added with addHelperAnnotation(). In this case, a list can be returned
+     * too - for example, the ruler is created using a line and a text, two separate objects. When finished, a
+     * group is created to attach to the canvas. When aborted, two helper items in an array are returned by this method.
+     * @returns {(fabric.Object|[fabric.Object])}
      */
     getCurrentObject() {
         return null;
@@ -171,6 +179,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * A list of extra properties defining the object geometry required to be included
+     * todo: replace with builtin fabricjs toObject call on each type class
      */
     exportsGeometry() {
         return [];
@@ -354,12 +363,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
-     * @param ofObject
-     * @param zoom
+     * @param {fabric.Object} ofObject
+     * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
+     * @param {number} realZoom real zoom value of the viewer (real zoom, linearly keep scale consistent, for example text)
      */
-    onZoom(ofObject, zoom) {
+    onZoom(ofObject, graphicZoom, realZoom) {
+        //todo try to use iterate method :D
+
         ofObject.set({
-            strokeWidth: ofObject.originalStrokeWidth/zoom
+            strokeWidth: ofObject.originalStrokeWidth/graphicZoom
         });
         // // Update object properties to reflect zoom
         // var updater = function(x) {
@@ -447,10 +459,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint
-     * @param {Number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
+     * @param {number} digits decimal precision, default undefined
+     * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
-    toPointArray(obj, converter, quality=1) {
+    toPointArray(obj, converter, digits=undefined, quality=1) {
         return undefined;
     }
 
@@ -470,27 +483,38 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
 /**
  * Polygon Utilities that can help with points array simplification and more
- * todo move here more utils
+ * todo move here stuff from magic wand code
  */
 OSDAnnotations.PolygonUtilities = {
 
-    simplify: function (points, highestQuality = false) {
+    intersectAABB: function (a, b) {
+        const dx = a.x - b.x;
+        const px = (a.width + b.width) - Math.abs(dx);
+        if (px <= 0) {
+            return false;
+        }
+
+        const dy = a.y - b.y;
+        const py = (a.height + b.height) - Math.abs(dx);
+        return py > 0;
+
+    },
+
+    simplify: function (points, highestQuality = true) {
         // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
-        let tolerance = 7 / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = 15 / VIEWER.scalebar.imagePixelSizeOnScreen();
         points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
-        points = this._simplifyDouglasPeucker(points, tolerance);
-
-        return points;
+        return this._simplifyDouglasPeucker(points, tolerance);
     },
 
     simplifyQuality: function (points, quality) {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = Math.pow((10 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen(), 2);
-        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, tolerance), tolerance);
+        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 
     approximatePolygonArea: function (points) {
@@ -505,23 +529,22 @@ OSDAnnotations.PolygonUtilities = {
         return { diffX: maxX - minX, diffY: maxY - minY };
     },
 
+    /**
+     *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
+     *  To detect intersection with another Polygon object, this
+     *  function uses the Separating Axis Theorem. It returns false
+     *  if there is no intersection, or an object if there is. The object
+     *  contains 2 fields, overlap and axis. Moving the polygon by overlap
+     *  on axis will get the polygons out of intersection.
+     *
+     *  @Aiosa Cleaned. Honestly, why people who are good at math cannot keep their code clean.
+     */
     polygonsIntersect(p1, p2) {
-        /**
-         *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
-         *  To detect intersection with another Polygon object, this
-         *  function uses the Separating Axis Theorem. It returns false
-         *  if there is no intersection, or an object if there is. The object
-         *  contains 2 fields, overlap and axis. Moving the polygon by overlap
-         *  on axis will get the polygons out of intersection.
-         *
-         *  @jirka Cleaned. Honestly, why people who are good at math cannot keep their code clean.
-         */
-
         let axis = {x: 0, y: 0},
             tmp, minA, maxA, minB, maxB, side, i,
             smallest = null,
             overlap = 99999999,
-            p1Pts = p1.points, p2Pts = p2.points;
+            p1Pts = p1.points || p1, p2Pts = p2.points || p2;
 
         /* test polygon A's sides */
         for (side = 0; side < p1Pts.length; side++) {
@@ -714,6 +737,7 @@ OSDAnnotations.PolygonUtilities = {
     }
 };
 
+//todo deprecate/remove this in favor of wand
 OSDAnnotations.AutoObjectCreationStrategy = class {
     constructor(selfName, context) {
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
@@ -766,7 +790,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
         });
         this._running = true;
-        this._renderEngine.addVisualisation({
+        this._renderEngine.addVisualization({
             shaders: {
                 _ : {
                     type: "heatmap",
@@ -796,10 +820,10 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 
     _beforeAutoMethod() {
         let vis = VIEWER.bridge.visualization();
-        this._renderEngine._visualisations[0] = {
+        this._renderEngine._visualizations[0] = {
             shaders: {}
         };
-        let toAppend = this._renderEngine._visualisations[0].shaders;
+        let toAppend = this._renderEngine._visualizations[0].shaders;
 
         for (let key in vis.shaders) {
             if (vis.shaders.hasOwnProperty(key)) {
@@ -847,7 +871,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 }
             }
         }
-        this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
+        this._renderEngine.rebuildVisualization(Object.keys(vis.shaders));
 
         this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
 
@@ -870,7 +894,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     _afterAutoMethod() {
-        delete this._renderEngine._visualisations[0];
+        delete this._renderEngine._visualizations[0];
     }
 
     approximateBounds(point, growY=true) {

@@ -1,0 +1,9 @@
+{
+    "id": "jwt-decode",
+    "name": "JWT Token Decoder",
+    "version": "4.0.0",
+    "includes" : [
+        "jwt.js"
+    ],
+    "requires": []
+}

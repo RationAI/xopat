@@ -1,0 +1,10 @@
+{
+    "id": "empaia-wsi-tile-source",
+    // TODO: ensure there is explicitly stated _WHERE_ the module reads data to avoid colision with empaia lib
+    "name": "RationAI Enhanced WSI Service by Empaia",
+    "version": "0.1.0",
+    "includes" : [
+        "tile-source.js"
+    ],
+    "requires": []
+}

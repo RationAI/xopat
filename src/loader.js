@@ -9,6 +9,7 @@ window.HTTPError = class extends Error {
         this.message = message;
         this.response = response;
         this.textData = textData;
+        this.statusCode = response && response.status || 500;
     }
 };
 
@@ -22,10 +23,11 @@ window.HTTPError = class extends Error {
  * @param MODULES
  * @param PLUGINS_FOLDER
  * @param MODULES_FOLDER
+ * @param POST_DATA can be empty object if no data is supposed to be loaded
  * @param version
  * @return {function} initializer function to call once ready
  */
-function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, version) {
+function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
@@ -71,12 +73,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
 
         let plugin;
         try {
-            let parameters = APPLICATION_CONTEXT.config.plugins[id];
-            if (!parameters) {
-                parameters = {};
-                APPLICATION_CONTEXT.config.plugins[id] = parameters;
+            if (!APPLICATION_CONTEXT.config.plugins[id]) {
+                APPLICATION_CONTEXT.config.plugins[id] = {};
             }
-            plugin = new PluginClass(id, parameters);
+            plugin = new PluginClass(id);
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
             /**
@@ -87,7 +87,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
              */
             window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailed'),
+                message: $.t('messages.pluginLoadFailedNamed', {plugin: id}),
             });
             cleanUpPlugin(id, e);
             return;
@@ -125,7 +125,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             plugin.pluginReady();
             return true;
         } catch (e) {
-            console.warn(`Failed to initialize plugin ${plugin}.`, e);
+            console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
         }
         return false;
@@ -186,6 +186,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
      */
     window.plugin = function(id) {
         return PLUGINS[id]?.instance;
+    };
+
+    /**
+     * Get a module singleton reference if instantiated.
+     * @param id module id
+     * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated
+     */
+    window.singletonModule = function (id) {
+        return MODULES[id]?.instance;
     };
 
     /**
@@ -279,6 +288,97 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
     }
 
+    // POST DATA STORAGE - Always implemented via POST, support static IO.
+    /**
+     * @extends XOpatStorage.Data
+     * @type {PostDataStore}
+     */
+    class PostDataStore extends XOpatStorage.Data {
+        /**
+         * @param options the options used in super class XOpatStorage.Data
+         * @param options.xoType type of the owner
+         */
+        constructor(options) {
+            super({...options,
+                id: (options.id || "").split(".").filter((v, i) => i > 0).join(".")});
+            if (options.xoType !== "plugin" && options.xoType !== "module") throw "Invalid xoType for PostDataStore!";
+            this.contextType = options.xoType;
+            //write target
+            this.__storage._withReference(this.contextType);
+        }
+
+        /**
+         * The ability to export all relevant data is used mainly with current session exports/shares.
+         * This is used for immediate static export of the current state.
+         * @return {Promise<string>} serialized data
+         */
+        async export() {
+            const exports = {};
+            //bit dirty, but we rely on keys implementation as we hardcode storage driver
+            for (let key of this.__storage._keys()) {
+                if (key.startsWith(this.id)) {
+                    exports[key] = await this.__storage.get(key);
+                }
+            }
+            try {
+                return JSON.stringify(exports);
+            } catch (e) {
+                console.error("Error exporting post data for ", this.id, e);
+                return undefined;
+            }
+        }
+
+        /**
+         * @param Class ignored argument, this class hardcodes POST DATA 'driver'
+         */
+        static register(Class) {
+            super.registerClass(class extends XOpatStorage.AsyncStorage {
+                async getItem(key) {
+                    let storage = POST_DATA[this.ref];
+                    // backward non-namespaced compatibility
+                    return POST_DATA[key] || (storage && storage[key]);
+                }
+                async setItem(key, value) {
+                    let storage = POST_DATA[this.ref];
+                    if (!storage) {
+                        storage = POST_DATA[this.ref] = {};
+                    }
+                    storage[key] = value;
+                }
+                async removeItem(key) {
+                    delete POST_DATA[key];
+                    let storage = POST_DATA[this.ref];
+                    if (storage) {
+                        delete storage[key];
+                    }
+                }
+                async clear() {
+                    if (POST_DATA[this.ref]) {
+                        POST_DATA[this.ref] = {};
+                    }
+                }
+                get length() {
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {}).length;
+                }
+                async key(index) {
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {})[index];
+                }
+                _keys() { //internal loader use
+                    let storage = POST_DATA[this.ref];
+                    return Object.keys(storage || {});
+                }
+                _withReference(ref) {  //internal loader use
+                    this.ref = ref;
+                }
+            });
+        }
+    }
+    PostDataStore.register(null);
+    const STORE_TOKEN = Symbol("XOpatElementDataStore");
+    const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
+
     /**
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
@@ -288,9 +388,46 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
     class XOpatElement {
 
         constructor(id, executionContextName) {
-            if (!id) throw `Trying to instantiate a ${this.constructor.name} - no id given.`;
-            this.id = id;
-            this.xoContext = executionContextName;
+            if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
+            this.__id = id;
+            this.__uid = `${executionContextName}.${id}`;
+            this.__xoContext = executionContextName;
+            this[CACHE_TOKEN] = new XOpatStorage.Cache({id: this.__uid});
+        }
+
+        /**
+         * @return {string} id element identifier
+         */
+        get id() {
+            return this.__id;
+        }
+
+        /**
+         * @return {string} id unique element identifier in the application
+         */
+        get uid() {
+            return this.__uid;
+        }
+
+        /**
+         * @return {string}  context ID (plugin/module)
+         */
+        get xoContext() {
+            return this.__xoContext;
+        }
+
+        /**
+         * @return {XOpatStorage.Cache} cache interface
+         */
+        get cache() {
+            return this[CACHE_TOKEN];
+        }
+
+        /**
+         * @return {PostDataStore}
+         */
+        get POSTStore() {
+            return this[STORE_TOKEN];
         }
 
         /**
@@ -317,7 +454,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         /**
          * Raise error event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         * todo make modules use this
+         *   todo better warn mechanism:
+         *      -> simple way of module/plugin level context warns and errors (no feedback)
+         *      -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -349,7 +488,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         /**
          * Raise warning event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         * todo make modules use this
+         *   todo better warn mechanism:
+         *      -> simple way of module/plugin level context warns and errors (no feedback)
+         *      -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -361,8 +502,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
              * Raise event from instance. Instances that register as event source fire on themselves.
              * @property {string} originType `"module"`, `"plugin"` or other type of the source
              * @property {string} originId
-             * @event error-user
-             * @event error-system
+             * @event warn-user
+             * @event warn-system
              * @memberOf VIEWER
              */
 
@@ -380,119 +521,86 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         }
 
         /**
-         * Initialize IO in the Element - enables use of export/import functions and cache
-         * @return {boolean} false if import failed (error thrown and caught)
+         * Initialize IO in the Element - enables use of export/import functions
+         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
+         * @param {string?} [options.exportKey=""] optional export key for the globally exported
+         *   data through exportData
+         * @return {PostDataStore} data store reference, or false if import failed
          */
-        async initIO() {
-            if (this.__ioInitialized) return false;
+        async initIO(options = {}) {
+            let store = this[STORE_TOKEN];
+            if (store) return store;
 
-            const _this = this;
-            VIEWER.addHandler('export-data', (e) => new Promise((resolve, reject) => {
-                try {
-                    _this.exportData().then(data => e.setSerializedData(_this.id, data)).then(resolve)
-                } catch (e) {
-                    reject(e);
-                }
-            }));
-            this.setCache = async (key, value) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        await store.set(_this.id + key, value);
-                        return true;
-                    } catch (e) {
-                        console.warn("Silent failure of cache setter -> delegate to local storage.");
-                    }
-                }
-
-                localStorage.setItem(this.id + key, value);
-                return true;
-            };
-            this.getCache = async (key, defaultValue=undefined, parse=true) => {
-                const store = APPLICATION_CONTEXT.metadata.persistent();
-                if (store) {
-                    try {
-                        return await store.get(_this.id + key, defaultValue);
-                    } catch (e) {
-                        console.warn("Silent failure of cache getter -> delegate to local storage.");
-                    }
-                }
-
-                let data = localStorage.getItem(key);
-                if (data === null) return defaultValue;
-                try {
-                    return parse && typeof data === "string" ? JSON.parse(data) : data;
-                } catch (e) {
-                    console.error(e);
-                    this.error({
-                        error: e, code: "W_CACHE_IMPORT_ERROR",
-                        message: $.t('error.cacheImportFail',
-                            {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
-                    });
-                    return defaultValue;
-                }
-            };
-            this.__ioInitialized = true;
+            options.id = this.uid;
+            options.xoType = this.__xoContext;
+            const dataStore = this[STORE_TOKEN] = new PostDataStore(options);
 
             try {
-                let data = APPLICATION_CONTEXT.getData(this.id);
-                if (typeof data === "string" && data) {
-                    if (this.willParseImportData()) data = JSON.parse(data);
-                    await this.importData(data);
-                }
-                return true;
+                const exportKey = options.exportKey || "";
+                VIEWER.addHandler('export-data', async (e) => {
+                    const data = await this.exportData();
+                    if (data) {
+                        await dataStore.set(exportKey, data);
+                    }
+                });
+
+                const data = await dataStore.get(exportKey);
+                if (data !== undefined) await this.importData(data);
+
             } catch (e) {
-                console.error('IO Failure:', this.constructor.name,  e);
+                console.error('IO Failure:', this.constructor.name, e);
                 this.error({
-                    error: e, code: "W_IO_IMPORT_ERROR",
+                    error: e, code: "W_IO_INIT_ERROR",
                     message: $.t('error.pluginImportFail',
                         {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
                 });
-                return false;
             }
+            return dataStore;
         }
 
         /**
-         * Called to export data, expects serialized object
-         * note: for multiple objects, serialize all and export serialized object with different keys
-         * @return {Promise<string>}
+         * Called to export data within 'export-data' event: automatically the post data store object
+         * (returned from initIO()) is given the output of this method:
+         *   `await dataStore.set(options.exportKey || "", await this.exportData());`
+         * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
+         * upon the event 'export-data', or simply nest objects to fit a single output
+         * @return {Promise<any>}
          */
         async exportData() {}
         /**
-         * Called with this.initIO if data available
+         * Called automatically within this.initIO if data available
          *  note: parseImportData return value decides if data is parsed data or passed as raw string
          * @param data {(string|*)} data
          */
         async importData(data) {}
+
         /**
-         * Decide whether importData gets parsed input
-         * @return {boolean}
+         *
+         * @param moduleId
+         * @param callback
+         * @return {boolean} true if finished immediatelly, false if registered handler for the
+         *   future possibility of the module being loaded
          */
-        willParseImportData() {
-            return true;
+        integrateWithSingletonModule(moduleId, callback) {
+            const targetModule = singletonModule(moduleId);
+            if (targetModule) {
+                callback(targetModule);
+                return true;
+            }
+            VIEWER.addHandler('module-singleton-created', e => {
+                if (e.id === moduleId) callback(e.module);
+            });
+            return false;
         }
-        /**
-         * Set cached value, unlike setOption this value is stored in provided system cache (cookies or user)
-         * @param {string} key
-         * @param {string} value
-         */
-        async setCache(key, value) {}
-        /**
-         * Get cached value, unlike setOption this value is stored in provided system cache (cookies or user)
-         * @param {string} key
-         * @param {*} defaultValue value to return in case no value is available
-         * @param {boolean} parse deserialize if true
-         * @return {string|*} return serialized or unserialized data
-         */
-        async getCache(key, defaultValue=undefined, parse=true) {}
 
         /**
          * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
          */
-        initEventSource(errorBindingOnViewer=true) {
+        registerAsEventSource(errorBindingOnViewer=true) {
             //consider _errorHandlers that would listen for errors and warnings and provide handling instead of global scope VIEWER (at least for plugins)
 
             const events = this.__eventSource = new OpenSeadragon.EventSource();
+            events.filters = {};
             this.addHandler = events.addHandler.bind(events);
             this.addOnceHandler = events.addOnceHandler.bind(events);
             this.getHandler = events.getHandler.bind(events);
@@ -501,43 +609,94 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             this.removeAllHandlers = events.removeAllHandlers.bind(events);
             this.removeHandler = events.removeHandler.bind(events);
             this.__errorBindingOnViewer = errorBindingOnViewer;
+
+            this.addFilter = ( eventName, handler, priority ) => {
+                let filters = this.filters[ eventName ];
+                if ( !filters ) {
+                    this.filters[ eventName ] = filters = [];
+                }
+                if ( handler && OpenSeadragon.isFunction( handler ) ) {
+                    let index = filters.length,
+                        filter = { handler: handler, priority: priority || 0 };
+                    filters[ index ] = filter;
+                    while ( index > 0 && filters[ index - 1 ].priority < filters[ index ].priority ) {
+                        filters[ index ] = filters[ index - 1 ];
+                        filters[ index - 1 ] = filter;
+                        index--;
+                    }
+                }
+            };
+            this.applyFilter = ( eventName, value ) => {
+                let filters = this.filters[ eventName ];
+                if ( !filters || !filters.length ) {
+                    return null;
+                }
+                for ( let i = 0; i < length; i++ ) {
+                    if ( filters[ i ] ) {
+                        value = filters[ i ].handler( value );
+                    }
+                }
+                return value;
+            };
+            this.removeFilter = ( eventName, handler ) => {
+                let filters = this.filters[ eventName ];
+                if ( !filters || !OpenSeadragon.isArray( filters ) ) {
+                    return;
+                }
+                this.filters = filters.filter(f => f.handler !== handler);
+            };
         }
         /**
          * Add an event handler for a given event. See OpenSeadragon.EventSource::addHandler
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         addHandler() {}
         /**
          * Add an event handler to be triggered only once (or X times). See OpenSeadragon.EventSource::addOnceHandler
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         addOnceHandler () {}
         /**
          * Get a function which iterates the list of all handlers registered for a given event, calling the handler for each.
          * See OpenSeadragon.EventSource::getHandler
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         getHandler () {}
         /**
          * Get the amount of handlers registered for a given event. See OpenSeadragon.EventSource::numberOfHandlers
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         numberOfHandlers () {}
         /**
          * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEvent
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         raiseEvent () {}
         /**
          * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         removeAllHandlers () {}
         /**
          * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if initEventSource() not called.
+         * Note: noop if registerAsEventSource() not called.
          */
         removeHandler () {}
+        /**
+         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
+         * Note: noop if registerAsEventSource() not called.
+         */
+        addFilter () {}
+        /**
+         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
+         * Note: noop if registerAsEventSource() not called.
+         */
+        applyFilter () {}
+        /**
+         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
+         * Note: noop if registerAsEventSource() not called.
+         */
+        removeFilter () {}
     }
 
     /**
@@ -572,7 +731,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getStaticMeta(metaKey, defaultValue) {
             if (metaKey === "instance") return undefined;
-            return MODULES[this.id]?.[metaKey] || defaultValue;
+            const value = MODULES[this.id]?.[metaKey];
+            if (value === undefined) return defaultValue;
+            return value;
         }
 
         /**
@@ -617,6 +778,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
             }
             staticContext.__self = this;
+
+            MODULES.instance = this;
+            // Await event necessary to fire after instantiation
+            VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
+                id: id,
+                module: this
+            }).catch(/*no-op*/);
         }
     }
 
@@ -658,41 +826,75 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          */
         getStaticMeta(metaKey, defaultValue) {
             if (metaKey === "instance") return undefined;
-            return PLUGINS[this.id]?.[metaKey] || defaultValue;
+            const value = PLUGINS[this.id]?.[metaKey];
+            if (value === undefined) return defaultValue;
+            return value;
         }
 
         /**
-         * Store the plugin configuration parameters
+         * Store the plugin online configuration parameters/options
          * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache
          */
         setOption(key, value, cache=true) {
-            if (cache) localStorage.setItem(this.id + key, value);
+            if (cache) this.setLocalOption(key, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
         }
 
         /**
-         * Read the plugin configuration parameters
+         * Read the plugin online configuration parameters/options.
+         * The defaultValue is read from a static configuration if not provided.
+         * Note that this behavior will read static values such as 'permaLoad', 'includes' etc..
          * @param {string} key
          * @param {*} defaultValue
          * @param {boolean} cache
          * @return {*}
          */
         getOption(key, defaultValue=undefined, cache=true) {
-            if (cache) {
-                let cached = localStorage.getItem(this.id + key);
-                if (cached !== null) return cached;
+            //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
+
+            //options are stored only for plugins, so we store them at the lowest level
+            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            if (value === null) {
+                // read default value from static context if exists
+                if (defaultValue === undefined && key !== "instance") {
+                    defaultValue = PLUGINS[this.id]?.[key];
+                }
+
+                value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
+                    APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             }
-            let value = APPLICATION_CONTEXT.config.plugins[this.id].hasOwnProperty(key) ?
-                APPLICATION_CONTEXT.config.plugins[this.id][key] : defaultValue;
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
-        };
+        }
+
+        /**
+         * Ability to cache a value locally into the browser,
+         * the value can be retrieved using this.getOption(...)
+         * @param key
+         * @param value
+         */
+        setLocalOption(key, value) {
+            localStorage.setItem(`${this.id}.${key}`, value);
+        }
+
+        /**
+         * Read plugin configuration value - either from a static configuration or dynamic one.
+         * More generic function that reads any option available (configurable via dynamic JSON or include.json)
+         * @param {string} optKey dynamic param key, overrides anything
+         * @param {string} staticKey static param key, used if dynamic value is undefined
+         * @param {any} defaultValue
+         * @param {boolean} cache
+         */
+        getOptionOrConfiguration(optKey, staticKey, defaultValue=undefined, cache=true) {
+            const value = this.getOption(optKey, undefined, cache);
+            return value === undefined ? this.getStaticMeta(staticKey, defaultValue) : value;
+        }
 
         /**
          * JS String to use in DOM callbacks to access self instance.
@@ -706,6 +908,26 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                 writable: false,
             });
             return `plugin('${this.id}')`;
+        }
+
+        /**
+         * To simplify plugin interaction, you can register a callback executed
+         * when a certain plugin gets loaded into the system.
+         * @param {string} pluginId
+         * @param {function} callback that receives the plugin instance
+         * @return {boolean} true if finished immediatelly, false if registered handler for the
+         *   future possibility of plugin being loaded
+         */
+        integrateWithPlugin(pluginId, callback) {
+            const targetPlugin = plugin(pluginId);
+            if (targetPlugin) {
+                callback(targetPlugin);
+                return true;
+            }
+            VIEWER.addHandler('plugin-loaded', e => {
+                if (e.id === pluginId) callback(e.plugin);
+            });
+            return false;
         }
 
         static ROOT = PLUGINS_FOLDER;
@@ -723,26 +945,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param url
          * @param postData
          * @param headers
-         * @param metaKeys metadata key list to include
          * @throws HTTPError
          * @return {Promise<string|any>}
          */
-        fetch: async function(url, postData=null, headers={}, metaKeys=true) {
+        fetch: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
             headers = $.extend({
-                'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             }, headers);
-
-            if (typeof postData === "object" && postData && metaKeys !== false) {
-                if (postData.metadata === undefined) {
-                    if (Array.isArray(metaKeys)) {
-                        postData.metadata = APPLICATION_CONTEXT.metadata.allWith(metaKeys);
-                    } else {
-                        postData.metadata = APPLICATION_CONTEXT.metadata.all();
-                    }
-                }
-            }
 
             const response = await fetch(url, {
                 method: method,
@@ -769,12 +979,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param url
          * @param postData
          * @param headers
-         * @param metaKeys metadata key list to include
          * @throws HTTPError
          * @return {Promise<string|any>}
          */
-        fetchJSON: async function(url, postData=null, headers={}, metaKeys=true) {
-            const response = await this.fetch(url, postData, headers, metaKeys),
+        fetchJSON: async function(url, postData=null, headers=null) {
+            headers = headers || {};
+            headers['Content-Type'] = 'application/json';
+            const response = await this.fetch(url, postData, headers),
                 data = await response.text();
             try {
                 return JSON.parse(data);
@@ -788,12 +999,25 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
          * @param stripSuffix
          */
         fileNameFromPath: function(imageFilePath, stripSuffix=true) {
-            let begin = imageFilePath.lastIndexOf('/')+1;
+            let begin = imageFilePath.lastIndexOf('/');
+            if (begin === -1) return imageFilePath;
+            begin++;
             if (stripSuffix) {
                 let end = imageFilePath.lastIndexOf('.');
                 if (end >= 0) return imageFilePath.substr(begin, end - begin);
             }
             return imageFilePath.substr(begin, imageFilePath.length - begin);
+        },
+
+        /**
+         * Strip path suffix
+         * @param {string} path
+         * @return {string}
+         */
+        stripSuffix: function (path) {
+            let end = path.lastIndexOf('.');
+            if (end >= 0) return path.substr(0, end);
+            return path;
         },
 
         /**
@@ -825,40 +1049,26 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
         loadPlugin: function(id, onload=_=>{}) {
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
-            if (window.hasOwnProperty(id)) {
-                /**
-                 * @property {string} id plugin id
-                 * @property {string} message
-                 * @memberOf VIEWER
-                 * @event plugin-failed
-                 */
-                window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
-                    id: id,
-                    message: $.t('messages.pluginLoadFailed'),
-                });
-                console.warn("Plugin id collision on global scope", id);
-                return;
-            }
             if (!Array.isArray(meta.includes)) {
+                meta.includes = [];
+            }
+
+            if (REGISTERED_PLUGINS === undefined) {
                 /**
+                 * Before a request to plugin loading is processed at runtime.
                  * @property {string} id plugin id
-                 * @property {string} message
                  * @memberOf VIEWER
-                 * @event plugin-failed
+                 * @event before-plugin-load
                  */
-                window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
-                    id: id,
-                    message: $.t('messages.pluginLoadFailed'),
-                });
-                console.warn("Plugin include invalid.");
-                return;
+                VIEWER.raiseEvent('before-plugin-load', {id: id});
             }
 
             let successLoaded = function() {
                 LOADING_PLUGIN = false;
 
-                //loaded after page load
-                if (!initializePlugin(PLUGINS[id].instance)) {
+                //loaded after page load if REGISTERED_PLUGINS === undefined
+                const loadedAfterPluginInit = REGISTERED_PLUGINS === undefined;
+                if (loadedAfterPluginInit && !initializePlugin(PLUGINS[id].instance)) {
                     /**
                      * @property {string} id plugin id
                      * @property {string} message
@@ -881,15 +1091,17 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
                     for (let p in PLUGINS) {
                         if (PLUGINS[p].loaded) plugins.push(p);
                     }
-                    APPLICATION_CONTEXT._setCookie('_plugins', plugins.join(","));
+                    APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
                 }
-                /**
-                 * Plugin was loaded dynamically at runtime.
-                 * @property {string} id plugin id
-                 * @memberOf VIEWER
-                 * @event plugin-loaded
-                 */
-                VIEWER.raiseEvent('plugin-loaded', {id: id});
+                if (loadedAfterPluginInit) {
+                    /**
+                     * Plugin was loaded dynamically at runtime.
+                     * @property {string} id plugin id
+                     * @memberOf VIEWER
+                     * @event plugin-loaded
+                     */
+                    VIEWER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
+                }
                 onload();
             };
             LOADING_PLUGIN = true;
@@ -908,6 +1120,45 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, versi
             }
             return MODULES[id].loaded;
         },
+
+        /**
+         * Serialize the Viewer
+         * @param includedPluginsList
+         * @param withCookies
+         * @return {Promise<{app: string, data: {}}>}
+         */
+        serializeApp: async function(includedPluginsList=undefined, withCookies=false) {
+            //reconstruct active plugins
+            let pluginsData = APPLICATION_CONTEXT.config.plugins;
+            let includeEvaluator = includedPluginsList ?
+                (p, o) => includedPluginsList.includes(p) :
+                (p, o) => o.loaded || o.permaLoad;
+
+            for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+                const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
+
+                if (!includeEvaluator(pid, plugin)) {
+                    delete pluginsData[pid];
+                } else if (!pluginsData.hasOwnProperty(pid)) {
+                    pluginsData[pid] = {};
+                }
+            }
+
+            let exportData = {};
+
+            /**
+             * Event to export your data within the viewer lifecycle
+             * Event handler can by <i>asynchronous</i>, the event can wait.
+             * todo OSD v5.0 will support also async events
+             *
+             * @property {function} setSerializedData callback to call,
+             *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
+             * @memberOf VIEWER
+             * @event export-data
+             */
+            await VIEWER.tools.raiseAwaitEvent(VIEWER, 'export-data');
+            return {app: UTILITIES.serializeAppConfig(withCookies), data: POST_DATA};
+        }
     };
 
     return function() {

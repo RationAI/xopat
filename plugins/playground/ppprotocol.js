@@ -292,6 +292,7 @@ Playground.Protocol = class extends OpenSeadragon.TileSource {
                     if (blb.size === 0) {
                         context.finish("Empty image response.");
                     } else {
+                        //todo free object url
                         image.src = (window.URL || window.webkitURL).createObjectURL(blb);
                     }
                 },

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+
+<head>
+  <meta charset="utf-8">
+  <title>Visualization Developer Setup</title>
+
+    <script>
+        var OpenSeadragon = {};
+    </script>
+
+    <template id="template-head"></template>
+
+</head>
+
+<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+
+<div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
+  <div class="Layout-main ">
+  <h1 class="f00-light">Developer visualization setup</h1>
+<br><br>
+
+      <br>
+          <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
+          try {
+              JSON.parse($(this).val());
+          } catch (e) {
+              console.warn(e, 'Data:', $(this).val());
+              alert(`Incorrect JSON in the custom visualization: ${e} (see console).`);
+          }
+">
+{
+    "params": {
+        "customBlending": true
+    },
+    "data": [],
+    "background": [
+        {
+            "dataReference": 0,
+            "lossless": false
+        }
+    ],
+    "visualizations": [
+        {
+            "name": "A visualization setup 1",
+            "lossless": true,
+            "shaders": {
+                "shader_id_1": {
+                    "name": "Layer 1",
+                    "type": "identity",
+                    "visible": 1,
+                    "fixed": false,
+                    "dataReferences": [],
+                    "params": { }
+                }
+            }
+        }
+    ]
+}
+</textarea>
+      <div id="form-submit-container"></div>
+      <br><br>
+      <div id="documentation"></div>
+      </div>
+  </div>
+</div>
+
+<template id="template-form-init"></template>
+
+<script type="text/javascript">
+
+    window.addEventListener('load', _ => {
+        window.formInit = $.extend(true, {
+            location: "/",
+            lang: {
+                ready: "Ready!"
+            }
+        }, window.formInit || {});
+
+        $("#form-submit-container").html(
+            `    <form method="POST" target="_blank" action="${formInit.location}" id="custom-request">
+        <input type="hidden" name="visualization" id="custom-visualization" value=''>
+        <button class="btn pointer" type="submit" value="${formInit.lang.ready}">${formInit.lang.ready}</button>
+    &emsp;
+    </form>`
+        );
+
+        ShaderConfigurator.buildShadersAndControlsDocs("documentation");
+
+        $(document).off('submit');
+
+        $('#custom-request').on('submit', evt => {
+            document.getElementById("custom-visualization").value = $("#custom-params").val();
+        });
+    });
+
+</script>
+</body>
+
+</html>

@@ -12,7 +12,7 @@ OSDAnnotations.FreeFormTool = class {
         this.screenRadius = 20;
         this.radius = 20;
         this.mousePos = null;
-        this.SQRT2DIV2 = 0.707106781187;
+        this.SQRT3DIV2 = 0.866025403784;
         this._context = context;
         this._update = null;
         this._created = false;
@@ -26,30 +26,38 @@ OSDAnnotations.FreeFormTool = class {
     /**
      * Initialize object for modification
      * @param {object} object fabricjs object
-     * @param {boolean} created true if the object has been just created, e.g.
+     * @param {boolean|Array<object>} created true if the object has been just created, e.g.
      *    the object is yet not on the canvas, the given object is appended to the canvas and modified directly,
      *    not copied (unless it is an implicit object)
+     *    can be also an array of points: in this case fft will consider the created as a polygonized
+     *    object data and re-use these to construct first iteration, this means you can explicitly
+     *    provide also polygon version of the target object if its factory does not support supportsBrush
      */
     init(object, created=false) {
-
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         if (objectFactory !== undefined) {
-            if (!objectFactory.isImplicit()) {  //object can be used immedietaly
-                let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
-                this._setupPolygon(newPolygon, object);
-            } else {
-                let points = objectFactory.supportsBrush() ?
-                objectFactory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined;
+            if (objectFactory.factoryID !== "polygon") {  //object can be used immedietaly
+                let points = Array.isArray(created) ? points : (
+                    objectFactory.supportsBrush() ?
+                        objectFactory.toPointArray(object,
+                            OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined
+                );
+
                 if (points) {
                     this._createPolygonAndSetupFrom(points, object);
                 } else {
                     Dialogs.show("This object cannot be modified.", 5000, Dialogs.MSG_WARN);
                     return;
                 }
+            } else {
+                let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
+                this._setupPolygon(newPolygon, object);
+
             }
         } else {
             this.polygon = null;
-            Dialogs.show("Modification with <i>shift</i> allowed only with annotation objects.", 5000, Dialogs.MSG_WARN);
+            //todo rather throw error
+            Dialogs.show("Error: invalid usage.", 5000, Dialogs.MSG_WARN);
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
@@ -156,16 +164,21 @@ OSDAnnotations.FreeFormTool = class {
      * @return {{x: number, y: number}[]} points
      */
     getCircleShape(fromPoint) {
-        let diagonal = this.radius * this.SQRT2DIV2;
+        let diagonal1 = this.radius * 0.5;
+        let diagonal2 = this.radius * this.SQRT3DIV2;
         return [
             { x: fromPoint.x - this.radius, y: fromPoint.y },
-            { x: fromPoint.x - diagonal, y: fromPoint.y + diagonal },
+            { x: fromPoint.x - diagonal2, y: fromPoint.y + diagonal1 },
+            { x: fromPoint.x - diagonal1, y: fromPoint.y + diagonal2 },
             { x: fromPoint.x, y: fromPoint.y + this.radius },
-            { x: fromPoint.x + diagonal, y: fromPoint.y + diagonal },
+            { x: fromPoint.x + diagonal1, y: fromPoint.y + diagonal2 },
+            { x: fromPoint.x + diagonal2, y: fromPoint.y + diagonal1 },
             { x: fromPoint.x + this.radius, y: fromPoint.y },
-            { x: fromPoint.x + diagonal, y: fromPoint.y - diagonal },
+            { x: fromPoint.x + diagonal2, y: fromPoint.y - diagonal1 },
+            { x: fromPoint.x + diagonal1, y: fromPoint.y - diagonal2 },
             { x: fromPoint.x, y: fromPoint.y - this.radius },
-            { x: fromPoint.x - diagonal, y: fromPoint.y - diagonal }
+            { x: fromPoint.x - diagonal1, y: fromPoint.y - diagonal2 },
+            { x: fromPoint.x - diagonal2, y: fromPoint.y - diagonal1 },
         ]
     }
 
@@ -378,6 +391,4 @@ OSDAnnotations.FreeFormTool = class {
     _toDistancePointsAsObjects(pointA, pointB) {
         return Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y);
     }
-
-
 };

@@ -196,7 +196,7 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
 
                 that.$next_btn = $("<div>", { class: that.cl.next_btn })
                     .appendTo(that.enjoyhint)
-                    .html("Next")
+                    .html($.t('tutorials.enjoyhint.next'))
                     .click(function(e) {
                         that.options.onNextClick();
                     });
@@ -301,7 +301,7 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                         that.stepData.width = newDataCoords.width + 11;
                         that.stepData.height = newDataCoords.height + 11;
 
-                        that.renderLabelWithShape(that.stepData, that.customBtnProps);
+                        that.renderLabelWithShape(that.stepData, that.customBtnProps, that.isLastStep);
                         $('.enjoyhint_next_btn').css('visibility', 'visible');
                         $('.enjoyhint_prev_btn').css('visibility', 'visible');
                         $('.enjoyhint_skip_btn').css('visibility', 'visible');
@@ -334,14 +334,6 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                     that.layer.add(that.shape);
                     that.kinetic_stage.draw();
                 });
-
-                var enjoyhint_elements = [
-                    that.enjoyhint,
-                    $top_dis_events,
-                    $bottom_dis_events,
-                    $left_dis_events,
-                    $right_dis_events
-                ];
 
                 that.show = function() {
                     that.enjoyhint.removeClass(that.cl.hide);
@@ -681,8 +673,9 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                     };
                 })($);
 
-                that.renderLabelWithShape = function(data, customBtnProps) {
+                that.renderLabelWithShape = function(data, customBtnProps, isLastStep) {
                     that.stepData = data;
+                    that.isLastStep = isLastStep;
                     that.customBtnProps = customBtnProps;
 
                     function findParentDialog(element) {
@@ -979,9 +972,9 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                             that.$prev_btn.html('&#8249;');
                         } else {
                             that.$next_btn.html(customBtnProps.nextButton && customBtnProps.nextButton.text ?
-                                customBtnProps.nextButton.text : "NEXT");
+                                customBtnProps.nextButton.text : (isLastStep() ? $.t('tutorials.enjoyhint.finish') : $.t('tutorials.enjoyhint.next')));
                             that.$prev_btn.html(customBtnProps.prevButton && customBtnProps.prevButton.text ?
-                                customBtnProps.prevButton.text : 'BACK');
+                                customBtnProps.prevButton.text : $.t('tutorials.enjoyhint.back'));
                         }
                         that.$prev_btn.css({
                             left: distance + 138,
@@ -1123,10 +1116,10 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
             return this;
         },
 
-        render_label_with_shape: function(data, stopFunction, customBtnProps) {
+        render_label_with_shape: function(data, stopFunction, customBtnProps, isLastStep) {
             this.each(function() {
                 that.stopFunction = stopFunction;
-                this.enjoyhint_obj.renderLabelWithShape(data, customBtnProps);
+                this.enjoyhint_obj.renderLabelWithShape(data, customBtnProps, isLastStep);
             });
 
             return this;
@@ -1255,6 +1248,11 @@ var EnjoyHint = function(configs) {
         $body.enjoyhint("hide_prev");
         $body.enjoyhint("hide_next");
         $body.enjoyhint("hide_skip");
+    };
+
+    var isLastStep = function () {
+        var step_data = data[current_step+1];
+        return !(data && step_data);
     };
 
     var stepAction = function(step=undefined) {
@@ -1396,7 +1394,7 @@ var EnjoyHint = function(configs) {
                     var $nextBtn = $(".enjoyhint_next_btn");
 
                     $nextBtn.addClass(step_data.nextButton.className || "");
-                    $nextBtn.text(step_data.nextButton.text || "NEXT");
+                    $nextBtn.text(step_data.nextButton.text || (isLastStep() ? $.t('tutorials.enjoyhint.finish') : $.t('tutorials.enjoyhint.next')));
                     that.nextUserClass = step_data.nextButton.className;
                 }
 
@@ -1404,7 +1402,7 @@ var EnjoyHint = function(configs) {
                     var $prevBtn = $(".enjoyhint_prev_btn");
 
                     $prevBtn.addClass(step_data.prevButton.className || "");
-                    $prevBtn.text(step_data.prevButton.text || "BACK");
+                    $prevBtn.text(step_data.prevButton.text || $.t('tutorials.enjoyhint.back'));
                     that.prevUserClass = step_data.prevButton.className;
                 }
 
@@ -1492,7 +1490,7 @@ var EnjoyHint = function(configs) {
                     shape_data.height = h + shape_margin;
                 }
 
-                $body.enjoyhint("render_label_with_shape", shape_data, that.stop, customBtnProps);
+                $body.enjoyhint("render_label_with_shape", shape_data, that.stop, customBtnProps, isLastStep);
 
             }, scrollSpeed + 20 || 270);
         }, timeout);

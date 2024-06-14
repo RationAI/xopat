@@ -1,5 +1,5 @@
 addPlugin('profiler', class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
 
         this.page = new AdvancedMenuPages(this.id);
@@ -96,7 +96,7 @@ addPlugin('profiler', class extends XOpatPlugin {
                 },{
                     type: "vega",
                     classes: "color-bg-white",
-                    specs: _this.getVegaBoxPlot(_this.records.map(r => ({ms: r})))
+                    vega: _this.getVegaBoxPlot(_this.records.map(r => ({ms: r})))
                 }, {
                     type: "text",
                     content: "You can download the raw data here:"

@@ -4,7 +4,7 @@
     "author": "Jirka Horák",
     "version": "1.0.0",
     "description": "Allgorithms and scripts applied online on images.",
-    "icon": "",
+    "icon": null,
     "includes" : [
         "playground.js",
         "renderingStrategy.js",
@@ -13,5 +13,6 @@
         "ppprotocol.js"
     ],
     "modules": ["webgl"],
+    "hidden": true,
     "permaLoad": false
 }

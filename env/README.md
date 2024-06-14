@@ -3,6 +3,9 @@
 This README describes options for xOpat configurations and available core configuration details.
 For details on modules and plugin configurations, see respective READMEs in given folders.
 
+The configuration can be provided either in a file (default location `env/env.json`, override-able path in `XOPAT_ENV` 
+variable) or a serialized JSON (also in `XOPAT_ENV`).
+
 Default static configuration for plugins, modules and the viewer itself can be overridden
 in ``env.json`` file. The full configuration is compiled for you (with comments) in `env.example.json`.
 Only fields that are to be overridden can be present.
@@ -33,13 +36,20 @@ Then, you can simply override values you need to change, simply follow the `env.
   ]
 }
 ````
+To generate minimal configuration file, run
+
+> grunt env --minimal
+
+which strips built-in options for plugins, modules, and removes empty configuration module objects.
 
 ### Static configuration provided in a dynamic way
-You can use ``XOPAT_ENV`` environmental variable to specify
+To provide a configuration file path, you can set 
+``XOPAT_ENV`` environmental variable to specify
  - a file path, if the file exists and _is readable_, it will try to parse its contents,
  - a string data, its contents will be treated as a serialized JSON,
  - otherwise, ``env/env.json`` is used (if exists)
 
+### Environmental variables
 You can use custom environment variables as a string values like this: ``<% ENV_VAR_NAME %>``.
 If ``X=3`` then `"watch <%X%>"` will result in `"watch 3"`. The pattern used is
 > ``<%\s*[a-zA-Z_][a-zA-Z0-9_]*\s*%>``

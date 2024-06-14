@@ -6,8 +6,7 @@ export default {
             cy.log("mainMenu:: Test without bypassCookies is not intended to pass.");
         }
 
-        ["#panel-navigator", "#navigator-pin",
-            "#global-export", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
+        ["#panel-navigator", "#navigator-pin", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
 
         if (config.params.stackedBackground) {
             cy.get("#global-tissue-visibility").should('not.be.visible');
@@ -39,29 +38,28 @@ export default {
         }
 
         ["#add-plugins", "#panel-navigator", "#navigator-pin", "#main-panel-hide",
-            "#global-export", "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
+            "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
     },
 
     shadersMainMenu(config) {
         if (!config.visualizations || config.visualizations.length < 1) {
             cy.get("#shaders").should('not.be.visible')
-            return;
-        }
+        } else {
+            let shaderOpener = cy.get("#shaders-pin");
 
-        let shaderOpener = cy.get("#shaders-pin");
+            cy.get("#shaders").should('be.visible')
+            cy.get("#shaders").children('option').then(options => {
+                const actual = [...options].map(o => o.innerText)
+                expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
+            })
 
-        cy.get("#shaders").should('be.visible')
-        cy.get("#shaders").children('option').then(options => {
-            const actual = [...options].map(o => o.innerText)
-            expect(actual).to.deep.eq(config.visualizations.map(v => v.name))
-        })
+            elements.openMenuArrow("#shaders-pin");
 
-        elements.openMenuArrow("#shaders-pin");
+            //testing of the submenu is too complex for general setup, tested in shader tests
 
-        //testing of the submenu is too complex for general setup, tested in shader tests
-
-        if (config.params.webglDebugMode) {
-            cy.contains('#test-inner--webgl', 'WebGL Processing I/O (debug mode)')
+            if (config.params.webglDebugMode) {
+                cy.contains('#test-inner--webgl', 'WebGL Processing I/O (debug mode)')
+            }
         }
     },
 

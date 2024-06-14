@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" data-light-theme="light">
+
+<head>
+    <meta charset="utf-8">
+    <title>Visualization</title>
+    <meta name="msapplication-TileColor" content="#da532c">
+    <!--Necessary for OSD on phone portrait mode-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- TODO hardcoded path -->
+    <link rel="apple-touch-icon" sizes="180x180" href="src/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
+    <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+
+    <!--Remember WARNS/ERRORS to be able to export-->
+    <script type="text/javascript">
+        (function () {
+            window.console.appTrace = [];
+
+            const defaultError = console.error;
+            const timestamp = () => {
+                let ts = new Date(), pad = "000", ms = ts.getMilliseconds().toString();
+                return ts.toLocaleTimeString("cs-CZ") + "." + pad.substring(0, pad.length - ms.length) + ms + " ";
+            };
+            window.console.error = function () {
+                window.console.appTrace.push("ERROR ",
+                    // (new Error().stack.split("at ")[1]).trim(), " ",
+                    timestamp(), ...arguments, "\n");
+                defaultError.apply(window.console, arguments);
+            };
+
+            const defaultWarn = console.warn;
+            window.console.warn = function () {
+                window.console.appTrace.push("WARN  ", ...arguments, "\n");
+                defaultWarn.apply(window.console, arguments);
+            };
+        })();
+    </script>
+
+    <!-- Template head -->
+    <template id="template-head"></template>
+</head>
+<body style="overflow: hidden;">
+<!-- OSD viewer -->
+<div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
+    <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
+    <div id='viewer-demo-advertising' style='display: none'>
+        <h1>xOpat - The WSI Viewer</h1>
+        <p>The viewer is missing the target data to view; this might happen, if</p>
+        <ul class="ml-3">
+            <li>you have an invalid link, or</li>
+            <li>the server that should deliver data is not responding</li>
+            <li>the data is not available due to authorization issues</li>
+        </ul>
+        <br><br>
+        <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>
+        <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">
+    </div>
+</div>
+
+<!-- System messaging -->
+<div id="system-message" class="d-none system-container">
+    <div id="system-message-warn" class="f00-light text-center">
+        <span class="material-icons f0-light mr-1" style="transform: translate(0px, -5px);">error_outline</span>
+        <span data-i18n="error.title">Error</span>
+    </div>
+    <div id="system-message-title" class="f2-light text-center clearfix"></div>
+    <div id="system-message-subtitle" class="text-normal text-center"></div>
+    <div class="text-small text-center mb-4" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('display', 'none');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
+    <div id="system-message-details" class="px-4 py-3 mb-2 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+    <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()" class="btn" type="button" data-i18n="error.dismissBtn">dismiss</button>
+</div>
+
+<!--Tutorials-->
+<div id="tutorials-container" class="d-none system-container">
+    <div id="tutorials-title" class="f1-light text-center clearfix"></div>
+    <p id="tutorials-description" class="text-center"></p>
+    <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
+    <br>
+    <div id="tutorials"></div>
+    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();" data-i18n="common.Exit">Exit</button>
+</div>
+
+<!-- Main Panel -->
+<span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
+
+<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
+    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
+        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1 flex-content-between">
+            <span id="main-panel-hide" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
+
+            <div id="user-panel" class="btn-pointer" style="flex-grow: 1;text-align-last: right;">
+                <span id="user-name" data-i18n="user.anonymous"></span>
+                <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
+            </div>
+        </div>
+
+        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
+            <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
+                <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
+            </div>
+            <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
+                <div id="tissue-title-header" class="one-liner" style="max-height: 255px; flex-grow: 1">
+                    <span id="global-tissue-visibility">
+                        <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                    </span>
+                    <span class="text-shadow-mild"><!--Inserted slide name--></span>
+                </div>
+                <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="
+ let self = $(this);
+ if (self.hasClass('pressed')) {
+    self.removeClass('pressed');
+    self.parent().parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
+ } else {
+    self.parent().parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
+    self.addClass('pressed');
+ }
+"> push_pin </span>
+            </div>
+            <span class="fas fa-clone btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone"></span>
+
+        </div>
+
+        <div id="panel-images" class="inner-panel mt-2"></div>
+
+        <div id="panel-shaders" class="inner-panel" style="display:none;">
+
+            <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
+            <div class="inner-panel-content noselect" id="inner-panel-content-1">
+                <div>
+                    <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+                    APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
+                    <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
+                        <!--populated with shaders from the list -->
+                    </select>
+                    <div class="d-inline-block float-right position-relative hover-selectable">
+                        <span id="cache-snapshot" class="material-icons btn-pointer text-right"
+                        style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
+                        <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                        </div>
+                    </div>
+                    <br>
+                    <div id="global-opacity" class="float-right">
+                        <label>
+                            <span data-i18n="main.global.layerOpacity">Opacity</span>
+                            <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
+                        </label>
+                    </div>
+                </div>
+
+                <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
+                        <!--populated with options for a given image data -->
+                </div>
+                <div id="blending-equation"></div>
+            </div>
+        </div>
+        <!-- Appended controls for other plugins -->
+    </div>
+
+    <div class="d-flex flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
+        <div class="width-full d-flex flex-justify-between mx-4">
+            <span id="copy-url" class="hover-selectable py-2 pr-1" data-i18n="[title]main.bar.explainExportUrl">
+                <span class="material-icons pr-0" style="font-size: 22px;">share</span>
+                <span class="pl-1" data-i18n="main.bar.share">Share &emsp;</span>
+
+                <div class="position-absolute px-1 py-1 rounded-2 border-sm bottom-1 left-0 flex-column width-full flex-items-center" style="background: var(--color-bg-tertiary);">
+
+                    <span id="global-export" class="btn-pointer flex-row" onclick="UTILITIES.export();" data-i18n="[title]main.bar.explainExportFile">
+                        <span class="material-icons px-0 py-1" style="font-size: 22px;">download</span>
+                        <span data-i18n="main.bar.exportFile">Export</span>
+                    </span>
+                    <span id="copy-url-inner" class="btn-pointer flex-row" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
+                        <span class="material-icons px-0" style="font-size: 22px;">link</span>
+                        <span data-i18n="main.bar.exportUrl">URL</span>
+                    </span>
+                </div>
+            </span>
+            <span id="add-plugins" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+                <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
+                <span class="pl-1" data-i18n="main.bar.plugins">Plugins</span>
+            </span>
+            <span id="global-help" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+                <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
+                <span class="pl-1" data-i18n="main.bar.tutorials">Tutorial</span>
+            </span>
+            <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
+        </div>
+    </div>
+</div>
+
+<div id="plugin-tools-menu" class="position-absolute top-0 right-0 left-0 noselect"></div>
+<div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
+<div id="fullscreen-loader" class="position-fixed width-full height-full" style="z-index: 999; background-color: var(--color-bg-backdrop);">
+    <div class="loader position-fixed" style="top: 50%; left: 50%; transform: translate(-50%, -50%);"></div>
+    <div class="position-fixed" style="top: calc(50% + 120px); left: calc(50% + 30px); transform: translate(-50%, -50%); width: 450px; max-width: 85vw;">
+        <div id="fullscreen-loader-title" class="h3 text-center" style="display: none"></div>
+        <div id="fullscreen-loader-description" class="h4 text-center" style="display: none;"></div>
+    </div>
+</div>
+    <script>
+//preventive error message, that will be discarded after the full initialization, no translation
+window.onerror = function (message, file, line, col, error) {
+    let ErrUI = USER_INTERFACE.Errors;
+    if (ErrUI.active) return false;
+    error = error || {};
+    ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
+<b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
+    return false;
+};
+    </script>
+
+    <!-- Template app -->
+    <template id="template-app"></template>
+
+    <!-- Template modules -->
+    <template id="template-modules"></template>
+
+    <script type="text/javascript">
+
+(function (window) {
+
+    /*---------------------------------------------------------*/
+    /*------------ Basic Tutorial       -----------------------*/
+    /*---------------------------------------------------------*/
+
+    const withLayers = () => APPLICATION_CONTEXT.layersAvailable;
+    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
+        {'next #viewer-container' : $.t('tutorials.basic.1')
+        }, {'next #main-panel' : $.t('tutorials.basic.2')
+        }, {'next #navigator-container' : $.t('tutorials.basic.3')
+        }, {'next #navigator-container' : $.t('tutorials.basic.4'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
+        }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
+            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
+        }, {'next #global-opacity' : $.t('tutorials.basic.5'), runIf: withLayers
+        }, {
+            'next #__tisue_list' : $.t('tutorials.basic.6'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {
+            'click #images-pin' : $.t('tutorials.basic.7'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-images' : $.t('tutorials.basic.8'),
+            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
+        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
+        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
+        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
+        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
+        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
+        }, {'next #copy-url' : $.t('tutorials.basic.14')
+        }, {'next #global-help' : $.t('tutorials.basic.15')}], function() {
+        if (withLayers()) {
+            //prerequisite - pin in default state
+            let pin = $("#shaders-pin");
+            let container = pin.parents().eq(1).children().eq(1);
+            pin.removeClass('pressed');
+            container.removeClass('force-visible');
+        }
+    });
+
+})(window);
+    </script>
+
+    <!-- Template plugins -->
+    <template id="template-plugins"></template>
+
+<script>
+    APPLICATION_CONTEXT.beginApplicationLifecycle(
+        APPLICATION_CONTEXT.config.data,
+        APPLICATION_CONTEXT.config.background,
+        APPLICATION_CONTEXT.config.visualizations
+    );
+</script>
+</body>
+</html>

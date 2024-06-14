@@ -5,6 +5,8 @@
 Thumbs.db
 
 #builds and binaries
+*.min.js
+*.min.js.map
 openseadragon/
 node_modules/
 build/
@@ -27,3 +29,6 @@ cypress.env.*
 #image comparison test temp data
 *.diff.png
 *.actual.png
+
+#all hidden files unless explicitly added
+.*
