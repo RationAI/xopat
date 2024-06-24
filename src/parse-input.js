@@ -178,6 +178,11 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             window.localStorage.setItem("xoSessionCache", JSON.stringify(data));
         }
 
+        // Todo this will make the viewer to not show any error - handled by the default screen... any better solution?
+        if (!session) {
+            session = {};
+        }
+
         // Needs to be solo condition, the above could create the session object
         if (session.error) {
             session.error = i18n.t(session.error);
