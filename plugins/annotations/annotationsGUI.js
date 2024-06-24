@@ -208,7 +208,10 @@ ${modeOptions.join("")}</div>`, 'draw');
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
 </div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
-		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
+
+		//trigger UI refreshes
+		this.updateSelectedFormat(this.exportOptions.format);
+		this._updateMainMenuPresetList();
 	}
 
 	getIOFormatRadioButton(format) {
