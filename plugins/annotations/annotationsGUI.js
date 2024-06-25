@@ -208,7 +208,10 @@ ${modeOptions.join("")}</div>`, 'draw');
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
 </div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
-		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
+
+		//trigger UI refreshes
+		this.updateSelectedFormat(this.exportOptions.format);
+		this._updateMainMenuPresetList();
 	}
 
 	getIOFormatRadioButton(format) {
@@ -866,14 +869,19 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 	_updateMainMenuPresetList() {
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
+
+		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;" class="d-inline-block">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
+			pushed = true;
 		});
+
+		if (!pushed) html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
 		html.push('</div>');
-		$("#preset-list-inner-mp").html(html.join(''));
+		$("#preset-list-inner-mp").html(html.join(''));;
 		this.context.history.refresh();
 	}
 
@@ -912,7 +920,7 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.THIS}._presetSelection = '${preset.presetID}'">`);
 
 		if (this.enablePresetModify) {
-			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
+			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0 z-3" 
 onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>`);
 		}
 
