@@ -780,11 +780,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             staticContext.__self = this;
 
             MODULES.instance = this;
-            // Await event necessary to fire after instantiation
-            VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
+
+            // Await event necessary to fire after instantiation, do in async context
+            setTimeout(() => VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
                 id: id,
                 module: this
-            }).catch(/*no-op*/);
+            }).catch(/*no-op*/));
         }
     }
 

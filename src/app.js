@@ -985,7 +985,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
              * @memberOf VIEWER
              * @event before-first-open
              */
-            await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', null).catch(e =>
+            await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', {
+                data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
+            }).catch(e =>
                 {
                     //todo something meaningful
                     console.error(e);

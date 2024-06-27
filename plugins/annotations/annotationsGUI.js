@@ -211,7 +211,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 
 		//trigger UI refreshes
 		this.updateSelectedFormat(this.exportOptions.format);
-		this._updateMainMenuPresetList();
+		this.updatePresetsHTML();
 	}
 
 	getIOFormatRadioButton(format) {
@@ -747,7 +747,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
 		let icon = preset.objectFactory.getIcon();
 		return `<div class="position-relative p-1" onclick="${this.THIS}.showPresets(${isLeftClick});">
-<span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
+<span class="material-icons position-absolute border-sm color-bg-primary close p-0 top-0 right-0 text-small" id="discard-annotation-p-selection"
  onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});">close</span>
 <span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
 <span class="one-liner d-inline-block v-align-middle pr-3">${category}</span>

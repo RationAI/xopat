@@ -168,6 +168,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     postData = data; // override post
                     delete viz.__age;
                     session = _parse(viz);
+                    session.__fromLocalStorage = true;
                 }
                 //window.localStorage.removeItem("xoSessionCache");
             }
