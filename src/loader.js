@@ -527,7 +527,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          *   data through exportData
          * @return {PostDataStore} data store reference, or false if import failed
          */
-        async initIO(options = {}) {
+        async initPostIO(options = {}) {
             let store = this[STORE_TOKEN];
             if (store) return store;
 
@@ -560,7 +560,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         /**
          * Called to export data within 'export-data' event: automatically the post data store object
-         * (returned from initIO()) is given the output of this method:
+         * (returned from initPostIO()) is given the output of this method:
          *   `await dataStore.set(options.exportKey || "", await this.exportData());`
          * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
          * upon the event 'export-data', or simply nest objects to fit a single output
@@ -568,7 +568,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          */
         async exportData() {}
         /**
-         * Called automatically within this.initIO if data available
+         * Called automatically within this.initPostIO if data available
          *  note: parseImportData return value decides if data is parsed data or passed as raw string
          * @param data {(string|*)} data
          */
@@ -780,11 +780,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             staticContext.__self = this;
 
             MODULES.instance = this;
-            // Await event necessary to fire after instantiation
-            VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
+
+            // Await event necessary to fire after instantiation, do in async context
+            setTimeout(() => VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
                 id: id,
                 module: this
-            }).catch(/*no-op*/);
+            }).catch(/*no-op*/));
         }
     }
 

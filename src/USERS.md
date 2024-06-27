@@ -8,7 +8,7 @@ authentication flow is the following:
    - including an `before-first-open` event priority configuration
    
    ````js
-    VIEWER.addHandler('before-first-open', async () => {
+    VIEWER.addHandler('before-first-open', async event => {
         //... do something and once you decide the module
         // either handles the auth or exits as noop, 
         // return the function result - this event

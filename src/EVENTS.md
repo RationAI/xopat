@@ -44,17 +44,22 @@ Fired when the viewer is ready. Note this is not the OSD native event but instea
 It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
 initial load).
 
-#### async `before-first-open` | e: null
+#### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
 Fired before the first open of the viewer happens. Apps can perform
 custom functionality just before the viewer gets initialized.
 In this event, you can also override the application rendering configuration,
 as it has not been initialized yet. For example, if the application rendering
-is missing all the data, you can provide default values for the rendering.
-Note that exception thrown in this event is considered as a signal for aborting the rendering.
-TODO DOCS
+is missing all the data, you can provide default values for the rendering. This data can be set
+to the respective elements: data / background / visualization arrays.
+``fromLocalStorage`` is true when the data was loaded from the user browser cache, but the viewer
+was not opened with a session spec. You can use this flag to monitor whether the viewer
+was properly opened, or just shows cached session and possibly replace it with more relevant one.
+
+Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
+
 #### `export-data` | e: `{}`
 Submit your serialized data to the export event. You should use the data storage instance you
-retrieve from ``initIO(...)`` call to set your data if you didn't do this already when this event fires.
+retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case

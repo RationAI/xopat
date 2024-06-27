@@ -8,6 +8,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.configuration = this.getStaticMeta('oidc', {});
         this._connectionRetries = 0;
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
+        this.useCookiesStore = this.getStaticMeta('useCookiesStore', true);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'popup');
         this.cookieRefreshTokenName = this.getStaticMeta('cookieRefreshTokenName');
@@ -36,11 +37,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return;
         }
 
+        // Make sure these are not set by the config - it could mess up
+        this.configuration.userStore = this.configuration.stateStore = undefined;
+        if (this.useCookiesStore) {
+            this.configuration.userStore = new oidc.WebStorageStateStore({
+                store: APPLICATION_CONTEXT.AppCookies.getStore()
+            });
+        }
+
         //Create OIDC User Manager
-        this.userManager = new oidc.UserManager({
-            ...this.configuration,
-            userStore: new oidc.WebStorageStateStore({ store: APPLICATION_CONTEXT.AppCookies.getStore() }),
-        });
+        this.userManager = new oidc.UserManager(this.configuration);
 
         //Resolve once we know if we handle login
         let resolves = null;
@@ -55,10 +61,19 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                     const urlParams = new URLSearchParams(window.location.search);
                     if (urlParams.get('state') !== null) {
 
+                        const url = window.location.href;
                         if (this.authMethod === "popup") {
-                            await this.userManager.signinPopupCallback(window.location.href);
+                            await this.userManager.signinPopupCallback(url);
                         } else {
-                            await this.userManager.signinRedirectCallback(window.location.href);
+                            // In redirection, clean up URL to not to contain auth data -> might cause invalid auth loop
+                            // but preserve other possible query args
+                            urlParams.delete("state");
+                            urlParams.delete("session_state");
+                            urlParams.delete("iss");
+                            urlParams.delete("code");
+                            window.history.replaceState({},
+                                window.document.title, window.location.origin + window.location.pathname + urlParams.toString());
+                            await this.userManager.signinRedirectCallback(url);
                             await this.handleUserDataChanged(false);
                         }
                         resolves && resolves();
@@ -74,6 +89,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 }
                 resolves && resolves();
             } catch (e) {
+                console.warn(e);
                 reject(e);
             }
         }).catch(e => {

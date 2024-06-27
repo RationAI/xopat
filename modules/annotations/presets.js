@@ -107,13 +107,17 @@ OSDAnnotations.PresetManager = class {
     constructor(selfName, context) {
         this._context = context;
         this._presets = {};
-        //active presets for mouse buttons
+        //active presets for mouse buttons, default state create one
         this.left = undefined;
         this.right = undefined;
         this._colorSteps = 8;
         this._colorStep = 0;
         this._presetsImported = false;
         this.modeOutline = this._context.cache.get('drawOutline', true);
+        this._context.addHandler('preset-delete', e => {
+            if (e.preset === this.left) this.selectPreset(undefined, true);
+            else if (e.preset === this.right) this.selectPreset(undefined, false);
+        });
     }
 
     getActivePreset(isLeftClick) {
@@ -438,7 +442,7 @@ OSDAnnotations.PresetManager = class {
      * @param {boolean} isLeftClick if true, the preset is set as 'left' property, 'right' otherwise
      * @param {boolean} cached
      */
-    selectPreset(id, isLeftClick, cached) {
+    selectPreset(id, isLeftClick= true, cached= true) {
         let preset = undefined, cachedId = "__unset__";
         if (id) {
             if (!this._presets[id]) return;
