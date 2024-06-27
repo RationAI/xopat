@@ -22,7 +22,7 @@
  *          * It gives a third party the power to work with each object and preset individually.
  *          * Note that partial output must not necessarily be a valid output of the given format.
  *          * In the case of unsupported format flexibility on this granularity, simply return
- *          * an unfinished list ob objects that can be later finalized into a full valid format output.
+ *          * an list of objects that can be later finalized into a full valid format output.
  *          *
  *          * Options are in this.options, reference to the annotation module as this.context
  *          *

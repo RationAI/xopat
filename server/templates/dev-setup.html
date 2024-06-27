@@ -21,6 +21,7 @@
 <br><br>
 
       <br>
+        <!--TODO ALLOW TABS, configure with a valid data examples with different use-cases, store in session/local storage-->
           <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
           try {
               JSON.parse($(this).val());
@@ -33,7 +34,7 @@
     "params": {
         "customBlending": true
     },
-    "data": [],
+    "data": ["data-to-fetch-1", "data-to-fetch-2"],
     "background": [
         {
             "dataReference": 0,
@@ -42,7 +43,7 @@
     ],
     "visualizations": [
         {
-            "name": "A visualization setup 1",
+            "name": "My visualization",
             "lossless": true,
             "shaders": {
                 "shader_id_1": {
@@ -50,7 +51,7 @@
                     "type": "identity",
                     "visible": 1,
                     "fixed": false,
-                    "dataReferences": [],
+                    "dataReferences": [1],
                     "params": { }
                 }
             }

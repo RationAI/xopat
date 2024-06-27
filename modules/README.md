@@ -195,14 +195,21 @@ all measures should be done.
 ## Gotchas
 Check plugin's README in case you did not. The available API is described there to greater detail.
 
-There is no event for IO initialization (events are included at will), however, you can override ``initIO`` to do so:
+#### Default IO
+A plugin or a module can export data either with custom logics based on events, or by built-in
+export system. This system is handy since it will automatically integrate file-like IO behavior
+within your application via HTTP POST.
+
+All you need to do is to override ``exportData`` and `importData` methods in the element root class
+and call ``this.initPostIO()`` at the startup. If you want to have a custom logics with the IO initialization,
+you can override the initialization like this:
 ````js
-async initIO() {
-    if (await super.initIO()) {
+async initPostIO() {
+    const postStore = await super.initPostIO();
+    if (postStore) {
         //... do something
-        return true;
     }
-    return false;
+    return postStore;
 }
 ````
-This might come in handy if you use cached values and want to import them at start-up.
+This might come in handy if you for example want to do additional IO initialization logics.

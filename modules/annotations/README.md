@@ -36,23 +36,3 @@ set of methods to create, copy, iterate and process annotations easily.
 
 todo finish description
 
-### The Data Schema
-
-You can access the data persitency module like this: ``persistor = module.initIO()``. The
-persistor is configured to strictly check the following key schema:
-````js
-schema: {
-    format: {deprecated: ["annotations-format"]},
-    version: {},
-    user: {},
-    created: {},
-    name: {deprecated: ["annotations-name"]},
-    session: {},
-    default: {},
-    annotation: {},
-    annotationList: {},
-    preset: {},
-    presetList: {}
-}
-````
-So that you can for example call ``await persistor.get('name')`` or `await persistor.get('annotations-name')` (deprecated name value which should be avoided).

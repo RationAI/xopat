@@ -17,6 +17,8 @@
     "eventBeforeOpenPriority": 0,
     //Mathod used for auth: "redirect", "popup"
     "method": "popup",
+    //Whether to store the login session in cookies
+    "useCookiesStore": true,
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'

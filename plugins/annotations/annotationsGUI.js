@@ -30,7 +30,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		await this.setupFromParams();
 
-		this.context.initIO();
+		this.context.initPostIO();
 		this.setupActiveTissue();
 		this.initHandlers();
 		//init on html sooner than history so it is placed above

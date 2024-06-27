@@ -128,9 +128,7 @@
             }
             this.scalebarContainer.style.display = "";
 
-            var props = this.sizeAndTextRenderer(
-                this.pixelsPerMeter * this.imagePixelSizeOnScreen(), this.minWidth
-            );
+            var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
             this.scalebarContainer.style.left = location.x + "px";
@@ -175,6 +173,15 @@
             }
             return this.__pixelRatio;
         },
+
+        /**
+         * Compute the current resolution
+         * @return {number}
+         */
+        currentResolution: function () {
+            return this.pixelsPerMeter * this.imagePixelSizeOnScreen()
+        },
+
         /**
          *
          * @return {string}

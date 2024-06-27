@@ -163,7 +163,7 @@ This (global) function will register the plugin and initialize it. It will make 
 
 ### IO Handling
 ``bindIO`` method is available that explicitly enables IO support. You probably want to
-call (somewhere in the initialization phase, usually in `pluginReady()`) function `initIO`
+call (somewhere in the initialization phase, usually in `pluginReady()`) function `initPostIO`
 on itself as well as any other module that does not call it explicitly.
 
 TODO docs

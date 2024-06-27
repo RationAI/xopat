@@ -333,7 +333,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
         if (window.OSDAnnotations && !this.annotations) {
             this.annotations = OSDAnnotations.instance();
             this.annotations.forceExportsProp = "presenterSids";
-            this.annotations?.initIO(); //enable IO export so we can work with annotations if any
+            this.annotations?.initPostIO(); //enable IO export so we can work with annotations if any
             this._bindAnnotations();
 
             const _this = this;

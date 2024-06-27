@@ -163,12 +163,13 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             if (strData) {
                 const data = JSON.parse(strData);
                 // consider the session alive for at most 30 minutes
-                if (session.__age && Date.now() - session.__age < 1800e3) {
+                const viz = data.visualization;
+                if (viz && viz.__age && Date.now() - viz.__age < 1800e3) {
                     postData = data; // override post
-                    delete session.__age;
-                    session = _parse(data.visualization);
+                    delete viz.__age;
+                    session = _parse(viz);
                 }
-                window.localStorage.removeItem("xoSessionCache");
+                //window.localStorage.removeItem("xoSessionCache");
             }
         } else if (!session.error) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)

@@ -104,10 +104,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * This initializes the main persitor.
 	 * @return {PostDataStore}
 	 */
-	async initIO() {
+	async initPostIO() {
 		if (this.POSTStore) return this.POSTStore;
 
-		const store = await super.initIO({
+		const store = await super.initPostIO({
 			schema: {
 				"": {_deprecated: ["annotations"]},
 			},
@@ -1018,7 +1018,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Create preset cache, this cache is loaded automatically with initIO request
+	 * Create preset cache, this cache is loaded automatically with initPostIO request
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {

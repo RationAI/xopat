@@ -54,7 +54,7 @@ Note that exception thrown in this event is considered as a signal for aborting 
 TODO DOCS
 #### `export-data` | e: `{}`
 Submit your serialized data to the export event. You should use the data storage instance you
-retrieve from ``initIO(...)`` call to set your data if you didn't do this already when this event fires.
+retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
