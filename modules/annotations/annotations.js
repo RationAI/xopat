@@ -146,6 +146,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			await this.loadPresetsCookieSnapshot();
 		}
 
+		if (this.presets.getExistingIds().length < 1) {
+			const newPreset = this.presets.addPreset();
+			this.presets.selectPreset(newPreset.presetID, true);
+		}
+
 		return store;
 	}
 
@@ -783,7 +788,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			for (let child of annotation._objects) delete child.excludeFromExport;
 		}
 		annotation.sessionID = this.session;
-		annotation.author = XOpatUser.instance().name;
+		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);

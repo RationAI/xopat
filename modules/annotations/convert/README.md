@@ -1,8 +1,21 @@
 # Convertors
 In order to flexibly support many annotation formats, you can implement your own format support by using
-`OSDAnnotations.Convertor.register([name], [object|class])`. The class provided must implement `encode` 
+`OSDAnnotations.Convertor.register([name], [object|class])`. The class provided must implement `encodePartial` and `encodeFinalize` 
 (outputting your format from internal representation) or `decode` (vice versa). These functions receive
 a list of active objects and a list of presets.
+
+``encodePartial`` should convert data to an object structure compatible with the target output, but without
+serialization. E.g., with XML output, we would return a DOM root node.
+It gives a third party the power to work with each object and preset individually. 
+Note that partial output must not necessarily be a valid output of the given format.
+If options.serialize==false, provide a list of objects before serialization. Else,
+provide a list of serialized objects - strings.
+
+     return {
+         objects: [serialized or unserialized list - depends on options.serialize, possibly undefined],
+         presets: [serialized or unserialized list - depends on options.serialize, possibly undefined]
+     };
+
 
 ### Supported formats
 The default format is the native format. Build-in (lossy) convertors include 
@@ -53,6 +66,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
+    id              annotation ID, can be undefined, unused by the core module
     author
     created
 

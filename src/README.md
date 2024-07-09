@@ -47,9 +47,18 @@ a script that is able to provide the user with a link, for reference see how `re
 Supported configuration for `index.php` - the visualization itself, can be passed both in `POST` and `GET` requests.
 The name of the argument is **`visualization`**, a JSON structure that sets up everything.
 
-> Direct URL's are not supported, except for those generated within the application and sent to `redirect.php`, 
-> _unless_ the post data is sent in `GET`. Note that this is not recommended as the size of the JSON configuration
-> can be enormous.
+> There are at least four ways of opening the viewer:
+>  - ``slides`` and `masks` query parameters, where a comma-separated list of data IDs is provided
+>  - URL-encoded session after ``#`` hash in URL
+>  - serialized session in GET (not recommended)
+>  - serialized session in POST
+> 
+> Furthermore, the viewer remembers last successfull session and 
+> stores it inside the browser memory, so that opening a viewer without
+> a valid session opens the last visited one.
+> 
+> NOTE: Plugins can override this behavior. Check used plugin READMEs for more details.
+> 
 
 Note that language setting is an parameter that behaves a bit differently: you can either specify ``locale`` parameter
 or override any specification by sending ``lang=[code]`` as a GET parameter - for simple localization overrides.

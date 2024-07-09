@@ -4,13 +4,14 @@
     "description": "Empaia Integration: viewing and annotating slides, running analysis jobs.",
     "includes" : [
         "empaia.js",
-        "tilesource-pixelmap.js"
+        "tilesourcePixelmap.js",
+        "annotationConvertor.js"
     ],
     "modules": ["empation-api"],
     "version": "1.0.0",
     "permaLoad": false,
     "hidden": true,
     // Selected scope parameters to use by default
-    "caseId": null,
+    "cases": {},
     "appId": null
 }

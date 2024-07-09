@@ -198,8 +198,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                         let encoded = this.encoders[obj.factoryID]?.(obj);
                         if (encoded) {
                             encoded.type = "Feature";
-                            if (this.options.serialize) encoded = JSON.stringify(encoded);
-                            result.objects.push(encoded);
+                            result.objects.push(this.options.serialize ? JSON.stringify(encoded) : encoded);
                         }
                     }
                 }
