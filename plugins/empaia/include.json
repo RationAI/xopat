@@ -12,6 +12,12 @@
     "permaLoad": false,
     "hidden": true,
     // Selected scope parameters to use by default
-    "cases": {},
+    "cases": {
+    //    "b10648a7-340d-43fc-a2d9-4d91cc86f33f": {
+    //        slides: ["b10648a7-340d-43fc-a2d9-4d91cc86f33f"],
+    //        //optional app to override global app
+    //        appId: "b10648a7-340d-43fc-a2d9-4d91cc86f33f"
+    //    }
+    },
     "appId": null
 }
