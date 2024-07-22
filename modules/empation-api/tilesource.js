@@ -325,8 +325,11 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
                     if (fails >= images.length) abort("All images failed to load from blob!");
                     else {
                         //reference background must receive non-array
-                        const ref = VIEWER.scalebar.getReferencedTiledImage();
-                        if (ref.source === self) {
+                        const ref = VIEWER.scalebar?.getReferencedTiledImage();
+
+                        //todo dirty we assume the ref is this source tiled image, but it generally does not have to be
+                        // hotfix for demo
+                        if (!ref || ref.source === self) {
                             context.finish(images[0], {}, undefined);
                         } else {
                             context.finish(images, {}, undefined);
