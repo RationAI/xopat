@@ -75,3 +75,35 @@ Servers should also allow to
 
 An existing server implementation demonstrates these requirements,
 which should new implementations adhere to.
+
+### Support types of access:
+The server should accept POST and GET parameters, as the viewer description states
+what opening ways are possible. Additionally, it should parse POST data:
+
+### Support default IO pipeline
+To support IO pipeline, the server must parse POST data and embed it in the HTML index file.
+The data comes in the following structure:
+
+````json
+{
+   "visualization": { ... the viewer session ... },
+   "modules[moduleId.property]": "serialized-data",
+   "plugins[pluginId.prop.propx]": "serialized-data",
+}
+````
+The viewer session comes in un-serialized. You have to respect the session and configure the viewer accordingly.
+You have to also respect the module and plugin data that optionally comes with the session, and provide it to plugins / modules
+in the index file as the following structure:
+
+````json
+{
+   "modules": {
+      "moduleId.property": "serialized-data"
+   },
+   "plugins": {
+      "pluginId.prop.propx": "serialized-data"
+   }
+}
+````
+
+The data shall stay serialized, until an instance accesses them.
