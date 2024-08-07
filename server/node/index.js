@@ -92,6 +92,15 @@ async function responseViewer(req, res) {
     let rawData = req.method === 'POST' ? await rawReqToString(req) : undefined;
     let postData;
 
+    function readPostDataItem(item) {
+        // The object can come in double-encoded, try encoding if necessary
+        try {
+            return JSON.parse(item);
+        } catch {
+            return item;
+        }
+    }
+
     function parsePostData(data) {
         const result = {};
         for (const key in data) {
@@ -103,9 +112,9 @@ async function responseViewer(req, res) {
                 if (!result[topLevelKey]) {
                     result[topLevelKey] = {};
                 }
-                result[topLevelKey][nestedKey] = data[key];
+                result[topLevelKey][nestedKey] = readPostDataItem(data[key]);
             } else {
-                result[topLevelKey] = data[key];
+                result[topLevelKey] = readPostDataItem(data[key]);
             }
         }
         return result;

@@ -5,15 +5,11 @@ services:
     build:
       context: ../../
       dockerfile: docker/php/Dockerfile
-      target: viewer-standalone
+      target: viewer-dev
     ports:
       - "8000:8000"
-    ## Uncomment to debug container if it fails to start
-    #entrypoint: ["sleep"]
-    #command: ["infinity"]
-    ## Optionally mount any parts of xopat (to /var/www/html/xopat) you want to keep up to date with the host system
-    #volumes:
-    # - path/to/xopat/env:/var/www/html/xopat/env:ro
+    volumes:
+     - ../../:/var/www/html/xopat:ro
     ## You can set-up xopat directly using env, but remember to prefix $ --> $$ to avoid issues
     #environment:
     #  XOPAT_ENV: |

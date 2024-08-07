@@ -297,7 +297,7 @@ function initXopatScripts() {
             form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
 node.setAttribute("name", "${key}");
-node.setAttribute("value", JSON.stringify(${data}));
+node.setAttribute("value", JSON.stringify(${JSON.stringify(data)}));
 form.appendChild(node);`;
         }
 
@@ -307,13 +307,16 @@ form.appendChild(node);`;
             // namespaced export within "modules" and "plugins"
             if (sets.length === 1) {
                 //handpicked allowed namespaces
-                if (id === "module" || id === "plugin" || id === "visualization") {
+                if (id === "visualization") {
+                    addExport(id, dataItem);
+                } else if (id === "module" || id === "plugin") {
                     if (typeof dataItem === "object") {  //nested object
                         for (let nId in dataItem) addExport(`${id}[${nId}]`, dataItem[nId]);
                     } else {  //plain
                         addExport(id, dataItem);
                     }
-                    //todo consider type checks so that we dont serialize array toString is not a good serializer
+                } else {
+                    console.error("Only 'visualization', 'module' and 'plugin' is allowed top-level object. Not included in export. Used:", id);
                 }
             } else if (sets.length > 1) {
                 //namespaced in id, backward compatibility

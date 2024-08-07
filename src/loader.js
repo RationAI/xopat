@@ -1145,8 +1145,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 }
             }
 
-            let exportData = {};
-
             /**
              * Event to export your data within the viewer lifecycle
              * Event handler can by <i>asynchronous</i>, the event can wait.

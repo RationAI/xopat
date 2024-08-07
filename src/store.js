@@ -146,6 +146,7 @@ class APIProxy {
                 if (options.strictSchema) {
                     throw `${this.constructor.name}: invalid schema key '${key}' for data '${options.id}' in a strict mode!`;
                 }
+                return key;
             }
         } else {
             this.validateKey = (key, withSuffix=true) => {
@@ -159,7 +160,7 @@ class APIProxy {
             this.deprecatedKeys = (key) => {
                 // validateKey always called first
                 const ref = schema[key];
-                return ref._deprecated || [];
+                return ref && ref._deprecated || [];
             }
         } else {
             this.deprecatedKeys = (key) => [];

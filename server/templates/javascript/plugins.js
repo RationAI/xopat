@@ -40,7 +40,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                 data["loaded"] = false;
 
                 if (fileExists(fullPath + "style.css")) {
-                    data["styleSheet"] = fullPath + "style.css";
+                    data["styleSheet"] = data["path"] + "style.css";
                 }
                 data["modules"] = data["modules"] || [];
 

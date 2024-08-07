@@ -55,10 +55,10 @@ Although very versatile, setting up the viewer correctly requires xOpat configur
 To configure the viewer for deployment, run ``grunt env`` and provide `env/env.json` file with the desired configuration.
 For more, see ``env/README.md``.
 
-> PHP server has available _docker image_. Node server can be run e.g. locally via ``npm run node``.
+> PHP server has available _docker image_. Node server can be run e.g. locally via ``npm run s-node``.
 > However, to really open the viewer with a meaningful data and visualization, you need to provide the data,
 > configure a WSI server and open the viewer session. To simplify all of this, we work on example deployment docker
-> compose we will soon publish. To test the session manually, you can use ``viewer.url/dev_setup``.
+> compose we will soon publish. To test the session manually, you can use ``[viewer.url]/dev_setup``.
 
 ## Environment, Build & Test
 
