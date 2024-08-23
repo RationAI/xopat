@@ -53,7 +53,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     hasControls     auto, disables fabricjs buildin controls, internally enabled if the system decides to
     lockMovementX   auto, disables the annotation movement in X
     lockMovementY   auto, disables the annotation movement in Y
-    sessionID       auto, technical id of the session
+    sessionID       auto, technical id of the session, annotation is not interactive if not set
 
     color           preset, defines the annotation color
     zoomAtCreation  creation time zoom level - the value comes from fabric.canvas
@@ -87,6 +87,18 @@ Examples:
 `[factoryID] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
 `[factoryID] rect` --> `[type] rect`: a rectangle annotation is simply an identity
 `[factoryID] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
+
+##### IDs
+``ID`` property is not internally used by default, but is supported due to its frequent usage. You have to set it manually, it
+is by default undefined.
+
+``sessionID`` property not only marks the current annotation session identification, it also acts as an interactivity flag - 
+if it is missing, the given annotation is not modifiable.
+
+``layerID`` not currently used, prepared for layers support. TODO update docs once ready.
+
+``presetID`` ID for the metadata group (a class) that describes the annotation. Presets are class templates
+that are defined once, and used repeatedly.
 
 ##### Available exporting
 The module can export objects with all props or necessary props only (i.e. not an `auto` value). But fabric exports

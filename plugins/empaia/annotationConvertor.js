@@ -4,8 +4,8 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
     annotationsModule.forceExportsProp = "npp_created";
     annotationsModule.addHandler('annotation-create', o => {
         //todo test if hiding scalebar does not affect this
-        o.npp_created = VIEWER.scalebar.currentResolution();
-    });
+        o.object.npp_created = Math.round(VIEWER.scalebar.currentResolution());
+    }, null, Infinity);
 
     OSDAnnotations.Convertor.register("empaia", class extends OSDAnnotations.Convertor.IConvertor {
         static title = 'Empaia Annotations';
@@ -73,7 +73,7 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
 
         async decode(data) {
             this.checkPreconditions();
-            data = JSON.parse(data);
+            data = typeof data === "string" ? JSON.parse(data) : data;
 
             return {
                 objects: data.items.map(obj => this.decoders[obj.type](obj)),
@@ -100,6 +100,7 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 id: object.id,
                 factoryID: "polygon",
                 type: "polygon",
+                npp_created: object.npp_created,
                 points: [object.head, object.tail]
             }),
             "rectangle": (object) => ({
@@ -108,6 +109,7 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 type: "rect",
                 width: object.width,
                 height: object.height,
+                npp_created: object.npp_created,
                 left: object.upper_left[0],
                 top: object.upper_left[1],
             }),
@@ -117,6 +119,7 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 type: "ellipse",
                 rx: object.radius,
                 ry: object.radius,
+                npp_created: object.npp_created,
                 left: object.center[0] - object.rx,
                 top: object.center[1] - object.ry,
             }),
@@ -124,18 +127,21 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 id: object.id,
                 factoryID: "polygon",
                 type: "polygon",
-                points: object.coordinates
+                npp_created: object.npp_created,
+                points: object.coordinates.map(p => ({x: p[0], y: p[1]}))
             }),
             "line": (object) => ({
                 id: object.id,
                 factoryID: "polygon",
                 type: "polygon",
-                points: object.coordinates
+                npp_created: object.npp_created,
+                points: object.coordinates.map(p => ({x: p[0], y: p[1]}))
             }),
             "point": (object) => ({
                 id: object.id,
                 factoryID: "point",
                 type: "ellipse",
+                npp_created: object.npp_created,
                 left: object.coordinates[0],
                 top: object.coordinates[1]
             }),
@@ -145,8 +151,8 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
             //todo encode type and try to recover? ruler, text...
             return {
                 id: object.id,
-                name: preset.meta.category?.value,
-                description: this.context.getAnnotationDescription(object),
+                name: this.context.getAnnotationDescription(object),
+                description: preset.presetID,
                 creator_type: "scope",
                 creator_id: this.empaia.defaultScope.id,
                 reference_type: "wsi",

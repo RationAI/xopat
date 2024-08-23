@@ -218,11 +218,12 @@ OSDAnnotations.FreeFormTool = class {
 
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
-                //cannot happen the created annotation was removed since only mode add can create
-                this._context.replaceAnnotation(this.polygon, this.initial, false);
+                //revert annotation replacement and delete the initial (annotation was erased by modification)
+                this._context.replaceAnnotation(this.polygon, this.initial, false, false);
                 this._context.deleteAnnotation(this.initial);
             } else if (!this._created) {
-                this._context.replaceAnnotation(this.polygon, this.initial, false);
+                //revert annotation replacement and when updated, really swap
+                this._context.replaceAnnotation(this.polygon, this.initial, false, false);
                 if (this._updatePerformed) {
                     this._context.replaceAnnotation(this.initial, this.polygon, true);
                 }
@@ -292,7 +293,7 @@ OSDAnnotations.FreeFormTool = class {
         this.initial = original;
 
         if (!this._created) {
-            this._context.replaceAnnotation(original, polyObject, false);
+            this._context.replaceAnnotation(original, polyObject, false, false);
         } else {
             this._context.addHelperAnnotation(polyObject);
         }

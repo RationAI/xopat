@@ -23,7 +23,7 @@ OpenSeadragon.Tools = class {
      * @param eventArgs event args object
      * @return {Promise<void>} promise resolved once event finishes
      */
-    async raiseAwaitEvent(context, eventName, eventArgs) {
+    async raiseAwaitEvent(context, eventName, eventArgs = undefined) {
         let events = context.events[ eventName ];
         if ( !events || !events.length ) {
             return null;

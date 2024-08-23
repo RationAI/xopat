@@ -7,7 +7,7 @@
 
 ![The XOpat Viewer](docs/assets/xopat-banner.png)
 
-## Why xOpat?
+## :point_right: Why xOpat?
 
 Configure the viewer to your needs, not vice versa! Here, you can take a half-ready solution
 and bring it to something that covers all your needs. With the focus on flexibility, extensibility and modularity, the xOpat
@@ -46,6 +46,13 @@ we try to cover it all!
 ### Having Issues?
 Please do not hesitate to reach us. We have yet to work in documentation & deployment
 simplification.
+
+## :point_right: What IS NOT xOpat?
+This viewer is not a all-in-one solution out of the box. The viewer does not _support WSI formats_.
+This viewer _does not run your dram AI_. **However, it can be configured & extended to do so**.
+WSI Support is dependent on the WSI Server/Service of your choice - if a server can read it, we can connect to it.
+AI jobs can either add their data to xOpat via raster images (just like WSI servers), or via vector graphics using
+to the Annotations plugin. Add your custom plugins to connect to services of your choice & do whatever you need!
 
 ## Setup
 First, install development dependencies. You need ``node`` and `npm`. Then just run `npm install`.

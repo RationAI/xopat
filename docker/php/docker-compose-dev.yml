@@ -7,7 +7,7 @@ services:
       dockerfile: docker/php/Dockerfile
       target: viewer-dev
     ports:
-      - "8000:8000"
+      - "9000:8000"
     volumes:
      - ../../:/var/www/html/xopat:ro
     ## You can set-up xopat directly using env, but remember to prefix $ --> $$ to avoid issues

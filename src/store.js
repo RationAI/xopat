@@ -140,7 +140,7 @@ class APIProxy {
                 const ref = schema[key];
                 if (ref) {
                     if (!key) return uid;
-                    if (withSuffix) return uid + key;
+                    if (withSuffix) return this.__id + key;
                     return key;
                 }
                 if (options.strictSchema) {
@@ -151,7 +151,7 @@ class APIProxy {
         } else {
             this.validateKey = (key, withSuffix=true) => {
                 if (!key) return uid;
-                if (withSuffix) return uid + key;
+                if (withSuffix) return this.__id + key;
                 return key;
             };
         }
