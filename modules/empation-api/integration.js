@@ -30,22 +30,6 @@ class V3Integration extends XOpatModule {
             await user.requestSecretUpdate();
             e.newToken = user.getSecret('jwt');
         });
-
-        // this.integrateWithSingletonModule('annotations', e => {
-        //     const annotations = e.module;
-        //     annotations.addHandler('annotation-create', ev => {
-        //
-        //     });
-        //     annotations.addHandler('annotation-delete', ev => {
-        //
-        //     });
-        //     annotations.addHandler('annotation-replace', ev => {
-        //
-        //     });
-        //     annotations.addHandler('annotation-edit', ev => {
-        //
-        //     });
-        // });
     }
 }
 new V3Integration();

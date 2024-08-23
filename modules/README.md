@@ -208,8 +208,14 @@ async initPostIO() {
     const postStore = await super.initPostIO();
     if (postStore) {
         //... do something
+        // e.g. read key 'key'
+        const data = await postStore.get('key');
     }
     return postStore;
 }
 ````
 This might come in handy if you for example want to do additional IO initialization logics.
+
+> **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
+> ``module[<module_id>.key] = value;``. Nested keys are up to the module to manage for itself,
+> e.g. ``module[<module_id>.parentKey.subKey] = value;``.

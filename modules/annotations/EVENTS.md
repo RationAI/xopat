@@ -13,12 +13,23 @@
 ##### layer-removed
 
 ##### annotation-create | ``{object: fabric.Object}``
+Fires when annotation object is created. This does not apply when
+``annotation-replace`` is called - in that case, the replacement is
+considered as the creation.
 
 ##### annotation-delete | ``{object: fabric.Object}``
 
 ##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
+This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
+in fact replace annotation with a new one. This event is called only once per update, 
+at the end.
+
+##### annotation-replace-helper | ``{previous: fabric.Object, next: fabric.Object}``
+This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
+It can be called several times during one edit action.
 
 ##### annotation-edit | ``{object: fabric.Object}``
+This event is fired when user performs direct annotation editing.
 
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 

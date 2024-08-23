@@ -25,9 +25,10 @@ window.HTTPError = class extends Error {
  * @param MODULES_FOLDER
  * @param POST_DATA can be empty object if no data is supposed to be loaded
  * @param version
+ * @param awaitPluginReady if true, returned handler awaits plugins
  * @return {function} initializer function to call once ready
  */
-function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
+function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version, awaitPluginReady=false) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
@@ -63,11 +64,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
     function instantiatePlugin(id, PluginClass) {
         if (!id) {
-            console.warn("Plugin registered with no id defined!", id);
+            console.error("Plugin registered with no id defined!", id);
             return;
         }
         if (!PLUGINS[id]) {
-            console.warn("Plugin registered with invalid id: no such id present in 'include.json'.", id);
+            console.error("Plugin registered with invalid id: no such id present in 'include.json'.", id);
             return;
         }
 
@@ -118,11 +119,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         return plugin;
     }
 
-    function initializePlugin(plugin) {
+    async function initializePlugin(plugin) {
         if (!plugin) return false;
         if (!plugin.pluginReady) return true;
         try {
-            plugin.pluginReady();
+            await plugin.pluginReady();
             return true;
         } catch (e) {
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
@@ -517,7 +518,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              */
             (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
                 $.extend(e,
-                {originType: this.xoContext, originId: this.id}));
+                    {originType: this.xoContext, originId: this.id}));
         }
 
         /**
@@ -793,7 +794,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
      * xOpat Plugin API. Plugins must have a parent class that
      * is registered and inherits from XOpatPlugin.
      * JS String to use in DOM callbacks to access self instance.
-     * @class XOpatPlugin
+     * @class
      * @extends XOpatElement
      * @inheritDoc
      */
@@ -1047,7 +1048,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param id plugin to load
          * @param onload function to call on successful finish
          */
-        loadPlugin: function(id, onload=_=>{}) {
+        loadPlugin: function(id, onload=_=>{}, force) {
             let meta = PLUGINS[id];
             if (!meta || meta.loaded || meta.instance) return;
             if (!Array.isArray(meta.includes)) {
@@ -1067,42 +1068,55 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             let successLoaded = function() {
                 LOADING_PLUGIN = false;
 
+                function finishPluginLoad() {
+                    if (meta.styleSheet) {  //load css if necessary
+                        $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+                    }
+                    meta.loaded = true;
+                    if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
+                        let plugins = [];
+                        for (let p in PLUGINS) {
+                            if (PLUGINS[p].loaded) plugins.push(p);
+                        }
+                        APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
+                    }
+                }
+
                 //loaded after page load if REGISTERED_PLUGINS === undefined
                 const loadedAfterPluginInit = REGISTERED_PLUGINS === undefined;
-                if (loadedAfterPluginInit && !initializePlugin(PLUGINS[id].instance)) {
-                    /**
-                     * @property {string} id plugin id
-                     * @property {string} message
-                     * @memberOf VIEWER
-                     * @event plugin-failed
-                     */
-                    window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
-                        id: plugin.id,
-                        message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}),
+                if (loadedAfterPluginInit) {
+
+                    initializePlugin(PLUGINS[id].instance).then(success => {
+                        if (!success) {
+                            /**
+                             * @property {string} id plugin id
+                             * @property {string} message
+                             * @memberOf VIEWER
+                             * @event plugin-failed
+                             */
+                            window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
+                                id: plugin.id,
+                                message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}),
+                            });
+                            return;
+                        }
+
+                        finishPluginLoad();
+
+                        /**
+                         * Plugin was loaded dynamically at runtime.
+                         * @property {string} id plugin id
+                         * @memberOf VIEWER
+                         * @event plugin-loaded
+                         */
+                        VIEWER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
+                        onload();
+                    }).catch(e => {
+                        console.error(e);
                     });
                     return;
                 }
-
-                if (meta.styleSheet) {  //load css if necessary
-                    $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
-                }
-                meta.loaded = true;
-                if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
-                    let plugins = [];
-                    for (let p in PLUGINS) {
-                        if (PLUGINS[p].loaded) plugins.push(p);
-                    }
-                    APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
-                }
-                if (loadedAfterPluginInit) {
-                    /**
-                     * Plugin was loaded dynamically at runtime.
-                     * @property {string} id plugin id
-                     * @memberOf VIEWER
-                     * @event plugin-loaded
-                     */
-                    VIEWER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
-                }
+                finishPluginLoad();
                 onload();
             };
             LOADING_PLUGIN = true;
@@ -1145,8 +1159,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 }
             }
 
-            let exportData = {};
-
             /**
              * Event to export your data within the viewer lifecycle
              * Event handler can by <i>asynchronous</i>, the event can wait.
@@ -1162,8 +1174,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
     };
 
-    return function() {
+    return awaitPluginReady ? async function() {
         //Notify plugins OpenSeadragon is ready
+        Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {
+            REGISTERED_PLUGINS = undefined;
+        });
+    } : function () {
         REGISTERED_PLUGINS.forEach(plugin => initializePlugin(plugin));
         REGISTERED_PLUGINS = undefined;
     }

@@ -166,6 +166,10 @@ This (global) function will register the plugin and initialize it. It will make 
 call (somewhere in the initialization phase, usually in `pluginReady()`) function `initPostIO`
 on itself as well as any other module that does not call it explicitly.
 
+> **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
+> ``plugin[<plugin_id>.key] = value;``. Nested keys are up to the plugin to manage for itself,
+> e.g. ``plugin[<plugin_id>.parentKey.subKey] = value;``.
+
 TODO docs
 The example below shows how to implement IO within with proper function overrides.
 ````js

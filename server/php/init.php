@@ -34,6 +34,31 @@ global $i18n;
 //load plugins
 require_once PHP_INCLUDES . "plugins.php";
 
+function safeReadPostValue($val) {
+    if (!is_string($val)) return $val;
+    try {
+        return json_decode($val, true);
+    } catch (Exception $e) {
+        return $val;
+    }
+}
+
+// in PHP, forms are automatically decoded, so we get nested arrays already, just
+// ensure we remove double-encoding
+foreach ($_POST as $key=>&$value) {
+    if (is_array($value)) {
+        foreach ($value as $childKey=>$childValue) {
+            $value[$childKey] = safeReadPostValue($childValue);
+        }
+    } else if (is_object($value)) {
+        foreach ($value as $childKey=>$childValue) {
+            $value->{$childKey} = safeReadPostValue($childValue);
+        }
+    } else {
+        $_POST[$key] = safeReadPostValue($value);
+    }
+}
+
 //todo consider parsing at least plugins and loading active items -> the 'compile time element load' - otherwise fetched dynamically
 //$bypassCookies = isBoolFlagInObject($parsedParams->params, "bypassCookies");
 //

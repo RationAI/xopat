@@ -75,3 +75,73 @@ Servers should also allow to
 
 An existing server implementation demonstrates these requirements,
 which should new implementations adhere to.
+
+### Support types of access:
+The server should accept POST and GET parameters, as the viewer description states
+what opening ways are possible. Additionally, it should parse POST data:
+
+### Support default IO pipeline
+To support IO pipeline, the server must parse POST data and embed it in the HTML index file.
+The data comes in the following structure:
+
+````json
+{
+   "visualization": { ... the viewer session ... },
+   "modules[moduleId.property]": "\"serialized-data\"",
+   "plugins[pluginId.prop.propx]": "\"serialized-data\"",
+}
+````
+The viewer session comes in un-serialized, or serialized once. You have to respect the session and configure the viewer accordingly.
+You have to also respect the module and plugin data that optionally comes with the session, and provide it to plugins / modules
+in the index file as the following structure:
+
+````json
+{
+   "modules": {
+      "moduleId.property": "serialized-data"
+   },
+   "plugins": {
+      "pluginId.prop.propx": "serialized-data"
+   }
+}
+````
+
+The data might (and usually do) come double-encoded, this is to avoid problems with inputs: 
+we could receive encoded JSON, literal string, a number, and all of them must be a valid JS in the exported index file:
+````javascript
+`<script>
+let encoded = ${"{\"a\":1, \"b\":2}"};
+let plain_string = ${"hi!"};
+let number = ${3};
+</script>`
+````
+results in 
+````html
+<script>
+   let encoded = {a:1, b:2};
+   let plain_string = hi!;
+   let number = 3;
+</script>
+````
+which is invalid. But how do we know whether a string is in fact an object encoded by JSON.stringify, 
+or a dom node by XMLSerializer().serializeToString(...) .. etc?
+We don't. Here comes in double-encoding, we encode each input once more. However, servers **must** attempt to encode
+these values before the viewer accepts them. Although the encoding could happen also on the
+viewer setup, this approach gives servers freedom to potentially modify parts of the session, etc.
+
+To do so, each server must attempt to process POST data by:
+ - figuring out whether the server receives the POST data as a unprocessed string, or whether it is pre-processed;
+ PHP servers can for example natively read the submitted POST data and expand the above described syntax to already nested
+ array, e.g. ``$_POST["modules"]["moduleId.property"]`` is a valid reference
+ - each '`"\"serialized-data\""`' object must be safely attempted to be decoded as a JSON, e.g.
+
+````javascript
+ function readPostDataItem(item) {
+     // The object can come in double-encoded, try encoding if necessary
+     try {
+         return JSON.parse(item);
+     } catch {
+         return item;
+     }
+ }
+````

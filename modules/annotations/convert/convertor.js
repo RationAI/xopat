@@ -106,6 +106,12 @@ OSDAnnotations.Convertor = class {
      * @param context
      * @param withAnnotations
      * @param withPresets
+     * @returns serialized or plain list of strings of objects based on this.options.serialize:
+     * {
+     *     objects: [...serialized annotations... ],
+     *     presets: [...serialzied presets... ],
+     * }
+     *
      */
     static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
         const parserCls = this.get(options.format);
@@ -283,7 +289,7 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
-     *
+     * todo: consider support for un-serialized objects too...
      * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
      * @return {object} must return the following structure:
      *    {

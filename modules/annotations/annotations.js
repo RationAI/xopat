@@ -58,7 +58,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	setCustomModeUsed(id, ModeClass) {
 		if (this.Modes.hasOwnProperty(id)) {
-			throw `The mode ${ModeClass} conflicts with another mode: ${this.Modes[id]}`;
+			throw `The mode ${ModeClass} conflicts with another mode: ${this.Modes[id]._id}`;
 		}
 		if (!OSDAnnotations.AnnotationState.isPrototypeOf(ModeClass)) {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
@@ -144,6 +144,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (!this._avoidImport) {
 			await this.loadPresetsCookieSnapshot();
+		}
+
+		if (this.presets.getExistingIds().length < 1) {
+			const newPreset = this.presets.addPreset();
+			this.presets.selectPreset(newPreset.presetID, true);
 		}
 
 		return store;
@@ -258,7 +263,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
-		if (!options?.format) options.format = "native";
+		if (!options?.format) options.format = "asap-xml";
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -276,12 +281,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Import annotations and presets. Imported presets automatically remove unused presets
 	 *   (no change in meta or no object created with).
+	 * todo allow also objects import not only string
 	 * @param {string} data serialized data of the given format
 	 * 	- either object with 'presets' and/or 'objects' data content - arrays
 	 * 	- or a plain array, treated as objects
 	 * @param {{}} options options
 	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {object?} options.bioformatsCroppingRect
+	 * @param {boolean} options.inheritSession set current session ID for the annotation if missing, default true
 	 * @param {boolean} clear erase state upon import
 	 * @return Promise(boolean) true if something was imported
 	 */
@@ -289,8 +296,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//todo allow for 'redo' history (once layers are introduced)
 
 		if (!options?.format) options.format = "native";
-		let toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+
+		let toImport;
+		try {
+			toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+		} catch (e) {
+			const formats = OSDAnnotations.Convertor.formats;
+			const triedFormat = options.format;
+			console.log("Failed to load annotations as default, attempt to parse some of the remaining supported formats:", formats);
+
+			for (let format of formats) {
+				if (format === triedFormat) continue;
+				try {
+					options.format = format;
+					toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+					console.log("Successfully parsed as", format);
+				} catch (e) {
+					//pass
+				}
+			}
+
+			if (!toImport) {
+				console.error("No supported format was able to parse provided annotations data!");
+			}
+		}
+
 		let imported = false;
+		let inheritSession = options.inheritSession === undefined || options.inheritSession;
 
 		// the import should happen in two stages, one that prepares the data and one that
 		// loads so that integrity is kept -> this is not probably a big issue since the only
@@ -299,7 +331,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (Array.isArray(toImport) && toImport.length > 0) {
 			imported = true;
 			//if no presets, maybe we are importing object array
-			await this._loadObjects({objects: toImport}, clear);
+			await this._loadObjects({objects: toImport}, clear, undefined, inheritSession);
 		} else {
 			if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
 				imported = true;
@@ -307,7 +339,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 			if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
 				imported = true;
-				await this._loadObjects(toImport, clear);
+				await this._loadObjects(toImport, clear, undefined, inheritSession);
 			}
 		}
 
@@ -388,13 +420,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * for loading presets, see this.presets.import(...)
 	 * @param {object} annotations objects to import, {objects:[object]} format
 	 * @param {boolean} clear true if existing objects should be removed, default false
+	 * @param inheritSession
 	 * @return Promise
 	 */
-	async loadObjects(annotations, clear=false) {
+	async loadObjects(annotations, clear=false, inheritSession=true) {
 		//todo allow for 'redo' history (once layers are introduced)
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
-		return this._loadObjects(annotations, clear);
+		return this._loadObjects(annotations, clear, undefined, inheritSession);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -783,7 +816,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			for (let child of annotation._objects) delete child.excludeFromExport;
 		}
 		annotation.sessionID = this.session;
-		annotation.author = XOpatUser.instance().name;
+		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
@@ -911,6 +944,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (updateHistory) this.history.push(next, previous);
 
 		if (_raise) this.raiseEvent('annotation-replace', {previous, next});
+		else this.raiseEvent('annotation-replace-helper', {previous, next});
 	}
 
 	/**
@@ -1475,7 +1509,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
-	_loadObjects(input, clear, reviver) {
+	_loadObjects(input, clear, reviver, inheritSession) {
 		const originalToObject = fabric.Object.prototype.toObject;
 		const inclusionProps = this._exportedPropertiesGlobal();
 
@@ -1497,6 +1531,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (clear) _this.clear();
 				_this._setBgOverlay(input, function () {
 					enlivenedObjects.forEach(function(obj, index) {
+
+						if (inheritSession && !obj.sessionID) {
+							obj.sessionID = self.session;
+						}
+
 						self.checkLayer(obj);
 						self.checkPreset(obj);
 

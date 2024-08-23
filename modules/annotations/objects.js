@@ -56,6 +56,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "sessionID",
         "presetID",
         "layerID",
+        "id"
     ];
 
     /**

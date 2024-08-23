@@ -140,17 +140,18 @@ class APIProxy {
                 const ref = schema[key];
                 if (ref) {
                     if (!key) return uid;
-                    if (withSuffix) return uid + key;
+                    if (withSuffix) return this.__id + key;
                     return key;
                 }
                 if (options.strictSchema) {
                     throw `${this.constructor.name}: invalid schema key '${key}' for data '${options.id}' in a strict mode!`;
                 }
+                return key;
             }
         } else {
             this.validateKey = (key, withSuffix=true) => {
                 if (!key) return uid;
-                if (withSuffix) return uid + key;
+                if (withSuffix) return this.__id + key;
                 return key;
             };
         }
@@ -159,7 +160,7 @@ class APIProxy {
             this.deprecatedKeys = (key) => {
                 // validateKey always called first
                 const ref = schema[key];
-                return ref._deprecated || [];
+                return ref && ref._deprecated || [];
             }
         } else {
             this.deprecatedKeys = (key) => [];

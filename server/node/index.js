@@ -91,6 +91,35 @@ async function responseViewer(req, res) {
     // Parse the request url
     let rawData = req.method === 'POST' ? await rawReqToString(req) : undefined;
     let postData;
+
+    function readPostDataItem(item) {
+        // The object can come in double-encoded, try encoding if necessary
+        try {
+            return JSON.parse(item);
+        } catch {
+            return item;
+        }
+    }
+
+    function parsePostData(data) {
+        const result = {};
+        for (const key in data) {
+            const topLevelKey = key.split('[')[0];
+            const nestedKeyMatch = key.match(/\[([^\]]+)\]/);
+
+            if (nestedKeyMatch) {
+                const nestedKey = nestedKeyMatch[1];
+                if (!result[topLevelKey]) {
+                    result[topLevelKey] = {};
+                }
+                result[topLevelKey][nestedKey] = readPostDataItem(data[key]);
+            } else {
+                result[topLevelKey] = readPostDataItem(data[key]);
+            }
+        }
+        return result;
+    }
+
     try {
         switch (req.headers['content-type']) {
             case 'application/x-www-form-urlencoded':
@@ -103,6 +132,9 @@ async function responseViewer(req, res) {
                 postData = rawData && JSON.parse(rawData) || {};
                 break;
         }
+
+        // Parse structure
+        postData = parsePostData(postData);
     } catch (e) {
         //be silent for now
         //todo: maybe notify the user somehow through the session set error prop or something

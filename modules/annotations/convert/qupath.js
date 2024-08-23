@@ -25,7 +25,6 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         },
     };
 
-
     //default presets in quPath that are safe to export
     _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
         {"name":"Name","value":"Ignore*"}}},{"color":"#c80000","factoryID":"polygon","presetID":"Tumor",

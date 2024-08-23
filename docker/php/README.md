@@ -28,9 +28,13 @@ variables are copied from ``/env`` and must be set up beforehand.
 Optionally, you can modify the compose file and override ``XOPAT_ENV``
 with custom env file path, or providing directly the string contents.
 
+
+### Development on PHP server
+Run ``docker compose -f docker/php/docker-compose-dev.yml up``. Note that ou also have to
+either modify the compose file and override ``XOPAT_ENV``, or create `env/env.json` file
+with custom session setting -- how does viewer talk to an image server?.
+
 ### Custom Setup
-
-
 To build image (using `$XO_IMAGE_NAME`):
 
  optionally: ``$XO_IMAGE_NAME=my-desired-name:my-tag``

@@ -92,7 +92,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD apache2ctl -D FOREGROUND
 
 #############################
-# VIEWER: PROD STANDALONE####
+# VIEWER: PROD GIT       ####
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 FROM ubuntu:jammy AS viewer-git
@@ -106,6 +106,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         curl \
         locales \
         tzdata \
+        git \
+        ca-certificates \
         # HTTP Server
         apache2 \
         tini \
@@ -147,9 +149,9 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD apache2ctl -D FOREGROUND
 
 
-#############################
-# VIEWER: PROD GIT       ####
-#############################
+###############################
+# VIEWER: PROD STANDALONE  ####
+###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
 COPY .htaccess /var/www/html/xopat/

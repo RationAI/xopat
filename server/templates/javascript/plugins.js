@@ -40,7 +40,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                 data["loaded"] = false;
 
                 if (fileExists(fullPath + "style.css")) {
-                    data["styleSheet"] = fullPath + "style.css";
+                    data["styleSheet"] = data["path"] + "style.css";
                 }
                 data["modules"] = data["modules"] || [];
 
@@ -110,9 +110,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
     core.requirePlugins = function () {
         return Object.keys(PLUGINS).map(pid => {
             let plugin = PLUGINS[pid];
-            console.log(plugin.id, core.parseBool(plugin["loaded"]), "LL", plugin["loaded"])
             if (core.parseBool(plugin["loaded"])) {
-                console.log(core.printDependencies(core.PLUGINS_FOLDER, plugin))
                 return `<div id='script-section-${plugin["id"]}'>` +
                     core.printDependencies(core.PLUGINS_FOLDER, plugin)
                 + "</div>";
