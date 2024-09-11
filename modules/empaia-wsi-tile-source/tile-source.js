@@ -24,19 +24,21 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      * @param {String} url
      */
     supports( data, url ) {
-        if (!url || !Array.isArray(data) || typeof data !== "object") return false;
-        //multi-tile or single tile access
-        let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
-        if (match) {
-            data = data || [{}];
-            data[0].tilesUrl = match[1];
-            return true;
-        }
-        match = url.match(/^(\/?[^\/].*\/v3\/slides)\/info/i);
-        if (match) {
-            data = data || {};
-            data.tilesUrl = match[1];
-            return true;
+        if (url && Array.isArray(data)) {
+            //multi-tile or single tile access
+            let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
+            if (match) {
+                data = data || [{}];
+                data[0].tilesUrl = match[1];
+                return true;
+            }
+        } else if (url && typeof data === "object") {
+            let match = url.match(/^(\/?[^\/].*\/v3\/slides)\/info/i);
+            if (match) {
+                data = data || {};
+                data.tilesUrl = match[1];
+                return true;
+            }
         }
         return false;
     }
