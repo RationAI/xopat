@@ -31,6 +31,14 @@ function initXopatScripts() {
         focusOnViewer = true;
         e.preventDefaultAction = true;
     });
+    function getIsViewerFocused() {
+        // TODO TEST!!!
+        const focusedElement = document.activeElement;
+        const focusTyping = focusedElement.tagName === 'INPUT' ||
+            focusedElement.tagName === 'TEXTAREA' ||
+            focusedElement.isContentEditable;
+        return focusOnViewer && !focusTyping;
+    }
     /**
      * Allows changing focus state artificially
      * @param {boolean} focused
@@ -39,7 +47,7 @@ function initXopatScripts() {
         focusOnViewer = focused;
     };
     document.addEventListener('keydown', function(e) {
-        e.focusCanvas = focusOnViewer;
+        e.focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {boolean} e.focusCanvas
@@ -49,7 +57,7 @@ function initXopatScripts() {
         VIEWER.raiseEvent('key-down', e);
     });
     document.addEventListener('keyup', function(e) {
-        e.focusCanvas = focusOnViewer;
+        e.focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {boolean} e.focusCanvas
