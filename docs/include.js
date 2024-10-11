@@ -27,12 +27,12 @@ const allowedExtensions = ['js', 'json', 'css'];
 module.exports = {
     //source javascript files and README
     files: [
-        ...flatten(config.js.external).map(x => `src/external/${x}`),
+        ...flatten(config.js.external).map(x => `docs/build/xopat/external/${x}`),
         ...flatten(config.js.src).map(x => `src/${x}`),
         ...flatten(webglConfig.includes).map(x => `modules/webgl/${x}`),
         'README.md',
         //other things we want to keep in docs, need @fileoverview tag, input as opts: {include: X }
-        'src/assets/style.css',
+        // 'src/assets/style.css',
         'src/config.json',
     ],
     allowedExtensions: allowedExtensions,

@@ -254,7 +254,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     getSessionData() {
         // Key used:  oidc.user:<authority>:<client>
         return APPLICATION_CONTEXT.AppCookies
-             .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
+            .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
         //return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
     }
 

@@ -152,32 +152,32 @@ function initXopatScripts() {
                 let zoom = null,
                     speed = 0.3;
                 switch (e.key) {
-                    case "Down": // IE/Edge specific value
-                    case "ArrowDown":
-                        adjustBounds(0, speed);
-                        break;
-                    case "Up": // IE/Edge specific value
-                    case "ArrowUp":
-                        adjustBounds(0, -speed);
-                        break;
-                    case "Left": // IE/Edge specific value
-                    case "ArrowLeft":
-                        adjustBounds(-speed, 0);
-                        break;
-                    case "Right": // IE/Edge specific value
-                    case "ArrowRight":
-                        adjustBounds(speed, 0);
-                        break;
-                    case "+":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                        return;
-                    case "-":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                        return;
-                    default:
-                        return; // Quit when this doesn't handle the key event.
+                case "Down": // IE/Edge specific value
+                case "ArrowDown":
+                    adjustBounds(0, speed);
+                    break;
+                case "Up": // IE/Edge specific value
+                case "ArrowUp":
+                    adjustBounds(0, -speed);
+                    break;
+                case "Left": // IE/Edge specific value
+                case "ArrowLeft":
+                    adjustBounds(-speed, 0);
+                    break;
+                case "Right": // IE/Edge specific value
+                case "ArrowRight":
+                    adjustBounds(speed, 0);
+                    break;
+                case "+":
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
+                    return;
+                case "-":
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
+                    return;
+                default:
+                    return; // Quit when this doesn't handle the key event.
                 }
             }
 

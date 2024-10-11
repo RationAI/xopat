@@ -53,7 +53,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         /**
          * Merge distinct values of objB to objA
          */
-         objectMergeRecursiveDistinct: function (objA, objB) {
+        objectMergeRecursiveDistinct: function (objA, objB) {
             let merged = objA;
 
             for (let key in objB) {
@@ -75,7 +75,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
         exception: undefined,
         getError() {
-             return this.exception;
+            return this.exception;
         },
 
         /*
@@ -193,7 +193,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
                 "Variable XOPAT_ENV is not a readable file or a valid ENV configuration!");
         } else if (fileExists(absPath + "env/env.json")) {
             ENV = parseEnvConfig(readFile(absPath + "env/env.json"),
-            "Configuration 'env/env.json' contains a syntactic error!");
+                "Configuration 'env/env.json' contains a syntactic error!");
         }
 
         let envCore = ENV["core"];

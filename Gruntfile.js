@@ -93,7 +93,7 @@ module.exports = function(grunt) {
 
     grunt.registerTask('env', 'Generate Env Configuration Example.', function() {
         let shortReport = grunt.option('minimal');
-        const fullReport = !(!! shortReport);
+        const fullReport = !(shortReport);
 
         grunt.log.write("Core configuration...\n");
         const output = [`
