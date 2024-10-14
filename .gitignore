@@ -8,6 +8,7 @@ Thumbs.db
 *.min.js
 *.min.js.map
 openseadragon/
+openseadragon-new/
 node_modules/
 build/
 coverage/

@@ -1,10 +1,4 @@
 /**
- * @typedef  { import("./config.json").xoEnv } xoEnv
- * @typedef  { import("./config.json").xoParams } xoParams
- * @typedef  { import("./config.json").xoClientSetup } xoClientSetup
- * @typedef  { import("./config.json").xoServerState } xoServerState
- */
-/**
  * @typedef BackgroundItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
@@ -460,25 +454,25 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             //todo check if the first background
             let title;
             switch (e.message.statusCode) {
-                case 401:
-                    title = $("#tissue-title-header");
-                    title.children().last().html($.t('main.global.tissue'));
-                    Dialogs.show($.t('error.slide.401'),
-                        20000, Dialogs.MSG_ERR);
-                    XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
-                    break;
-                case 403:
-                    title = $("#tissue-title-header");
-                    title.children().last().html($.t('main.global.tissue'));
-                    Dialogs.show($.t('error.slide.403'),
-                        20000, Dialogs.MSG_ERR);
-                    break;
-                case 404:
-                    Dialogs.show($.t('error.slide.404'),
-                        20000, Dialogs.MSG_ERR);
-                    break;
-                default:
-                    break;
+            case 401:
+                title = $("#tissue-title-header");
+                title.children().last().html($.t('main.global.tissue'));
+                Dialogs.show($.t('error.slide.401'),
+                    20000, Dialogs.MSG_ERR);
+                XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
+                break;
+            case 403:
+                title = $("#tissue-title-header");
+                title.children().last().html($.t('main.global.tissue'));
+                Dialogs.show($.t('error.slide.403'),
+                    20000, Dialogs.MSG_ERR);
+                break;
+            case 404:
+                Dialogs.show($.t('error.slide.404'),
+                    20000, Dialogs.MSG_ERR);
+                break;
+            default:
+                break;
             }
             notified = true;
         } else {
@@ -760,7 +754,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         let child = img;
                         if (img.width < img.height) {
                             child = document.createElement("canvas"),
-                                context = child.getContext("2d");
+                            context = child.getContext("2d");
                             child.width = img.height;
                             child.height = img.width;
                             context.setTransform(0,-1, 1,0, 0, child.width/2);
@@ -944,8 +938,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-                                              background,
-                                              visualizations=undefined) {
+        background,
+        visualizations=undefined) {
         try {
             initXopatLayers();
 
@@ -988,10 +982,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', {
                 data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
             }).catch(e =>
-                {
-                    //todo something meaningful
-                    console.error(e);
-                }
+            {
+                //todo something meaningful
+                console.error(e);
+            }
             );
             this.openViewerWith(data, background, visualizations || []);
         } catch (e) {

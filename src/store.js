@@ -98,13 +98,13 @@ class xoAsyncStorage {
 const storageAPI = Object.keys(window.Storage.prototype);
 function errInstanceApi(instance, keys) {
     for (let key of keys) {
-        if (!key in instance) return `method ${key} is not implemented!`;
+        if (!(key in instance)) return `method ${key} is not implemented!`;
     }
     return false;
 }
 function errClassApi(cls, keys) {
     for (let key of keys) {
-        if (!key in cls) return `method ${key} is not implemented!`;
+        if (!(key in cls)) return `method ${key} is not implemented!`;
     }
     return false;
 }
