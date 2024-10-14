@@ -3,7 +3,7 @@
  *
  * data reference must contain one index to the data to render using identity
  */
-WebGLModule.IdentityLayer = class extends WebGLModule.VisualizationLayer {
+WebGLModule.IdentityLayer = class extends WebGLModule.ShaderLayer {
 
     static type() {
         return "identity";

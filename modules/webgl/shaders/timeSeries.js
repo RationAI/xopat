@@ -3,7 +3,7 @@
  *
  * data reference must contain one index to the data to render using identity
  */
-WebGLModule.TimeSeries = class extends WebGLModule.VisualizationLayer {
+WebGLModule.TimeSeries = class extends WebGLModule.ShaderLayer {
 
     construct(options, dataReferences) {
         //todo supply options clone? options changes are propagated and then break things

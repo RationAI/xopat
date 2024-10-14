@@ -16,7 +16,7 @@
  * supports thresholding - outputs color on areas above certain value
  * mapping html input slider 0-100 to .0-1.0
  */
-WebGLModule.ColorMap = class extends WebGLModule.VisualizationLayer {
+WebGLModule.ColorMap = class extends WebGLModule.ShaderLayer {
 
     static type() {
         return "colormap";

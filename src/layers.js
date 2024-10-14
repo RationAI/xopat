@@ -81,223 +81,132 @@ function initXopatLayers() {
 
         // Wrap WebGL module into bridge interface to bind to OpenSeadragon
         const firstTimeSetup = VIEWER.bridge === undefined;
-        let webglProcessing;
-        if (!firstTimeSetup) {
-            VIEWER.bridge.reset();
-            webglProcessing = VIEWER.bridge.webGLEngine;
-        } else {
-            webglProcessing = new WebGLModule({
-                htmlControlsId: "data-layer-options",
-                htmlShaderPartHeader: createHTMLLayerControls,
-                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
-                ready: function() {
-                    let i = 0;
-                    const select = $("#shaders"),
-                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
-                    seaGL.foreachVisualization(function (vis) {
-                        let selected = i == activeIndex ? "selected" : "";
-                        if (vis.error) {
-                            select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
-                        } else {
-                            select.append(`<option value="${i}" ${selected}>${vis['name']}</option>`);
-                        }
-                        i++;
-                    });
+//         let webglProcessing;
+//         if (!firstTimeSetup) {
+//             VIEWER.bridge.reset();
+//             webglProcessing = VIEWER.bridge.webGLEngine;
+//         } else {
+//             webglProcessing = new WebGLModule({
+//                 htmlControlsId: "data-layer-options",
+//                 htmlShaderPartHeader: createHTMLLayerControls,
+//                 webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+//                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+//                 ready: function() {
+//                     let i = 0;
+//                     const select = $("#shaders"),
+//                         activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
+//                     seaGL.foreachVisualization(function (vis) {
+//                         let selected = i == activeIndex ? "selected" : "";
+//                         if (vis.error) {
+//                             select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
+//                         } else {
+//                             select.append(`<option value="${i}" ${selected}>${vis['name']}</option>`);
+//                         }
+//                         i++;
+//                     });
+//
+//                     if (window.APPLICATION_CONTEXT.getOption("customBlending")) {
+//                         let blend = $("#blending-equation");
+//                         blend.html(`
+// <span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
+// <textarea id="custom-blend-equation-code" class="form-control blob-code-inner" style="width: calc(100% - 20px); margin-left: 20px;
+// display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
+// <span class="blob-code"><span class="blob-code-inner">}</span></span>
+// <button class="btn" onclick="VIEWER.bridge.webGLEngine.changeBlending($('#custom-blend-equation-code').val()); VIEWER.bridge.redraw();"
+// style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
+//                     }
+//                 },
+//                 visualizationInUse: function(visualization) {
+//                     enableDragSort("data-layer-options");
+//                     UTILITIES.updateUIForMissingSources();
+//                     //called only if everything is fine
+//                     // TODO: consider timeout - this hides any errors although they might be valid
+//                     //USER_INTERFACE.Errors.hide(); //preventive
+//
+//                     //Re-fetching data not necessary as we always fetch all the data of given visualization
+//                     // var activeData = ""; //don't set this globally :(
+//                     // let data = seaGL.dataImageSources();
+//                     // if (data !== activeData) {
+//                     //     activeData = data;
+//                     //     if (seaGL.getTiledImage()) {
+//                     //          window.VIEWER.addTiledImage({
+//                     //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
+//                     //             index: seaGL.getLayerIdx(),
+//                     //             opacity: $("#global-opacity input").val(),
+//                     //             replace: true
+//                     //         });
+//                     //     }
+//                     // }
+//                     /**
+//                      * Fired when visualization goal is set up and run, but before first rendering occurs.
+//                      * @property visualization visualization configuration used
+//                      * @memberOf VIEWER
+//                      * @event visualization-used
+//                      */
+//                     VIEWER.raiseEvent('visualization-used', visualization);
+//                 },
+//                 visualizationChanged: function(oldVis, newVis) {
+//                     seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
+//                     let index = seaGL.getWorldIndex(),
+//                         sources = seaGL.dataImageSources();
+//
+//                     if (seaGL.disabled()) {
+//                         seaGL.enable();
+//                         VIEWER.addTiledImage({
+//                             tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
+//                             index: index,
+//                             opacity: $("#global-opacity input").val(),
+//                             success: function(e) {
+//                                 UTILITIES.prepareTiledImage(index, e.item, newVis);
+//                                 seaGL.addLayer(index);
+//                                 seaGL.redraw();
+//                             }
+//                         });
+//                     } else {
+//                         VIEWER.addTiledImage({
+//                             tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
+//                             index: index,
+//                             opacity: $("#global-opacity input").val(),
+//                             replace: true,
+//                             success: function(e) {
+//                                 UTILITIES.prepareTiledImage(index, e.item, newVis);
+//                                 seaGL.addLayer(index);
+//                                 seaGL.redraw();
+//                             }
+//                         });
+//                     }
+//                 },
+//                 //called when this module is unable to run
+//                 onFatalError: function(error) {
+//                     USER_INTERFACE.Errors.show(error.error, error.desc);
+//                 },
+//
+//                 //called when a problem occurs, but other parts of the system still might work
+//                 onError: function(error) {
+//                     USER_INTERFACE.Errors.show(error.error, error.desc);
+//                 },
+//             });
+//             VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
+//        }
 
-                    if (window.APPLICATION_CONTEXT.getOption("customBlending")) {
-                        let blend = $("#blending-equation");
-                        blend.html(`
-<span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
-<textarea id="custom-blend-equation-code" class="form-control blob-code-inner" style="width: calc(100% - 20px); margin-left: 20px;
-display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
-<span class="blob-code"><span class="blob-code-inner">}</span></span>
-<button class="btn" onclick="VIEWER.bridge.webGLEngine.changeBlending($('#custom-blend-equation-code').val()); VIEWER.bridge.redraw();"
-style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
-                    }
-                },
-                visualizationInUse: function(visualization) {
-                    enableDragSort("data-layer-options");
-                    UTILITIES.updateUIForMissingSources();
-                    //called only if everything is fine
-                    // TODO: consider timeout - this hides any errors although they might be valid
-                    //USER_INTERFACE.Errors.hide(); //preventive
-
-                    //Re-fetching data not necessary as we always fetch all the data of given visualization
-                    // var activeData = ""; //don't set this globally :(
-                    // let data = seaGL.dataImageSources();
-                    // if (data !== activeData) {
-                    //     activeData = data;
-                    //     if (seaGL.getTiledImage()) {
-                    //          window.VIEWER.addTiledImage({
-                    //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
-                    //             index: seaGL.getLayerIdx(),
-                    //             opacity: $("#global-opacity input").val(),
-                    //             replace: true
-                    //         });
-                    //     }
-                    // }
-                    /**
-                     * Fired when visualization goal is set up and run, but before first rendering occurs.
-                     * @property visualization visualization configuration used
-                     * @memberOf VIEWER
-                     * @event visualization-used
-                     */
-                    VIEWER.raiseEvent('visualization-used', visualization);
-                },
-                visualizationChanged: function(oldVis, newVis) {
-                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
-                    let index = seaGL.getWorldIndex(),
-                        sources = seaGL.dataImageSources();
-
-                    if (seaGL.disabled()) {
-                        seaGL.enable();
-                        VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
-                            index: index,
-                            opacity: $("#global-opacity input").val(),
-                            success: function(e) {
-                                UTILITIES.prepareTiledImage(index, e.item, newVis);
-                                seaGL.addLayer(index);
-                                seaGL.redraw();
-                            }
-                        });
-                    } else {
-                        VIEWER.addTiledImage({
-                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
-                            index: index,
-                            opacity: $("#global-opacity input").val(),
-                            replace: true,
-                            success: function(e) {
-                                UTILITIES.prepareTiledImage(index, e.item, newVis);
-                                seaGL.addLayer(index);
-                                seaGL.redraw();
-                            }
-                        });
-                    }
-                },
-                //called when this module is unable to run
-                onFatalError: function(error) {
-                    USER_INTERFACE.Errors.show(error.error, error.desc);
-                },
-
-                //called when a problem occurs, but other parts of the system still might work
-                onError: function(error) {
-                    USER_INTERFACE.Errors.show(error.error, error.desc);
-                },
-            });
-            VIEWER.bridge = new OpenSeadragon.BridgeGL(VIEWER, webglProcessing, APPLICATION_CONTEXT.getOption("tileCache"));
-        }
-
-        let seaGL = VIEWER.bridge;
-        seaGL.addVisualization(...visualizations);
-        seaGL.setData(...APPLICATION_CONTEXT.config.data);
+        // seaGL.addVisualization(...visualizations);
+        // seaGL.setData(...APPLICATION_CONTEXT.config.data);
         if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
 
-        seaGL.createUrlMaker = function(vis, isSecureMode) {
+        VIEWER.drawer.renderer.createUrlMaker = function(vis, isSecureMode) {
             if (isSecureMode && vis) delete vis.protocol;
-            seaGL.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
-            return seaGL.urlMaker;
+            VIEWER.drawer.renderer.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
+            return VIEWER.drawer.renderer.urlMaker;
         };
 
-        function createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
-            let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
-            //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
+        if (!firstTimeSetup) return {
 
-            let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
-            const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
-            let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
-            modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
-id="${dataId}-mode-toggle"
- style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
-
-            let availableShaders = "";
-            for (let available of WebGLModule.ShaderMediator.availableShaders()) {
-                let selected = available.type() === layer.type ? " selected" : "";
-                availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-            }
-
-            let filterUpdate = [];
-            if (!fixed) {
-                for (let key in WebGLModule.VisualizationLayer.filters) {
-                    let found = layer.params.hasOwnProperty(key);
-                    if (found) {
-                        filterUpdate.push('<span>', WebGLModule.VisualizationLayer.filterNames[key],
-                            ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
-                            '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
-                            "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
-                    }
-                }
-            }
-            const fullTitle = title.startsWith("...") ? dataId : title;
-            const cacheApplied = layer._cacheApplied ?
-                `<div class="p2 info-container rounded-2" style="width: 97%">
-${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
-
-            return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
-            <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
-${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${fullTitle}">${title}</span>
-              <div class="d-inline-block label-render-type pointer" style="float: right;">
-                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
-                </div>
-                ${modeChange}
-                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
-            </div>
-            <div class="non-draggable">${html}${filterUpdate.join("")}</div>${cacheApplied}
-            </div>`;
         }
 
-        /**
-         * Made with love by @fitri
-         * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
-         *
-         * Shader re-compilation and re-ordering logics
-         * Modified by Jiří
-         */
-        function enableDragSort(listId) {
-            UIComponents.Actions.draggable(listId, item => {
-                const id = item.dataset.id;
-                window.DropDown.bind(item, () => {
-                    const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
-                    const clipSelected = currentMask === "mask_clip";
-                    const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
 
-                    return [{
-                        title: $.t('main.shaders.defaultBlending'),
-                    }, {
-                        title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                        action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
-                        selected: maskEnabled
-                    }, {
-                        title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                        icon: "payments",
-                        styles: "padding-right: 5px;",
-                        action: (selected) => {
-                            const node = document.getElementById(`${id}-mode-toggle`);
-                            const newMode = selected ? "mask" : "mask_clip";
-                            node.dataset.mode = newMode;
-                            if (!maskEnabled) {
-                                UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
-                            } else {
-                                UTILITIES.changeModeOfLayer(id, newMode, false);
-                            }
-                        },
-                        selected: clipSelected
-                    }];
-                });
-            }, undefined, e => {
-                const listItems = e.target.parentNode.children;
-                seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
-            })
-        }
 
         if (firstTimeSetup) {
             /*---------------------------------------------------------*/
@@ -342,12 +251,11 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 if (async && !image.source.multiConfigure) {
                     UTILITIES.multiplexSingleTileSource(image);
                     image.source.multiConfigure(VIEWER.bridge.dataImageSources().map(s =>
-                        seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, s)));
+                        VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, s)));
                 }
 
                 //todo get rid of?
                 image.source.greyscale = APPLICATION_CONTEXT.getOption("grayscale") ? "/greyscale" : "";
-                seaGL.addLayer(index);
             };
 
             /**
@@ -785,58 +693,59 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
     /**
      * Test for rendering capabilities
      * Throws error on failure
+     * FIXME STRECKO
      */
     UTILITIES.testRendering = function(pixelErrThreshold=10) {
-        //test 4X4 with heatmap shader
-        const webglModuleTest = new WebGLModule({
-            webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-            onFatalError: error => {throw error},
-            onError: error => {throw error},
-            debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
-            uniqueId: "browser_render_test"
-        });
-        //tests #43ff64 --> [67, 255, 100]
-        webglModuleTest.addVisualization({name: "Test", shaders: {
-            test: {
-                type: "heatmap",
-                params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
-                dataReferences: [0]
-            }
-        }});
-        webglModuleTest.prepareAndInit(null, 2, 2);
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        canvas.width = canvas.height = 2;
-        ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillRect(0, 0, 1, 1);
-        ctx.fillStyle = "rgba(255, 80, 125, 255)"; ctx.fillRect(1, 0, 1, 1);
-        ctx.fillStyle = "rgba(32, 0, 32, 128)"; ctx.fillRect(0, 1, 1, 1);
-        ctx.fillStyle = "rgba(80, 80, 90, 120)"; ctx.fillRect(1, 1, 1, 1);
-
-        // Render a webGL canvas to an input canvas using cached version
-        const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 1);
-        if (!output) throw "Failed to process WebGL output: null returned.";
-        ctx.drawImage(output, 0, 0, 2, 2);
-        const data = ctx.getImageData(0, 0, 2, 2).data;
-        const testPixel = (pixelPosition, expectedRGBA) => {
-            let index = pixelPosition*4;
-            for (let i = 0; i < 4; i++) {
-                const d = Math.abs(data[index+i] - expectedRGBA[i]);
-                if (d > pixelErrThreshold) {
-                    const description = `PIXEL[${(pixelPosition)%2}, ${Math.floor(pixelPosition/2)}] expected [${expectedRGBA}], got [${data.slice(index, index+4)}]`;
-                    if (d > 2*pixelErrThreshold) throw "Heatmap shader does not work as intended! " + description;
-                    console.warn("WebGL Test shows minor color error in the output - this might be caused by interpolation.");
-                }
-            }
-        }
-        // Remove subsequent tests
-        UTILITIES.testRendering = function () {};
-        console.log("Rendering test output:", data, "pixel", OpenSeadragon.pixelDensityRatio);
-        // Test pixels [0, 0], [1, 0], [0, 1], [1, 1]
-        testPixel(0, [0, 0, 0, 0]); // R0 -> alpha 0, output zeroed out (no-op)
-        testPixel(1, [67, 255, 100, 255]); // R255 -> alpha 0
-
-        // TODO: for some reason test returns modified colors for alpha != 255
-        //testPixel(2, [67, 255, 100, 32]); // R32 -> alpha 32
-        //testPixel(3, [67, 255, 100, 80]); // R80 -> alpha 80
+        // //test 4X4 with heatmap shader
+        // const webglModuleTest = new WebGLModule({
+        //     webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+        //     onFatalError: error => {throw error},
+        //     onError: error => {throw error},
+        //     debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+        //     uniqueId: "browser_render_test"
+        // });
+        // //tests #43ff64 --> [67, 255, 100]
+        // webglModuleTest.addVisualization({name: "Test", shaders: {
+        //     test: {
+        //         type: "heatmap",
+        //         params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
+        //         dataReferences: [0]
+        //     }
+        // }});
+        // webglModuleTest.prepareAndInit(null, 2, 2);
+        // const canvas = document.createElement("canvas");
+        // const ctx = canvas.getContext("2d");
+        // canvas.width = canvas.height = 2;
+        // ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillRect(0, 0, 1, 1);
+        // ctx.fillStyle = "rgba(255, 80, 125, 255)"; ctx.fillRect(1, 0, 1, 1);
+        // ctx.fillStyle = "rgba(32, 0, 32, 128)"; ctx.fillRect(0, 1, 1, 1);
+        // ctx.fillStyle = "rgba(80, 80, 90, 120)"; ctx.fillRect(1, 1, 1, 1);
+        //
+        // // Render a webGL canvas to an input canvas using cached version
+        // const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 1);
+        // if (!output) throw "Failed to process WebGL output: null returned.";
+        // ctx.drawImage(output, 0, 0, 2, 2);
+        // const data = ctx.getImageData(0, 0, 2, 2).data;
+        // const testPixel = (pixelPosition, expectedRGBA) => {
+        //     let index = pixelPosition*4;
+        //     for (let i = 0; i < 4; i++) {
+        //         const d = Math.abs(data[index+i] - expectedRGBA[i]);
+        //         if (d > pixelErrThreshold) {
+        //             const description = `PIXEL[${(pixelPosition)%2}, ${Math.floor(pixelPosition/2)}] expected [${expectedRGBA}], got [${data.slice(index, index+4)}]`;
+        //             if (d > 2*pixelErrThreshold) throw "Heatmap shader does not work as intended! " + description;
+        //             console.warn("WebGL Test shows minor color error in the output - this might be caused by interpolation.");
+        //         }
+        //     }
+        // }
+        // // Remove subsequent tests
+        // UTILITIES.testRendering = function () {};
+        // console.log("Rendering test output:", data, "pixel", OpenSeadragon.pixelDensityRatio);
+        // // Test pixels [0, 0], [1, 0], [0, 1], [1, 1]
+        // testPixel(0, [0, 0, 0, 0]); // R0 -> alpha 0, output zeroed out (no-op)
+        // testPixel(1, [67, 255, 100, 255]); // R255 -> alpha 0
+        //
+        // // TODO: for some reason test returns modified colors for alpha != 255
+        // //testPixel(2, [67, 255, 100, 32]); // R32 -> alpha 32
+        // //testPixel(3, [67, 255, 100, 80]); // R80 -> alpha 80
     }
 }

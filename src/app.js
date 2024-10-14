@@ -396,7 +396,111 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
-        drawer: "canvas",
+        // drawer: "canvas",
+        drawer: 'myImplementation',
+        drawerOptions: {
+            'myImplementation': {
+                //htmlShaderPartHeader
+                htmlControlsId: 'data-layer-options',
+                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                htmlShaderPartHeader: temp__createHTMLLayerControls,
+                ready: function() {
+                    let i = 0;
+                    const select = $("#shaders"),
+                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
+                    VIEWER.drawer.renderer.foreachVisualization(function (vis) {
+                        let selected = i == activeIndex ? "selected" : "";
+                        if (vis.error) {
+                            select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
+                        } else {
+                            select.append(`<option value="${i}" ${selected}>${vis['name']}</option>`);
+                        }
+                        i++;
+                    });
+
+                    if (window.APPLICATION_CONTEXT.getOption("customBlending")) {
+                        let blend = $("#blending-equation");
+                        blend.html(`
+<span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
+<textarea id="custom-blend-equation-code" class="form-control blob-code-inner" style="width: calc(100% - 20px); margin-left: 20px;
+display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
+<span class="blob-code"><span class="blob-code-inner">}</span></span>
+<button class="btn" onclick="VIEWER.drawer.renderer.changeBlending($('#custom-blend-equation-code').val()); window.temp__draw();"
+style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
+                    }
+                },
+                visualizationInUse: function(visualization) {
+                    temp__enableDragSort("data-layer-options");
+                    UTILITIES.updateUIForMissingSources();
+                    //called only if everything is fine
+                    // TODO: consider timeout - this hides any errors although they might be valid
+                    //USER_INTERFACE.Errors.hide(); //preventive
+
+                    //Re-fetching data not necessary as we always fetch all the data of given visualization
+                    // var activeData = ""; //don't set this globally :(
+                    // let data = seaGL.dataImageSources();
+                    // if (data !== activeData) {
+                    //     activeData = data;
+                    //     if (seaGL.getTiledImage()) {
+                    //          window.VIEWER.addTiledImage({
+                    //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
+                    //             index: seaGL.getLayerIdx(),
+                    //             opacity: $("#global-opacity input").val(),
+                    //             replace: true
+                    //         });
+                    //     }
+                    // }
+                    /**
+                     * Fired when visualization goal is set up and run, but before first rendering occurs.
+                     * @property visualization visualization configuration used
+                     * @memberOf VIEWER
+                     * @event visualization-used
+                     */
+                    VIEWER.raiseEvent('visualization-used', visualization);
+                },
+                visualizationChanged: function(oldVis, newVis) {
+                    seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
+                    let index = seaGL.getWorldIndex(),
+                        sources = seaGL.dataImageSources();
+
+                    if (seaGL.disabled()) {
+                        seaGL.enable();
+                        VIEWER.addTiledImage({
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
+                            index: index,
+                            opacity: $("#global-opacity input").val(),
+                            success: function(e) {
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
+                                seaGL.addLayer(index);
+                                seaGL.redraw();
+                            }
+                        });
+                    } else {
+                        VIEWER.addTiledImage({
+                            tileSource : seaGL.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, sources),
+                            index: index,
+                            opacity: $("#global-opacity input").val(),
+                            replace: true,
+                            success: function(e) {
+                                UTILITIES.prepareTiledImage(index, e.item, newVis);
+                                seaGL.addLayer(index);
+                                seaGL.redraw();
+                            }
+                        });
+                    }
+                },
+                //called when this module is unable to run
+                onFatalError: function(error) {
+                    USER_INTERFACE.Errors.show(error.error, error.desc);
+                },
+
+                //called when a problem occurs, but other parts of the system still might work
+                onError: function(error) {
+                    USER_INTERFACE.Errors.show(error.error, error.desc);
+                },
+            }
+        },
         ajaxHeaders: headers,
         splitHashDataForPost: true,
         subPixelRoundingForTransparency:
@@ -408,6 +512,108 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     new OpenSeadragon.Tools(VIEWER);
+
+    window.temp__draw = function() {
+        //Necessary to clear if underlying image is hidden, todo: when refactoring, optimize this
+        VIEWER.drawer.clear();
+        VIEWER.navigator.drawer.clear();
+        VIEWER.world.draw();
+        VIEWER.world.draw();
+    }
+    /**
+     * Made with love by @fitri
+     * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
+     *
+     * Shader re-compilation and re-ordering logics
+     * Modified by Jiří
+     */
+    function temp__enableDragSort(listId) {
+        UIComponents.Actions.draggable(listId, item => {
+            const id = item.dataset.id;
+            window.DropDown.bind(item, () => {
+                const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
+                const clipSelected = currentMask === "mask_clip";
+                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+
+                return [{
+                    title: $.t('main.shaders.defaultBlending'),
+                }, {
+                    title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
+                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                    selected: maskEnabled
+                }, {
+                    title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
+                    icon: "payments",
+                    styles: "padding-right: 5px;",
+                    action: (selected) => {
+                        const node = document.getElementById(`${id}-mode-toggle`);
+                        const newMode = selected ? "mask" : "mask_clip";
+                        node.dataset.mode = newMode;
+                        if (!maskEnabled) {
+                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                        } else {
+                            UTILITIES.changeModeOfLayer(id, newMode, false);
+                        }
+                    },
+                    selected: clipSelected
+                }];
+            });
+        }, undefined, e => {
+            const listItems = e.target.parentNode.children;
+            seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
+        })
+    }
+    function temp__createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
+        let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
+        //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
+
+        let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
+        const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
+        let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
+        modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
+id="${dataId}-mode-toggle"
+ style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
+onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
+
+        let availableShaders = "";
+        for (let available of WebGLModule.ShaderMediator.availableShaders()) {
+            let selected = available.type() === layer.type ? " selected" : "";
+            availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
+        }
+
+        let filterUpdate = [];
+        if (!fixed) {
+            for (let key in WebGLModule.ShaderLayer.filters) {
+                let found = layer.params.hasOwnProperty(key);
+                if (found) {
+                    filterUpdate.push('<span>', WebGLModule.ShaderLayer.filterNames[key],
+                        ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
+                        '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
+                        "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
+                }
+            }
+        }
+        const fullTitle = title.startsWith("...") ? dataId : title;
+        const cacheApplied = layer._cacheApplied ?
+            `<div class="p2 info-container rounded-2" style="width: 97%">
+${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
+
+        return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
+${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${fullTitle}">${title}</span>
+              <div class="d-inline-block label-render-type pointer" style="float: right;">
+                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
+onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
+                </div>
+                ${modeChange}
+                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
+            </div>
+            <div class="non-draggable">${html}${filterUpdate.join("")}</div>${cacheApplied}
+            </div>`;
+    }
 
     /**
      * Event to fire if you want to avoid explicit warning handling,
@@ -448,37 +654,39 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
-    VIEWER.addHandler('add-item-failed', e => {
-        if (notified) return;
-        if (e.message && e.message.statusCode) {
-            //todo check if the first background
-            let title;
-            switch (e.message.statusCode) {
-            case 401:
-                title = $("#tissue-title-header");
-                title.children().last().html($.t('main.global.tissue'));
-                Dialogs.show($.t('error.slide.401'),
-                    20000, Dialogs.MSG_ERR);
-                XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
-                break;
-            case 403:
-                title = $("#tissue-title-header");
-                title.children().last().html($.t('main.global.tissue'));
-                Dialogs.show($.t('error.slide.403'),
-                    20000, Dialogs.MSG_ERR);
-                break;
-            case 404:
-                Dialogs.show($.t('error.slide.404'),
-                    20000, Dialogs.MSG_ERR);
-                break;
-            default:
-                break;
-            }
-            notified = true;
-        } else {
-            console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
-        }
-    });
+
+    //FIXME STRECKO
+    // VIEWER.addHandler('add-item-failed', e => {
+    //     if (notified) return;
+    //     if (e.message && e.message.statusCode) {
+    //         //todo check if the first background
+    //         let title;
+    //         switch (e.message.statusCode) {
+    //         case 401:
+    //             title = $("#tissue-title-header");
+    //             title.children().last().html($.t('main.global.tissue'));
+    //             Dialogs.show($.t('error.slide.401'),
+    //                 20000, Dialogs.MSG_ERR);
+    //             XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
+    //             break;
+    //         case 403:
+    //             title = $("#tissue-title-header");
+    //             title.children().last().html($.t('main.global.tissue'));
+    //             Dialogs.show($.t('error.slide.403'),
+    //                 20000, Dialogs.MSG_ERR);
+    //             break;
+    //         case 404:
+    //             Dialogs.show($.t('error.slide.404'),
+    //                 20000, Dialogs.MSG_ERR);
+    //             break;
+    //         default:
+    //             break;
+    //         }
+    //         notified = true;
+    //     } else {
+    //         console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
+    //     }
+    // });
 
 
     /*---------------------------------------------------------*/
@@ -1050,6 +1258,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const handleFinishOpenImageEvent = (item, url, index) => {
             openedSources--;
             if (item) {
+
+                if (url.source) { //todo dirty
+                    const shader = url.shader;
+                    VIEWER.drawer.configureTiledImage(item, shader);
+                    url = url.source;
+                }
+
                 /**
                  * Fired before visualization is initialized and loaded.
                  * @event tiled-image-created
@@ -1066,7 +1281,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             return (toOpenLastBgIndex, source, toOpenIndex) => {
                 openedSources++;
                 window.VIEWER.addTiledImage({
-                    tileSource: source,
+                    tileSource: source.source || source, //todo dirty
                     opacity: opacity,
                     success: (event) => {
                         success({userArg, toOpenLastBgIndex, toOpenIndex, event});
@@ -1157,17 +1372,32 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             }
 
-            VIEWER.bridge.loadShaders(
-                activeVisIndex,
-                function() {
-                    VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
-                    //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
-                    let data = VIEWER.bridge.dataImageSources();
-                    //if (async && data.length > 0) data = data[0];
-                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, data));
-                    openAll(1);
-                }
-            );
+            // Prepare data
+            const activeVis = visualizations[activeVisIndex];
+            VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
+            for (let shaderId in activeVis.shaders) {
+
+                const shaderConfig = activeVis.shaders[shaderId];
+                toOpen.push({
+                    source: VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server,
+                        shaderConfig.dataReferences.map(rId => data[rId])
+                    ),
+                    shader: shaderConfig
+                });
+            }
+            openAll(activeVis.shaders.length);
+
+            // VIEWER.bridge.loadShaders(
+            //     activeVisIndex,
+            //     function() {
+            //         VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
+            //         //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
+            //         let data = VIEWER.bridge.dataImageSources();
+            //         //if (async && data.length > 0) data = data[0];
+            //         toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, data));
+            //         openAll(1);
+            //     }
+            // );
         } else {
             openAll(0);
         }

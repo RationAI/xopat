@@ -103,6 +103,7 @@ function errInstanceApi(instance, keys) {
     return false;
 }
 function errClassApi(cls, keys) {
+    cls = cls.prototype;
     for (let key of keys) {
         if (!(key in cls)) return `method ${key} is not implemented!`;
     }

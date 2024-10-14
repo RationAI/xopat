@@ -10,7 +10,7 @@
  *  threshold - for more details, see @WebGLModule.UIControls number UI type
  *  opacity - for more details, see @WebGLModule.UIControls number UI type
  */
-WebGLModule.EdgeLayer = class extends WebGLModule.VisualizationLayer {
+WebGLModule.EdgeLayer = class extends WebGLModule.ShaderLayer {
 
     static type() {
         return "edge";
