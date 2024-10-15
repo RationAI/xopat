@@ -816,6 +816,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			for (let child of annotation._objects) delete child.excludeFromExport;
 		}
 		annotation.sessionID = this.session;
+		console.log("ANNOTATION CREATED");
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		this.history.push(annotation);
@@ -1963,13 +1964,18 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			width: ffTool.radius * 2 + offset,
 			height: ffTool.radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
+
+		let max = 0,
+			result = candidates; // by default return the whole list if intersections are <= 0
 		for (let i = 0; i < candidates.length; i++) {
 			let candidate = candidates[i];
-			if (OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, candidate.asPolygon)) {
-				return candidate;
+			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, candidate.asPolygon);
+			if (intersection && intersection.length > max) {
+				max = intersection.length;
+				result = candidate;
 			}
 		}
-		return candidates; //converted array of arrays of points
+		return result;
 	}
 
 	fftFoundIntersection(result) {

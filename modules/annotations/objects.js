@@ -538,6 +538,8 @@ OSDAnnotations.PolygonUtilities = {
      *  contains 2 fields, overlap and axis. Moving the polygon by overlap
      *  on axis will get the polygons out of intersection.
      *
+     *  WARNING: the intersection does not work for 'eaten' polygons (one polygon inside another)
+     *
      *  @Aiosa Cleaned. Honestly, why people who are good at math cannot keep their code clean.
      */
     polygonsIntersect(p1, p2) {
