@@ -1456,7 +1456,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (e.focusCanvas) {
 			if (!e.ctrlKey && !e.altKey) {
-				if (e.key === "Delete") return this.removeActiveObject();
+				if (e.key === "Delete" || e.key === "Backspace") return this.removeActiveObject();
 				if (e.key === "Escape") {
 					this.history._boardItemSave();
 					this.setMode(this.Modes.AUTO);
@@ -1464,7 +1464,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				}
 			}
 
-			if (e.ctrlKey && !e.altKey && e.code === "KeyZ") {
+			if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
 				return e.shiftKey ? this.history.redo() : this.history.back();
 			}
 		}
