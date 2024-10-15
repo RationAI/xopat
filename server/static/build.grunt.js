@@ -49,9 +49,9 @@ module.exports.registerStaticServerTask = function (grunt, message) {
         const replacer = function(match, p1) {
             try {
                 switch (p1) {
-                    case "head":
-                        grunt.log.write(' head');
-                        return `
+                case "head":
+                    grunt.log.write(' head');
+                    return `
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
@@ -60,9 +60,9 @@ ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}`;
 
-                    case "app":
-                        grunt.log.write(' app');
-                        return `
+                case "app":
+                    grunt.log.write(' app');
+                    return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
@@ -84,17 +84,17 @@ ${core.requireCore("app")}`;
     );
     </script>`;
 
-                    case "modules":
-                        grunt.log.write(' modules');
-                        return core.requireModules();
+                case "modules":
+                    grunt.log.write(' modules');
+                    return core.requireModules();
 
-                    case "plugins":
-                        grunt.log.write(' plugins');
-                        return core.requirePlugins();
+                case "plugins":
+                    grunt.log.write(' plugins');
+                    return core.requirePlugins();
 
-                    default:
-                        grunt.log.write(` [unknown template key ${p1}]`);
-                        return "";
+                default:
+                    grunt.log.write(` [unknown template key ${p1}]`);
+                    return "";
                 }
             } catch (e) {
                 grunt.log.error(`Failed on key ${p1} while processing the html template!`, e);

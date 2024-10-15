@@ -27,10 +27,10 @@ addPlugin('profiler', class extends XOpatPlugin {
             "axes":[{"orient":"bottom","scale":"xscale","zindex":1}],
             "marks":[{"type":"group","data":[{"name":"summary","source":"frames","transform":[{"type":
                 "aggregate","fields":["ms","ms","ms","ms","ms"],"ops":["min","q1","median","q3","max"],
-                "as":["min","q1","median","q3","max"]}]}],"marks":[{"type":"rect","from":{"data":"summary"},
+            "as":["min","q1","median","q3","max"]}]}],"marks":[{"type":"rect","from":{"data":"summary"},
                 "encode":{"enter":{"fill":{"value":"black"},"height":{"value":1}},"update":{"yc":{"signal":
                 "plotWidth/2","offset":-0.5},"x":{"scale":"xscale","field":"min"},"x2":{"scale":"xscale",
-                "field":"max"}}}},{"type":"rect","from":{"data":"summary"},"encode":{"enter":{"fill":{"value":
+                    "field":"max"}}}},{"type":"rect","from":{"data":"summary"},"encode":{"enter":{"fill":{"value":
                 "steelblue"},"cornerRadius":{"value":4}},"update":{"yc":{"signal":"plotWidth/2"},"height":
                 {"signal":"plotWidth/2"},"x":{"scale":"xscale","field":"q1"},"x2":{"scale":"xscale","field":
                 "q3"}}}},{"type":"rect","from":{"data":"summary"},"encode":{"enter":{"fill":{"value":

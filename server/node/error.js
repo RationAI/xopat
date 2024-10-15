@@ -26,15 +26,15 @@ function throwFatalErrorIfFallback(res, condition, title, description, details="
 
     const replacer = function(match, p1) {
         switch (p1) {
-            case "error":
-                return `
+        case "error":
+            return `
                 <div class="collapsible" onclick="toggleContent()">Detailed Information</div>
                 <div class="content">
                     <p>${description}</p>
                     <code>${details}</code>
                 </div>`;
-            default:
-                break;
+        default:
+            break;
         }
         return "";
     }
@@ -67,23 +67,23 @@ function showError(res, errTitle, errDesc, errDetails, locale='en') {
 
     const replacer = function(match, p1) {
         switch (p1) {
-            case "head":
-                return `
+        case "head":
+            return `
 ${core.requireLib("primer")}
 ${core.requireCore("env")}
 ${core.requireLib("jquery")}`;
 
-            case "text-title":
-                return "Error"; //i18n.t('error.title');
-            case "text-details":
-                return "details"; //i18n.t('error.detailsBtn');
-            case "custom":
-                return core.GATEWAY ? `<button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" 
+        case "text-title":
+            return "Error"; //i18n.t('error.title');
+        case "text-details":
+            return "details"; //i18n.t('error.detailsBtn');
+        case "custom":
+            return core.GATEWAY ? `<button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" 
 type="button">back</button>` : "";
-            case "display-error-call":
-                return `<script>DisplayError.show('${title}', \`${description}\`);<\/script>`;
-            default:
-                break;
+        case "display-error-call":
+            return `<script>DisplayError.show('${title}', \`${description}\`);<\/script>`;
+        default:
+            break;
         }
         return "";
     }

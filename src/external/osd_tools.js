@@ -335,7 +335,7 @@ OpenSeadragon.Tools = class {
                 canvasCache[index] = canvas;
 
                 if (steps < 1) {
-                      let outputCanvas = document.createElement('canvas'),
+                    let outputCanvas = document.createElement('canvas'),
                         c2d = outputCanvas.getContext('2d');
                     outputCanvas.width = outputSize.width;
                     outputCanvas.height = outputSize.height;

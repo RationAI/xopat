@@ -327,7 +327,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Get bounding box of an object - used to focus the screen on.
      */
     getObjectFocusZone(ofObject) {
-       return ofObject.getBoundingRect(true, true);
+        return ofObject.getBoundingRect(true, true);
     }
 
     /**
@@ -537,6 +537,8 @@ OSDAnnotations.PolygonUtilities = {
      *  if there is no intersection, or an object if there is. The object
      *  contains 2 fields, overlap and axis. Moving the polygon by overlap
      *  on axis will get the polygons out of intersection.
+     *
+     *  WARNING: the intersection does not work for 'eaten' polygons (one polygon inside another)
      *
      *  @Aiosa Cleaned. Honestly, why people who are good at math cannot keep their code clean.
      */
@@ -899,7 +901,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     approximateBounds(point, growY=true) {
-		if (!this._beforeAutoMethod() || !this.changeTile(point) || !this._running) {
+        if (!this._beforeAutoMethod() || !this.changeTile(point) || !this._running) {
             this._afterAutoMethod();
             return null;
         }
@@ -907,15 +909,15 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         this.origPixel = this.getPixelData(point);
         let dimensionSize = Math.max(screen.width, screen.height);
 
-		let p = {x: point.x, y: point.y};
-		if (!this.comparator(this.origPixel)) {
-			//default object of width 40
-			return { top: this.toGlobalPointXY(p.x, p.y - 20), left: this.toGlobalPointXY(p.x - 20, p.y),
+        let p = {x: point.x, y: point.y};
+        if (!this.comparator(this.origPixel)) {
+            //default object of width 40
+            return { top: this.toGlobalPointXY(p.x, p.y - 20), left: this.toGlobalPointXY(p.x - 20, p.y),
                 bottom: this.toGlobalPointXY(p.x, p.y + 20), right: this.toGlobalPointXY(p.x + 20, p.y) }
-		}
+        }
 
         let counter = 0;
-		const _this = this;
+        const _this = this;
         function progress(variable, stepSize) {
             while (_this.getAreaStamp(p.x, p.y) === 15 && counter < dimensionSize) {
                 p[variable] += stepSize;
@@ -926,16 +928,16 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             return ok;
         }
 
-		if (!progress("x", 2)) return null;
-		let right = this.toGlobalPointXY(p.x, p.y);
-		p.x = point.x;
+        if (!progress("x", 2)) return null;
+        let right = this.toGlobalPointXY(p.x, p.y);
+        p.x = point.x;
 
         if (!progress("x", -2)) return null;
         let left = this.toGlobalPointXY(p.x, p.y);
-		p.x = point.x;
+        p.x = point.x;
 
-		let top, bottom;
-		if (growY) {
+        let top, bottom;
+        if (growY) {
             if (!progress("y", 2)) return null;
             bottom = this.toGlobalPointXY(p.x, p.y);
             p.y = point.y;
@@ -946,8 +948,8 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             bottom = top = this.toGlobalPointXY(p.x, p.y);
         }
 
-		//if too small, discard
-		if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;
+        //if too small, discard
+        if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;
         return { top: top, left: left, bottom: bottom, right: right };
     }
 
@@ -1056,18 +1058,18 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     toGlobalPointXY (x, y) {
-		return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
-	}
+        return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+    }
 
-	toGlobalPoint (point) {
-		return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(point);
-	}
+    toGlobalPoint (point) {
+        return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(point);
+    }
 
-	isValidPixel(eventPosition) {
-		return this.comparator(this.getPixelData(eventPosition));
-	}
+    isValidPixel(eventPosition) {
+        return this.comparator(this.getPixelData(eventPosition));
+    }
 
-	comparator(pixel) {
+    comparator(pixel) {
         return pixel[0] == this.origPixel[0] &&
             pixel[1] == this.origPixel[1] &&
             pixel[2] == this.origPixel[2] &&
@@ -1090,20 +1092,20 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         return false;
     }
 
-	getPixelData(eventPosition) {
-		//change only if outside
-		if (!this._currentTile.bounds.containsPoint(eventPosition)) {
-			this.changeTile(eventPosition);
-		}
+    getPixelData(eventPosition) {
+        //change only if outside
+        if (!this._currentTile.bounds.containsPoint(eventPosition)) {
+            this.changeTile(eventPosition);
+        }
 
-		// get position on a current tile
-		let x = eventPosition.x - this._currentTile.position.x;
-		let y = eventPosition.y - this._currentTile.position.y;
+        // get position on a current tile
+        let x = eventPosition.x - this._currentTile.position.x;
+        let y = eventPosition.y - this._currentTile.position.y;
 
-		// get position on DZI tile (usually 257*257)
+        // get position on DZI tile (usually 257*257)
         let canvasCtx = this._currentTile.getCanvasContext();
-		let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
-		let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
+        let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
+        let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
 
         // let pixel = new Uint8Array(4);
         // let gl = this._renderEngine.gl;
@@ -1112,26 +1114,26 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
         return this._currentTile.annotationCanvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
     }
 
-	// CHECKS 4 neightbouring pixels and returns which ones are inside the specified region
-	//  |_|_|_|   --> topRight: first (biggest), bottomRight: second, bottomLeft: third, topLeft: fourth bit
-	//  |x|x|x|   --> returns  0011 -> 0*8 + 1*4 + 1*2 + 0*1 = 6, bottom right & left pixel inside
-	//  |x|x|x|
-	getAreaStamp(x, y) {
-		let result = 0;
-		if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y - 1))) {
-			result += 8;
-		}
-		if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y + 1))) {
-			result += 4;
-		}
-		if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y + 1))) {
-			result += 2;
-		}
-		if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y - 1))) {
-			result += 1;
-		}
-		return result;
-	}
+    // CHECKS 4 neightbouring pixels and returns which ones are inside the specified region
+    //  |_|_|_|   --> topRight: first (biggest), bottomRight: second, bottomLeft: third, topLeft: fourth bit
+    //  |x|x|x|   --> returns  0011 -> 0*8 + 1*4 + 1*2 + 0*1 = 6, bottom right & left pixel inside
+    //  |x|x|x|
+    getAreaStamp(x, y) {
+        let result = 0;
+        if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y - 1))) {
+            result += 8;
+        }
+        if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y + 1))) {
+            result += 4;
+        }
+        if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y + 1))) {
+            result += 2;
+        }
+        if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y - 1))) {
+            result += 1;
+        }
+        return result;
+    }
 };
 
 OSDAnnotations.TiledImageMagicWand  = class extends OSDAnnotations.AutoObjectCreationStrategy {
