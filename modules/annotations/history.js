@@ -109,7 +109,9 @@ window.addEventListener("beforeunload", (e) => {
         }
 
         let active = this._context.canvas.getActiveObject();
-        if (active) this.highlight(active);
+        if (active && renderer) {  // do not call highlight inside detached window, handled by _syncLoad
+            this.highlight(active);
+        }
         this._context.raiseEvent('history-open', {
             inNewWindow: !renderer,
             containerId: this.containerId,
@@ -434,6 +436,11 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             }
             return false;
         });
+
+        let active = this._context.canvas.getActiveObject();
+        if (active) {
+            this.highlight(active);
+        }
     }
 
     _focus(bbox, objectId = undefined, adjustZoom=true) {
