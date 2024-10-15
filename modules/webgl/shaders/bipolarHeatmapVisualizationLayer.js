@@ -53,7 +53,7 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.ShaderLayer {
 
     getFragmentShaderExecution() {
         return `
-    float chan = ${this.sampleChannel('tile_texture_coords', 0, true)};
+    float chan = ${this.sampleChannel('v_texture_coords', 0, true)};
     if (!close(chan, .5)) {
         if (chan < .5) {
             chan = ${this.filter(`1.0 - chan * 2.0`)};

@@ -70,14 +70,14 @@ int clipToThresholdi_${this.uid}(float value) {
 
     getFragmentShaderExecution() {
         return `
-    float mid = ${this.sampleChannel('tile_texture_coords')};
+    float mid = ${this.sampleChannel('v_texture_coords')};
     if (mid < 1e-6) return vec4(.0);
     float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
     
-    float u = ${this.sampleChannel('vec2(tile_texture_coords.x - dist, tile_texture_coords.y)')};
-    float b = ${this.sampleChannel('vec2(tile_texture_coords.x + dist, tile_texture_coords.y)')}; 
-    float l = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - dist)')}; 
-    float r = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y + dist)')};
+    float u = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y)')};
+    float b = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y)')}; 
+    float l = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - dist)')}; 
+    float r = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + dist)')};
     int counter = clipToThresholdi_${this.uid}(u) + 
                 clipToThresholdi_${this.uid}(b) + 
                 clipToThresholdi_${this.uid}(l) + 
@@ -86,10 +86,10 @@ int clipToThresholdi_${this.uid}(float value) {
         return vec4(${this.color.sample()}, 1.0); //border
     }
     
-    float u2 = ${this.sampleChannel('vec2(tile_texture_coords.x - 3.0*dist, tile_texture_coords.y)')};
-    float b2 = ${this.sampleChannel('vec2(tile_texture_coords.x + 3.0*dist, tile_texture_coords.y)')}; 
-    float l2 = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y - 3.0*dist)')}; 
-    float r2 = ${this.sampleChannel('vec2(tile_texture_coords.x, tile_texture_coords.y + 3.0*dist)')};
+    float u2 = ${this.sampleChannel('vec2(v_texture_coords.x - 3.0*dist, v_texture_coords.y)')};
+    float b2 = ${this.sampleChannel('vec2(v_texture_coords.x + 3.0*dist, v_texture_coords.y)')}; 
+    float l2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - 3.0*dist)')}; 
+    float r2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + 3.0*dist)')};
 
     float mid2 = clipToThresholdf_${this.uid}(mid);  
     float dx = min(clipToThresholdf_${this.uid}(u2) - mid2, clipToThresholdf_${this.uid}(b2) - mid2);

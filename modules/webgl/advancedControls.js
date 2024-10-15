@@ -736,7 +736,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     }
 //
 //    sample(value=undefined, valueGlType='void') {
-//         if (typeof ratio !== "string") ratio = "tile_texture_coords";
+//         if (typeof ratio !== "string") ratio = "v_texture_coords";
 //         return `filter_${this.context.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
 //     }
 //

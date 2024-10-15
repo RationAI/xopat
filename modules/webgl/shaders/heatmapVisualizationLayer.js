@@ -58,7 +58,7 @@ WebGLModule.HeatmapLayer = class extends WebGLModule.ShaderLayer {
 
     getFragmentShaderExecution() {
         return `    
-    float chan = ${this.sampleChannel('tile_texture_coords')};
+    float chan = ${this.sampleChannel('v_texture_coords')};
     bool shows = chan >= ${this.threshold.sample('chan', 'float')};
     if (${this.inverse.sample()}) {
         if (!shows) {

@@ -31,7 +31,7 @@ WebGLModule.IdentityLayer = class extends WebGLModule.ShaderLayer {
     }
 
     getFragmentShaderExecution() {
-        return `return ${this.sampleChannel("tile_texture_coords")};`;
+        return `return ${this.sampleChannel("v_texture_coords")};`;
     }
 };
 

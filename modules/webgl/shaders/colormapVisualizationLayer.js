@@ -79,7 +79,7 @@ WebGLModule.ColorMap = class extends WebGLModule.ShaderLayer {
 
     getFragmentShaderExecution() {
         return `
-    float chan = ${this.sampleChannel('tile_texture_coords')};
+    float chan = ${this.sampleChannel('v_texture_coords')};
     return vec4(${this.color.sample('chan', 'float')}, step(0.05, ${this.threshold.sample('chan', 'float')}));
 `;
     }

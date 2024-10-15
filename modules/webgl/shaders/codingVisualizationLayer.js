@@ -78,7 +78,7 @@ vec3 myFunction(in int param1, out float param2, inout bool param3) {
     _getDefaultFSExecute() {
         let textures = [];
         for (let i = 0; i < this.texturesCount; i++) {
-            textures.push(this.sampleChannel('tile_texture_coords', i, true))
+            textures.push(this.sampleChannel('v_texture_coords', i, true))
         }
         return `/*Some hints:
 --- how do I sample texture? which textures are available?

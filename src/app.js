@@ -1382,7 +1382,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     source: VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server,
                         shaderConfig.dataReferences.map(rId => data[rId])
                     ),
-                    shader: shaderConfig
+                    shader: {[shaderId] : shaderConfig}
                 });
             }
             openAll(activeVis.shaders.length);
