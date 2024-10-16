@@ -214,6 +214,7 @@ async function responseDeveloperSetup(req, res) {
             switch (p1) {
             case "head":
                 return `
+${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}

@@ -479,7 +479,14 @@ ${renders.join("")}
         if (this.__uicontrols) return this.__uicontrols;
         this.__uicontrols = {};
         let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {layer: {}});
+        let fallbackLayer = new WebGLModule.IdentityLayer("id", {
+            shaderObject: {},
+            webglContext: {},
+            interactive: false,
+            invalidate: () => {},
+            rebuild: () => {},
+            refetch: () => {}
+        });
         fallbackLayer.construct({}, [0]);
         for (let type of types) {
             let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
