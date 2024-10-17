@@ -1,0 +1,23 @@
+{
+    "id": "empaia",
+    "name": "Empaia",
+    "description": "Empaia Integration: viewing and annotating slides, running analysis jobs.",
+    "includes" : [
+        "empaia.js",
+        "tilesourcePixelmap.js",
+        "annotationConvertor.js"
+    ],
+    "modules": ["empation-api"],
+    "version": "1.0.0",
+    "permaLoad": false,
+    "hidden": true,
+    // Selected scope parameters to use by default
+    "cases": {
+    //    "b10648a7-340d-43fc-a2d9-4d91cc86f33f": {
+    //        slides: ["b10648a7-340d-43fc-a2d9-4d91cc86f33f"],
+    //        //optional app to override global app
+    //        appId: "b10648a7-340d-43fc-a2d9-4d91cc86f33f"
+    //    }
+    },
+    "appId": null
+}

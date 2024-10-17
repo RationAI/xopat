@@ -1,5 +1,5 @@
 addPlugin("user-session", class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this.authServer = this.getStaticMeta('authServer');
         this.performAuthServer = this.getStaticMeta('performAuth');
@@ -92,12 +92,10 @@ Save Session: <span class="material-icons">save</span></span>`,
         }
     }
 
+    //todo implement new auth flow
     _finishAuthOk(response) {
-        const meta = APPLICATION_CONTEXT.metadata;
-        meta.set(xOpatSchema.user, response);
-
         USER_INTERFACE.MainMenu.replace(
-            `User &nbsp;<span class="f3-light">${meta.get(xOpatSchema.user.name, "unknown")}</span>`,
+            `User &nbsp;<span class="f3-light">${XOpatUser.instance().name}</span>`,
             this.activeTissue && this.storeSessionServer ? `<span class="btn-pointer" title="Store your workplace on the server." 
 style="text-align:right; vertical-align:sub;float: right;" onclick="${this.THIS}.export();">
 Save Session: <span class="material-icons">save</span></span>` : "",
@@ -122,7 +120,7 @@ style="text-align:right; text-decoration: line-through; vertical-align:sub;float
     async viewerToHTML() {
         return `<!DOCTYPE html>
 <html lang="en" dir="ltr">
-<head><meta charset="utf-8"><title>Visualisation export</title></head>
+<head><meta charset="utf-8"><title>Visualization export</title></head>
 <body>
 ${await UTILITIES.getForm()}
 </body></html>`;

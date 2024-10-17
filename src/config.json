@@ -5,14 +5,32 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "1.1.3",
+    "version": "2.0.0",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
-    "active_client": "localhost",
-    /* Client Server dependent configurations, at runtime "client" is replaced by its "active_client" child  */
+    "active_client": "dev",
+    /**
+     * The Client App static configuration
+     * @typedef {{
+     *   domain: string
+     *   path: string,
+     *   image_group_server: string,
+     *   image_group_protocol: string,
+     *   image_group_preview: string,
+     *   data_group_server: string,
+     *   data_group_protocol: string,
+     *   headers: ?Object,
+     *   js_cookie_expire: ?number,
+     *   js_cookie_path: ?string,
+     *   js_cookie_same_site: ?string,
+     *   js_cookie_secure: ?boolean,
+     *   secureMode: ?boolean,
+     *   redirectUrl: ?string
+     * }} xoClientSetup
+     */
     "client": {
-        "localhost": {
+        "dev": {
             /* The Viewer Domain Full URL including protocol NOTE: should end with a slash */
             "domain": "http://localhost:8080/",
             /*
@@ -20,8 +38,6 @@
              Use null to let the system detect the path automatically.
             */
             "path": "",
-            /* TODO: Not well tested */
-            "metadata_server": "",
             /*
                Image Group Server for data not processed by visualizations, specifies the server and protocol
                and the tissue file preview URL getter. Both latter are javascript one-liners resulting in a string.
@@ -29,8 +45,8 @@
                Server URL can be relative, if on the same server domain as the viewer.
              */
             "image_group_server": "/iipsrv/iipsrv.fcgi",
-            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
-            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
+            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`", //one-liner expression
+            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`", //one-liner expression
             /*
                Data Group Server for visualized data, specifies the server and protocol as javascript one-liner
                resulting in a string. Available are 'path' (image server URL) and 'data'
@@ -40,38 +56,36 @@
                In case of parameter fetchAsync = true, data is a single string, not an array!
              */
             "data_group_server": "/iipsrv/iipsrv.fcgi",
-            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
+            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`", //one-liner expression
             // Can be overridden by params.headers
             "headers": {},
             /* Cookie Setup */
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
-            "js_cookie_same_site": "",
-            "js_cookie_secure": "",
+            "js_cookie_same_site": "", //string value, lowercase
+            "js_cookie_secure": false, //boolean - true/false
+            "js_cookie_domain": null, //by default the viewer domain
             "secureMode": false,
-            //todo make servers able to provide sensible defaults
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "redirectUrl": "redirect.php",
-            // Disable for servers that do not support POST parsing: will not support direct data sharing
-            "supportsPost": true
+            "redirectUrl": "redirect.php"
         },
+        // We can keep multiple configurations within the file and switch between them...
         "prod": {
             "domain": "https://rationai-vis.ics.muni.cz/",
             "path": null,
-            "metadata_server": "",
-            "image_group_server": "/iipsrv-martin/iipsrv.fcgi",
+            "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
-            "data_group_server": "/iipsrv-martin/iipsrv.fcgi",
+            "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
             "headers": {},
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
-            "js_cookie_same_site": "None",
-            "js_cookie_secure": "false",
+            "js_cookie_same_site": "strict",
+            "js_cookie_secure": true,
+            "js_cookie_domain": null,
             "secureMode": true,
-            "redirectUrl": "redirect.php",
-            "supportsPost": true
+            "redirectUrl": "redirect.php"
         }
     },
     /**
@@ -91,14 +105,17 @@
      *   tileCache: ?boolean,
      *   preventNavigationShortcuts: ?boolean,
      *   permaLoadPlugins: ?boolean,
-     *   bypassCookies: ?boolean,
      *   theme: ?string,
      *   stackedBackground: ?boolean,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
      *   headers: ?Object,
      *   preferredFormat: ?string,
-     *   fetchAsync: ?boolean
+     *   fetchAsync: ?boolean,
+     *   bypassCache: ?boolean,
+     *   bypassCookies: ?boolean,
+     *   bypassCacheLoadTime: ?boolean,
+     *   disablePluginsUi: ?boolean,
      * }} xoParams
      */
     "setup": {
@@ -121,7 +138,10 @@
         "tileCache": true,
         "preventNavigationShortcuts": false,
         "permaLoadPlugins": true,
+        // can disable cookies support
         "bypassCookies": false,
+        // can disable cache data loading
+        "bypassCache": false,
         "bypassCacheLoadTime": false,
         // can be dimmed, dark, light, auto
         "theme": "auto",
@@ -134,7 +154,23 @@
         // can be anything that supports the protocol of your choice,
         // ExtendedDZI supports "png", "zip", "jpg"
         "preferredFormat": "zip",
-        "fetchAsync": false
+        "fetchAsync": false,
+        // Do not render plugin selection in GUI, but they can still be active
+        "disablePluginsUi": false
+    },
+    /**
+     * The Server status. This object is here just for the reference and
+     * to provide default values; the server shall set up these properties accordingly.
+     * DO NOT modify these
+     * @typedef {{
+     *   name: string
+     *   supportsPost: boolean
+     * }} xoServerState
+     */
+    "serverStatus": {
+        "name": null,
+        // Disable for servers that do not support POST parsing: will not support direct data sharing
+        "supportsPost": true
     },
 
     /**
@@ -160,11 +196,11 @@
         "external": {
             "protocols": [
                 "dziexttilesource.js",
-                "empaia-service.js",
                 "emptytilesource.js"
             ],
             "common": [
                 "enjoyhint.js",
+                //"cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
@@ -182,9 +218,9 @@
          */
         "src": {
             //"env": "",
-            "loader": "loader.js",
-            "deps": ["ui_components.js", "shader_configurator.js"],
-            "app": ["app.js", "user_interface.js", "scripts.js", "layers.js"]
+            "loader": ["store.js", "loader.js"],
+            "deps": ["ui-components.js", "shader-configurator.js"],
+            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         }
     },
 
@@ -193,7 +229,8 @@
      */
     "css": {
         "libs": {
-            "primer": "primer_css.css"
+            "primer": "primer_css.css",
+            "fontawesome": "fontawesome/css/v6-all.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

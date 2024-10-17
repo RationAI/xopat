@@ -56,6 +56,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "sessionID",
         "presetID",
         "layerID",
+        "id"
     ];
 
     /**
@@ -483,7 +484,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
 /**
  * Polygon Utilities that can help with points array simplification and more
- * todo move here more utils
+ * todo move here stuff from magic wand code
  */
 OSDAnnotations.PolygonUtilities = {
 
@@ -737,6 +738,7 @@ OSDAnnotations.PolygonUtilities = {
     }
 };
 
+//todo deprecate/remove this in favor of wand
 OSDAnnotations.AutoObjectCreationStrategy = class {
     constructor(selfName, context) {
         this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
@@ -789,7 +791,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
             }
         });
         this._running = true;
-        this._renderEngine.addVisualisation({
+        this._renderEngine.addVisualization({
             shaders: {
                 _ : {
                     type: "heatmap",
@@ -819,10 +821,10 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
 
     _beforeAutoMethod() {
         let vis = VIEWER.bridge.visualization();
-        this._renderEngine._visualisations[0] = {
+        this._renderEngine._visualizations[0] = {
             shaders: {}
         };
-        let toAppend = this._renderEngine._visualisations[0].shaders;
+        let toAppend = this._renderEngine._visualizations[0].shaders;
 
         for (let key in vis.shaders) {
             if (vis.shaders.hasOwnProperty(key)) {
@@ -870,7 +872,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
                 }
             }
         }
-        this._renderEngine.rebuildVisualisation(Object.keys(vis.shaders));
+        this._renderEngine.rebuildVisualization(Object.keys(vis.shaders));
 
         this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
 
@@ -893,7 +895,7 @@ OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.A
     }
 
     _afterAutoMethod() {
-        delete this._renderEngine._visualisations[0];
+        delete this._renderEngine._visualizations[0];
     }
 
     approximateBounds(point, growY=true) {

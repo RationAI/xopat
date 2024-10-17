@@ -3,6 +3,9 @@
 This README describes options for xOpat configurations and available core configuration details.
 For details on modules and plugin configurations, see respective READMEs in given folders.
 
+The configuration can be provided either in a file (default location `env/env.json`, override-able path in `XOPAT_ENV` 
+variable) or a serialized JSON (also in `XOPAT_ENV`).
+
 Default static configuration for plugins, modules and the viewer itself can be overridden
 in ``env.json`` file. The full configuration is compiled for you (with comments) in `env.example.json`.
 Only fields that are to be overridden can be present.

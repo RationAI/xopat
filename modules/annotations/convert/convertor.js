@@ -22,7 +22,7 @@
  *          * It gives a third party the power to work with each object and preset individually.
  *          * Note that partial output must not necessarily be a valid output of the given format.
  *          * In the case of unsupported format flexibility on this granularity, simply return
- *          * an unfinished list ob objects that can be later finalized into a full valid format output.
+ *          * an list of objects that can be later finalized into a full valid format output.
  *          *
  *          * Options are in this.options, reference to the annotation module as this.context
  *          *
@@ -106,6 +106,12 @@ OSDAnnotations.Convertor = class {
      * @param context
      * @param withAnnotations
      * @param withPresets
+     * @returns serialized or plain list of strings of objects based on this.options.serialize:
+     * {
+     *     objects: [...serialized annotations... ],
+     *     presets: [...serialzied presets... ],
+     * }
+     *
      */
     static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
         const parserCls = this.get(options.format);
@@ -282,7 +288,7 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
-     *
+     * todo: consider support for un-serialized objects too...
      * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
      * @return {object} must return the following structure:
      *    {

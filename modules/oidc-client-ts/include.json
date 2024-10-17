@@ -1,0 +1,42 @@
+{
+    "id": "oidc-client-ts",
+    "name": "OIDC Client for JavaScript",
+    "description": "Library to provide OpenID Connect (OIDC) and OAuth2 protocol support for client-side, browser-based JavaScript client applications. Also included is support for user session and access token management.",
+    "version": "2.4.0",
+    "includes" : [
+        "oidc-client-ts.js",
+        "oidc-auth.js"
+    ],
+    "requires": ["jwt-decode"],
+    "permaLoad": false,
+    //How many login retry attempts to perform
+    "errorLoginRetry": 2,
+    //Retry timeout in seconds
+    "retryTimeout": 20,
+    //Event (login) priority
+    "eventBeforeOpenPriority": 0,
+    //Mathod used for auth: "redirect", "popup"
+    "method": "popup",
+    //Whether to store the login session in cookies
+    "useCookiesStore": true,
+    //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
+    "oidc": {
+        //We recommend not to modify 'redirect_uri'
+        //Authority ID (url) the OIDC sets in the communication, url used for authorization
+        "authority": "",
+        //Client ID of this application, its auth secret (or null)
+        "client_id": "",
+        "client_secret": null,
+        //Default scope for the user
+        "scope": "openid offline_access",
+        //Can specify where to redirect after logout, by default the viewer gateway
+        "post_logout_redirect_uri": null, //by default the logout_redirect_uri
+        "accessTokenExpiringNotificationTimeInSeconds": 150,
+        "redirectMethod": "replace",
+        "redirectTarget": "top"
+    },
+    // endpoint to read user info from (if the token e.g. does not cover username)
+    "oidcUserInfo": null,
+    // if the refresh token is stored in cookies, provide the name to sync apps
+    "cookieRefreshTokenName": "_sharedEmpaiaRefreshToken"
+}

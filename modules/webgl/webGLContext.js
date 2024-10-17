@@ -40,7 +40,7 @@ WebGLModule.GlContextFactory = class {
             return;
         }
         if (!maker.hasOwnProperty("webGLImplementation")) {
-            console.error("Registered context maker must create webgl context visualisation using webGLImplementation()!");
+            console.error("Registered context maker must create webgl context visualization using webGLImplementation()!");
             return;
         }
         WebGLModule.GlContextFactory._GL_MAKERS[version] = maker;
@@ -84,7 +84,7 @@ WebGLModule.GlContextFactory = class {
 
 /**
  * @interface WebGLModule.WebGLImplementation
- * Interface for the visualisation rendering implementation which can run
+ * Interface for the visualization rendering implementation which can run
  * on various GLSL versions
  */
 WebGLModule.WebGLImplementation = class {
@@ -122,36 +122,36 @@ WebGLModule.WebGLImplementation = class {
     }
 
     /**
-     * Create a visualisation from the given JSON params
-     * @param {string[]} order keys of visualisation.shader in which order to build the visualization
+     * Create a visualization from the given JSON params
+     * @param {string[]} order keys of visualization.shader in which order to build the visualization
      *   the order: painter's algorithm: the last drawn is the most visible
-     * @param {object} visualisation
+     * @param {object} visualization
      * @param {boolean} withHtml whether html should be also created (false if no UI controls are desired)
      * @return {object}
          {string} object.vertex_shader vertex shader code
          {string} object.fragment_shader fragment shader code
          {string} object.html html for the UI
-         {number} object.usableShaders how many layers are going to be visualised
-         {(array|string[])} object.dataUrls ID's of data in use (keys of visualisation.shaders object) in desired order
+         {number} object.usableShaders how many layers are going to be visualized
+         {(array|string[])} object.dataUrls ID's of data in use (keys of visualization.shaders object) in desired order
                     the data is guaranteed to arrive in this order (images stacked below each other in imageElement)
      */
-    generateVisualisation(order, visualisation, withHtml) {
-        console.error("::generateVisualisation() must be implemented!");
+    generateVisualization(order, visualization, withHtml) {
+        console.error("::generateVisualization() must be implemented!");
     }
 
     /**
      * Called once program is switched to: initialize all necessary items
      * @param {WebGLProgram} program  used program
-     * @param {Visualization} currentVisualisation  JSON parameters used for this visualisation
+     * @param {Visualization} currentVisualization  JSON parameters used for this visualization
      */
-    toBuffers(program, currentVisualisation) {
+    toBuffers(program, currentVisualization) {
         console.error("::toBuffers() must be implemented!");
     }
 
     /**
      * Draw on the canvas using given program
      * @param {WebGLProgram} program  used program
-     * @param {WebGLModule.VisualizationConfig} currentVisualisation  JSON parameters used for this visualisation
+     * @param {WebGLModule.VisualizationConfig} currentVisualization  JSON parameters used for this visualization
      * @param {object} imageElement image data
      * @param {object} tileDimension
      * @param {number} tileDimension.width width of the result
@@ -161,7 +161,7 @@ WebGLModule.WebGLImplementation = class {
      * @param {number} pixelSize arbitrary number 2 (this is not very clean design, pass object load properties of?)
      *   used to pass ratio of how many screen pixels a fragment spans on
      */
-    toCanvas(program, currentVisualisation, imageElement, tileDimension, zoomLevel, pixelSize) {
+    toCanvas(program, currentVisualization, imageElement, tileDimension, zoomLevel, pixelSize) {
         console.error("::toCanvas() must be implemented!");
     }
 
@@ -237,12 +237,12 @@ WebGLModule.WebGL_1_0 = class extends WebGLModule.WebGLImplementation {
         return this.texture.sample(dataIndex, textureCoords);
     }
 
-    generateVisualisation(order, visualisation, withHtml) {
+    generateVisualization(order, visualization, withHtml) {
         let definition = "", execution = "", html = "",
             _this = this, usableShaders = 0, simultaneouslyVisible = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
-            let layer = visualisation.shaders[dataId];
+            let layer = visualization.shaders[dataId];
             layer.rendering = false;
 
             if (layer.type == "none") {
@@ -281,7 +281,7 @@ vec4 lid_${layer._index}_xo() {
                     layer._renderContext.htmlControls(), dataId, visible, layer, true) + html;
             } else {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer["name"],
-                    `The requested visualisation type does not work properly.`, dataId, false, layer, false) + html;
+                    `The requested visualization type does not work properly.`, dataId, false, layer, false) + html;
                 console.warn("Invalid shader part.", "Missing one of the required elements.", layer);
             }
         });
@@ -291,14 +291,14 @@ vec4 lid_${layer._index}_xo() {
          */
         //must preserve the definition order
         // let urls = [];
-        // for (let key in visualisation.shaders) {
-        //     if (visualisation.shaders.hasOwnProperty(key)) {
-        //         let layer = visualisation.shaders[key];
+        // for (let key in visualization.shaders) {
+        //     if (visualization.shaders.hasOwnProperty(key)) {
+        //         let layer = visualization.shaders[key];
         //
         //         // if (layer.hasOwnProperty("target")) {
-        //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+        //         //     if (!visualization.shaders.hasOwnProperty(layer["target"])) {
         //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
-        //         //     } else if (visualisation.shaders[target].rendering) {
+        //         //     } else if (visualization.shaders[target].rendering) {
         //         //         urls.push(key);
         //         //     }
         //         // } else
@@ -394,7 +394,7 @@ void main() {
 `;
     }
 
-    toBuffers(program, currentVisualisation) {
+    toBuffers(program, currentVisualization) {
         if (!this.context.running) return;
 
         let context = this.context,
@@ -402,8 +402,8 @@ void main() {
 
         // Allow for custom loading
         gl.useProgram(program);
-        context.visualisationInUse(currentVisualisation);
-        context['gl_loaded'].call(context, gl, program, currentVisualisation);
+        context.visualizationInUse(currentVisualization);
+        context['gl_loaded'].call(context, gl, program, currentVisualization);
 
         // Unchangeable square array buffer fills viewport with texture
         var boxes = [[-1, 1, -1, -1, 1, 1, 1, -1], [0, 1, 0, 0, 1, 1, 1, 0]];
@@ -419,7 +419,7 @@ void main() {
             return [vertex, vec, gl.FLOAT, 0, vec * bytes, count * index * vec * bytes];
         });
 
-        this.texture.toBuffers(this.context, gl, program, this.wrap, this.filter, currentVisualisation);
+        this.texture.toBuffers(this.context, gl, program, this.wrap, this.filter, currentVisualization);
 
         this._drawArrays = [gl.TRIANGLE_STRIP, 0, count];
 
@@ -428,13 +428,13 @@ void main() {
         gl.bufferData(gl.ARRAY_BUFFER, buffer, gl.STATIC_DRAW);
     }
 
-    toCanvas(program, currentVisualisation, imageElement, tileDimension, zoomLevel, pixelSize) {
+    toCanvas(program, currentVisualization, imageElement, tileDimension, zoomLevel, pixelSize) {
         if (!this.context.running) return;
 
         let context = this.context,
             gl = this.gl;
 
-        context['gl_drawing'].call(context, gl, program, currentVisualisation, tileDimension);
+        context['gl_drawing'].call(context, gl, program, currentVisualization, tileDimension);
 
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -450,11 +450,11 @@ void main() {
 
         // Upload textures
         this.texture.toCanvas(context, context._dataSourceMapping,
-            currentVisualisation, imageElement, tileDimension, program, context.gl);
+            currentVisualization, imageElement, tileDimension, program, context.gl);
 
         gl.drawArrays.apply(gl, this._drawArrays);
 
-        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualisation,
+        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualization,
             imageElement, tileDimension, program, gl);
         return gl.canvas;
     }
@@ -476,11 +476,11 @@ WebGLModule.WebGL_2_0 = class extends WebGLModule.WebGLImplementation {
         return "2.0";
     }
 
-    generateVisualisation(order, visualisation, withHtml) {
+    generateVisualization(order, visualization, withHtml) {
         var definition = "", execution = "", html = "", _this = this, usableShaders = 0, globalScopeCode = {};
 
         order.forEach(dataId => {
-            let layer = visualisation.shaders[dataId];
+            let layer = visualization.shaders[dataId];
             layer.rendering = false;
 
             if (layer.type == "none") {
@@ -521,7 +521,7 @@ vec4 lid_${layer._index}_xo() {
                     layer._renderContext.htmlControls(), dataId, visible, layer, true) + html;
             } else {
                 if (withHtml) html = _this.context.htmlShaderPartHeader(layer.name,
-                    `The requested visualisation type does not work properly.`, dataId, false, layer, false) + html;
+                    `The requested visualization type does not work properly.`, dataId, false, layer, false) + html;
                 console.warn("Invalid shader part.", "Missing one of the required elements.", layer);
             }
         });
@@ -531,14 +531,14 @@ vec4 lid_${layer._index}_xo() {
          */
         //must preserve the definition order
         // let urls = [], indicesMapping = new Array(usableShaders).fill(0);
-        // for (let key in visualisation.shaders) {
-        //     if (visualisation.shaders.hasOwnProperty(key)) {
-        //         let layer = visualisation.shaders[key];
+        // for (let key in visualization.shaders) {
+        //     if (visualization.shaders.hasOwnProperty(key)) {
+        //         let layer = visualization.shaders[key];
         //
         //         // if (layer.hasOwnProperty("target")) {
-        //         //     if (!visualisation.shaders.hasOwnProperty(layer["target"])) {
+        //         //     if (!visualization.shaders.hasOwnProperty(layer["target"])) {
         //         //         console.warn("Invalid target of the data source " + dataId + ". Ignoring.");
-        //         //     } else if (visualisation.shaders[target].rendering) {
+        //         //     } else if (visualization.shaders[target].rendering) {
         //         //         urls.push(key);
         //         //     }
         //         // } else
@@ -655,7 +655,7 @@ void main() {
 `;
     }
 
-    toBuffers(program, currentVisualisation) {
+    toBuffers(program, currentVisualization) {
         if (!this.context.running) return;
 
         let context = this.context,
@@ -663,17 +663,17 @@ void main() {
 
         // Allow for custom loading
         gl.useProgram(program);
-        context.visualisationInUse(currentVisualisation);
-        context['gl_loaded'].call(context, gl, program, currentVisualisation);
+        context.visualizationInUse(currentVisualization);
+        context['gl_loaded'].call(context, gl, program, currentVisualization);
 
         //Note that the drawing strategy is not to resize canvas, and simply draw everyhing on squares
-        this.texture.toBuffers(context, gl, program, this.wrap, this.filter, currentVisualisation);
+        this.texture.toBuffers(context, gl, program, this.wrap, this.filter, currentVisualization);
 
         //Empty ARRAY: get the vertices directly from the shader
         gl.bindBuffer(gl.ARRAY_BUFFER, this.emptyBuffer);
     }
 
-    toCanvas(program, currentVisualisation, imageElement, tileDimension, zoomLevel, pixelSize) {
+    toCanvas(program, currentVisualization, imageElement, tileDimension, zoomLevel, pixelSize) {
         if (!this.context.running) return;
         // Allow for custom drawing in webGL and possibly avoid using webGL at all
 
@@ -683,20 +683,20 @@ void main() {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        context['gl_drawing'].call(context, gl, program, currentVisualisation, tileDimension);
+        context['gl_drawing'].call(context, gl, program, currentVisualization, tileDimension);
 
         // Set Attributes for GLSL
         gl.uniform1f(gl.getUniformLocation(program, "pixel_size_in_fragments"), pixelSize);
         gl.uniform1f(gl.getUniformLocation(program, "zoom_level"), zoomLevel);
 
         // Upload textures
-        this.texture.toCanvas(context, context._dataSourceMapping, currentVisualisation,
+        this.texture.toCanvas(context, context._dataSourceMapping, currentVisualization,
             imageElement, tileDimension, program, gl);
 
         // Draw three points (obtained from gl_VertexID from a static array in vertex shader)
         gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualisation,
+        this.texture.toCanvasFinish(context, context._dataSourceMapping, currentVisualization,
             imageElement, tileDimension, program, gl);
         return gl.canvas;
     }

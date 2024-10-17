@@ -1,6 +1,6 @@
 
 /**
- * Wrapping the funcionality of WebGL to be suitable for the visualisation.
+ * Wrapping the funcionality of WebGL to be suitable for the visualization.
  * Written by Aiosa
  * @class WebGLModule
  */
@@ -35,7 +35,7 @@ window.WebGLModule = class {
      * @param {string} html
      * @param {string} dataId
      * @param {boolean} isVisible
-     * @param {WebGLModule.VisualisationLayer} layer
+     * @param {WebGLModule.VisualizationLayer} layer
      * @param {boolean} wasErrorWhenLoading
      */
 
@@ -45,7 +45,7 @@ window.WebGLModule = class {
      * to distinguish uniquely between static generated code parts
      * @type {RegExp}
      */
-    static idPattern = /^[0-9a-zA-Z_]*$/;
+    static idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
 
     /**
      * @param {object} incomingOptions
@@ -55,9 +55,9 @@ window.WebGLModule = class {
      * @param {boolean} incomingOptions.debug debug mode default false
      * @param {function} incomingOptions.ready function called when ready
      * @param {function} incomingOptions.resetCallback function called when user input changed, e.g. changed output of the current rendering
-     * @param {function} incomingOptions.visualisationInUse function called when visualisation is initialized and run
-     * @param {function} incomingOptions.visualisationChanged function called when a visualization swap is performed:
-     *   signature f({Visualization} oldVisualisation,{Visualization} newVisualisation)
+     * @param {function} incomingOptions.visualizationInUse function called when visualization is initialized and run
+     * @param {function} incomingOptions.visualizationChanged function called when a visualization swap is performed:
+     *   signature f({WebGLModule.VisualizationConfig} oldVisualization,{WebGLModule.VisualizationConfig} newVisualization)
      * @param {function} incomingOptions.onFatalError called when this module is unable to run
      * @param {function} incomingOptions.onError called when a problem occurs, but other parts of the system still might work
      * @constructor
@@ -76,11 +76,11 @@ window.WebGLModule = class {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         };
         this.resetCallback = function() { };
-        //called once a visualisation is compiled and linked (might not happen)
-        this.visualisationReady = function(i, visualisation) { };
-        //called once a visualisation is switched to (including first run)
-        this.visualisationInUse = function(visualisation) { };
-        this.visualisationChanged = function(oldVis, newVis) { };
+        //called once a visualization is compiled and linked (might not happen)
+        this.visualizationReady = function(i, visualization) { };
+        //called once a visualization is switched to (including first run)
+        this.visualizationInUse = function(visualization) { };
+        this.visualizationChanged = function(oldVis, newVis) { };
         //called when exception (usually some missing function) occurs
         this.onError = function(error) {
             console.warn("An error has occurred:", error.error, error.desc);
@@ -108,7 +108,7 @@ window.WebGLModule = class {
         }
 
         if (!this.constructor.idPattern.test(this.uniqueId)) {
-            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore. ID: " + this.uniqueId;
+            throw "WebGLModule: invalid ID! Id can contain only letters, numbers and underscore (non-consecutive, not at the beginning). ID: " + this.uniqueId;
         }
 
         /**
@@ -126,18 +126,18 @@ window.WebGLModule = class {
         /////////////////////////////////////////////////////////////////////////////////
         ///////////// Internals /////////////////////////////////////////////////////////
         /////////////////////////////////////////////////////////////////////////////////
-
+        this._programs = {};
         this.reset();
 
         try {
             //WebGLModule.GlContextFactory.init(this,  "1.0");
             WebGLModule.GlContextFactory.init(this, this.webGlPreferredVersion, "2.0", "1.0");
         } catch (e) {
-            this.onFatalError({error: "Unable to initialize the visualisation.", desc: e});
+            this.onFatalError({error: "Unable to initialize the visualization.", desc: e});
             console.error(e);
             return;
         }
-        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId})`);
+        console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId || '<main>'})`);
 
         this.gl_loaded = function(gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
@@ -154,8 +154,8 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     reset() {
-        this._unloadCurrentProgram();
-        this._visualisations = [];
+        Object.keys(this._programs).forEach(key => this._unloadProgram(key));
+        this._visualizations = [];
         this._dataSources = [];
         this._origDataSources = [];
         this._customShaders = [];
@@ -188,17 +188,17 @@ window.WebGLModule = class {
 
     /**
      * Set program shaders. Vertex shader is set by default a square.
-     * @param {Visualization} visualisations - objects that define the visualisation (see Readme)
+     * @param {WebGLModule.VisualizationConfig} visualizations - objects that define the visualization (see Readme)
      * @return {boolean} true if loaded successfully
      * @instance
      * @memberOf WebGLModule
      */
-    addVisualisation(...visualisations) {
+    addVisualization(...visualizations) {
           if (this._prepared) {
-            console.error("New visualisation cannot be introduced after the visualiser was prepared.");
+            console.error("New visualization cannot be introduced after the visualizer was prepared.");
             return false;
         }
-        for (let vis of visualisations) {
+        for (let vis of visualizations) {
             if (!vis.hasOwnProperty("shaders")) {
                 console.warn("Invalid visualization: no shaders defined", vis);
                 continue;
@@ -217,7 +217,7 @@ window.WebGLModule = class {
                 console.warn("Invalid visualization: no shader configuration present!", vis);
                 continue;
             }
-            this._visualisations.push(vis);
+            this._visualizations.push(vis);
         }
         return true;
     }
@@ -236,50 +236,50 @@ window.WebGLModule = class {
     }
 
     /**
-     * Runs a callback on each visualisation goal
-     * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+     * Runs a callback on each visualization goal
+     * @param {function} call callback to perform on each visualization goal (its object given as the only parameter)
      * @instance
      * @memberOf WebGLModule
      */
-    foreachVisualisation(call) {
-        this._visualisations.forEach(vis => call(vis));
+    foreachVisualization(call) {
+        this._visualizations.forEach(vis => call(vis));
     }
 
     /**
-     * Rebuild visualisation and update scene
+     * Rebuild visualization and update scene
      * @param {string[]|undefined} order of shaders, ID's of data as defined in setup JSON, last element
      *   is rendered last (top)
      * @instance
      * @memberOf WebGLModule
      */
-    rebuildVisualisation(order=undefined) {
-        let vis = this._visualisations[this._program];
+    rebuildVisualization(order=undefined) {
+        let vis = this._visualizations[this._program];
 
         if (order) {
             vis.order = order;
         }
-        this._unloadCurrentProgram();
-        this._visualisationToProgram(vis, this._program);
+        this._unloadProgram();
+        this._visualizationToProgram(vis, this._program);
         this._forceSwitchShader(this._program);
     }
 
     /**
-     * Get currently used visualisation
-     * @return {object} current visualisation
+     * Get currently used visualization
+     * @return {object} current visualization
      * @instance
      * @memberOf WebGLModule
      */
     visualization(index) {
-        return this._visualisations[Math.min(index, this._visualisations.length-1)];
+        return this._visualizations[Math.min(index, this._visualizations.length-1)];
     }
 
     /**
-     * Get currently used visualisation ilayer.params,ndex
+     * Get currently used visualization ilayer.params,ndex
      * @return {number} index of the current visualization
      * @instance
      * @memberOf WebGLModule
      */
-    currentVisualisationIndex() {
+    currentVisualizationIndex() {
         return this._program;
     }
 
@@ -291,15 +291,15 @@ window.WebGLModule = class {
      * @instance
      * @memberOf WebGLModule
      */
-    switchVisualisation(i) {
+    switchVisualization(i) {
         if (!this._initialized) {
-            console.warn("WebGLModule::switchVisualisation(): not initialized.");
+            console.warn("WebGLModule::switchVisualization(): not initialized.");
             return;
         }
         if (this._program === i) return;
         let oldIndex = this._program;
         this._forceSwitchShader(i);
-        this.visualisationChanged(this._visualisations[oldIndex], this._visualisations[i]);
+        this.visualizationChanged(this._visualizations[oldIndex], this._visualizations[i]);
     }
 
     /**
@@ -318,12 +318,12 @@ window.WebGLModule = class {
     }
 
     /**
-     * Get a list of image pyramids used to compose the current visualisation goal
+     * Get a list of image pyramids used to compose the current visualization goal
      * @instance
      * @memberOf WebGLModule
      */
     getSources() {
-        //return this._visualisations[this._program].dziExtendedUrl;
+        //return this._visualizations[this._program].dziExtendedUrl;
         return this._dataSources;
     }
 
@@ -339,7 +339,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     processImage(data, tileDimension, zoom, pixelSize) {
-        let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualisations[this._program],
+        let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualizations[this._program],
             data, tileDimension, zoom, pixelSize);
 
         if (this.debug) this._renderDebugIO(data, result);
@@ -358,7 +358,7 @@ window.WebGLModule = class {
 
     /**
      * Execute call on each visualization layer with no errors
-     * @param {object} vis current visualisation setup context
+     * @param {object} vis current visualization setup context
      * @param {function} callback call to execute
      * @param {function} onFail handle exception during execition
      * @return {boolean} true if no exception occured
@@ -385,7 +385,7 @@ window.WebGLModule = class {
 
     /**
      * Execute call on each _visible_ visualization layer with no errors
-     * @param {object} vis current visualisation setup context
+     * @param {object} vis current visualization setup context
      * @param {function} callback call to execute
      * @param {function} onFail handle exception during execition
      * @return {boolean} true if no exception occured
@@ -421,7 +421,7 @@ window.WebGLModule = class {
      * @return {number} program index
      */
     getCurrentProgramIndex() {
-        if (this._program < 0 || this._program >= this._visualisations.length) this._program = 0;
+        if (this._program < 0 || this._program >= this._visualizations.length) this._program = 0;
         return this._program;
     }
 
@@ -438,8 +438,8 @@ window.WebGLModule = class {
     /**
      * For easy initialization, do both in once call.
      * For separate initialization (prepare|init), see functions below.
-     * @param {string[]|undefined} dataSources a list of data identifiers available to the visualisations
-     *  - visualisation configurations should not reference data not present in this array
+     * @param {string[]|undefined} dataSources a list of data identifiers available to the visualizations
+     *  - visualization configurations should not reference data not present in this array
      *  - the module gives you current list of required subset of this list for particular active visualization goal
      * @param width initialization width
      * @param height initialization height
@@ -453,14 +453,14 @@ window.WebGLModule = class {
 
     /**
      * Prepares the WebGL wrapper for being initialized. More concretely,
-     * each visualisation is prepared by downloading all necessary files (e.g. shaders),
+     * each visualization is prepared by downloading all necessary files (e.g. shaders),
      * shaders are compiled and other WebGL structures initialized. It is separated from
      * initialization as this must be finished before OSD is ready (we must be ready to draw when the data comes).
      * The idea is to open the protocol for OSD in onPrepared.
-     * Shaders are fetched from `visualisation.url` parameter.
+     * Shaders are fetched from `visualization.url` parameter.
      *
      * @param {string[]|undefined} dataSources id's of data such that server can understand which image to send (usually paths)
-     * @param {number} visIndex index of the initial visualisation
+     * @param {number} visIndex index of the initial visualization
      * @param {function} onPrepared callback to execute after succesfull preparing.
      */
     prepare(dataSources, onPrepared, visIndex=0) {
@@ -469,10 +469,10 @@ window.WebGLModule = class {
             return;
         }
 
-        if (this._visualisations.length < 1) {
-            console.error("No visualisation specified!");
-            this.onFatalError({error: "No visualisation specified!",
-                desc: "::prepare() called with no visualisation set."});
+        if (this._visualizations.length < 1) {
+            console.error("No visualization specified!");
+            this.onFatalError({error: "No visualization specified!",
+                desc: "::prepare() called with no visualization set."});
             return;
         }
         this._origDataSources = dataSources || [];
@@ -481,7 +481,7 @@ window.WebGLModule = class {
         this._prepared = true;
         this.getCurrentProgramIndex(); //resets index
 
-        this._visualisationToProgram(this._visualisations[this._program], this._program);
+        this._visualizationToProgram(this._visualizations[this._program], this._program);
         onPrepared();
     }
 
@@ -524,7 +524,7 @@ window.WebGLModule = class {
      */
     changeBlending(code) {
         this.webGLImplementation.setBlendEquation(code);
-        this.rebuildVisualisation();
+        this.rebuildVisualization();
     }
 
     //////////////////////////////////////////////////////////////////////////////
@@ -534,11 +534,11 @@ window.WebGLModule = class {
     /**
      * Prepare for a certain program to use, call before this program is used for rendering
      * @param {WebGLProgram} program current program to use
-     * @param currentVisualisation current visualisation data structure
+     * @param currentVisualization current visualization data structure
      * @private
      */
-    _toBuffers(program, currentVisualisation) {
-        this.webGLImplementation.toBuffers(program, currentVisualisation);
+    _toBuffers(program, currentVisualization) {
+        this.webGLImplementation.toBuffers(program, currentVisualization);
     }
 
     /**
@@ -552,15 +552,15 @@ window.WebGLModule = class {
     _forceSwitchShader(i, _reset=true) {
         if (isNaN(i) || i === null || i === undefined) i = this._program;
 
-        if (i >= this._visualisations.length) {
-            console.error("Invalid visualisation index ", i, "trying to use index 0...");
+        if (i >= this._visualizations.length) {
+            console.error("Invalid visualization index ", i, "trying to use index 0...");
             if (i === 0) return;
             i = 0;
         }
 
-        let target = this._visualisations[i];
+        let target = this._visualizations[i];
         if (!this._programs.hasOwnProperty(i)) {
-            this._visualisationToProgram(target, i);
+            this._visualizationToProgram(target, i);
         } else if (i !== this._program) {
             this._updateRequiredDataSources(target);
         }
@@ -570,7 +570,7 @@ window.WebGLModule = class {
             if (this.supportsHtmlControls()) this._loadHtml(i, this._program);
             this._loadScript(i, this._program);
             this.running = false;
-            if (this._visualisations.length < 2) {
+            if (this._visualizations.length < 2) {
                 this.onFatalError(target); //considered fatal as there is no valid goal
             } else {
                 this.onError(target);
@@ -587,10 +587,10 @@ window.WebGLModule = class {
         }
     }
 
-    _unloadCurrentProgram() {
-        if (this._programs && this._programs.hasOwnProperty(this._program)) {
+    _unloadProgram(index = this._program) {
+        if (this._programs && this._programs.hasOwnProperty(index)) {
             //must remove before attaching new
-            let program = this._programs[this._program];
+            let program = this._programs[index];
             this._detachShader(program, "VERTEX_SHADER");
             this._detachShader(program, "FRAGMENT_SHADER");
         }
@@ -598,11 +598,11 @@ window.WebGLModule = class {
 
     _loadHtml(visId) {
         let htmlControls = document.getElementById(this.htmlControlsId);
-        htmlControls.innerHTML = this._visualisations[visId]._built["html"];
+        htmlControls.innerHTML = this._visualizations[visId]._built["html"];
     }
 
     _loadScript(visId) {
-        return WebGLModule.eachValidVisualizationLayer(this._visualisations[visId], layer => layer._renderContext.init());
+        return WebGLModule.eachValidVisualizationLayer(this._visualizations[visId], layer => layer._renderContext.init());
     }
 
     _getDebugInfoPanel() {
@@ -615,6 +615,10 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
 
     _loadDebugInfo() {
         if (!this.debug) return;
+        if (!this.supportsHtmlControls()) {
+            console.warn(`WebGL Renderer ${this.uniqueId} does not support visual rendering without enabled HTML control!`);
+            return;
+        }
 
         let container = document.getElementById(`test-${this.uniqueId}-webgl`);
         if (!container) {
@@ -628,6 +632,9 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 
     async _renderDebugIO(inputData, outputData) {
+        if (!this.supportsHtmlControls()) {
+            return;
+        }
         let input = document.getElementById(`test-${this.uniqueId}-webgl-input`);
         let output = document.getElementById(`test-${this.uniqueId}-webgl-output`);
 
@@ -647,30 +654,30 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         }
     }
 
-    _buildFailed(visualisation, error) {
+    _buildFailed(visualization, error) {
         console.error(error);
-        visualisation.error = "Failed to compose visualisation.";
-        visualisation.desc = error;
+        visualization.error = "Failed to compose visualization.";
+        visualization.desc = error;
     }
 
-    _buildVisualisation(order, visualisation) {
+    _buildVisualization(order, visualization) {
         try {
-            let data = this.webGLImplementation.generateVisualisation(order, visualisation, this.supportsHtmlControls());
+            let data = this.webGLImplementation.generateVisualization(order, visualization, this.supportsHtmlControls());
             if (data.usableShaders < 1) {
-                this._buildFailed(visualisation, `Empty visualisation: no valid visualisation has been specified.
-<br><b>Visualisation setup:</b></br> <code>${JSON.stringify(visualisation, WebGLModule.jsonReplacer)}</code>
-<br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualisation.data)}</code>`);
+                this._buildFailed(visualization, `Empty visualization: no valid visualization has been specified.
+<br><b>Visualization setup:</b></br> <code>${JSON.stringify(visualization, WebGLModule.jsonReplacer)}</code>
+<br><b>Dynamic shader data:</b></br><code>${JSON.stringify(visualization.data)}</code>`);
                 return null;
             }
             data.dziExtendedUrl = data.dataUrls.join(",");
-            visualisation._built = data;
+            visualization._built = data;
 
             //preventive
-            delete visualisation.error;
-            delete visualisation.desc;
+            delete visualization.error;
+            delete visualization.desc;
             return data;
         } catch (error) {
-            this._buildFailed(visualisation, error);
+            this._buildFailed(visualization, error);
         }
         return null;
     }
@@ -713,13 +720,13 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         });
     }
 
-    _visualisationToProgram(vis, idx) {
+    _visualizationToProgram(vis, idx) {
         if (!vis.hasOwnProperty("_built")) {
             vis._built = {};
         }
 
         this._updateRequiredDataSources(vis);
-        this._processVisualisation(vis, idx);
+        this._processVisualization(vis, idx);
         return idx;
     }
 
@@ -737,11 +744,12 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             layer: layer,
             webgl: this.webGLImplementation,
             invalidate: this.resetCallback,
-            rebuild: this.rebuildVisualisation.bind(this, undefined),
+            interactive: this.supportsHtmlControls(),
+            rebuild: this.rebuildVisualization.bind(this, undefined),
             refetch: function() {
                 _this._updateRequiredDataSources(visualization);
                 //vis not change, but underlying data
-                _this.visualisationChanged(visualization, visualization);
+                _this.visualizationChanged(visualization, visualization);
             }
         });
         layer._renderContext.construct(layer.params || {}, layer.dataReferences);
@@ -781,7 +789,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         }
     }
 
-    _processVisualisation(vis, idx) {
+    _processVisualization(vis, idx) {
         let gl = this.gl,
             err = function(message, description) {
                 vis.error = message;
@@ -828,16 +836,16 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             vis.order = Object.keys(vis.shaders);
         }
 
-        this._buildVisualisation(vis.order, vis);
+        this._buildVisualization(vis.order, vis);
 
         if (vis.hasOwnProperty("error") && vis.error) {
-            this.visualisationReady(idx, vis);
+            this.visualizationReady(idx, vis);
             return;
         }
 
         this.constructor.compileShader(gl, program,
             vis._built["vertex_shader"], vis._built["fragment_shader"], err, this.debug);
-        this.visualisationReady(idx, vis);
+        this.visualizationReady(idx, vis);
     }
 
     static compileShader(gl, program, VS, FS, onError, isDebugMode) {
@@ -865,14 +873,14 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
 
         if (!useShader(gl, program, VS, 'VERTEX_SHADER') ||
             !useShader(gl, program, FS, 'FRAGMENT_SHADER')) {
-            onError("Unable to use this visualisation.",
+            onError("Unable to use this visualization.",
                 "Compilation of shader failed. For more information, see logs in the console.");
             console.warn("VERTEX SHADER\n", numberLines( VS ));
             console.warn("FRAGMENT SHADER\n", numberLines( FS ));
         } else {
             gl.linkProgram(program);
             if (!ok('Program', 'LINK', program)) {
-                onError("Unable to use this visualisation.",
+                onError("Unable to use this visualization.",
                     "Linking of shader failed. For more information, see logs in the console.");
             } else if (isDebugMode) {
                 console.info("FRAGMENT SHADER\n", numberLines( FS ));

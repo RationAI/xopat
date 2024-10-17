@@ -1,5 +1,5 @@
 # Annotations
-
+todo docs
 This is a GUI interface for the Annotations module. Adds cloud-sharing options.
 For customization, adjust the `include.json` file.
 
@@ -49,13 +49,13 @@ The xOpat Annotations use by default a simple API that you either
  - have to pretend to fulfill on the client side by reimplementing ``dataLoader.js``
 
 Everything is built upon simple object representing the **data** object:
-
+todo docs
 - (required) id: id for the current annotation data
 - (optional) data: serialized, format-compatible export
 - (read-optional) metadata: metadata 
   - default implementation re-uses ``UTILTIES.fetchJSON`` that adds meta automatically via the viewer metadata
 + (optional) any other custom data not recognized by default by the plugin
-
+todo docs
 Furthermore, ``metadata`` must either contain several properties, or implement
 `get*()` methods in ``dataLoader.js`` for correct reading.
 

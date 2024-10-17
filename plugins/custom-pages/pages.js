@@ -1,8 +1,7 @@
 addPlugin("custom-pages", class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
-        this.data = params.data;
-        if (!Array.isArray(this.data)) this.data = [];
+        this.data = this.getOption('data', []);
         this.builder = new AdvancedMenuPages(this.id);
     }
 

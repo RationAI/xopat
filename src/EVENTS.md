@@ -44,11 +44,22 @@ Fired when the viewer is ready. Note this is not the OSD native event but instea
 It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
 initial load).
 
-#### `export-data` | e: `{setSerializedData: function}`
-Submit your serialized data to the export event. The event gives you a callback to use to 
-save the data: ``setSerializedData(myUniqueKey, mySerializedData)``. The `myUniqueKey` value
-should be unique - a good idea is to make use of the plugin id value when creating the value.
-When loaded, you can access the data using `APPLICATION_CONTEXT.getData(myUniqueKey)` invoked on the main plugin object.
+#### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
+Fired before the first open of the viewer happens. Apps can perform
+custom functionality just before the viewer gets initialized.
+In this event, you can also override the application rendering configuration,
+as it has not been initialized yet. For example, if the application rendering
+is missing all the data, you can provide default values for the rendering. This data can be set
+to the respective elements: data / background / visualization arrays.
+``fromLocalStorage`` is true when the data was loaded from the user browser cache, but the viewer
+was not opened with a session spec. You can use this flag to monitor whether the viewer
+was properly opened, or just shows cached session and possibly replace it with more relevant one.
+
+Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
+
+#### `export-data` | e: `{}`
+Submit your serialized data to the export event. You should use the data storage instance you
+retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
@@ -61,11 +72,19 @@ a different notification is being shown). Parameters should be strictly kept:
 #### `error-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 Same as above, an error event. 
 
-#### `plugin-loaded` | e: `{id: string}
+#### `before-plugin-load` | e: `{id: string}
+Fired before a plugin is loaded within a system (at runtime).
+
+#### `plugin-loaded` | e: `{id: string, plugin: XOpatPlugin}
 Fired when plugin is loaded within a system (at runtime).
 
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).
+
+#### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton}`
+Modules generally cannot be monitored as they might be any custom
+code used in any context. However, singleton modules are meant for shared
+access to functionality, therefore a handler for singletons is available.
 
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
@@ -101,6 +120,12 @@ fully re-usable for your purposes, **using custom annotation objects to perform 
 
 ### Rendering-Related Events
 
+#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
+Fired when the UI wants to know what is a slide _preview url_, which can be constructed
+from ``server`` on which `image` slide identification lives. If `imagePreview`
+is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
+values using the ``image_group_preview`` configuration specification.
+
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
 Fired when the corresponding `TiledImage` fails to load multiple tiles within a certain time
 so that the viewer believes the `TiledImage` instance is faulty and should be removed.
@@ -112,7 +137,7 @@ When a different image pyramid is loaded as a background, the viewer notifies yo
 measurements (aspect ratio, dimensions...) might have changed. It gives you the background setup objects from
 the viewer configuration and corresponding `TiledImage` instances.
 
-#### `visualisation-used` | e: _visualization goal_
+#### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.

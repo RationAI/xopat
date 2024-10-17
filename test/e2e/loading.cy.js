@@ -34,7 +34,7 @@ describe('Third party pyramidal image', () => {
         }
 
         cy.window().then(window => {
-            window.APPLICATION_CONTEXT.prepareViewer(
+            window.APPLICATION_CONTEXT.openViewerWith(
                 secondConfig.data,
                 secondConfig.background,
                 secondConfig.visualizations
@@ -58,19 +58,19 @@ describe('Third party pyramidal image', () => {
 
 describe('Faulty data', () => {
     it('No valid image in normal mode', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params(),
             data: config.data('invalid'),
             background: config.background({}, 0)
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
         cy.get("#tissue-title-header").should('contain.text', "Faulty")
     })
 
     it('Valid background, invalid layers', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params(),
             data: config.data('even-indexes-valid-only'),
             background: config.background({}, 0),
@@ -79,15 +79,16 @@ describe('Faulty data', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer().then(x => {
             testElements.systemNotification("Failed to load overlays");
-            testBasic.mainMenu(visualisation);
+            testElements.closeDialog();
+            testBasic.mainMenu(visualization);
         });
     })
 
     it('Valid layers, invalid background', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params(),
             data: config.data('even-indexes-valid-only'),
             background: config.background({}, 1),
@@ -96,14 +97,14 @@ describe('Faulty data', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
-        testBasic.settingsMenu(visualisation);
+        testBasic.settingsMenu(visualization);
     })
 
     it('Valid and invalid background, invalid layers, side-by-side mode, invalid first.', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params(),
             data: config.data('even-indexes-valid-only'),
             background: config.background({}, 1, 0),
@@ -112,7 +113,7 @@ describe('Faulty data', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#tissue-title-header").should('contain.text', "Faulty")
@@ -122,7 +123,7 @@ describe('Faulty data', () => {
     })
 
     it ('Stacked mode three layers', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
                 stackedBackground: true
@@ -131,19 +132,19 @@ describe('Faulty data', () => {
             background: config.background({}, 0, 1, 2),
         }
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#images-pin").click();
         cy.get("#image-layer-options").children().should('have.length', 3)
-            .should('contain.text', 'tissue')
-            .should('contain.text', 'annotation')
-            .should('contain.text', 'probability')
-            .should('not.contain.text', 'Faulty');
+            .should('contain.text', 'FirstIndex')
+            .should('contain.text', 'SecondIndex')
+            .should('contain.text', 'ThirdIndex')
+            .should('not.contain.text', 'FourthIndex');
     })
 
     it('Stacked mode no valid data.', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 stackedBackground: true
             }),
@@ -154,7 +155,7 @@ describe('Faulty data', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
         cy.get("#images-pin").click();
@@ -171,7 +172,7 @@ describe('Faulty data', () => {
     })
 
     it('Valid and invalid background, invalid layers, stacked mode, invalid first.', () => {
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 stackedBackground: true
             }),
@@ -182,9 +183,11 @@ describe('Faulty data', () => {
             ]
         };
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
         utils.waitForViewer();
 
+        //failed image load dialog prevents click
+        testElements.closeDialog();
         cy.get("#images-pin").click();
 
         //first shown is the last rendered - the most visible
@@ -195,7 +198,7 @@ describe('Faulty data', () => {
         testElements.getStackedImageMenuItem(0).should('contain.text', 'Faulty')
         cy.get("#images-pin").click();
 
-        testBasic.mainMenu(visualisation);
+        testBasic.mainMenu(visualization);
     })
 })
 

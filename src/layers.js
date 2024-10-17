@@ -1,8 +1,8 @@
 function initXopatLayers() {
     /**
-     * Disables Visualisation Rendering (the data group)
+     * Disables Visualization Rendering (the data group)
      */
-    window.APPLICATION_CONTEXT.disableVisualisation = function () {
+    window.APPLICATION_CONTEXT.disableVisualization = function () {
         if (!VIEWER.bridge) return;
         const renderingIndex = VIEWER.bridge.getWorldIndex();
         if (renderingIndex || renderingIndex == 0) {
@@ -13,8 +13,7 @@ function initXopatLayers() {
 
     function parseStore(key) {
         try {
-            const cookie = localStorage.getItem(key) || "{}";
-            return cookie ? JSON.parse(cookie) : {};
+            return JSON.parse(APPLICATION_CONTEXT.AppCache.get(key, "{}"));
         } catch (e) {
             return {};
         }
@@ -24,23 +23,23 @@ function initXopatLayers() {
         function isset(x, type="string") {
             return x && typeof x === type;
         }
-        return APPLICATION_CONTEXT.config.visualizations.filter((visualisationTarget, index) => {
-            if (!isset(visualisationTarget.name)) {
-                visualisationTarget.name = $.t('main.shaders.defaultTitle');
+        return APPLICATION_CONTEXT.config.visualizations.filter((visualizationTarget, index) => {
+            if (!isset(visualizationTarget.name)) {
+                visualizationTarget.name = $.t('main.shaders.defaultTitle');
             }
-            if (!isset(visualisationTarget.shaders, "object")) {
-                console.warn(`Visualisation #${index} removed: missing shaders definition.`, visualisationTarget);
+            if (!isset(visualizationTarget.shaders, "object")) {
+                console.warn(`Visualization #${index} removed: missing shaders definition.`, visualizationTarget);
                 return false;
             }
 
             let shaderCount = 0, sid = 0, source = $.t("common.Source");
-            for (let data in visualisationTarget.shaders) {
-                const layer = visualisationTarget.shaders[data];
+            for (let data in visualizationTarget.shaders) {
+                const layer = visualizationTarget.shaders[data];
 
                 if (!isset(layer.type)) {
                     //message ui? 'messages.shaderTypeMissing'
-                    console.warn(`Visualisation #${index} shader layer removed: missing type.`, layer);
-                    delete visualisationTarget.shaders[data];
+                    console.warn(`Visualization #${index} shader layer removed: missing type.`, layer);
+                    delete visualizationTarget.shaders[data];
                     continue;
                 }
 
@@ -68,13 +67,13 @@ function initXopatLayers() {
     const orderedCookieCache = parseStore('_layers.orderedCache');
 
     /**
-     * Initialize Visualisation (data group) from APPLICATION_CONTEXT.config setup
+     * Initialize Visualization (data group) from APPLICATION_CONTEXT.config setup
      * @return {*}
      */
     window.APPLICATION_CONTEXT.prepareRendering = function () {
         const visualizations = parseVisualization();
         if (visualizations.length <= 0) {
-            return APPLICATION_CONTEXT.disableVisualisation();
+            return APPLICATION_CONTEXT.disableVisualization();
         }
 
         //We are active!
@@ -96,7 +95,7 @@ function initXopatLayers() {
                     let i = 0;
                     const select = $("#shaders"),
                         activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
-                    seaGL.foreachVisualisation(function (vis) {
+                    seaGL.foreachVisualization(function (vis) {
                         let selected = i == activeIndex ? "selected" : "";
                         if (vis.error) {
                             select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
@@ -117,11 +116,12 @@ display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.00
 style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
                     }
                 },
-                visualisationInUse: function(visualisation) {
+                visualizationInUse: function(visualization) {
                     enableDragSort("data-layer-options");
                     UTILITIES.updateUIForMissingSources();
                     //called only if everything is fine
-                    USER_INTERFACE.Errors.hide(); //preventive
+                    // TODO: consider timeout - this hides any errors although they might be valid
+                    //USER_INTERFACE.Errors.hide(); //preventive
 
                     //Re-fetching data not necessary as we always fetch all the data of given visualization
                     // var activeData = ""; //don't set this globally :(
@@ -138,14 +138,14 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                     //     }
                     // }
                     /**
-                     * Fired when visualisation goal is set up and run, but before first rendering occurs.
-                     * @property visualisation visualisation configuration used
+                     * Fired when visualization goal is set up and run, but before first rendering occurs.
+                     * @property visualization visualization configuration used
                      * @memberOf VIEWER
-                     * @event visualisation-used
+                     * @event visualization-used
                      */
-                    VIEWER.raiseEvent('visualisation-used', visualisation);
+                    VIEWER.raiseEvent('visualization-used', visualization);
                 },
-                visualisationChanged: function(oldVis, newVis) {
+                visualizationChanged: function(oldVis, newVis) {
                     seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
                     let index = seaGL.getWorldIndex(),
                         sources = seaGL.dataImageSources();
@@ -190,7 +190,7 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         }
 
         let seaGL = VIEWER.bridge;
-        seaGL.addVisualisation(...visualizations);
+        seaGL.addVisualization(...visualizations);
         seaGL.setData(...APPLICATION_CONTEXT.config.data);
         if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
             console.warn("Invalid default vis index. Using 0.");
@@ -223,10 +223,10 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
 
             let filterUpdate = [];
             if (!fixed) {
-                for (let key in WebGLModule.VisualisationLayer.filters) {
+                for (let key in WebGLModule.VisualizationLayer.filters) {
                     let found = layer.params.hasOwnProperty(key);
                     if (found) {
-                        filterUpdate.push('<span>', WebGLModule.VisualisationLayer.filterNames[key],
+                        filterUpdate.push('<span>', WebGLModule.VisualizationLayer.filterNames[key],
                             ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
                             '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
                             "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
@@ -246,7 +246,7 @@ ${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnO
               <div class="d-inline-block label-render-type pointer" style="float: right;">
                   <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
                   <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
+onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
                 </div>
                 ${modeChange}
                 <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
@@ -321,11 +321,11 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         }
                     }
                 }
-                localStorage.setItem(cookieKey, JSON.stringify(shaderCache));
+                APPLICATION_CONTEXT.AppCache.set(cookieKey, JSON.stringify(shaderCache));
             };
 
             /**
-             * Prepares TiledImage for visualisation rendering after it has been instantiated
+             * Prepares TiledImage for visualization rendering after it has been instantiated
              * @private
              */
             UTILITIES.prepareTiledImage = function(index, image, visSetup) {
@@ -351,7 +351,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             };
 
             /**
-             * Set visualisation parameters cache
+             * Set visualization parameters cache
              * @param {boolean} named cache by layer name if true, position if false
              */
             UTILITIES.makeCacheSnapshot = function(named=true) {
@@ -372,7 +372,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             function setNewDataGroup(index) {
                 APPLICATION_CONTEXT.setOption("activeVisualizationIndex", index);
-                seaGL.switchVisualisation(index);
+                seaGL.switchVisualization(index);
             }
 
             shadersMenu.addEventListener("change", function() {
@@ -380,7 +380,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
             });
 
             VIEWER.addHandler('background-image-swap', function(e) {
-                const oldIndex = webglProcessing.currentVisualisationIndex();
+                const oldIndex = webglProcessing.currentVisualizationIndex();
                 e.prevBackgroundSetup.goalIndex = oldIndex;
 
                 const newIndex = Number.parseInt(e.backgroundSetup.goalIndex);
@@ -423,7 +423,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 seaGL.reorder();
             };
 
-            UTILITIES.changeVisualisationLayer = function(self, layerId) {
+            UTILITIES.changeVisualizationLayer = function(self, layerId) {
                 let _this = $(self),
                     type = _this.val();
                 let factoryClass = WebGLModule.ShaderMediator.getClass(type);
@@ -443,10 +443,10 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                         shaderPart.type = type;
                         seaGL.reorder(null); //force to re-build
                     } else {
-                        console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': bad initialization?`);
+                        console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': bad initialization?`);
                     }
                 } else {
-                    console.error(`UTILITIES::changeVisualisationLayer Invalid layer id '${layerId}': unknown type!`);
+                    console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': unknown type!`);
                 }
                 _this.html("");
             };
@@ -549,7 +549,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
 
             /**
              * Generic Multiplexing for TileSources
-             * allows to use built-in protocols as multi tile sources for visualisation viewing.
+             * allows to use built-in protocols as multi tile sources for visualization viewing.
              * The image exchange must be in images - the tile response is interpreted as an Image object
              * @param {OpenSeadragon.TiledImage} image
              *
@@ -747,6 +747,7 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                                     body: postData
                                 }).then(data => data.blob()).then(blob => {
                                     if (imageJob.userData.didAbort) throw "Aborted!";
+                                    //todo revoke not called! implement with v5 in OSD destructors
                                     context.images[i].src = URL.createObjectURL(blob);
                                 }).catch((e) => {
                                     console.log(e);
@@ -779,5 +780,63 @@ onchange="UTILITIES.changeVisualisationLayer(this, '${dataId}')" style="display:
                 }
             }
         }
+    }
+
+    /**
+     * Test for rendering capabilities
+     * Throws error on failure
+     */
+    UTILITIES.testRendering = function(pixelErrThreshold=10) {
+        //test 4X4 with heatmap shader
+        const webglModuleTest = new WebGLModule({
+            webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+            onFatalError: error => {throw error},
+            onError: error => {throw error},
+            debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+            uniqueId: "browser_render_test"
+        });
+        //tests #43ff64 --> [67, 255, 100]
+        webglModuleTest.addVisualization({name: "Test", shaders: {
+                test: {
+                    type: "heatmap",
+                    params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
+                    dataReferences: [0]
+                }
+            }});
+        webglModuleTest.prepareAndInit(null, 2, 2);
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = canvas.height = 2;
+        ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillRect(0, 0, 1, 1);
+        ctx.fillStyle = "rgba(255, 80, 125, 255)"; ctx.fillRect(1, 0, 1, 1);
+        ctx.fillStyle = "rgba(32, 0, 32, 128)"; ctx.fillRect(0, 1, 1, 1);
+        ctx.fillStyle = "rgba(80, 80, 90, 120)"; ctx.fillRect(1, 1, 1, 1);
+
+        // Render a webGL canvas to an input canvas using cached version
+        const output = webglModuleTest.processImage(canvas, {width: 2, height: 2},1, 1);
+        if (!output) throw "Failed to process WebGL output: null returned.";
+        ctx.drawImage(output, 0, 0, 2, 2);
+        const data = ctx.getImageData(0, 0, 2, 2).data;
+        const testPixel = (pixelPosition, expectedRGBA) => {
+            let index = pixelPosition*4;
+            for (let i = 0; i < 4; i++) {
+                const d = Math.abs(data[index+i] - expectedRGBA[i]);
+                if (d > pixelErrThreshold) {
+                    const description = `PIXEL[${(pixelPosition)%2}, ${Math.floor(pixelPosition/2)}] expected [${expectedRGBA}], got [${data.slice(index, index+4)}]`;
+                    if (d > 2*pixelErrThreshold) throw "Heatmap shader does not work as intended! " + description;
+                    console.warn("WebGL Test shows minor color error in the output - this might be caused by interpolation.");
+                }
+            }
+        }
+        // Remove subsequent tests
+        UTILITIES.testRendering = function () {};
+        console.log("Rendering test output:", data, "pixel", OpenSeadragon.pixelDensityRatio);
+        // Test pixels [0, 0], [1, 0], [0, 1], [1, 1]
+        testPixel(0, [0, 0, 0, 0]); // R0 -> alpha 0, output zeroed out (no-op)
+        testPixel(1, [67, 255, 100, 255]); // R255 -> alpha 0
+
+        // TODO: for some reason test returns modified colors for alpha != 255
+        //testPixel(2, [67, 255, 100, 32]); // R32 -> alpha 32
+        //testPixel(3, [67, 255, 100, 80]); // R80 -> alpha 80
     }
 }

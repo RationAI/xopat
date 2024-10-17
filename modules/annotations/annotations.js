@@ -13,7 +13,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		super("annotations");
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
-		this.initEventSource();
+		this.registerAsEventSource();
 		this._init();
 		this._setListeners();
 	}
@@ -58,7 +58,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	setCustomModeUsed(id, ModeClass) {
 		if (this.Modes.hasOwnProperty(id)) {
-			throw `The mode ${ModeClass} conflicts with another mode: ${this.Modes[id]}`;
+			throw `The mode ${ModeClass} conflicts with another mode: ${this.Modes[id]._id}`;
 		}
 		if (!OSDAnnotations.AnnotationState.isPrototypeOf(ModeClass)) {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
@@ -91,23 +91,79 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/******************* EXPORT, IMPORT **********************/
-
 	async exportData() {
 		return await this.export();
 	}
 
 	async importData(data) {
-		if (!this._avoidImport) await this.import(data);
+		await this.import(data);
 	}
 
-	async initIO() {
+	/**
+	 * Get the currently used data persistence storage module.
+	 * This initializes the main persitor.
+	 * @return {PostDataStore}
+	 */
+	async initPostIO() {
+		if (this.POSTStore) return this.POSTStore;
 
-		//todo a bit hacky, first attempt to save workspaces
-		let data = await this.getCache("_unsaved");
+		const store = await super.initPostIO({
+			schema: {
+				"": {_deprecated: ["annotations"]},
+			},
+			strictSchema: false
+		});
+
+		await this._initIoFromCache();
+
+		let guard = 0; const _this=this;
+		function editRoutine(event, force=false) {
+			if (force || guard++ > 10) {
+				guard = 0;
+				//todo ensure cache can be non-persistent as a fallback
+				_this.cache.set('_unsaved', {
+					session: APPLICATION_CONTEXT.sessionName,
+					objects: _this.toObject(true)?.objects,
+					presets: _this.presets.toObject()
+				});
+			}
+		}
+
+		this.addHandler('export', () => {
+			_this.cache.set('_unsaved', null);
+			guard = 0;
+		});
+		this.addHandler('annotation-create', editRoutine);
+		this.addHandler('annotation-delete', editRoutine);
+		this.addHandler('annotation-replace', editRoutine);
+		this.addHandler('annotation-edit', editRoutine);
+		window.addEventListener("beforeunload", event => {
+			if (guard === 0 || !_this.history.canUndo()) return;
+			editRoutine(null, true);
+		});
+
+		if (!this._avoidImport) {
+			await this.loadPresetsCookieSnapshot();
+		}
+
+		if (this.presets.getExistingIds().length < 1) {
+			const newPreset = this.presets.addPreset();
+			this.presets.selectPreset(newPreset.presetID, true);
+		}
+
+		return store;
+	}
+
+	async _initIoFromCache() {
+		//todo verify how this behaves with override data import later from the data API
+		// also problem: if cache implemented over DB? we could add cache.local option that could
+		// explicitly request / enforce local storage usage
+		let data = this.cache.get("_unsaved");
 		if (data) {
 			try {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
+						//todo do not avoid import but import to a new layer!!!
 						this._avoidImport = true;
 						if (data?.presets) await this.presets.import(data?.presets, true);
 						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
@@ -122,61 +178,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					} else {
 						this._avoidImport = false;
 						//do not erase cache upon load, still not saved anywhere
-						await this.setCache('_unsaved', null);
+						await this.cache.set('_unsaved', null);
 					}
 				}
 			} catch (e) {
 				console.error("Faulty cached data!", e);
 			}
 		}
-		if (!this._avoidImport) {
-			let presets = await this.getCache("_lastPresetList");
-			if (presets) {
-				await this.presets.import(presets, true);
-				this.raiseEvent('import', {
-					options: {},
-					clear: true,
-					data: {
-						presets: presets
-					},
-				});
-			}
-		}
-
-		let guard = 0; const _this=this;
-		function editRoutine(event, force=false) {
-			if (force || guard++ > 10) {
-				guard = 0;
-				_this.setCache('_unsaved', {
-					session: APPLICATION_CONTEXT.sessionName,
-					objects: _this.toObject(true)?.objects,
-					presets: _this.presets.toObject()
-				});
-			}
-		}
-
-		this.addHandler('export', () => {
-			_this.setCache('_unsaved', null);
-			guard = 0;
-		});
-		this.addHandler('annotation-create', editRoutine);
-		this.addHandler('annotation-delete', editRoutine);
-		this.addHandler('annotation-replace', editRoutine);
-		this.addHandler('annotation-edit', editRoutine);
-		this.addHandler('preset-create', () => this.setCache('_lastPresetList', this.presets.toObject()));
-		this.addHandler('preset-update', () => this.setCache('_lastPresetList', this.presets.toObject()));
-		this.addHandler('preset-delete', () => this.setCache('_lastPresetList', this.presets.toObject()));
-
-		window.addEventListener("beforeunload", event => {
-			if (guard === 0 || !_this.history.canUndo()) return;
-			editRoutine(null, true);
-		});
-
-		if (await super.initIO()) {
-			if (!this._avoidImport) await this.loadPresetsCookieSnapshot();
-			return true;
-		}
-		return false;
 	}
 
 	getFormatSuffix(format=undefined) {
@@ -255,7 +263,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
-		if (!options?.format) options.format = "native";
+		if (!options?.format) options.format = "asap-xml";
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -273,12 +281,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Import annotations and presets. Imported presets automatically remove unused presets
 	 *   (no change in meta or no object created with).
+	 * todo allow also objects import not only string
 	 * @param {string} data serialized data of the given format
 	 * 	- either object with 'presets' and/or 'objects' data content - arrays
 	 * 	- or a plain array, treated as objects
 	 * @param {{}} options options
 	 * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
 	 * @param {object?} options.bioformatsCroppingRect
+	 * @param {boolean} options.inheritSession set current session ID for the annotation if missing, default true
 	 * @param {boolean} clear erase state upon import
 	 * @return Promise(boolean) true if something was imported
 	 */
@@ -286,8 +296,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//todo allow for 'redo' history (once layers are introduced)
 
 		if (!options?.format) options.format = "native";
-		let toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+
+		let toImport;
+		try {
+			toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+		} catch (e) {
+			const formats = OSDAnnotations.Convertor.formats;
+			const triedFormat = options.format;
+			console.log("Failed to load annotations as default, attempt to parse some of the remaining supported formats:", formats);
+
+			for (let format of formats) {
+				if (format === triedFormat) continue;
+				try {
+					options.format = format;
+					toImport = await OSDAnnotations.Convertor.decode(options, data, this);
+					console.log("Successfully parsed as", format);
+				} catch (e) {
+					//pass
+				}
+			}
+
+			if (!toImport) {
+				console.error("No supported format was able to parse provided annotations data!");
+			}
+		}
+
 		let imported = false;
+		let inheritSession = options.inheritSession === undefined || options.inheritSession;
 
 		// the import should happen in two stages, one that prepares the data and one that
 		// loads so that integrity is kept -> this is not probably a big issue since the only
@@ -296,7 +331,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (Array.isArray(toImport) && toImport.length > 0) {
 			imported = true;
 			//if no presets, maybe we are importing object array
-			await this._loadObjects({objects: toImport}, clear);
+			await this._loadObjects({objects: toImport}, clear, undefined, inheritSession);
 		} else {
 			if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
 				imported = true;
@@ -304,7 +339,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 			if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
 				imported = true;
-				await this._loadObjects(toImport, clear);
+				await this._loadObjects(toImport, clear, undefined, inheritSession);
 			}
 		}
 
@@ -385,13 +420,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * for loading presets, see this.presets.import(...)
 	 * @param {object} annotations objects to import, {objects:[object]} format
 	 * @param {boolean} clear true if existing objects should be removed, default false
+	 * @param inheritSession
 	 * @return Promise
 	 */
-	async loadObjects(annotations, clear=false) {
+	async loadObjects(annotations, clear=false, inheritSession=true) {
 		//todo allow for 'redo' history (once layers are introduced)
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
-		return this._loadObjects(annotations, clear);
+		return this._loadObjects(annotations, clear, undefined, inheritSession);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -455,78 +491,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	setOSDTracking(tracking) {
 		VIEWER.setMouseNavEnabled(tracking);
-	}
-
-	// Copied out of OpenSeadragon private code scope to allow manual scroll navigation
-	fireMouseWheelNavigation(event) {
-		// Simulate a 'wheel' event
-		const tracker = VIEWER.innerTracker;
-		const simulatedEvent = {
-			target:     event.target || event.srcElement,
-			type:       "wheel",
-			shiftKey:   event.shiftKey || false,
-			clientX:    event.clientX,
-			clientY:    event.clientY,
-			pageX:      event.pageX ? event.pageX : event.clientX,
-			pageY:      event.pageY ? event.pageY : event.clientY,
-			deltaMode:  event.type === "MozMousePixelScroll" ? 0 : 1, // 0=pixel, 1=line, 2=page
-			deltaX:     0,
-			deltaZ:     0
-		};
-
-		// Calculate deltaY
-		if ( OpenSeadragon.MouseTracker.wheelEventName === "mousewheel" ) {
-			simulatedEvent.deltaY = -event.wheelDelta / OpenSeadragon.DEFAULT_SETTINGS.pixelsPerWheelLine;
-		} else {
-			simulatedEvent.deltaY = event.deltaY;
-		}
-		const originalEvent = event;
-		event = simulatedEvent;
-
-		var nDelta, eventInfo, eventArgs = null;
-		nDelta = event.deltaY < 0 ? 1 : -1;
-		eventInfo = {
-			originalEvent: event,
-			eventType: 'wheel',
-			pointerType: 'mouse',
-			isEmulated: event !== originalEvent,
-			eventSource: tracker,
-			eventPhase: event ? ((typeof event.eventPhase !== 'undefined') ? event.eventPhase : 0) : 0,
-			defaultPrevented: OpenSeadragon.eventIsCanceled( event ),
-			shouldCapture: false,
-			shouldReleaseCapture: false,
-			userData: tracker.userData,
-			isStoppable: true,
-			isCancelable: true,
-			preventDefault: false,
-			preventGesture: !tracker.hasScrollHandler,
-			stopPropagation: false,
-		};
-
-		if ( tracker.preProcessEventHandler ) {
-			tracker.preProcessEventHandler( eventInfo );
-		}
-
-		if ( tracker.scrollHandler && !eventInfo.preventGesture && !eventInfo.defaultPrevented ) {
-			eventArgs = {
-				eventSource:          tracker,
-				pointerType:          'mouse',
-				position:             OpenSeadragon.getMousePosition( event ).minus( OpenSeadragon.getElementOffset( tracker.element )),
-				scroll:               nDelta,
-				shift:                event.shiftKey,
-				isTouchEvent:         false,
-				originalEvent:        originalEvent,
-				preventDefault:       eventInfo.preventDefault || eventInfo.defaultPrevented,
-				userData:             tracker.userData
-			};
-			tracker.scrollHandler( eventArgs );
-		}
-		if ( eventInfo.stopPropagation ) {
-			OpenSeadragon.stopEvent( originalEvent );
-		}
-		if (( eventArgs && eventArgs.preventDefault ) || ( eventInfo.preventDefault && !eventInfo.defaultPrevented ) ) {
-			OpenSeadragon.cancelEvent( originalEvent );
-		}
 	}
 
 	/**
@@ -626,13 +590,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Set mode by object
 	 * @event mode-changed
 	 * @param {OSDAnnotations.AnnotationState} mode
+	 * @param {boolean} [force=false]
 	 */
-	setMode(mode) {
+	setMode(mode, force=false) {
 		if (this.disabledInteraction || mode === this.mode) return;
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
-		} else if (mode !== this.Modes.AUTO) {
+		} else if (mode !== this.Modes.AUTO || force) {
 			this._setModeToAuto(true);
 			this._setModeFromAuto(mode);
 		} else {
@@ -644,14 +609,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Set current mode by mode id
 	 * @event mode-changed
 	 * @param {string} id
+	 * @param {boolean} [force=false]
 	 */
-	setModeById(id) {
+	setModeById(id, force=false) {
 		let _this = this;
 		for (let mode in this.Modes) {
 			if (!this.Modes.hasOwnProperty(mode)) continue;
 			mode = this.Modes[mode];
 			if (mode.getId() === id) {
-				_this.setMode(mode);
+				_this.setMode(mode, force);
 				break;
 			}
 		}
@@ -850,7 +816,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			for (let child of annotation._objects) delete child.excludeFromExport;
 		}
 		annotation.sessionID = this.session;
-		annotation.author = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.id);
+		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
@@ -860,7 +826,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Add annotation to the canvas
+	 * Add annotation to the canvas. Annotation will have identity
+	 * (unlike helper annotation which is meant for visual purposes only).
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
 	 */
@@ -885,7 +852,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Delete helper annotation, should not be used on normal annotation
+	 * Delete helper annotation, should not be used on full identity
+	 * annotation.
 	 * @param {fabric.Object} annotation helper annotation
 	 */
 	deleteHelperAnnotation(annotation) {
@@ -943,6 +911,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/**
 	 * Get default annotation name
 	 * @param {fabric.Object} annotation
+	 * @param {boolean} [withCoordinates=true]
 	 * @return {string} annotation name created by factory
 	 */
 	getDefaultAnnotationName(annotation, withCoordinates=true) {
@@ -975,6 +944,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (updateHistory) this.history.push(next, previous);
 
 		if (_raise) this.raiseEvent('annotation-replace', {previous, next});
+		else this.raiseEvent('annotation-replace-helper', {previous, next});
 	}
 
 	/**
@@ -1082,11 +1052,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Create preset cache, this cache is loaded automatically with initIO request
+	 * Create preset cache, this cache is loaded automatically with initPostIO request
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {
-		return await this.setCache('presets.cache', JSON.stringify(this.presets.toObject()));
+		return await this.cache.set('presets', JSON.stringify(this.presets.toObject()));
 	}
 
 	/**
@@ -1094,7 +1064,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	async loadPresetsCookieSnapshot(ask=true) {
 		const presets = this.presets;
-		const presetCookiesData = await this.getCache('presets.cache');
+		const presetCookiesData = this.cache.get('presets');
 
 		if (presetCookiesData) {
 			if (ask && this.presets._presetsImported) {
@@ -1255,9 +1225,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				this.setMode(this.Modes.AUTO);
 			}
 		}, false);
-		//window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+		// window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
 		VIEWER.addHandler('screenshot', e => {
- 			e.context2D.drawImage(this.canvas.getElement(), 0, 0);
+			e.context2D.drawImage(this.canvas.getElement(), 0, 0);
 		});
 
 		/**************************************************************************************************
@@ -1330,7 +1300,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			let point = screenToPixelCoords(event.x, event.y);
 			if (_this.mode.handleClickUp(event, point, true, factory)) {
 				event.preventDefault();
-			} else {
+			} else /*if (!_this.isModeAuto())*/ {
 				//todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
 				_this.raiseEvent('canvas-release', {
 					originalEvent: event,
@@ -1394,7 +1364,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.isModeAuto() || _this._wasModeFiredByKey || o.e.shiftKey) {
 				_this.mode.scroll(o.e, o.e.deltaY);
 			} else {
-				_this.fireMouseWheelNavigation(o.e);
+				_this._fireMouseWheelNavigation(o.e);
 				_this.mode.scrollZooming(o.e, o.e.deltaY);
 			}
 		});
@@ -1493,9 +1463,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				}
 			}
 
-			if (e.ctrlKey) {
-				if (e.key === "z") return this.history.back();
-				if (e.key === "Z") return this.history.redo();
+			if (e.ctrlKey && !e.altKey && e.code === "KeyZ") {
+				return e.shiftKey ? this.history.redo() : this.history.back();
 			}
 		}
 
@@ -1540,7 +1509,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
-	_loadObjects(input, clear, reviver) {
+	_loadObjects(input, clear, reviver, inheritSession) {
 		const originalToObject = fabric.Object.prototype.toObject;
 		const inclusionProps = this._exportedPropertiesGlobal();
 
@@ -1562,6 +1531,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (clear) _this.clear();
 				_this._setBgOverlay(input, function () {
 					enlivenedObjects.forEach(function(obj, index) {
+
+						if (inheritSession && !obj.sessionID) {
+							obj.sessionID = self.session;
+						}
+
 						self.checkLayer(obj);
 						self.checkPreset(obj);
 
@@ -1585,11 +1559,85 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
 	}
+
+	// Copied out of OpenSeadragon private code scope to allow manual scroll navigation
+	_fireMouseWheelNavigation(event) {
+		// Simulate a 'wheel' event
+		const tracker = VIEWER.innerTracker;
+		const simulatedEvent = {
+			target:     event.target || event.srcElement,
+			type:       "wheel",
+			shiftKey:   event.shiftKey || false,
+			clientX:    event.clientX,
+			clientY:    event.clientY,
+			pageX:      event.pageX ? event.pageX : event.clientX,
+			pageY:      event.pageY ? event.pageY : event.clientY,
+			deltaMode:  event.type === "MozMousePixelScroll" ? 0 : 1, // 0=pixel, 1=line, 2=page
+			deltaX:     0,
+			deltaZ:     0
+		};
+
+		// Calculate deltaY
+		if ( OpenSeadragon.MouseTracker.wheelEventName === "mousewheel" ) {
+			simulatedEvent.deltaY = -event.wheelDelta / OpenSeadragon.DEFAULT_SETTINGS.pixelsPerWheelLine;
+		} else {
+			simulatedEvent.deltaY = event.deltaY;
+		}
+		const originalEvent = event;
+		event = simulatedEvent;
+
+		var nDelta, eventInfo, eventArgs = null;
+		nDelta = event.deltaY < 0 ? 1 : -1;
+		eventInfo = {
+			originalEvent: event,
+			eventType: 'wheel',
+			pointerType: 'mouse',
+			isEmulated: event !== originalEvent,
+			eventSource: tracker,
+			eventPhase: event ? ((typeof event.eventPhase !== 'undefined') ? event.eventPhase : 0) : 0,
+			defaultPrevented: OpenSeadragon.eventIsCanceled( event ),
+			shouldCapture: false,
+			shouldReleaseCapture: false,
+			userData: tracker.userData,
+			isStoppable: true,
+			isCancelable: true,
+			preventDefault: false,
+			preventGesture: !tracker.hasScrollHandler,
+			stopPropagation: false,
+		};
+
+		if ( tracker.preProcessEventHandler ) {
+			tracker.preProcessEventHandler( eventInfo );
+		}
+
+		if ( tracker.scrollHandler && !eventInfo.preventGesture && !eventInfo.defaultPrevented ) {
+			eventArgs = {
+				eventSource:          tracker,
+				pointerType:          'mouse',
+				position:             OpenSeadragon.getMousePosition( event ).minus( OpenSeadragon.getElementOffset( tracker.element )),
+				scroll:               nDelta,
+				shift:                event.shiftKey,
+				isTouchEvent:         false,
+				originalEvent:        originalEvent,
+				preventDefault:       eventInfo.preventDefault || eventInfo.defaultPrevented,
+				userData:             tracker.userData
+			};
+			tracker.scrollHandler( eventArgs );
+		}
+		if ( eventInfo.stopPropagation ) {
+			OpenSeadragon.stopEvent( originalEvent );
+		}
+		if (( eventArgs && eventArgs.preventDefault ) || ( eventInfo.preventDefault && !eventInfo.defaultPrevented ) ) {
+			OpenSeadragon.cancelEvent( originalEvent );
+		}
+	}
 };
 
 /**
- * Default annotation state parent class, also a valid mode (does nothing).
- * @type {OSDAnnotations.AnnotationState}
+ * @classdesc Default annotation state parent class, also a valid mode (does nothing).
+ * 	The annotation mode defines how it is turned on (key shortcuts) and how it
+ *  drives the user control over this module
+ * @class {OSDAnnotations.AnnotationState}
  */
 OSDAnnotations.AnnotationState = class {
 	/**
@@ -1601,15 +1649,31 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {string} description description of this mode
 	 */
 	constructor(context, id, icon, description) {
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this._id = id;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this.icon = icon;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {OSDAnnotations}
+		 */
 		this.context = context;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {string}
+		 */
 		this.description = description;
 	}
 
 	/**
 	 * Perform action on mouse up event
-	 * @param {Event} o original js event
+	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
@@ -1621,7 +1685,7 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Perform action on mouse down event
-	 * @param {Event} o original js event
+	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
 	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
@@ -1633,10 +1697,10 @@ OSDAnnotations.AnnotationState = class {
 	/**
 	 * Handle mouse moving event while the OSD navigation is disabled
 	 * NOTE: mouse move in navigation mode is used to navigate, not available
-	 * @param {MouseEvent} event
+	 * @param {MouseEvent} o original event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 */
-	handleMouseMove(event, point) {
+	handleMouseMove(o, point) {
 		//do nothing
 	}
 
@@ -1789,6 +1853,7 @@ OSDAnnotations.AnnotationState = class {
 	 *
 	 * NOTE: these methods should be as specific as possible, e.g. test also that
 	 * no ctrl/alt/shift key is held if you do not require them to be on
+	 *       these methods should ignore CapsLock, e.g. test e.code not e.key
 	 * @param {KeyboardEvent} e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
@@ -1808,7 +1873,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "🆀 navigate / select annotations");
+		super(context, "auto", "open_with", "🆀  navigate / select annotations");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1829,25 +1894,6 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		const object = canvas.findNextObjectUnderMouse(o, active);
 		if (object) canvas.setActiveObject(object, o);
 		return true; //considered as handled
-
-		//todo implement elsewhere
-		// if (!updater || !this.autoSelectionEnabled) {
-		// 	this.abortClick(isLeftClick, true);
-		// 	return false;
-		// }
-		//
-		// //instant create wants screen pixels as we approximate based on zoom level
-		// const created = updater.instantCreate(new OpenSeadragon.Point(o.x, o.y), isLeftClick);
-		// if (created === false) {
-		// 	VIEWER.raiseEvent('warn-user', {
-		// 		originType: "module",
-		// 		originId: "annotations",
-		// 		code: "W_AUTO_CREATION_FAIL",
-		// 		message: "Automatic annotation creation failed!",
-		// 		isLeftClick: isLeftClick
-		// 	});
-		// }
-		// return true;
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
@@ -1866,7 +1912,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	accepts(e) {
-		return e.key === "q" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyQ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
@@ -1993,11 +2039,11 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	}
 
 	accepts(e) {
-		return e.key === "e" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyE" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "e";
+		return e.code === "KeyE";
 	}
 };
 
@@ -2059,11 +2105,11 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyR" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "r";
+		return e.code === "KeyR";
 	}
 };
 
@@ -2134,19 +2180,18 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	accepts(e) {
-		return e.key === "w" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyW" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "w";
+		return e.code === "KeyW";
 	}
 };
-
 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "brush", "🆈  correction tool");
+		super(context, "fft-correct", "brush", "🆉  correction tool");
 		this.candidates = null;
 	}
 
@@ -2203,10 +2248,10 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	}
 
 	accepts(e) {
-		return e.key === "r" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		return e.code === "KeyZ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
 	}
 
 	rejects(e) {
-		return e.key === "r";
+		return e.code === "KeyZ";
 	}
 };

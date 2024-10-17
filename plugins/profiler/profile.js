@@ -1,5 +1,5 @@
 addPlugin('profiler', class extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
 
         this.page = new AdvancedMenuPages(this.id);

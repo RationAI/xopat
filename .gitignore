@@ -29,3 +29,6 @@ cypress.env.*
 #image comparison test temp data
 *.diff.png
 *.actual.png
+
+#all hidden files unless explicitly added
+.*

@@ -5,9 +5,9 @@ class AnnotationsGUI extends XOpatPlugin {
 		super(id);
 
 		this._server = this.getStaticMeta("server");
-		//todo parse validity on OSDAnnotations.Convertor.formats ?
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
+		this.registerAsEventSource();
 	}
 
 	/*
@@ -16,10 +16,7 @@ class AnnotationsGUI extends XOpatPlugin {
 	async pluginReady() {
 		//load the localization, then initialize
 		await this.loadLocale();
-		await this.init();
-	}
 
-	async init() {
 		const _this = this;
 
 		//Register used annotation object factories
@@ -33,11 +30,8 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		await this.setupFromParams();
 
-		this.context.initIO();
-		this.dataLoader = new AnnotationsGUI.DataLoader(this);
-
+		this.context.initPostIO();
 		this.setupActiveTissue();
-
 		this.initHandlers();
 		//init on html sooner than history so it is placed above
 		this.initHTML();
@@ -50,29 +44,6 @@ class AnnotationsGUI extends XOpatPlugin {
 			if (_this.context.disabledInteraction) return;
 			_this.context.setOpacity(Number.parseFloat($(this).val()));
 		});
-
-		function autoLoad(id) {
-			_this._loadAnnotation(id, e => {
-				console.warn('AutoLoad annotations failed', e);
-				const data = _this.getAnnotationById(id);
-				const isDefault = data ? _this.dataLoader.getIsDefault(data) : false;
-				const name = data ? _this.dataLoader.getMetaName() : id;
-				Dialogs.show(`Attempt to autoload ${isDefault ? "default " : ""}annotations set <b>${name}</b> failed. 
-You can <a class="pointer" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu('${_this.id}', 'annotations-shared');">
-load available sets manually</a>.`, 4000, Dialogs.MSG_WARN);
-			});
-		}
-
-		this.loadAnnotationsList(() => {
-			const ids = _this.getOption('serverAutoLoadIds', undefined);
-			if (Array.isArray(ids)) {
-				ids.forEach(autoLoad);
-			} else {
-				const defaultId = _this.getDefaultAnnotationItemId();
-				if (defaultId !== undefined) autoLoad(defaultId);
-			}
-		});
-
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 	}
 
@@ -148,17 +119,16 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <div class="d-flex flex-row mt-1">
 <div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 ${UIComponents.Elements.checkBox({
-	label: this.t('outlineOnly'), 
+	label: this.t('outlineOnly'),
 	classes: "pl-2",
 	onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
 	default: this.context.presets.getModeOutline()})}
 </div>
-
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
 </div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" onclick="${this.THIS}.showPresets();">
+<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
 <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
 			"annotations-panel",
@@ -180,6 +150,7 @@ ${UIComponents.Elements.checkBox({
 		//AutoMode
 		modeOptions.push(defaultModeControl(modes.AUTO));
 		modeOptions.push(vertSeparator);
+		modeOptions.push('<span id="annotations-custom-modes-panel">');
 		// Custom shapes
 		let customMode = modes.CUSTOM;
 		for (let factoryID of this._allowedFactories) {
@@ -188,16 +159,19 @@ ${UIComponents.Elements.checkBox({
 				modeOptions.push(`
 <input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="d-none switch" name="annotation-modes-selector">
 <label for="${factoryID}-annotation-mode" class="label-annotation-mode position-relative" 
-onclick="${this.THIS}.updatePresetWith(true, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true); event.preventDefault(); return false;" 
-oncontextmenu="${this.THIS}.updatePresetWith(false, 'objectFactory', '${factoryID}'); ${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
+onclick="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true);" 
+oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
 title="${customMode.getDescription()}: ${factory.title()}">
 <span class="material-icons btn-pointer p-1 rounded-2">${factory.getIcon()}</span></label>`);
 			}
 		}
+		modeOptions.push('</span>');
 		modeOptions.push(vertSeparator);
 		// Brushes
+		modeOptions.push('<span id="annotations-brush-modes-panel">');
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_ADD));
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_REMOVE));
+		modeOptions.push('</span>');
 		// Wand + correction
 		modeOptions.push(vertSeparator);
 		modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
@@ -234,7 +208,9 @@ ${modeOptions.join("")}</div>`, 'draw');
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
 </div>`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
-		this.updateSelectedFormat(this.exportOptions.format); //trigger UI refresh
+
+		//trigger UI refreshes
+		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
 	}
 
@@ -265,13 +241,21 @@ ${modeOptions.join("")}</div>`, 'draw');
 			// manual mode check factory, which can be re-set only if matches
 			if (id === "custom") {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				if (!preset || this.context.presets.getActivePreset(isLeftClick).objectFactory.factoryID !== factory) {
+				if (!preset) {
+					return;
+				}
+				if (preset.objectFactory.factoryID !== factory) {
+					this.updatePresetWith(preset.presetID, 'objectFactory', factory);
 					return;
 				}
 			}
 			this.context.setModeById("auto");
 			$('#auto-annotation-mode').prop('checked', true).trigger('change');
 		} else {
+			if (id === "custom" && factory) {
+				const preset = this.context.presets.getActivePreset(isLeftClick);
+				this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+			}
 			this.context.setModeById(id);
 		}
 	}
@@ -323,16 +307,17 @@ ${modeOptions.join("")}</div>`, 'draw');
 		this.isModalHistory = asModal;
 	}
 
+	_createHistoryInAdvancedMenu(focus = false) {
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+		this._openedHistoryMenu = true;
+		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+	}
+
 	initHandlers() {
-		const _this = this;
-
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
-		VIEWER.addHandler('background-image-swap', e => {
-			_this.setupActiveTissue();
-			_this.loadAnnotationsList();
-		});
-		VIEWER.addHandler('warn-user', (e) => _this._errorHandlers[e.code]?.apply(this, [e]));
-
+		VIEWER.addHandler('background-image-swap', e => this.setupActiveTissue());
+		VIEWER.addHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
 		const modeChangeHandler = e => {
 			$("#mode-custom-items").html(e.mode.customHtml());
 			let id = e.mode.getId();
@@ -377,26 +362,26 @@ ${modeOptions.join("")}</div>`, 'draw');
 		});
 
 		//allways select primary button preset since context menu shows only on non-primary
-		function showContextMenu(e) {
-			if (_this.context.presets.right
+		this.context.addHandler('nonprimary-release-not-handled', (e) => {
+			if (this.context.presets.right
 				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
 				return;
 			}
 
 			let actions = [], handler;
-			let active = _this.context.canvas.findTarget(e.originalEvent);
+			let active = this.context.canvas.findTarget(e.originalEvent);
 			if (active) {
 				actions.push({
 					title: `Change annotation to:`
 				});
-				handler = _this._clickAnnotationChangePreset.bind(_this, active);
+				handler = this._clickAnnotationChangePreset.bind(this, active);
 			} else {
 				actions.push({
 					title: `Select preset for left click:`
 				});
-				handler = _this._clickPresetSelect.bind(_this, true);
+				handler = this._clickPresetSelect.bind(this, true);
 			}
-			_this.context.presets.foreach(preset => {
+			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				actions.push({
@@ -404,30 +389,27 @@ ${modeOptions.join("")}</div>`, 'draw');
 					iconCss: `color: ${preset.color};`,
 					title: category,
 					action: () => {
-						_this._presetSelection = preset.presetID;
+						this._presetSelection = preset.presetID;
 						handler();
 					},
 				});
 			});
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
-		}
-		this.context.addHandler('nonprimary-release-not-handled', showContextMenu);
+		});
 
 		// this.context.forEachLayerSorted(l => {
-		// 	_this.insertLayer(l);
+		// 	  this.insertLayer(l);
 		// });
 		// this.context.addHandler('layer-added', e => {
-		// 	_this.insertLayer(e.layer, e.layer.name);
+		// 	  this.insertLayer(e.layer, e.layer.name);
 		// });
 
 		let strategy = this.context.automaticCreationStrategy;
 		if (strategy && this.context.autoSelectionEnabled) {
 			this.context.Modes.AUTO.customHtml = this.getAutoCreationStrategyControls.bind(this);
-			//on visualisation change update auto UI
-			VIEWER.addHandler('visualisation-used', function (visualisation) {
-				_this.updateAutoSelect(visualisation);
-			});
+			//on visualization change update auto UI
+			VIEWER.addHandler('visualization-used', vis => this.updateAutoSelect(vis));
 		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
@@ -443,30 +425,38 @@ ${modeOptions.join("")}</div>`, 'draw');
 			this.id, "Annotations Plugin Overview", "get familiar with the annotations plugin", "draw", [
 				{
 					"next #annotations-panel": "Annotations allow you to annotate <br>the canvas parts and export and share all of it."
-				},{
-					"next #annotations-left-click": "Each of your mouse buttons<br>can be used to create annotations.<br>Simply assign some class (<b>preset</b>) and start annotating!"
-				},{
-					"click #annotations-right-click": "To open <b>Presets dialog window</b>, click on one of these buttons<br>."
-				},{
-					"next #preset-no-0": "This is an example of an annotation preset."
-				},{
-					"next #preset-add-new": "Here you create a new class."
-				},{
-					"click #preset-no-0": "Click anywhere on the preset. This will select it for the right mouse button."
-				},{
-					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
-				}, {
-					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
-				},{
-					"next #plugin-tools-menu": "Apart from the default, navigation mode, you can switch <br> to and control different annotation modes here.<br>Modes are closely described in other tutorials."
-				},{
-					"next #annotations-fast-factory-switch": "To change current annotation object type, <br>select it with (and for) left or right mouse button. <br> The button needs to have a preset assigned."
-				},{
-					"click #annotations-panel-pin": "Open additional configuration options."
 				}, {
 					"next #enable-disable-annotations": "This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys."
 				}, {
-					"next #enable-disable-annotations": "This tutorial is finished.<br>To learn more, follow other annotation tutorials!"
+					"next #server-primary-save": "Depending on the viewer settings <br>the annotations can be saved here (either locally or to a server). <br> The right button opens additional settings options."
+				}, {
+					"click #annotations-panel-pin": "Open additional configuration options."
+				}, {
+					"next #preset-list-button-mp": "Existing annotation classes are here."
+				}, {
+					"next #preset-list-mp-edit": "You can edit them using this button."
+				}, {
+					"next #annotation-list-button-mp": "Existing annotations list can be opened here. <br> It can open both in the menu and in a new window."
+				}, {
+					"next #annotations-panel": "This was the main panel menu. Now let's move to the toolbar."
+				}, {
+					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
+				}, {
+					"next #annotations-left-click": "Switching can be done by mouse or with shortcuts by holding a keyboard key. <br>Modes are closely described in other tutorials."
+				}, {
+					"click #annotations-right-click": "To open <b>Annotation Class dialog window</b>, click on the button."
+				}, {
+					"next #preset-no-0": "This is an example of an annotation class."
+				}, {
+					"next #preset-add-new": "Here you create a new class."
+				}, {
+					"click #preset-no-0": "Click anywhere on the preset. This will select it for the right mouse button."
+				}, {
+					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
+				}, {
+					"next #viewer-container": "You can now use right mouse button<br>to create a polygons,<br>or the left button for different preset - at once!"
+				}, {
+					"next #viewer-container": "This tutorial is finished.<br>To learn more, follow other annotation tutorials!"
 				}], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
 			}
@@ -495,13 +485,17 @@ ${modeOptions.join("")}</div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
 				{
-					"next #custom-annotation-mode + label": "You need to be in the manual creation mode. <br> We recommend holding 'W' key instead of switching modes with a mouse."
+					"next #annotations-custom-modes-panel": "Manual creation modes are available for each object type. <br> We recommend holding 'W' key instead of switching modes<br>with a mouse for faster workflow."
 				}, {
-					"next #polygon-annotation-factory-switch": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
+					"next #ellipse-annotation-mode + label": "To switch to a different object type, <br>you can click using either left (for left mouse class) or right mouse button.<br>Note that you need active class preset on that button."
 				}, {
-					"next #polyline-annotation-factory-switch": "The same for a polyline."
+					"next #polygon-annotation-mode + label": "With a polygon, you can click or drag to create its vertices.<br> Polygon creation will be finished by arriving to a point <br> inside the first, red vertex; or when you change the mode<br> (e.g. release 'W' key)."
 				}, {
-					"next #text-annotation-factory-switch": "A text (and a point) can be created by clicking."
+					"next #polyline-annotation-mode + label": "The same for a polyline."
+				}, {
+					"next #ruler-annotation-mode + label": "A ruler is able to measure distances. <br> Ruler is not modifiable by a brush."
+				},{
+					"next #text-annotation-mode + label": "A text (and a point) can be created by clicking."
 				}, {
 					"next #viewer-container": "Most other objects (such as a rectangle)<br>can be created by mouse dragging (click+move).<br>Now you can try it out."
 				}
@@ -511,21 +505,45 @@ ${modeOptions.join("")}</div>`, 'draw');
 		);
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Free form tool", "painting with your mouse", "gesture", [
+			this.id, "Magic Wand", "automatically select similar regions", "blur_on", [
+				{
+					"click #magic-wand-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'T' key <br> instead in the future."
+				}, {
+					"next #viewer-container": "By hovering over the canvas you can already see proposed annotations."
+				}, {
+					"next #mode-custom-items select": "The target layer to detect from can be set here."
+				}, {
+					"next #mode-custom-items span": "The sensitivity can be modified here, or by a wheel <br> (or shift+wheel if you don't use key shortcut)."
+				}, {
+					"next #viewer-container": "By clicking on the canvas, the annotation is created. <br> You can now try it out."
+				}
+			], () => {
+				USER_INTERFACE.Tools.open('annotations-tool-bar');
+			}
+		);
+
+		USER_INTERFACE.Tutorials.add(
+			this.id, "Brushing", "painting with your mouse", "gesture", [
 				{
 					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'E' key <br> instead in the future."
-				},{
+				}, {
 					"next #viewer-container": "Now you can draw a polygon by a free hand."
-				},{
+				}, {
 					"next #fft-add-annotation-mode + label": "<b>Selected object</b> can be appended to ('E' key) ..."
-				},{
+				}, {
 					"next #fft-remove-annotation-mode + label": "... or removed from ('R' key)."
-				},{
-					"next #fft-size": "The brush size can be changed here or with a mouse wheel."
-				},{
+				}, {
+					"next #fft-size": "The brush size can be changed here or with a mouse wheel <br>(shift+wheel if not using key shortcuts)."
+				}, {
 					"click #fft-remove-annotation-mode + label": "Click here to switch to the removal.<br>We recommend holding 'R' key <br> instead in the future."
-				},{
-					"next #viewer-container": "You can now try to erase areas from existing annotations.<br>To start erasing, make sure the object you want to modify is selected."
+				}, {
+					"next #viewer-container": "You can now try to erase areas from existing annotations."
+				}, {
+					"click #fft-correct-annotation-mode + label": "Click here to switch to the annotation correction brush."
+				}, {
+					"next #fft-correct-annotation-mode + label": "It is similar, but: <br> it cannot create new annotations, and<br>it ignores mouse buttons class presets: <br> left adds (+) while right button removes (-)."
+				}, {
+					"next #viewer-container": "You can now try to append to (left) or erase from (right) existing annotations."
 				}
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
@@ -535,26 +553,19 @@ ${modeOptions.join("")}</div>`, 'draw');
 		USER_INTERFACE.Tutorials.add(
 			this.id, "Other UI Controls", "annotations management", "dashboard_customize", [
 				{
-					"next #viewer-container": "There are much more features included."
-				},
-				{
-					"next #show-annotation-board": "Annotation board helps you with annotations management.<br>The board opens in a separate window.<br>It allows you to edit and manage annotations."
-				},
-				{
-					"next #viewer-container": "A history is also available.<br> Shortcut is undo:Ctrl+Z and redo:Ctrl+Shift+Z<br>(or use the annotation board)."
-				},
-				{
-					"click #show-annotation-export": "Click here to open export options."
-				},
-				{
-					"next #annotations-shared": "You can export or import different annotation formats. <br>"
-				},
-				{
+					"next #viewer-container": "An annotation history is available."
+				}, {
+					"next #toolbar-history-undo": "Shortcut are undo: Ctrl+Z..."
+				}, {
+					"next #toolbar-history-redo": "...and redo: Ctrl+Shift+Z."
+				}, {
+					"click #show-annotation-export": "There are also various export options. Click here to open the menu."
+				}, {
+					"next #annotations-shared": "You can export or import different annotation formats via files.<br>"
+				}, {
 					"next #annotations-local-export-panel": "Importing is dependent on the active format!<br>It is possible to export annotations themselves;<br> some formats allow also exporting presets only."
 				},
-				{
-					"next #available-annotations": "If configured, it is possible to also upload annotations to the server."
-				},
+				//todo server upload tutorial
 			], () => {
 				USER_INTERFACE.Tools.open('annotations-tool-bar');
 			}
@@ -574,8 +585,10 @@ ${modeOptions.join("")}</div>`, 'draw');
 	//todo event handler prevent default / return false?
 	_errorHandlers = {
 		W_NO_PRESET: (e) => {
-			Dialogs.show(this.t('errors.noPresetAction', {selfId: this.id,
-					action: `USER_INTERFACE.highlight('MainMenu', 'annotations-panel', '${e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}');`}),
+			Dialogs.show(this.t('errors.noPresetAction', {
+					selfId: this.id,
+					action: `USER_INTERFACE.highlight('MainMenu', 'annotations-panel', '${e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}');`
+				}),
 				3000, Dialogs.MSG_WARN, false);
 			return false;
 		},
@@ -593,7 +606,7 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 
 	_toggleEnabled(node) {
 		let self = $(node);
-		if (this.context.disabledInteraction){
+		if (this.context.disabledInteraction) {
 			this.context.enableAnnotations(true);
 			self.html('visibility');
 			self.attr('data-ref', 'on');
@@ -659,7 +672,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 
 	/******************** AUTO DETECTION ***********************/
 
-	getDetectionControlOptions(visualisation) {
+	getDetectionControlOptions(visualization) {
 		let autoStrategy = this.context.automaticCreationStrategy;
 		if (!autoStrategy.running) return "";
 		let html = "";
@@ -667,9 +680,9 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		let index = -1;
 		let layer = null;
 		let key = "";
-		for (key in visualisation.shaders) {
-			if (!visualisation.shaders.hasOwnProperty(key)) continue;
-			layer = visualisation.shaders[key];
+		for (key in visualization.shaders) {
+			if (!visualization.shaders.hasOwnProperty(key)) continue;
+			layer = visualization.shaders[key];
 			if (isNaN(layer._index)) continue;
 
 			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
@@ -687,13 +700,13 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		if (index < 0) {
 			if (!layer) return;
 			autoStrategy.setLayer(layer._index, key);
-			html = "<option selected " + html.substr(8);
+			html = "<option selected " + html.substring(8);
 		}
 		return html;
 	}
 
-	updateAutoSelect(visualisation) {
-		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualisation));
+	updateAutoSelect(visualization) {
+		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualization));
 	}
 
 	getAutoCreationStrategyControls() {
@@ -721,7 +734,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	getMissingPresetHTML(isLeftClick) {
 		return `<div class="p-1" onclick="${this.THIS}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
-<span class="one-liner d-inline-block v-align-middle pr-2">Add</span></div>`;
+<span class="one-liner d-inline-block v-align-middle pr-2">Set</span></div>`;
 	}
 
 	/**
@@ -734,7 +747,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
 		let icon = preset.objectFactory.getIcon();
 		return `<div class="position-relative p-1" onclick="${this.THIS}.showPresets(${isLeftClick});">
-<span class="material-icons position-absolute border-sm color-bg-primary close p-0" id="discard-annotation-p-selection"
+<span class="material-icons position-absolute border-sm color-bg-primary close p-0 top-0 right-0 text-small" id="discard-annotation-p-selection"
  onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});">close</span>
 <span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
 <span class="one-liner d-inline-block v-align-middle pr-3">${category}</span>
@@ -823,14 +836,11 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		this.context.createPresetsCookieSnapshot();
 	}
 
-	/**
-	 * Update main HTML GUI part of presets upon preset change
-	 */
-	updatePresetsHTML() {
+	updatePresetsMouseButtons() {
 		if (Object.keys(this.context.presets._presets).length < 1) {
 			const p = this.context.presets.addPreset();
 			if (!this.context.presets.getActivePreset(true)) {
-				this.context.presets.selectPreset(p.presetID, true);
+				this.context.presets.selectPreset(p.presetID, true, false);
 			}
 		}
 
@@ -847,27 +857,31 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 			this.validatePresetFactory(rightPreset);
 			right.html(this.getPresetControlHTML(rightPreset, false));
 		} else right.html(this.getMissingPresetHTML(false));
+	}
 
-		const lid = leftPreset?.objectFactory.factoryID,
-			rid = rightPreset?.objectFactory.factoryID;
-		$("#annotations-fast-factory-switch").children().each(function() {
-			if (this.dataset.factory === lid) this.style.borderColor = leftPreset.color;
-			else if (this.dataset.factory === rid) this.style.borderColor = rightPreset.color;
-			else this.style.borderColor = 'transparent';
-		});
+	/**
+	 * Update main HTML GUI part of presets upon preset change
+	 */
+	updatePresetsHTML() {
+		this.updatePresetsMouseButtons();
 		this._updateMainMenuPresetList();
 	}
 
 	_updateMainMenuPresetList() {
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
+
+		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;" class="d-inline-block">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
+			pushed = true;
 		});
+
+		if (!pushed) html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
 		html.push('</div>');
-		$("#preset-list-inner-mp").html(html.join(''));
+		$("#preset-list-inner-mp").html(html.join(''));;
 		this.context.history.refresh();
 	}
 
@@ -906,7 +920,7 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.THIS}._presetSelection = '${preset.presetID}'">`);
 
 		if (this.enablePresetModify) {
-			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0" 
+			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0 z-3" 
 onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>`);
 		}
 
@@ -1054,7 +1068,7 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 			return false;
 		}
 		const _this = this;
-		setTimeout(function() {
+		setTimeout(function () {
 			Dialogs.closeWindow('preset-modify-dialog');
 			_this.context.setPreset(_this._presetSelection, isLeft);
 		}, 150);
@@ -1083,54 +1097,10 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 		this._updateMainMenuPresetList();
 	}
 
-	getAnnotationsHeadMenu(error="") {
+	getAnnotationsHeadMenu(error = "") {
+		//todo
 		error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
 		return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}<br>`;
-	}
-
-	/*** HTTP API **/
-
-	get serverStoredList() {
-		return this.getServerStoredListWithCallback(() => {
-			Dialogs.show("Reconnected to the server! Please, repeat this action to proceed.",
-				20000, Dialogs.MSG_INFO);
-		});
-	}
-
-	getServerStoredListWithCallback(onSuccess) {
-		if (!this._serverAnnotationList) {
-			this.loadAnnotationsList(onSuccess, (error) => {
-				console.error(error);
-				Dialogs.show("Failed to finish the task. Please, notify us about the problem.",
-					20000, Dialogs.MSG_ERR);
-			});
-			return [];
-		}
-		return this._serverAnnotationList;
-	}
-
-	set serverStoredList(value) {
-		this._serverAnnotationList = value;
-	}
-
-	getAnnotationById(id) {
-		for (let annotation of this.serverStoredList) {
-			//load default annotation if present
-			if (this.dataLoader.getId(annotation) == id) {
-				return annotation;
-			}
-		}
-		return undefined;
-	}
-
-	getDefaultAnnotationItemId() {
-		for (let annotation of this.serverStoredList) {
-			//load default annotation if present
-			if (this.dataLoader.getIsDefault(annotation)) {
-				return this.dataLoader.getId(annotation);
-			}
-		}
-		return undefined;
 	}
 
 	saveDefault() {
@@ -1138,189 +1108,8 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 			this.exportToFile();
 			return;
 		}
-
-		const id = this.getDefaultAnnotationItemId();
-		if (id === undefined && confirm("Store the current annotation workspace as the default set for this file?")) {
-			this.uploadAnnotation(true);
-		} else {
-			//confirm part of the behaviour
-			this.updateAnnotation(id);
-		}
-	}
-
-	loadAnnotationsList(onSuccessLoad=()=>{}, onError=undefined) {
-		if (!this._server) {
-			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu(`This feature is not enabled.`));
-			return;
-		}
-		this.annotationsMenuBuilder.clear();
-		this.serverStoredList = null;
-
-		if (!onError) {
-			const _this = this;
-			onError = function (error) {
-				console.error(_this.dataLoader.getErrorResponseMessage(error));
-				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu(
-					`Could not load annotations list. <a class="pointer" onclick="plugin('${_this.id}').loadAnnotationsList()">Retry.</a>`));
-			}
-		}
-
-		this.dataLoader.loadAnnotationsList(this._server, this.activeTissue, json => {
-			let count = 0,
-				user = APPLICATION_CONTEXT.metadata.get(xOpatSchema.user.name, "unknown user");
-
-			//todo unify behaviour, two servers send different response :/
-			this.serverStoredList = Array.isArray(json) ? json : json.annotations;
-
-			this.annotationsMenuBuilder.addRow({
-				title: `Upload new annotations (name <input type="text" value="" placeholder="automatic" class="form-control" id="annotations-upload-name" title="Name">)`,
-				details: `Upload current annotations in the viewer as a new dataset (as ${user}).`,
-				icon: `<button class="btn mr-3 px-2 py-1" onclick="${this.THIS}.uploadAnnotation()" title="Upload"><span class="pr-1 pl-0 material-icons btn-pointer">upload</span> Upload</button>`,
-				contentAction: '',
-				containerStyle: 'margin: 0 0 10px 0;'
-			});
-
-			function getActionButton(annotationId, text, icon, funcName) {
-				return `<span onclick="${funcName}('${annotationId}');return false;" title="${text}" 
-class="btn-pointer mt-1 d-inline-block px-1"><span class="material-icons width-full text-center">${icon}</span>
-<br><span style="font-size: smaller">${text}</span></span>`;
-			}
-
-			for (let available of this._serverAnnotationList) { //access raw, prevents recursion
-				//unsafe mode will parse all the metadata as one, so the user meta will be read from available.metadata
-				this.dataLoader.parseMetadata(available);
-				this.dataLoader.setActive(available);
-				let id = this.dataLoader.getId();
-				this.annotationsMenuBuilder.addRow({
-					title: this.dataLoader.getMetaName(),
-					details: this.dataLoader.getMetaDescription(),
-					icon: this.dataLoader.getIcon(),
-					contentAction: getActionButton(id, 'Download', 'download', `${this.THIS}.loadAnnotation`)
-						+ getActionButton(id, 'Update', 'update', `${this.THIS}.updateAnnotation`)
-						+ getActionButton(id, 'Delete', 'delete', `${this.THIS}.removeAnnotation`)
-				});
-				count++;
-			}
-			$("#annotations-shared-head").html(this.getAnnotationsHeadMenu());
-			onSuccessLoad(json);
-		}, onError);
-	}
-
-	loadAnnotation(id, force=false) {
-		const _this = this;
-		this._loadAnnotation(id, e => {
-			console.error("Import failed!", e);
-			Dialogs.show("Could not load annotations. Please, let us know about this issue and provide " +
-				`<a onclick=\"${_this.id}.exportToFile()\">exported file</a>.`,
-				20000, Dialogs.MSG_ERR);
-		}, force);
-	}
-
-	_loadAnnotation(id, onError, force=false) {
-		const _this = this
-		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
-		const isDefault = this.dataLoader.getIsDefault();
-
-		this.dataLoader.loadAnnotation(this._server, id, isDefault,json => {
-			$('#preset-modify-dialog').remove();
-
-			_this.dataLoader.parseMetadata(json);
-			_this._ioArgs.format = _this.dataLoader.getMetaFormat(json);
-			_this.context.import(json.data, this._ioArgs).then(r => {
-				_this.updatePresetsHTML();
-				_this._recordId(id);
-				$("#annotations-shared-head").html(_this.getAnnotationsHeadMenu());
-				Dialogs.show(r ? (isDefault ? "Loaded default annotation set." : "Annotation set loaded.")
-					: "No data was imported! Are you sure you have a correct format set?",
-					1000, r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
-			}).catch(onError);
-		}, onError);
-	}
-
-	updateAnnotation(id) {
-		const _this = this;
-		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
-		if (!confirm("You are about to overwrite annotation set '" + this.dataLoader.getMetaName() + "'. Continue?" )) return;
-
-		const isDefault = this.dataLoader.getIsDefault();
-
-		//server IO only supports default format
-		this._ioArgs.format = this._defaultFormat;
-		this.context.export(this._ioArgs).then(data => {
-			_this.dataLoader.updateAnnotation(_this._server, id, isDefault, data, this._defaultFormat,
-				json => {
-					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-					_this.loadAnnotationsList();
-					_this._recordId(id);
-				},
-				e => {
-					Dialogs.show(`Failed to upload annotations. Are you logged in? You can 
-<a onclick="${_this.id}.exportToFile()">Export them instead (save as a file)</a>.`,
-						7000, Dialogs.MSG_ERR);
-					console.error("Failed to update annotation: " + this.dataLoader.getMetaName(), "ID", id,
-						_this.dataLoader.getErrorResponseMessage(e));
-				}
-			);
-		})
-	}
-
-	removeAnnotation(id) {
-		const _this = this;
-		this.dataLoader.setActive(this.serverStoredList.find(x => _this.dataLoader.getId(x) == id));
-		if (!confirm("You are about to delete annotation set '" + this.dataLoader.getMetaName() + "'. Continue?" )) return;
-
-		const isDefault = this.dataLoader.getIsDefault();
-
-		this.dataLoader.removeAnnotation(this._server, id, isDefault,
-			json => {
-				Dialogs.show(`Annotation '${this.dataLoader.getMetaName()}' removed.`, 2000, Dialogs.MSG_INFO);
-				_this.loadAnnotationsList();
-			},
-			e => {
-				Dialogs.show(`Failed to delete annotation '${this.dataLoader.getMetaName()}'.`,
-					7000, Dialogs.MSG_ERR);
-				console.error("Failed to delete annotation: " + this.dataLoader.getMetaName(),
-					_this.dataLoader.getErrorResponseMessage(e));
-			}
-		);
-	}
-
-	uploadAnnotation(asDefault=false) {
-		const _this = this, name = document.getElementById("annotations-upload-name")?.value;
-		//server IO only supports default format
-		this._ioArgs.format = this._defaultFormat;
-		this.context.export(this._ioArgs).then(data => {
-			this.dataLoader.uploadAnnotation(_this._server, _this.activeTissue, name, asDefault, data, this._defaultFormat,
-				json => {
-					Dialogs.show("Annotations uploaded.", 2000, Dialogs.MSG_INFO);
-					_this.loadAnnotationsList();
-
-					try {
-						const item = Array.isArray(json) ? json[json.length-1] : json;
-						_this.dataLoader.parseMetadata(item);
-						const id = _this.dataLoader.getId(item);
-						if (id) {
-							_this._recordId(id);
-						}
-					} catch (e) {
-						console.error(e);
-					}
-				},
-				e => {
-					Dialogs.show(`Failed to upload annotations. Are you logged in? You can 
-<a onclick="${_this.id}.exportToFile()">Export them instead (save as a file)</a>.`,
-						7000, Dialogs.MSG_ERR);
-					console.error("Failed to upload annotations.", _this.dataLoader.getErrorResponseMessage(e));
-				}
-			);
-		});
-	}
-
-	_recordId(id) {
-		let ids = this.getOption('serverAutoLoadIds', undefined);
-		if (!Array.isArray(ids)) ids = [];
-		ids.push(id);
-		this.setOption('serverAutoLoadIds', ids, false);
+		Dialogs.show("Server-side storage is in the process of implementation. Please, save the data locally for now.");
+		//todo server upload!!!
 	}
 }
 

@@ -2,11 +2,11 @@
     "id": "annotations",
     "name": "Annotations Module",
     "description": "A module that brings annotations functionality.",
+    "version": "0.1.0",
     "includes" : [
         "annotations.js",
         "ext/greiner-hormann.min.js",
         "ext/magic-wand.js",
-        "ext/morph.js",
         "convert/convertor.js",
         "convert/native.js",
         "convert/asapXml.js",

@@ -6,8 +6,7 @@ export default {
             cy.log("mainMenu:: Test without bypassCookies is not intended to pass.");
         }
 
-        ["#panel-navigator", "#navigator-pin",
-            "#global-export", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
+        ["#panel-navigator", "#navigator-pin", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
 
         if (config.params.stackedBackground) {
             cy.get("#global-tissue-visibility").should('not.be.visible');
@@ -39,7 +38,7 @@ export default {
         }
 
         ["#add-plugins", "#panel-navigator", "#navigator-pin", "#main-panel-hide",
-            "#global-export", "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
+            "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
     },
 
     shadersMainMenu(config) {

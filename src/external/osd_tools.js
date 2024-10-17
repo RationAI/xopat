@@ -10,6 +10,7 @@ OpenSeadragon.Tools = class {
      * @param context OpenSeadragon instance
      */
     constructor(context) {
+        //todo initialize explicitly outside to help IDE resolution
         if (context.tools) throw "OSD Tools already instantiated on the given viewer instance!";
         context.tools = this;
         this.viewer = context;
@@ -22,7 +23,7 @@ OpenSeadragon.Tools = class {
      * @param eventArgs event args object
      * @return {Promise<void>} promise resolved once event finishes
      */
-    async raiseAwaitEvent(context, eventName, eventArgs) {
+    async raiseAwaitEvent(context, eventName, eventArgs = undefined) {
         let events = context.events[ eventName ];
         if ( !events || !events.length ) {
             return null;
@@ -43,8 +44,9 @@ OpenSeadragon.Tools = class {
             eventArgs.eventSource = context;
             eventArgs.userData = events[ index ].userData;
             let result = events[ index ].handler( eventArgs );
-            if (!result || OpenSeadragon.type(result) !== "promise") return;
-            await result;
+            if (result && OpenSeadragon.type(result) === "promise") {
+                await result;
+            }
             await loop(index + 1);
         }
         return await loop(0);

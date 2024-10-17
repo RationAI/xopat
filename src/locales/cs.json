@@ -16,6 +16,7 @@
         "saveCookies": "Zapamatovat nastavení"
       },
       "bar": {
+        "share": "Share",
         "exportUrl": "URL",
         "explainExportUrl": "Získejte link; neobsahuje data pluginů",
         "exportFile": "Stáhnout",

@@ -8,5 +8,6 @@
     "includes" : ["tutorials.js"],
     "modules": [],
     "permaLoad": false,
+    "hidden": true,
     "server": ""
 }

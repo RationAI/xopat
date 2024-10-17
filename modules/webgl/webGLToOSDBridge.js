@@ -24,6 +24,7 @@ window.OpenSeadragon.BridgeGL = class {
         if (!cachedMode) {
             this.uid = OpenSeadragon.BridgeGL.getUniqueId();
         }
+        //todo probably bad implementation, weakmap does not count reference for _KEYS_
         this._rendering = new WeakMap();
         this.imageData = undefined;
     }
@@ -130,50 +131,50 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Runs a callback on each visualisation goal
-     * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+     * Runs a callback on each visualization goal
+     * @param {function} call callback to perform on each visualization goal (its object given as the only parameter)
      */
-    foreachVisualisation(call) {
-        this.webGLEngine.foreachVisualisation(call);
+    foreachVisualization(call) {
+        this.webGLEngine.foreachVisualization(call);
     }
 
     /**
-     * Get a visualisaiton goal object
-     * @returns {object} a visualisaiton goal object
+     * Get a visualizaiton goal object
+     * @returns {object} a visualizaiton goal object
      */
     visualization(index=undefined) {
-        return this.webGLEngine.visualization(index || this.webGLEngine.currentVisualisationIndex());
+        return this.webGLEngine.visualization(index === undefined ? this.webGLEngine.currentVisualizationIndex() : index);
     }
 
     /**
-     * Get the current visualisaiton goal index
-     * @returns {number} current visualisaiton goal index
+     * Get the current visualizaiton goal index
+     * @returns {number} current visualizaiton goal index
      */
-    currentVisualisationIndex() {
-        return this.webGLEngine.currentVisualisationIndex();
+    currentVisualizationIndex() {
+        return this.webGLEngine.currentVisualizationIndex();
     }
 
     /**
      * Set program shaders. Just forwards the call to webGLEngine, for easier access.
-     * @param {object} visualisation - objects that define the visualisation (see Readme)
+     * @param {object} visualization - objects that define the visualization (see Readme)
      * @return {boolean} true if loaded successfully
      */
-    addVisualisation(...visualisation) {
+    addVisualization(...visualization) {
         if (this.webGLEngine.isPrepared) {
-            console.warn("Invalid action: visualisations have been already loaded.");
+            console.warn("Invalid action: visualizations have been already loaded.");
             return false;
         }
-        return this.webGLEngine.addVisualisation(...visualisation);
+        return this.webGLEngine.addVisualization(...visualization);
     }
 
     /**
      * Set program data.
-     * @param {string} data - objects that define the visualisation (see Readme)
+     * @param {string} data - objects that define the visualization (see Readme)
      * @return {boolean} true if loaded successfully
      */
     setData(...data) {
         if (this.webGLEngine.isPrepared) {
-            console.warn("Invalid action: visualisations have been already loaded.");
+            console.warn("Invalid action: visualizations have been already loaded.");
             return false;
         }
         this.imageData = data.length === 0 ? undefined : data;
@@ -181,15 +182,15 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Change visualisation in use
-     * @param {number} visIdx index of the visualisation
+     * Change visualization in use
+     * @param {number} visIdx index of the visualization
      */
-    switchVisualisation(visIdx) {
-        this.webGLEngine.switchVisualisation(visIdx);
+    switchVisualization(visIdx) {
+        this.webGLEngine.switchVisualization(visIdx);
     }
 
     /**
-     * Make ViaWebGL download and prepare visualisations,
+     * Make ViaWebGL prepare visualizations,
      * called inside init() if not called manually before
      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
      */
@@ -202,16 +203,16 @@ window.OpenSeadragon.BridgeGL = class {
     }
 
     /**
-     * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLEngine.shaderGenerator
-     * @param {array} order array of strings that refer to ID's in the visualisation
+     * Reorder shader: will re-generate current visualization from dynamic data obtained from webGLEngine.shaderGenerator
+     * @param {array} order array of strings that refer to ID's in the visualization
      *   data (e.g. pyramidal tiff paths in our case), first is rendered last (top)
      */
     reorder(order=undefined) {
         if (!Array.isArray(order)) {
-            this.webGLEngine.rebuildVisualisation(null);
+            this.webGLEngine.rebuildVisualization(null);
         } else {
             //webGLEngine rendering is first in order: first drawn, last in order: last drawn (atop)
-            this.webGLEngine.rebuildVisualisation(order.reverse());
+            this.webGLEngine.rebuildVisualization(order.reverse());
         }
         this.redraw();
     }
@@ -279,7 +280,7 @@ window.OpenSeadragon.BridgeGL = class {
 
     /**
      * Get IDS of data sources to be fetched from the server at the time
-     * @return {Array} array of keys from 'shaders' parameter of the current visualisation goal
+     * @return {Array} array of keys from 'shaders' parameter of the current visualization goal
      */
     dataImageSources() {
         return this.webGLEngine.getSources();
@@ -307,7 +308,7 @@ window.OpenSeadragon.BridgeGL = class {
      * - awaits the OSD opening
      *
      * @param {function} layerLoaded callback on load
-     * @param {number} withActiveIndex index of the visualisation to load as first, default 0
+     * @param {number} withActiveIndex index of the visualization to load as first, default 0
      * @return {OpenSeadragon.BridgeGL}
      */
     initBeforeOpen(layerLoaded=()=>{}, withActiveIndex=0) {
@@ -612,7 +613,7 @@ window.OpenSeadragon.BridgeGL = class {
 //             const newVis = {...vis, shaders: {}};
 //             let entry = Object.entries(vis.shaders).find((e, i) => i === idx);
 //             if (entry) newVis.shaders[entry[0]] = newVis.shaders[entry[1]];
-//             engine.addVisualisation(newVis);
+//             engine.addVisualization(newVis);
 //         });
 //
 //         if (!this.uid) {
@@ -700,56 +701,56 @@ window.OpenSeadragon.BridgeGL = class {
 //     }
 //
 //     /**
-//      * Runs a callback on each visualisation goal
-//      * @param {function} call callback to perform on each visualisation goal (its object given as the only parameter)
+//      * Runs a callback on each visualization goal
+//      * @param {function} call callback to perform on each visualization goal (its object given as the only parameter)
 //      */
-//     foreachVisualisation(call) {
+//     foreachVisualization(call) {
 //         for (let engine of this.webGLEngineList) {
 //             if (engine?.isPrepared) {
-//                 engine.foreachVisualisation(call);
+//                 engine.foreachVisualization(call);
 //             }
 //         }
 //     }
 //
 //     /**
-//      * Get a visualisaiton goal object
-//      * @returns {object} a visualisaiton goal object
+//      * Get a visualizaiton goal object
+//      * @returns {object} a visualizaiton goal object
 //      */
 //     visualization(index=undefined) {
-//         return this._visualizations(index || this.webGLEngine.currentVisualisationIndex());
+//         return this._visualizations(index || this.webGLEngine.currentVisualizationIndex());
 //     }
 //
 //     /**
-//      * Get the current visualisaiton goal index
-//      * @returns {number} current visualisaiton goal index
+//      * Get the current visualizaiton goal index
+//      * @returns {number} current visualizaiton goal index
 //      */
-//     currentVisualisationIndex() {
+//     currentVisualizationIndex() {
 //         //same for all engines
 //         //topdo engines have just one
-//         return this.webGLEngine.currentVisualisationIndex();
+//         return this.webGLEngine.currentVisualizationIndex();
 //     }
 //
 //     /**
 //      * Set program shaders. Just forwards the call to webGLEngine, for easier access.
-//      * @param {object} visualisation - objects that define the visualisation (see Readme)
+//      * @param {object} visualization - objects that define the visualization (see Readme)
 //      * @return {boolean} true if loaded successfully
 //      */
-//     addVisualisation(...visualisation) {
+//     addVisualization(...visualization) {
 //         if (this.webGLEngine) {
-//             console.warn("Invalid action: visualisations can be attached before layers are added only.");
+//             console.warn("Invalid action: visualizations can be attached before layers are added only.");
 //             return false;
 //         }
-//         this._visualizations.push(...visualisation);
+//         this._visualizations.push(...visualization);
 //     }
 //
 //     /**
 //      * Set program data.
-//      * @param {string} data - objects that define the visualisation (see Readme)
+//      * @param {string} data - objects that define the visualization (see Readme)
 //      * @return {boolean} true if loaded successfully
 //      */
 //     setData(...data) {
 //         if (this.webGLEngine.isPrepared) {
-//             console.warn("Invalid action: visualisations have been already loaded.");
+//             console.warn("Invalid action: visualizations have been already loaded.");
 //             return false;
 //         }
 //         this.imageData = data.length === 0 ? undefined : data;
@@ -757,21 +758,21 @@ window.OpenSeadragon.BridgeGL = class {
 //     }
 //
 //     /**
-//      * Change visualisation in use
-//      * @param {number} visIdx index of the visualisation
+//      * Change visualization in use
+//      * @param {number} visIdx index of the visualization
 //      */
-//     switchVisualisation(visIdx) {
+//     switchVisualization(visIdx) {
 //         //todo inactive renderers?
 //
 //         //todo need to re-change layers
 //
 //         // for (let key in this.webGLEngineList) {
-//         //     this.webGLEngineList[key].switchVisualisation(visIdx);
+//         //     this.webGLEngineList[key].switchVisualization(visIdx);
 //         // }
 //     }
 //
 //     /**
-//      * Make ViaWebGL download and prepare visualisations,
+//      * Make ViaWebGL download and prepare visualizations,
 //      * called inside init() if not called manually before
 //      * (sometimes it is good to start ASAP - more time to load before OSD starts drawing)
 //      */
@@ -804,18 +805,18 @@ window.OpenSeadragon.BridgeGL = class {
 //
 //
 //     /**
-//      * Reorder shader: will re-generate current visualisation from dynamic data obtained from webGLEngine.shaderGenerator
-//      * @param {array} order array of strings that refer to ID's in the visualisation
+//      * Reorder shader: will re-generate current visualization from dynamic data obtained from webGLEngine.shaderGenerator
+//      * @param {array} order array of strings that refer to ID's in the visualization
 //      *   data (e.g. pyramidal tiff paths in our case), first is rendered last (top)
 //      */
 //     reorder(order=undefined) {
 //         //todo support? reorder in viewer?
 //         //not supported for now
 //         // if (!Array.isArray(order)) {
-//         //     this.webGLEngine.rebuildVisualisation(null);
+//         //     this.webGLEngine.rebuildVisualization(null);
 //         // } else {
 //         //     //webGLEngine rendering is first in order: first drawn, last in order: last drawn (atop)
-//         //     this.webGLEngine.rebuildVisualisation(order.reverse());
+//         //     this.webGLEngine.rebuildVisualization(order.reverse());
 //         // }
 //         this.redraw();
 //     }
@@ -886,7 +887,7 @@ window.OpenSeadragon.BridgeGL = class {
 //
 //     /**
 //      * Get IDS of data sources to be fetched from the server at the time
-//      * @return {Array} array of keys from 'shaders' parameter of the current visualisation goal
+//      * @return {Array} array of keys from 'shaders' parameter of the current visualization goal
 //      */
 //     dataImageSources() {
 //         return this.webGLEngineList.reduce((acc, item) => {
@@ -917,7 +918,7 @@ window.OpenSeadragon.BridgeGL = class {
 //      * - awaits the OSD opening
 //      *
 //      * @param {function} layerLoaded callback on load
-//      * @param {number} withActiveIndex index of the visualisation to load as first, default 0
+//      * @param {number} withActiveIndex index of the visualization to load as first, default 0
 //      * @return {OpenSeadragon.BridgeGL}
 //      */
 //     initBeforeOpen(layerLoaded=()=>{}, withActiveIndex=0) {

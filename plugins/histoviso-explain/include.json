@@ -10,5 +10,6 @@
         "histoviso_explain_annotation_factory_extension.js"
     ],
     "modules": ["annotations", "webgl"],
+    "hidden": true,
     "permaLoad": false
 }

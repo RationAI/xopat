@@ -201,8 +201,13 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
     }
 
-    //TO-DOCS describe how meta is handled and error property treated
+    /**
+     * Retrieve image metadata for given image index - tilesources can fetch data or data-arrays.
+     * @param index index of the data if tilesource supports multi data fetching
+     * @return {TileSourceMetadata}
+     */
     getImageMetaAt(index) {
+        //not really compatible type, but carries over the error property
         return this.ImageArray[index];
     }
 
@@ -229,7 +234,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function(context) {
-                const abort = context.finish.bind(context, null, undefined);
+                const abort = context.finish.bind(context, null);
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
@@ -271,9 +276,13 @@ $.ExtendedDziTileSource = class extends $.TileSource {
                                     entry.blob().then(blob => {
                                         if (blob.size > 0) {
                                             const img = new Image();
-                                            img.onload = () => resolve(img);
+                                            const objUrl = URL.createObjectURL(blob);
+                                            img.onload = () => {
+                                                resolve(img);
+                                                URL.revokeObjectURL(objUrl);
+                                            };
                                             img.onerror = img.onabort = reject;
-                                            img.src = URL.createObjectURL(blob);
+                                            img.src = objUrl;
                                         } else blackImage(_this, resolve, reject);
                                     });
                                 });

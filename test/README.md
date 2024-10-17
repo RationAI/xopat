@@ -1,42 +1,53 @@
 # Testing with Cypress
 
-The testing framework can be run directly from console using `npx cypress open`. The testing happens on a running viewer
-url configured in the `cypress.env.json` file, _not necessarily on the source files in this repository_. As the viewer
-can serve data across the internet, the testing framework can test any running viewer instance if you have access.
-For now, you need to
- - create **``cypress.env.json``** file in the project root, it defines where and how to access the viewer, an example file is ``cypress.env.example.json``
+The testing framework can be run directly from console using `npx cypress open`. But first,
+the testing must be configured, which can be done in many ways:
+ - local WSI server and viewer
+ - distant WSI server and local viewer
+ - both distant WSI server and viewer
+
+The only thing you have to ensure is that the WSI server can access the correct slides required for testing,
+and that the slide paths/IDs are provided. Typically, you have to:
+ - create **``cypress.env.json``** file in the project root, it defines where and how to access the viewer, see example files in this directory
  - run ``npm install`` if you haven't already, it installs build and test tools
- - run ``npx cypress open`` to run the interactive test framework
+ - run ``npm run test-w`` (alias to ``npx cypress open``) to run the interactive test framework
+
+Configuring the test correctly might be a bit more difficult
+than you would expect; therefore we provide almost out-of-box setup for localhost.
 
 ## Testing on localhost
-First, clone xopat-docker repository and build and _run_ the docker compose system.
-> Recommended way of building is to set ``DOCKER_BUILDKIT=0`` env variable to prevent docker from
-> messing up the build process. For windows, use `set DOCKER_BUILDKIT=0`.
-``cypress.env.json`` file needs the WSI slides to test with. These can be downloaded here:
+First, download the slide data:
 - tissue.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/tissue.php
 - annotation.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/annotation.php
 - probability.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/probability.php
 - explainability.tiff: https://rationai-vis.ics.muni.cz/visualization-demo/data/explainability.php
 
-Move these files to a xopat-docker repository to the ``data`` folder. Finally, provide path
-to these files in the env file (relative to the data folder):
+Next, download a WSI viewer and run it. We recommend using 
+[our modification of the Empaia WSI Server](https://github.com/RationAI/WSI-Service). You need
+to run the docker compose for the server - in `docker-compose.yml` inside the repository:
+ - configure the ENV variables (see e.g. `cypress.env.rationai-mapper.json`)
+ - mount the directory where your slides are inside the docker as ``/data``
+   - move the downloaded test slides as ``[the-docker-mount-path]/cypress/*.tiff`` 
 
-``````json
-{
-  "interceptDomain": "http://localhost:8080/**",
-  "viewer": "http://localhost:8080/xopat/index.php",
-  "imageServer": "http://localhost:8080/iipsrv/iipsrv.fcgi",
-  "headers": {
-  },
-  "wsi_tissue": "tissue.tiff",
-  "wsi_annotation": "annotation.tiff",
-  "wsi_probability": "probability.tiff",
-  "wsi_explainability": "explainability.tiff"
-}
-``````
-Note that you are _not_ testing the repository code, but the deployed instance
-in the docker.
+And then run ``docker compose up``. Move the `cypress.env.rationai-mapper.json` to this repository
+root and rename it to `cypress.env.json`.
 
+> Do not forget to remove commens from JSON for cypress env. Cypress does not support
+> JSON with comments unlike this viewer.
+ 
+
+Last but not least, we will use the `node` local viewer server. Do not
+forget to download and build OpenSeadragon - the default location is
+``./openseadragon`` so you can run `git clone <openseadragon url> && cd openseadragon && npm install`
+The viewer must understand the WSI server you are going to use. You can use
+``viewer.env.wsi-service.json``, simply run `npm run s-node-test` (server node for tests).
+
+Now you are done and you can start testing (e.g. `npm run test-w` for interactive tests).
+
+### HEADERS object in cypress.env.json
+These headers used for cypress access to the viewer domain
+(configured in the `interceptDomain` field). This is necessary for the viewer
+ server to parse correctly the post data (session).
 
 ## Writing tests
 
@@ -51,6 +62,9 @@ The best approach is to copy and modify existing tests.
 ## Todo
 Testing is very dependent on the deployed instance configuration, 
 some even cannot be changed by the test suite (e.g., `secureMode` since
-it would be insecure to allow changing it). Also, testing is dependent
-on a remote image server. In the future, the goal is to create
-a localhost version of the viewer to test internally, on a local-hosted data.
+it would be insecure to allow changing it). Test are for now quite unstable, please
+first check that the test does not fail due to
+ - invalid viewer awaiting
+ - different / missing static viewer configuration
+ - older viewer version
+ - another unknown reasons (try to run it twice)

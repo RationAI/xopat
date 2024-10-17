@@ -1,6 +1,7 @@
 {
     "id": "colorMaps",
     "name": "Predefined colormaps",
+    "version": "0.1.0",
     "includes" : [
         "colormaps.js"
     ],

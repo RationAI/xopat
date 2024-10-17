@@ -2,7 +2,7 @@
 
 xOpat is a standalone web-browser application. Server-side execution is necessary only
 due to certain capabilities browsers cannot provide:
- - parse HTTP GET/POST requests
+ - parse HTTP POST data
  - scan filesystem
  - dynamically compile from configurations
 
@@ -13,14 +13,22 @@ then provides an HTML static page.
 
 ## Available Servers / Entrypoints
  - [x] PHP Server
- - [ ] Node.js Server [in development]
- - [x] HTML static index page [in development]
+ - [x] Node.js Server
+   - cornercases might be not handled well yet (e.g. supplying POST data in different ways) 
+ - [x] HTML static index page
 
 ## Implementation
 
 There are no implementation constraints, and so the server implementations might behave
 slightly differently depending on what is possible in the given environment, and
 how the server was implemented. But the server should be able to:
+
+### Provide basic entrypoints
+ - ``/`` location that opens up the viewer
+ - ``/dev_setup`` that opens the developer session manual editor
+
+All such entrypoints should be implemented using the prepared HTML templates.
+See ``templates/README.md``. 
 
 ### Provide Static Configuration
 
@@ -59,17 +67,81 @@ It should also reason about what items should be loaded at the beginning (e.g. l
 if the viewer is going to render visualizations, etc. Server should parse correctly the
 configuration input and act relevantly on errors, providing translated interface where possible.
 Servers should also allow to
- - parse GET:
-   - `lang`, optional preferred language
-   - `visualization`, the full session configuration (here URL-encoded)
-   - `slide` & `masks` - slide identification and mask coma-separated list of identifications to show
-     - identification being either file path or ID the server understands, with default configuration applied 
- - parse and prefer using POST if possible:
-   - support ``visualization`` attribute
-   - pass all the POST data except the keys specified above to the viewer initialization
+ - pass POST data to the JS app initialization function
  - use only single URL endpoint to multiple functionalities if applicable:
    - ``directive=user_setup`` shows page that documents statically available visualizations and allows
    users to build sessions using JSON
    - ``directive=user_setup`` shows page with user-friendly setup of shaders (TODO: in progress of design)
 
-The baseline is an existing server implementation which should new implementations adhere to.
+An existing server implementation demonstrates these requirements,
+which should new implementations adhere to.
+
+### Support types of access:
+The server should accept POST and GET parameters, as the viewer description states
+what opening ways are possible. Additionally, it should parse POST data:
+
+### Support default IO pipeline
+To support IO pipeline, the server must parse POST data and embed it in the HTML index file.
+The data comes in the following structure:
+
+````json
+{
+   "visualization": { ... the viewer session ... },
+   "modules[moduleId.property]": "\"serialized-data\"",
+   "plugins[pluginId.prop.propx]": "\"serialized-data\"",
+}
+````
+The viewer session comes in un-serialized, or serialized once. You have to respect the session and configure the viewer accordingly.
+You have to also respect the module and plugin data that optionally comes with the session, and provide it to plugins / modules
+in the index file as the following structure:
+
+````json
+{
+   "modules": {
+      "moduleId.property": "serialized-data"
+   },
+   "plugins": {
+      "pluginId.prop.propx": "serialized-data"
+   }
+}
+````
+
+The data might (and usually do) come double-encoded, this is to avoid problems with inputs: 
+we could receive encoded JSON, literal string, a number, and all of them must be a valid JS in the exported index file:
+````javascript
+`<script>
+let encoded = ${"{\"a\":1, \"b\":2}"};
+let plain_string = ${"hi!"};
+let number = ${3};
+</script>`
+````
+results in 
+````html
+<script>
+   let encoded = {a:1, b:2};
+   let plain_string = hi!;
+   let number = 3;
+</script>
+````
+which is invalid. But how do we know whether a string is in fact an object encoded by JSON.stringify, 
+or a dom node by XMLSerializer().serializeToString(...) .. etc?
+We don't. Here comes in double-encoding, we encode each input once more. However, servers **must** attempt to encode
+these values before the viewer accepts them. Although the encoding could happen also on the
+viewer setup, this approach gives servers freedom to potentially modify parts of the session, etc.
+
+To do so, each server must attempt to process POST data by:
+ - figuring out whether the server receives the POST data as a unprocessed string, or whether it is pre-processed;
+ PHP servers can for example natively read the submitted POST data and expand the above described syntax to already nested
+ array, e.g. ``$_POST["modules"]["moduleId.property"]`` is a valid reference
+ - each '`"\"serialized-data\""`' object must be safely attempted to be decoded as a JSON, e.g.
+
+````javascript
+ function readPostDataItem(item) {
+     // The object can come in double-encoded, try encoding if necessary
+     try {
+         return JSON.parse(item);
+     } catch {
+         return item;
+     }
+ }
+````

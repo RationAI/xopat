@@ -17,7 +17,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this._scrollZoom = this.scrollZooming.bind(this);
 
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
-            APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
+        APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
 
         // TODO works with OSD 5.0+
         // const drawerType = "canvas"; //VIEWER.drawer.getType();
@@ -233,7 +233,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     accepts(e) {
-        const accepts = e.key === "t" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+        const accepts = e.code === "KeyT" && !e.ctrlKey && !e.shiftKey && !e.altKey;
         // if (accepts) {
         //     this._buttonActive = !this._buttonActive;
         //     if (!this._buttonActive) {
@@ -245,7 +245,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     rejects(e) {
-        return e.key === "t";
+        return e.code === "KeyT";
     }
 
     customHtml() {

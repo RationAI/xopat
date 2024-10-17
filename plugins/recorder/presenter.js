@@ -1,10 +1,10 @@
 class Presenter extends XOpatPlugin {
-    constructor(id, params) {
+    constructor(id) {
         super(id);
         this._toolsMenuId = "presenter-tools-menu";
 
         //todo document option, get via getOption instead
-        this.playOnEnter = params.playEnterDelay ?? -1;
+        this.playOnEnter = this.getOption('playEnterDelay', -1);
         this._delay = true;
         this._annotationRefs = {}; //consider WeakMap
     }
@@ -198,7 +198,7 @@ ${UIComponents.Elements.checkBox({
     }
 
     export() {
-        UTILITIES.downloadAsFile("visualisation-recording.json", JSON.stringify({
+        UTILITIES.downloadAsFile("visualization-recording.json", JSON.stringify({
             "snapshots": this.snapshots.exportJSON(false),
             "annotations": this.exportAnnotations(false)
         }));
@@ -333,7 +333,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
         if (window.OSDAnnotations && !this.annotations) {
             this.annotations = OSDAnnotations.instance();
             this.annotations.forceExportsProp = "presenterSids";
-            this.annotations?.initIO(); //enable IO export so we can work with annotations if any
+            this.annotations?.initPostIO(); //enable IO export so we can work with annotations if any
             this._bindAnnotations();
 
             const _this = this;

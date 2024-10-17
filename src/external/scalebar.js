@@ -128,9 +128,7 @@
             }
             this.scalebarContainer.style.display = "";
 
-            var props = this.sizeAndTextRenderer(
-                this.pixelsPerMeter * this.imagePixelSizeOnScreen(), this.minWidth
-            );
+            var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
             this.scalebarContainer.style.left = location.x + "px";
@@ -147,6 +145,8 @@
     $.Scalebar.prototype = {
         /**
          * Referenced tile image getter used for measurements
+         * todo we should provide references scale image allways and all
+         *  access on BG data should be via the APP Context
          */
         getReferencedTiledImage: function () {},
         /**
@@ -158,6 +158,7 @@
         },
         /**
          * Compute size of one pixel in the image on your screen
+         * //todo rename to get..() or change to property getter
          * @return {number} image pixel size on screen (should be between 0 and 1 in most cases)
          */
         imagePixelSizeOnScreen: function() {
@@ -172,6 +173,15 @@
             }
             return this.__pixelRatio;
         },
+
+        /**
+         * Compute the current resolution
+         * @return {number}
+         */
+        currentResolution: function () {
+            return this.pixelsPerMeter * this.imagePixelSizeOnScreen()
+        },
+
         /**
          *
          * @return {string}
@@ -316,14 +326,11 @@
                     this.viewer.container.appendChild(this.magnificationContainer);
                 }
                 this.viewer.addHandler("open", this.refreshHandler);
-                this.viewer.addHandler("animation", this.refreshHandler);
-                this.viewer.addHandler("resize", this.refreshHandler);
+                this.viewer.addHandler("update-viewport", this.refreshHandler);
             } else {
                 this._active = false;
                 this.viewer.removeHandler("open", this.refreshHandler);
-                this.viewer.removeHandler("animation", this.refreshHandler);
-                this.viewer.removeHandler("resize", this.refreshHandler);
-
+                this.viewer.removeHandler("update-viewport", this.refreshHandler);
                 let container = document.getElementById("viewer-scale-bar");
                 if (container) container.remove();
                 container = document.getElementById("viewer-scale-bar");

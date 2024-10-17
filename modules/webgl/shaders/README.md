@@ -1,9 +1,9 @@
 # Dynamic shader building
 
-The visualisation setup is used to instantiate to JavaScript shader layer classes.
+The visualization setup is used to instantiate to JavaScript shader layer classes.
 ````JSON
 {    
-      "name": "A visualisation setup 1",
+      "name": "A visualization setup 1",
       "shaders": {
             "my_id": {
                   "name": "Probability layer",
@@ -28,11 +28,11 @@ The visualisation setup is used to instantiate to JavaScript shader layer classe
 }
 ````
 
-Each shader (layer) must inherit from `VisualisationLayer` class. There are pre-defined shader layers such as `identity`, 
+Each shader (layer) must inherit from `VisualizationLayer` class. There are pre-defined shader layers such as `identity`, 
 `heatmap`, `edge`, `biploar-heatmap` or `colormap`. Then, the `shaders[<id>].params` field is sent to the constructor as a single object.
 
 Furthermore:
-- shader layer class must inherit from `VisualisationLayer`
+- shader layer class must inherit from `VisualizationLayer`
     - your constructor must pass the received object to the super constructor
 - shader layer class must implement `name()`, `type()` and `getFragmentShaderExecution()` methods
 - the class must be registered to `ShaderMediator`
@@ -75,12 +75,12 @@ Each control should support three parameters:
  - `interactive`: whether the user should be allowed to interact with the control (usually provides no HTML if no interactive)
  - `default`: default value (need not to be necessarily true, however, with simple controls it is advantageous since controls switching will use the same default value)
 
-### class `VisualisationLayer`
+### class `VisualizationLayer`
 There are several features available for you: things that will make your coding easier. Basic `identity` shader can look
 really simple!
 
 ````js
-class IdentityVisualisationLayer extends VisualisationLayer {
+class IdentityVisualizationLayer extends VisualizationLayer {
 
     static type() {
         return "identity";
@@ -112,7 +112,7 @@ class IdentityVisualisationLayer extends VisualisationLayer {
 Your code should reflect these important properties:
 - VERSION INDEPENDENCE: the code should be independent of the GLSL version used.
     - `this.webglContext.getVersion()` will tell you the version of WebGL used
-    - rely on functions available in ``VisualisationLayer`` superclass, and request new API if needed
+    - rely on functions available in ``VisualizationLayer`` superclass, and request new API if needed
 - SHADER RE-USABILITY: all global variable and function names must be extended with unique ID so that multiple code 
 insertion is possible
     - `this.uid` contains unique identifier for each layer
@@ -131,12 +131,12 @@ all exiting branches must return a value
     - include ``super.getFragmentShaderDefinition()`` output when overriding
 
 #### Writing the Layer Class
-You of course might want to do more such as passing user input into the shader. The `VisualisationLayer` enables you to implement
+You of course might want to do more such as passing user input into the shader. The `VisualizationLayer` enables you to implement
 these member functions:
 - `glLoaded(program, gl)` is called when the WebGL program starts to be used, get your uniform locations here (and possibly send time-independent values)
 - `glDrawing(program, dimension, gl)` is called when the WebGl drawing event begins, meant to send time-varying uniform values
 - `init()` is called always before `glLoaded()`, and after your HTML was attached to the page you can for example initialize your HTML control inputs
-- `htmlControls()` is called to generate the shader HTML controls, these are **_replaced_** every time the visualisation is
+- `htmlControls()` is called to generate the shader HTML controls, these are **_replaced_** every time the visualization is
 re-compiled
 
 ##### Life cycle of your shader
@@ -144,7 +144,7 @@ API functions are called in a certain order. Keep the order to avoid errors. _\[
   1. `constructor()` phase: you can rely on no functions and API calls to work: use
   to initialize your member variables only, also good place to play around with passed
   options object - set default values etc.
-  2. `ready()` phase: you can use API of `WebGLModule.VisualisationLayer`
+  2. `ready()` phase: you can use API of `WebGLModule.VisualizationLayer`
   3. **visualization used** _\[loop\]_
      1. `htlmControls` phase: define what user can interact with
      2. `init` phase: run JavaScript initialization (e.g. set up your HTML elements), after `mycontrol.ini()` it is safe to use all API of the aprticular control (see controls description below)
@@ -152,7 +152,7 @@ API functions are called in a certain order. Keep the order to avoid errors. _\[
      4. **render** _\[loop\]_
         - `glDrawing` phase: particular image is going to be post-processed: load data to GPU that differs tile to tile
  
-##### Selected VisualisationLayer API
+##### Selected VisualizationLayer API
     
 At your disposal are these global variables:
 - `uniform float pixel_size_in_fragments;` - how many fragmens can fit into one pixel on the screen
@@ -305,14 +305,14 @@ The shader can specify data references for rendering from nD data sources.
  
 
 ### More advanced stuff: using multiple data sources at once
-One might want to combine multiple data into one visualisation (shader) part. To do so:
+One might want to combine multiple data into one visualization (shader) part. To do so:
 - Define all data ID's you access in the shader setup using `dataReference` array
 
 Having data set-up like this (and sent to the webgl module using `setup([<the data>], ...)` in the right order),
 ```json
 "data": ["image1", "image2", "image3", "image4", "image5", "image6"]
 ```
-and having one visualisation goal set-up in the following manner:
+and having one visualization goal set-up in the following manner:
 ```json
      "shaders": {
          "data_source_main": {

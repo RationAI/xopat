@@ -11,7 +11,7 @@ describe('Annotations - User Controls', () => {
 
     it('Get reference', () => {
 
-        let visualisation = {
+        let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0)
             }),
@@ -31,7 +31,7 @@ describe('Annotations - User Controls', () => {
             }
         }
 
-        cy.launch(visualisation);
+        cy.launch(visualization);
 
         utils.waitForViewer().then(w => {
             ANNOTATIONS = w.OSDAnnotations.instance();

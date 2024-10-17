@@ -19,9 +19,8 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
         MODULES = core.MODULES,
         ENV = core.ENV;
 
-    let modulePaths = scanDir(core.ABS_MODULES);
-
-    for (let dir of modulePaths) {
+    let pluginPaths = scanDir(core.ABS_PLUGINS);
+    for (let dir of pluginPaths) {
         if (dir == "." || dir == "..") continue;
 
         let fullPath = `${core.ABS_PLUGINS}${dir}/`;
@@ -41,7 +40,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                 data["loaded"] = false;
 
                 if (fileExists(fullPath + "style.css")) {
-                    data["styleSheet"] = fullPath + "style.css";
+                    data["styleSheet"] = data["path"] + "style.css";
                 }
                 data["modules"] = data["modules"] || [];
 
@@ -58,11 +57,11 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                         if (!isType(ENV["plugins"], "object")) ENV["plugins"] = {};
                         const ENV_PLUG = ENV["plugins"];
 
-                        if (isType(ENV_PLUG[data["id"]], "string")) {
+                        if (isType(ENV_PLUG[data["id"]], "object")) {
                             data = core.objectMergeRecursiveDistinct(data, ENV_PLUG[data["id"]]);
                         }
 
-                        if (isType(data["permaLoad"], "boolean") && core.parseBool(data["permaLoad"])) {
+                        if (core.parseBool(data["permaLoad"]) === true) {
                             data["loaded"] = true;
                         }
                     } else {
@@ -90,6 +89,17 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                     "includes": [],
                     "modules": [],
                 };
+            }
+        }
+    }
+
+    for (let pid in PLUGINS) {
+        const plugin = PLUGINS[pid];
+        plugin.loaded &= !plugin.error;
+        if (plugin.loaded) {
+            for (let mid of plugin.modules) {
+                const module = MODULES[mid];
+                if (module) module.loaded = true;
             }
         }
     }

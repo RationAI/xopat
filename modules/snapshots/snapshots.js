@@ -4,13 +4,13 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         super("snaphots");
         this.viewer = VIEWER;
 
-        this.initEventSource();
+        this.registerAsEventSource();
 
         this._idx = 0;
         this._steps = [];
         this._currentStep = null;
         this._deprecated_IO_API();
-        this.initIO(); //todo consider delegation to plugins that use snapshots
+        this.initPostIO(); //todo consider delegation to plugins that use snapshots
         this._utils = VIEWER.tools;
 
         this._captureVisualization = false;
@@ -334,7 +334,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
             }
         }
         return {
-            index: this.viewer.bridge.currentVisualisationIndex(),
+            index: this.viewer.bridge.currentVisualizationIndex(),
             cache: shadersCache,
             order: [...vis.order]
         }
@@ -409,7 +409,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     _setVisualization(step, duration) {
         let bridge = this.viewer.bridge,
             from = step.visualization,
-            curIdx = bridge.currentVisualisationIndex(),
+            curIdx = bridge.currentVisualizationIndex(),
             curVis = bridge.visualization(from.index),
             needsRefresh = !this._equalOrder(curVis.order, from.order);
 
@@ -433,9 +433,9 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         if (curIdx !== from.index) {
             //refetch (todo update select)
             curVis.order = from.order;
-            bridge.switchVisualisation(from.index);
+            bridge.switchVisualization(from.index);
         } else if (needsRefresh) {
-            bridge.webGLEngine.rebuildVisualisation(from.order);
+            bridge.webGLEngine.rebuildVisualization(from.order);
             bridge.redraw(duration * 900); //50% od the duration allowed to be constantly updated
         }
     }

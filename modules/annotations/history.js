@@ -39,6 +39,12 @@ OSDAnnotations.History = class {
         this._focusWithScreen = value;
     }
 
+    /**
+     * Set ability to auto-change the history ui position (detached / contained)
+     * @param {function} renderer function that acts like an event - receives history reference
+     *      and should attach the history HTML where desired
+     * @param maxHeight maxHeight css property
+     */
     setAutoOpenDOMRenderer(renderer, maxHeight="auto") {
         this._autoDomRenderer = renderer;
         this._maxHeight = maxHeight;
@@ -47,10 +53,8 @@ OSDAnnotations.History = class {
     /**
      * Open external menu window with the history toolbox
      * focuses window if already opened.
-     * @param {function} renderer function that takes:
-     *    - a container ID that should be set
-     *    - two functions returning HTML strings: a header and a body and attaches them
-     *  to the DOM where desired, the container SHOULD RECEIVE ID of the first argument
+     * @param {function} renderer function that acts like an event - receives history reference
+     *      and should attach the history HTML where desired
      */
     openHistoryWindow(renderer=undefined) {
 
@@ -112,6 +116,9 @@ window.addEventListener("beforeunload", (e) => {
         });
     }
 
+    /**
+     * Reopen the history window in the other context, open if not opened
+     */
     swapHistoryWindowLocation() {
         const willOpenNewWindow = !this._lastOpenedInDetachedWindow;
         if (willOpenNewWindow) {
@@ -336,8 +343,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             node.css("background", "var(--color-bg-success)");
             if (node[0]) {
                 let bounds = node[0].getBoundingClientRect();
-                let ctx = this.winContext();
-
+                let ctx = this.winContext()
                 if (this._lastOpenedInDetachedWindow) {
                     if (bounds.top < 0 || bounds.bottom > (ctx.innerHeight || ctx.document.documentElement.clientHeight)) {
                         board.parents("#window-content").scrollTo(node, 150, {offset: -20});

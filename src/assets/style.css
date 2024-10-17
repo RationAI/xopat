@@ -10,6 +10,9 @@
 .text-shadow {
     text-shadow: -1px 0 var(--color-bg-primary), 0 1px var(--color-bg-primary), 1px 0 var(--color-bg-primary), 0 -1px var(--color-bg-primary);
 }
+.text-shadow-mild {
+    text-shadow: 0px 0px 3px var(--color-bg-primary);
+}
 html[data-color-mode=dark] .invert-icon {
     filter: invert(0.8);
 }
@@ -322,9 +325,33 @@ input.switch:checked + label span {
     color: var(--color-state-focus-border);
 }
 
-/**
-todo remplace #cache snapshot with this:
+/* HTML: <div class="loader"></div> from https://css-loaders.com/spinner/ */
+.loader {
+    width: 50px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 8px solid var(--color-icon-primary);
+    animation:
+            l20-1 0.8s infinite linear alternate,
+            l20-2 1.6s infinite linear;
+}
+@keyframes l20-1{
+    0%    {clip-path: polygon(50% 50%,0       0,  50%   0%,  50%    0%, 50%    0%, 50%    0%, 50%    0% )}
+    12.5% {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100%   0%, 100%   0%, 100%   0% )}
+    25%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 100% 100%, 100% 100% )}
+    50%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
+    62.5% {clip-path: polygon(50% 50%,100%    0, 100%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
+    75%   {clip-path: polygon(50% 50%,100% 100%, 100% 100%,  100% 100%, 100% 100%, 50%  100%, 0%   100% )}
+    100%  {clip-path: polygon(50% 50%,50%  100%,  50% 100%,   50% 100%,  50% 100%, 50%  100%, 0%   100% )}
+}
+@keyframes l20-2{
+    0%    {transform:scaleY(1)  rotate(0deg)}
+    49.99%{transform:scaleY(1)  rotate(135deg)}
+    50%   {transform:scaleY(-1) rotate(0deg)}
+    100%  {transform:scaleY(-1) rotate(-135deg)}
+}
 
+/**
   Selectable multibutton shows on hover
   Use:
      <[container] class="hover-selectable">
@@ -344,6 +371,7 @@ todo remplace #cache snapshot with this:
     display: flex !important;
 }
 
+
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
@@ -353,6 +381,28 @@ todo remplace #cache snapshot with this:
     font-style: normal;
     font-weight: 400;
     src: url(icons.woff2) format('woff2');
+}
+
+/* font awesome: default behavior extended by these properties
+                 to avoid the styling, use full name, e.g. fa-solid
+*/
+.fas, .far, .fab {
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+    color: var( --color-icon-primary);
+    vertical-align: middle;
+    padding: 3px 9px;
+    text-rendering: optimizeLegibility;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'liga';
 }
 
 .material-icons {
@@ -369,6 +419,12 @@ todo remplace #cache snapshot with this:
     direction: ltr;
     -webkit-font-feature-settings: 'liga';
     -webkit-font-smoothing: antialiased;
+    color: var( --color-icon-primary);
+    vertical-align: middle;
+    padding: 0 5px;
+    text-rendering: optimizeLegibility;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'liga';
 }
 /*Important: fixes the navigator viewport position*/
 div {box-sizing: initial !important;}
@@ -403,8 +459,8 @@ div {box-sizing: initial !important;}
 @keyframes spin { 100% {transform: rotate(360deg);} }
 .inline-pin {cursor: pointer;vertical-align: baseline !important;}
 .inline-pin.pressed  {transform: translate(0, 6px);}
-.inline-pin.pressed::after {content: '';width: 20px;height: 7px;background: var(--color-bg-canvas);position: absolute;
-    right: 7px;top: 17px;}
+.inline-pin.pressed::after {content: '';width: 6px;height: 7px;background: var(--color-bg-canvas);position: absolute;
+    right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
 .shader-part {background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));}
@@ -431,13 +487,10 @@ div {box-sizing: initial !important;}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
 #tissue-preview-container {
-    height: 50px;
     flex-direction: row;
     display: flex;
 }
-#tissue-preview-container:hover {
-    height: 200px;
-}
+
 #tissue-preview-container .selected::before {
     content: '';
     width: 100%;
@@ -448,14 +501,8 @@ div {box-sizing: initial !important;}
     top: 0;
     z-index: 2;
 }
-#tissue-preview-container .pointer:hover::before {
-    z-index: 4;
-}
+
 #tissue-title-header {
-    position: absolute;
-    right: 12px;
-    top: 39px;
-    writing-mode: tb;
     font-size: 16px;
     font-weight: bold;
 }
@@ -471,10 +518,12 @@ div {box-sizing: initial !important;}
     box-shadow: var(--color-shadow-medium);
     z-index: 3;
 }
-
-#tissue-preview-container img {
-    height: 200px;
-
+#tissue-preview-container .tissue-label {
+    position: absolute;
+    bottom: 2px;
+    text-wrap: nowrap;
+    font-size: xx-small;
+    color: var(--color-text-link);
 }
 #tissue-preview-container img:hover {
 
@@ -510,7 +559,12 @@ input.selectable-image-row-context:checked + div {
 .popUpEnter{opacity: 1 !important;animation: popUpEnter 0.2s;-webkit-animation: popUpEnter 0.2s;}
 .popUpHide{opacity: 0;display: none !important;animation: popUpHide 0.2s;-webkit-animation: popUpHide 0.2s;
     -webkit-animation-fill-mode: forwards;animation-fill-mode: forwards;}
-
+.loading-text-style {display: block !important;animation: pulsing 2s linear infinite;}
+@keyframes pulsing {
+    from { opacity: 1; }
+    50% { opacity: 0.5; }
+    to { opacity: 1; }
+}
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
@@ -519,17 +573,6 @@ input.selectable-image-row-context:checked + div {
 a {cursor: pointer;}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
-.material-icons {font-family: 'Material Icons';font-weight: normal;font-style: normal;font-size: 24px;
-    display: inline-block;color: var( --color-icon-primary);line-height: 1;text-transform: none;letter-spacing: normal;
-    word-wrap: normal;white-space: nowrap;direction: ltr;vertical-align: middle;padding: 0 5px;
-    -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'liga';}
-.fa {font-weight: normal;font-style: normal;font-size: 24px;
-    display: inline-block;color: var( --color-icon-primary);line-height: 1;text-transform: none;letter-spacing: normal;
-    word-wrap: normal;white-space: nowrap;direction: ltr;vertical-align: middle;padding: 0 5px;
-    -webkit-font-smoothing: antialiased;text-rendering: optimizeLegibility;-moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'liga';}
-
 /* For some reason Github css does not style input range */
 input[type=range] { height: 25px;  -webkit-appearance: none; /*margin: 3px 0;*/ width: 65%; background: transparent;
     vertical-align: middle; margin: 0;}

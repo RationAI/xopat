@@ -22,6 +22,7 @@ export default {
     background: (overrides, ...dataIndexes) => {
         return dataIndexes.map(i => ({
             "dataReference": i,
+            "name": ["FirstIndex", "SecondIndex", "ThirdIndex", "FourthIndex"][i],
             "lossless": false,
             ...overrides
         }));

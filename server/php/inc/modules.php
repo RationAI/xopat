@@ -33,7 +33,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                         $data = array_merge_recursive_distinct($data, $ENV_MOD[$data["id"]]);
                     }
 
-                    if (isset($data["permaLoad"]) && $data["permaLoad"]) {
+                    if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
                         $data["loaded"] = true;
                     }
                 } else {
@@ -60,11 +60,8 @@ function scanDependencies(&$itemList, $id, $contextName) {
     $item = &$itemList[$id];
     global $order;
 
-    if ($item["_priority"] > -1) {
-        return true;
-    }
-
-    $item["_priority"] = -1;
+    if (isset($item["_xoi"])) return $item["_xoi"] > 0;
+    $item["_xoi"] = -1;
 
     $valid = true;
     foreach ($item["requires"] as $dependency) {
@@ -81,15 +78,15 @@ function scanDependencies(&$itemList, $id, $contextName) {
             return false;
         }
 
-        if (!isset($dep["_priority"])) {
+        if (!isset($dep["_xoi"])) {
             $valid &= scanDependencies($itemList, $dependency, $contextName);
-        } else if ($dep["_priority"] == -1) {
+        } else if ($dep["_xoi"] == -1) {
             $item["error"] = $i18n->t('php.cyclicDeps',
                 array("context" => $contextName, "dependency" => $dependency));
             return false;
         }
     }
-    $item["_priority"] = $order++;
+    $item["_xoi"] = $order++;
     if (!$valid) {
         $item["error"] = $i18n->t('php.removedInvalidDeps',
             array("dependencies" => implode(", ", $item["requires"])));
@@ -99,9 +96,7 @@ function scanDependencies(&$itemList, $id, $contextName) {
 
 //make sure all modules required by other modules are loaded, goes in acyclic deps list - everything gets loaded
 function resolveDependencies(&$itemList) {
-    for (end($itemList); key($itemList)!==null; prev($itemList)){
-        //has to be in reverse order!
-        $mod = current($itemList);
+    foreach ($itemList as $_ => $mod){
         if ($mod["loaded"]) {
             foreach ($mod["requires"] as $__ => $requirement) {
                 $itemList[$requirement]["loaded"] = true;
@@ -155,7 +150,7 @@ function printDependencies($directory, $item) {
 foreach ($MODULES as $id=>$mod) {
     //scan only if priority not set (not visited yet)
 
-    if (!isset($mod["_priority"])) {
+    if (!isset($mod["_xoi"])) {
         scanDependencies($MODULES, $id, 'modules');
     }
 }

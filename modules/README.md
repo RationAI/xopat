@@ -118,8 +118,8 @@ Returns stored value if available, supports cookie caching and the value gets ex
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
 for build-in defaults, defined in the viewer core.
 
-#### `APPLICATION_CONTEXT::setOption(key, value, cookies=true)`
-Stores value under arbitrary `key`, caches it if allowed within cookies. The value gets exported with the viewer. 
+#### `APPLICATION_CONTEXT::setOption(key, value, cache=true)`
+Stores value under arbitrary `key`, caches it if allowed. The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor.
 
 #### `APPLICATION_CONTEXT::getData(key)`
@@ -131,7 +131,7 @@ Modules (and plugins) can have their own event system - in that case, the `EVENT
 should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
 should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
 
-> Events are available only after `this.initEventSource()` has been called.
+> Events are available only after `this.registerAsEventSource()` has been called.
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -154,7 +154,7 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 ``bindIO`` method is available that explicitly enables IO within a module. The module should have
 explicit impact on the viewer and load data only when requested, so leave this method call to the
 code using your module if possible.
-
+todo docs
 The example below shows how to implement IO within a module with proper function overrides.
 ````js
 async exportData() {
@@ -175,13 +175,7 @@ export something like:
   "presets": [...]
 }
 ````
-
-#####Note:
-It is possible (but not advised) to use internal core API to do custom exports: 
-``````javascript
-VIEWER.addHandler('export-data', e => e.setSerializedData(...));
-let data = APPLICATION_CONTEXT.getData(...);
-``````
+TODO DOCS
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create
@@ -195,20 +189,33 @@ the functionality appropriately. This includes:
  - visualization swapping
  
 Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.tools.referencedImage()`` to get to the _reference_ of a Tiled Image: an image wrt. which
+Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
 all measures should be done.
 
 ## Gotchas
 Check plugin's README in case you did not. The available API is described there to greater detail.
 
-There is no event for IO initialization (events are included at will), however, you can override ``initIO`` to do so:
+#### Default IO
+A plugin or a module can export data either with custom logics based on events, or by built-in
+export system. This system is handy since it will automatically integrate file-like IO behavior
+within your application via HTTP POST.
+
+All you need to do is to override ``exportData`` and `importData` methods in the element root class
+and call ``this.initPostIO()`` at the startup. If you want to have a custom logics with the IO initialization,
+you can override the initialization like this:
 ````js
-async initIO() {
-    if (await super.initIO()) {
+async initPostIO() {
+    const postStore = await super.initPostIO();
+    if (postStore) {
         //... do something
-        return true;
+        // e.g. read key 'key'
+        const data = await postStore.get('key');
     }
-    return false;
+    return postStore;
 }
 ````
-This might come in handy if you use cached values and want to import them at start-up.
+This might come in handy if you for example want to do additional IO initialization logics.
+
+> **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
+> ``module[<module_id>.key] = value;``. Nested keys are up to the module to manage for itself,
+> e.g. ``module[<module_id>.parentKey.subKey] = value;``.

@@ -12,6 +12,9 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             if (x === "false") return false;
             if (x === "true") return true;
         }
+        if (type === "number") {
+            return !!x;
+        }
         return undefined;
     }
 
@@ -110,7 +113,8 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         },
 
         requireOpenseadragon: function() {
-            return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}"></script>\n`;
+            const version = this.VERSION;
+            return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
 
         requireLib: function (name) {
