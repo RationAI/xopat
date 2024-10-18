@@ -1375,8 +1375,8 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             // Prepare data
             const activeVis = visualizations[activeVisIndex];
             VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
+            let count = 0;
             for (let shaderId in activeVis.shaders) {
-
                 const shaderConfig = activeVis.shaders[shaderId];
                 toOpen.push({
                     source: VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server,
@@ -1384,8 +1384,9 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     ),
                     shader: {[shaderId] : shaderConfig}
                 });
+                count++;
             }
-            openAll(activeVis.shaders.length);
+            openAll(count);
 
             // VIEWER.bridge.loadShaders(
             //     activeVisIndex,
