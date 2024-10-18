@@ -409,7 +409,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     let i = 0;
                     const select = $("#shaders"),
                         activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
-                    VIEWER.drawer.renderer.foreachVisualization(function (vis) {
+                    APPLICATION_CONTEXT.config.visualizations.forEach(function (vis) {
                         let selected = i == activeIndex ? "selected" : "";
                         if (vis.error) {
                             select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
@@ -1053,16 +1053,16 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         const eventOpts = {};
 
 
-        const seaGL = VIEWER.bridge;
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && seaGL) {
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
             const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
-            const activeVis = seaGL.visualization();
+
+            //TODO fix: now hardcoded first item
+            const activeVis = APPLICATION_CONTEXT.config.visualizations[0];
             if (layerWorldItem) {
                 UTILITIES.prepareTiledImage(layerPosition,
                     layerWorldItem, activeVis);
 
                 $("#panel-shaders").css('display', 'block');
-                seaGL.initAfterOpen();
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
