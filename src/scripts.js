@@ -9,7 +9,12 @@ function initXopatScripts() {
     // opacity of general layer available everywhere
     $("#global-opacity input").on("input", function() {
         let val = $(this).val();
-        VIEWER.world.getItemAt(VIEWER.bridge.getWorldIndex()).setOpacity(val);
+        for (let imageIndex = 0; imageIndex < VIEWER.world.getItemCount(); imageIndex++) {
+            const image = VIEWER.world.getItemAt(imageIndex);
+            if (!image.getBackgroundConfig) {
+                image.setOpacity(val);
+            }
+        }
     });
 
     $(VIEWER.element).on('contextmenu', function(event) {
