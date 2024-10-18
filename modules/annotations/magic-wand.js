@@ -29,7 +29,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         //     debugGridColor:     VIEWER.debugGridColor,
         //     options:            VIEWER.drawerOptions[drawerType]
         // });
-        this.drawer = new OpenSeadragon.Drawer({
+        this.drawer = new OpenSeadragon.CanvasDrawer({
             viewer:             VIEWER,
             viewport:           VIEWER.viewport,
             element:            VIEWER.canvas,
@@ -75,9 +75,11 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this.drawer.clear();
         const targetImage = VIEWER.world.getItemAt(this.tiledImageIndex),
             oldDrawer = targetImage._drawer;
-        targetImage._drawer = this.drawer;
-        targetImage.draw();
-        targetImage._drawer = oldDrawer;
+
+        //TODO new openseadragon API might have this prop removed
+        //targetImage._drawer = this.drawer;
+        this.drawer.draw([targetImage]);
+        //targetImage._drawer = oldDrawer;
         // end
         const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
         this.data = {
