@@ -41,10 +41,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(instance, options) {
-       if (instance.type === "group") {
-           this._configureParts(instance.item(0), instance.item(1), options);
-           this._configureWrapper(instance, instance.item(0), instance.item(1), options);
-       }
+        if (instance.type === "group") {
+            this._configureParts(instance.item(0), instance.item(1), options);
+            this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+        }
     }
 
     /**

@@ -8,38 +8,94 @@ addPlugin('empaia', class extends XOpatPlugin {
         this._currentCaseId = this._currentAppId = this.scopeAPI = null;
         this.api.__scope_def = [null, null];
 
-        VIEWER.addHandler('background-image-swap', e => this.pluginReady());
 
-        this.integrateWithSingletonModule('annotations', module => {
+        this.integrateWithSingletonModule('annotations', async module => {
             EmpationAPI.integrateWithAnnotations(module);
 
             const Convertor = OSDAnnotations.Convertor.get("empaia");
-            module.addHandler('annotation-create', ev => {
-                const empaiaTiledImage = VIEWER.scalebar.getReferencedTiledImage();
+            const convertor = new Convertor(module, {});
 
-                const preset = module.presets.get(ev.object.presetID)
-                console.log(new Convertor(module, {}).encodeSingleObject(ev.object, preset, empaiaTiledImage.source));
-            });
-            module.addHandler('annotation-delete', ev => {
+            if (!this.scopeAPI) {
+                await this.refreshScope(module);
+            } else {
+                await this.stateChanged(module);
+            }
 
-            });
-            module.addHandler('annotation-replace', ev => {
+            VIEWER.addHandler('background-image-swap', e => this.refreshScope(module));
 
-            });
-            module.addHandler('annotation-edit', ev => {
+            //todo some queue that performs updates one by one?
 
-            });
+            // module.addHandler('annotation-create', async ev => {
+            //     const empaiaTiledImage = VIEWER.scalebar.getReferencedTiledImage();
+            //     const annotation = convertor.encodeSingleObject(ev.object, empaiaTiledImage.source);
+            //     const annot = await this.scopeAPI.annotations.create(annotation);
+            //     ev.object.id = annot.id;
+            // });
+            // module.addHandler('annotation-delete', ev => {
+            //     if (!ev.object.id) {
+            //         console.warn("NO ID!")
+            //     }
+            //     this.scopeAPI.annotations.deleteById(ev.object.id);
+            // });
+            // module.addHandler('annotation-replace', async ev => {
+            //     if (ev.previous) {
+            //         if (!ev.previous.id) {
+            //             console.warn("NO ID!")
+            //         }
+            //         this.scopeAPI.annotations.deleteById(ev.previous.id);
+            //     }
+            //     if (ev.next) {
+            //         ev.next.npp_created = ev.previous.npp_created;
+            //         const empaiaTiledImage = VIEWER.scalebar.getReferencedTiledImage();
+            //         const annotation = convertor.encodeSingleObject(ev.next, empaiaTiledImage.source);
+            //         const annot = await this.scopeAPI.annotations.create(annotation);
+            //         ev.object.id = annot.id;
+            //     }
+            // });
+            // module.addHandler('annotation-edit', ev => {
+            //     if (!ev.object.id) {
+            //         console.warn("NO ID!")
+            //     }
+            //     const empaiaTiledImage = VIEWER.scalebar.getReferencedTiledImage();
+            //     const annotation = convertor.encodeSingleObject(ev.object, empaiaTiledImage.source);
+            //     this.scopeAPI.annotations.update(annotation);
+            // });
         });
     }
 
-    async pluginReady() {
+    async refreshScope(module) {
         const bgId = APPLICATION_CONTEXT.referencedId();
         if (!this.setActiveScope(bgId)) {
             //todo warn!
         } else {
             this.scopeAPI = await this.api.newScopeUse(this._currentCaseId, this._currentAppId);
+
+            if (module) {
+                await this.stateChanged(module);
+            }
         }
         console.log(this.scopeAPI);
+    }
+
+    async stateChanged(module) {
+        if (!this.scopeAPI) {
+            return;
+        }
+        //todo clear?
+        //todo loading screen?
+
+        const slideId = VIEWER.scalebar.getReferencedTiledImage()?.source?.getEmpaiaId();
+        if (!slideId) {
+            //todo error message
+            return;
+        }
+        try {
+            const annotations = await this.scopeAPI.annotations.query({creators: [this.scopeAPI.id], references: [slideId]});
+            module.import(annotations, {format: "empaia"}, true);
+        } catch (e) {
+            //todo err
+            throw e;
+        }
     }
 
     setActiveScope(wsiID) {

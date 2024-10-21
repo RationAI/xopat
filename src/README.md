@@ -304,18 +304,24 @@ require_core("loader");
 //we can do in javascript later
 ?>
 <script>
-    //loader needs this data from the plugins.php
-    const runLoader = initXOpatLoader(
-        <?php echo json_encode($PLUGINS) ?>,
-        <?php echo json_encode($MODULES) ?>,
-        '<?php echo PLUGINS_FOLDER ?>',
-        '<?php echo MODULES_FOLDER ?>',
-        '<?php echo VERSION ?>');
-    runLoader();
-
-    UTILITIES.loadModules(()=>{
-        console.log('Loaded, yay!');
-    }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
+    async function() {
+        //loader needs this data from the plugins.php
+        const runLoader = initXOpatLoader(
+            <?php echo json_encode($PLUGINS) ?>,
+            <?php echo json_encode($MODULES) ?>,
+            '<?php echo PLUGINS_FOLDER ?>',
+            '<?php echo MODULES_FOLDER ?>',
+            '<?php echo VERSION ?>',
+            // for demonstration purposes, we request awaiting loader, which makes sure all 
+            // plugins finish their initialization, default is false
+            true  
+        );
+        await runLoader();
+    
+        UTILITIES.loadModules(()=>{
+            console.log('Loaded, yay!');
+        }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
+    }();
 </script>
 
 ````
