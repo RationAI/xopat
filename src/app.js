@@ -1007,7 +1007,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         background,
         visualizations=[],
     ) {
-        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
         USER_INTERFACE.Loading.show(true);
         VIEWER.close();
 
@@ -1027,6 +1026,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 renderingWithWebGL = false;
             }
         }
+        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         config.data = data;
