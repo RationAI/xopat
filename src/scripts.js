@@ -261,10 +261,14 @@ function initXopatScripts() {
             point: VIEWER.viewport.getCenter()
         };
 
+        //delete unnecessary data
+        const data = {...APPLICATION_CONTEXT.config};
+        delete data.defaultParams;
+
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
+            ? JSON.stringify(data, WebGLModule.jsonReplacer)
+            : JSON.stringify(data, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
         APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
