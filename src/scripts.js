@@ -506,6 +506,24 @@ ${await UTILITIES.getForm()}
         });
     };
 
+    //TODO: make this a normal standard UI api (open / focus / inline)
+    window.UTILITIES.openDebuggingWindow = function (html = '') {
+        let ctx = Dialogs.getModalContext('__xopat__debug__window__');
+        if (ctx) {
+            ctx.window.focus();
+            return ctx.window;
+        }
+
+        //TODO ... VIEWER.drawer.showDebugging
+        Dialogs.showCustomModal('__xopat__debug__window__', 'Debugging Window', 'Debugging Window', html);
+        const window = Dialogs.getModalContext('__xopat__debug__window__')?.window;
+        if (!window) {
+            return null;
+        }
+
+        return window;
+    };
+
     $("body")
         .append("<a id='link-download-helper' class='d-none'></a>")
         .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
