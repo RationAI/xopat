@@ -321,7 +321,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
-        return `${x}_${y}/${level}/${this.tilesUrl}`;
+        return `${x}_${y}/${level}/${this.fileId}`;
     }
 
     getTileCacheDataAsContext2D(cacheObject) {
