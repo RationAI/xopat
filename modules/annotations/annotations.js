@@ -816,7 +816,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			for (let child of annotation._objects) delete child.excludeFromExport;
 		}
 		annotation.sessionID = this.session;
-		console.log("ANNOTATION CREATED");
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		this.history.push(annotation);
@@ -1006,6 +1005,48 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 		return targets;
+	}
+
+	/**
+	 * Undo action, handled by either a history implementation, or the current mode
+	 */
+	undo() {
+		const can = this.mode.canUndo();
+		if (can === undefined) return this.history.back();
+		this.mode.undo();
+		this.raiseEvent('history-change');
+	}
+
+	/**
+	 * Redo action, handled by either a history implementation, or the current mode
+	 */
+	redo() {
+		const can = this.mode.canRedo();
+		if (can === undefined) return this.history.redo();
+		this.mode.redo();
+		this.raiseEvent('history-change');
+	}
+
+	/**
+	 * Check if undo can be performed, returns true/false. Called does not know wheter undo is being handled
+	 * on the history or active mode level.
+	 * @return {boolean}
+	 */
+	canUndo() {
+		const can = this.mode.canUndo();
+		if (can !== undefined) return can;
+		return this.history.canUndo();
+	}
+
+	/**
+	 * Check if redo can be performed, returns true/false. Called does not know wheter undo is being handled
+	 * on the history or active mode level.
+	 * @return {boolean}
+	 */
+	canRedo() {
+		const can = this.mode.canRedo();
+		if (can !== undefined) return can;
+		return this.history.canRedo();
 	}
 
 	/**
@@ -1465,7 +1506,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 
 			if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
-				return e.shiftKey ? this.history.redo() : this.history.back();
+				return e.shiftKey ? this.redo() : this.undo();
 			}
 		}
 
@@ -1478,10 +1519,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_objectDeselected(event) {
 		if (this.disabledInteraction || !event.target) return;
 		//todo make sure deselect prevent does not prevent also deletion
-		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
-			this.disabledInteraction = true;
-			this.canvas.setActiveObject(event.target);
-			this.disabledInteraction = false;
+		try {
+			if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
+				this.disabledInteraction = true;
+				this.canvas.setActiveObject(event.target);
+				this.disabledInteraction = false;
+			}
+		} catch (e) {
+			console.error(e);
 		}
 	}
 
@@ -1489,24 +1534,28 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.disabledInteraction) return;
 		let object = event.target;
 
-		if (!this.mode.objectSelected(event, object)) {
-			this.context.disabledInteraction = true;
-			this.context.canvas.discardActiveObject();
-			this.context.disabledInteraction = false;
-		} else {
-			this.history.highlight(object);
-			if (this.history.isOngoingEditOf(object)) {
-				if (this.isMouseOSDInteractive()) {
-					object.set({
-						hasControls: false,
-						lockMovementX: true,
-						lockMovementY: true
-					});
-				}
+		try {
+			if (!this.mode.objectSelected(event, object)) {
+				this.context.disabledInteraction = true;
+				this.context.canvas.discardActiveObject();
+				this.context.disabledInteraction = false;
 			} else {
-				let factory = this.getAnnotationObjectFactory(object.factoryID);
-				if (factory) factory.selected(object);
+				this.history.highlight(object);
+				if (this.history.isOngoingEditOf(object)) {
+					if (this.isMouseOSDInteractive()) {
+						object.set({
+							hasControls: false,
+							lockMovementX: true,
+							lockMovementY: true
+						});
+					}
+				} else {
+					let factory = this.getAnnotationObjectFactory(object.factoryID);
+					if (factory) factory.selected(object);
+				}
 			}
+		} catch (e) {
+			console.error(e);
 		}
 	}
 
@@ -1816,6 +1865,35 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
+	 * Undo action, by default noop
+	 */
+	undo() {
+	}
+
+	/**
+	 * Undo action, by default return undefined: not handled (undo() will not be called)
+	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
+	 */
+	canUndo() {
+		return undefined;
+	}
+
+	/**
+	 * Redo action, by default noop
+	 */
+	redo() {
+
+	}
+
+	/**
+	 * Redo action, by default return undefined: not handled (redo() will not be called)
+	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
+	 */
+	canRedo() {
+		return undefined;
+	}
+
+	/**
 	 * Check whether the mode is default mode.
 	 * @return {boolean} true if the mode is used as a default mode.
 	 */
@@ -1878,6 +1956,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
+		if (!isLeftClick) return false;
+
 		let clickTime = Date.now();
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
@@ -1926,6 +2006,16 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState {
 	constructor(context, id, icon, description) {
 		super(context, id, icon, description);
+	}
+
+	canUndo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
+	}
+
+	canRedo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
 	}
 
 	fftStartWith(point, ffTool, reference, wasCreated) {
@@ -2128,11 +2218,26 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
 		super(context, "custom", "format_shapes","🆆  create annotations manually");
+		this._lastUsed = null;
+	}
+
+	canUndo() {
+		if (this._lastUsed) return this._lastUsed.canUndoCreate();
+		return undefined;
+	}
+
+	canRedo() {
+		if (this._lastUsed) return false;
+		return undefined;
+	}
+
+	undo() {
+		if (this._lastUsed) return this._lastUsed.undoCreate();
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) return false;
-		this._finish(objectFactory);
+		this._finish(this._lastUsed);
 		return true;
 	}
 
@@ -2155,6 +2260,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	_init(point, isLeftClick, updater) {
 		if (!updater) return;
 		updater.initCreate(point.x, point.y, isLeftClick);
+		this._lastUsed = updater;
 	}
 
 	_finish(updater) {
@@ -2171,9 +2277,12 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 			} else {
 				this.context.deleteHelperAnnotation(helper);
 			}
+			this._lastUsed = null;
 			return;
 		}
-		updater.finishDirect();
+		if (updater.finishDirect()) {
+			this._lastUsed = null;
+		}
 	}
 
 	setFromAuto() {
@@ -2205,6 +2314,16 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	constructor(context) {
 		super(context, "fft-correct", "brush", "🆉  correction tool");
 		this.candidates = null;
+	}
+
+	canUndo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
+	}
+
+	canRedo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {

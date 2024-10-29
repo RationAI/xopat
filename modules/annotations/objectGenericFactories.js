@@ -133,11 +133,12 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -309,11 +310,12 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -735,6 +737,22 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
+    undoCreate() {
+        if (!this.canUndoCreate()) return;
+
+        const polygon = this._current;
+        polygon.points.pop();
+        if (this._followPoint) {
+            const currentPoint = polygon.points[polygon.points.length - 1];
+            this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+        }
+        polygon.setCoords();
+        this._context.canvas.renderAll();
+    }
+
+    canUndoCreate() {
+        return this._polygonBeingCreated && this._current?.points.length > 1;
+    }
 
     exportsGeometry() {
         return ["points"];
@@ -849,12 +867,8 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return -1; //always allow
     }
 
-    initCreate(x, y, isLeftClick = true) {
-        if (!this._polygonBeingCreated) {
-            this._initialize();
-        }
-
-        let properties = {
+    _getCommonHelperProps() {
+        return  {
             selectable: false,
             hasControls: false,
             evented: false,
@@ -863,6 +877,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             lockMovementX: true,
             lockMovementY: true
         };
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        if (!this._polygonBeingCreated) {
+            this._initialize();
+        }
+
+        const properties = this._getCommonHelperProps();
 
         //create circle representation of the point
         let polygon = this._current,
@@ -977,7 +999,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
+            radius: 5 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
