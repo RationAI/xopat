@@ -9,7 +9,7 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
             context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('range'));
         params.title = "";
         this._c2 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'), "second-");
+            context, name, "second-" + webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'));
     }
 
     init() {
@@ -96,7 +96,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         } else {
             this.cssGradient = this._discreteCssFromPallete;
         }
-        this.context.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
+        this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
     }
 
     init() {
@@ -121,7 +121,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
                 _this.value = selected;
                 _this.store(selected);
                 _this.changed("default", _this.pallete, _this.value, _this);
-                _this.context.invalidate();
+                _this.owner.invalidate();
             };
 
             this._setPallete(this.colorPallete);
@@ -314,7 +314,7 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
         } else {
             this.cssGradient = this._discreteCssFromPallete;
         }
-        this.context.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
+        this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this.glslCode());
     }
 
     init() {
@@ -342,7 +342,7 @@ WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModul
                     _this.value = _this.colorPallete;
                     _this.store(_this.colorPallete);
                     _this.changed("default", _this.pallete, _this.value, _this);
-                    _this.context.invalidate();
+                    _this.owner.invalidate();
                 }
             };
 
@@ -402,7 +402,7 @@ WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.ICo
         this.MAX_SLIDERS = 12;
         this._params = this.getParams(params);
 
-        this.context.includeGlobalCode('advanced_slider', `
+        this.owner.includeGlobalCode('advanced_slider', `
 #define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS} 
 float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN], in float mask[ADVANCED_SLIDER_LEN+1], in bool maskOnly, in float minValue) {
     float bigger = .0, actualLength = .0, masked = minValue;
@@ -502,7 +502,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
 
                     _this.changed("breaks", _this.value, encoded, _this);
                     _this.store(values, "breaks");
-                    _this.context.invalidate();
+                    _this.owner.invalidate();
                 }
 
                 for (let i = 0; i < pips.length; i++) {
@@ -524,7 +524,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                         this.style.background = (!_this.params.inverted && _this.mask[idx] > 0)
                         || (_this.params.inverted && _this.mask[idx] == 0) ?
                             "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
-                        _this.context.invalidate();
+                        _this.owner.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize-1;
                         _this.changed("mask", _this.mask, _this.mask, _this);
                         _this.store(_this.mask, "mask");
@@ -551,7 +551,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
                         _this.changed("breaks", _this.value, strValues, _this);
                         _this.store(unencoded, "breaks");
 
-                        _this.context.invalidate();
+                        _this.owner.invalidate();
                         _this._updatePending = false;
                     }, 50);
                 }
@@ -688,7 +688,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //                     self.css('border', 'none');
 //                     _this.store(_this.value);
 //                     _this.changed("default", _this.value, _this.encodedValue, _this);
-//                     _this.context.invalidate();
+//                     _this.owner.invalidate();
 //                 } catch (e) {
 //                     self.css('border', 'red 1px solid');
 //                 }
@@ -718,13 +718,13 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //         let dyLow = this.DY % 2 == 0 ? this.DY/2-1 : (this.DY-1) / 2;
 //
 //         return `uniform float ${this.webGLVariableName}[${this.DX*this.DY}];
-// float filter_${this.context.uid}_kernel(in vec2 coords, in float kernel[${this.DX}*${this.DY}]) {
-//    vec2 stepSize = 1.0 / ${this.context.textureSize()};
+// float filter_${this.owner.uid}_kernel(in vec2 coords, in float kernel[${this.DX}*${this.DY}]) {
+//    vec2 stepSize = 1.0 / ${this.owner.textureSize()};
 //    float result = .0;
 //    for (int i = -${dxLow}/2; i<${Math.floor(this.DX/2)}; i++) {
 //        for (int j = -${dyLow}/2; j<${Math.floor(this.DY/2)}; j++) {
 //            vec2 sampleCoord = vec2(coords.x + float(i)*stepSize.x, coords.y + float(j)*stepSize.y);
-//            result += kernel[i*${this.DY}+j] * ${this.context.sampleChannel("sampleCoord")};
+//            result += kernel[i*${this.DY}+j] * ${this.owner.sampleChannel("sampleCoord")};
 //        }
 //    }
 //    return result;
@@ -737,7 +737,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //
 //    sample(value=undefined, valueGlType='void') {
 //         if (typeof ratio !== "string") ratio = "v_texture_coords";
-//         return `filter_${this.context.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
+//         return `filter_${this.owner.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
 //     }
 //
 //     get supports() {

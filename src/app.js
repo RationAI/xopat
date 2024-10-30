@@ -570,10 +570,13 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
         const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
         let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
-        modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
-id="${dataId}-mode-toggle"
- style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
+        modeChange = '';
+
+// TODO: enable
+//         `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
+// id="${dataId}-mode-toggle"
+//  style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
+// onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
 
         let availableShaders = "";
         for (let available of WebGLModule.ShaderMediator.availableShaders()) {
@@ -1255,15 +1258,13 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         const toOpen = [];
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
-        const handleFinishOpenImageEvent = (item, url, index) => {
+        const handleFinishOpenImageEvent = (item, config, index) => {
             openedSources--;
             if (item) {
 
-                if (url.source) { //todo dirty
-                    const shader = url.shader;
-                    VIEWER.drawer.configureTiledImage(item, shader);
-                    url = url.source;
-                }
+                const shader = config.shader;
+                VIEWER.drawer.configureTiledImage(item, config.id, shader);
+                const url = config.source;
 
                 /**
                  * Fired before visualization is initialized and loaded.
@@ -1284,7 +1285,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     tileSource: source.source || source, //todo dirty
                     opacity: opacity,
                     success: (event) => {
-                        success({userArg, toOpenLastBgIndex, toOpenIndex, event});
+                        success({userArg, toOpenLastBgIndex, toOpenIndex, event, source});
                         handleFinishOpenImageEvent(event.item, source, toOpenIndex);
                     },
                     error: () => {
@@ -1301,7 +1302,10 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 const bg = background[i];
                 if (isSecureMode) delete bg.protocol;
                 const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
+                toOpen.push({
+                    source: urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]),
+                    id: `bg-${i}`
+                });
             }
 
             imageOpener = imageOpenerCreator(e => {
@@ -1309,18 +1313,27 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 e.event.item.getBackgroundConfig = () => {
                     return APPLICATION_CONTEXT.config.background[index];
                 };
+                e.event.item.getShaderId = () => {
+                    return e.source.id;
+                };
             });
         } else if (background.length > 0) {
             const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
             let selectedImage = background[selectedIndex];
             if (isSecureMode) delete selectedImage.protocol;
             const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
+            toOpen.push({
+                source: urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]),
+                id: `bg-${selectedIndex}`
+            });
 
             imageOpener = imageOpenerCreator(e => {
                 const index = e.userArg;
                 e.event.item.getBackgroundConfig = () => {
                     return APPLICATION_CONTEXT.config.background[index];
+                };
+                e.event.item.getShaderId = () => {
+                    return e.source.id;
                 };
             }, selectedIndex);
         }
@@ -1340,7 +1353,12 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
             for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
 
-            const visOpener = imageOpenerCreator(()=>{});
+            // todo dirty opening logics, simplify
+            const visOpener = imageOpenerCreator(e=>{
+                e.event.item.getShaderId = () => {
+                    return e.source.id;
+                };
+            });
             for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
         }
 
@@ -1382,7 +1400,8 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     source: VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server,
                         shaderConfig.dataReferences.map(rId => data[rId])
                     ),
-                    shader: {[shaderId] : shaderConfig}
+                    shader: {[shaderId] : shaderConfig},
+                    id: shaderId //todo dirty
                 });
                 count++;
             }

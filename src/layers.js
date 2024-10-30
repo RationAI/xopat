@@ -321,14 +321,24 @@ function initXopatLayers() {
              * @private
              */
             UTILITIES.shaderPartToogleOnOff = function(self, layerId) {
+                //todo layer id might not be correct here
+                const tiledImage = VIEWER.world._items.find(x => x.getShaderId && x.getShaderId() === layerId);
                 if (self.checked) {
-                    seaGL.visualization().shaders[layerId].visible = true;
+                    //todo find tiled image ID:
+                    tiledImage.setOpacity(tiledImage.__cachedOpacity || 1);
                     self.parentNode.parentNode.classList.remove("shader-part-error");
                 } else {
-                    seaGL.visualization().shaders[layerId].visible = false;
+                    tiledImage.__cachedOpacity = tiledImage.getOpacity();
+                    tiledImage.setOpacity(0);
                     self.parentNode.parentNode.classList.add("shader-part-error");
                 }
-                seaGL.reorder();
+                UTILITIES.renderViewport();
+            };
+
+            UTILITIES.renderViewport = function () {
+                // TODO enable clear somehow... or maybe not necessary
+                VIEWER.world.draw();
+                VIEWER.navigator.drawer.draw();
             };
 
             UTILITIES.changeVisualizationLayer = function(self, layerId) {

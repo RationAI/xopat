@@ -489,7 +489,12 @@ ${renders.join("")}
         });
         fallbackLayer.construct({}, [0]);
         for (let type of types) {
-            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
+            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {
+                default: {
+                    type: type
+                },
+                accepts: () => true,
+            }, Date.now(), {});
             let glType = ctrl.type;
             ctrl.name = type;
             if (!this.__uicontrols.hasOwnProperty(glType)) this.__uicontrols[glType] = [];
