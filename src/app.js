@@ -563,10 +563,10 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
             seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
         })
     }
-    function temp__createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
+    function temp__createHTMLLayerControls(html, dataId, isVisible, layer, wasErrorWhenLoading) {
         let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
         //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
-
+        const title = layer.name;
         let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
         const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
         let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
