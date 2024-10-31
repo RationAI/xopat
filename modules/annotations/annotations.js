@@ -96,7 +96,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	async importData(data) {
-		await this.import(data);
+		const options = {inheritSession: true};
+		if (typeof data === "object" && data.format) {
+			options.format = data.format;;
+		}
+		await this.import(data, options);
 	}
 
 	/**
@@ -263,7 +267,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
-		if (!options?.format) options.format = "asap-xml";
+		if (!options?.format) options.format = "native";
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
