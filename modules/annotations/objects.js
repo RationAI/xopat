@@ -347,6 +347,19 @@ OSDAnnotations.AnnotationObjectFactory = class {
     updateCreate(x, y) {
     }
 
+    /**
+     * Unfo of the last manual creation step
+     */
+    undoCreate() {
+    }
+
+    /**
+     * Check if factory (or its current state) will handle undoCreate() call
+     * @return {boolean} true if undoCreate() will undo one manual creation step
+     */
+    canUndoCreate() {
+        return false;
+    }
 
     /**
      * Update the object coordinates by user interaction
@@ -393,14 +406,19 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was performed directly by the user.
+     * @return {boolean} true if object finished; when factory for example
+     *   does not support direct finish, or decide not yet to finish, this should
+     *   return false.
      */
     finishDirect() {
+        return false;
     }
 
     /**
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was enforced by the environment (i.e.
-     * performed by the user indirectly).
+     * performed by the user indirectly). Thus, it shall finish the object creation
+     * at all costs - usually, an annotation mode will be changing.
      */
     finishIndirect() {
     }
@@ -496,7 +514,7 @@ OSDAnnotations.PolygonUtilities = {
         }
 
         const dy = a.y - b.y;
-        const py = (a.height + b.height) - Math.abs(dx);
+        const py = (a.height + b.height) - Math.abs(dy);
         return py > 0;
 
     },
@@ -514,7 +532,7 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = (15 - 12*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 

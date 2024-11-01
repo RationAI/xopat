@@ -202,6 +202,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     handleMouseHover(event, point) {
+        if (!this.context.presets.left) return;
         this._isLeft = true;
         this._process(event);
     }

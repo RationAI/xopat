@@ -13,7 +13,7 @@ require_once ABSPATH . "server/php/inc/init.php";
 
 if (!count($_POST)) {
     try {
-        $_POST = (array)json_decode(file_get_contents("php://input"), true);
+        $_POST = (array)json_decode(file_get_contents("php://input"), false);
     } catch (Exception $e) {
         //pass not a valid input
         $_POST = (object)[];
@@ -37,7 +37,7 @@ require_once PHP_INCLUDES . "plugins.php";
 function safeReadPostValue($val) {
     if (!is_string($val)) return $val;
     try {
-        return json_decode($val, true);
+        return json_decode($val);
     } catch (Exception $e) {
         return $val;
     }
@@ -64,6 +64,11 @@ foreach ($_POST as $key=>&$value) {
 //
 //$pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 //
+
+//ensureDefined($_POST, "params", {});
+//ensureDefined($_POST, "data", []);
+//ensureDefined($_POST, "background", []);
+//ensureDefined($_POST, "plugins", {});
 
 $CORE["serverStatus"]["name"] = "php";
 $CORE["serverStatus"]["supportsPost"] = true;

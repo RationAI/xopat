@@ -60,6 +60,15 @@ function ensureDefined($object, $property, $default) {
         $object->{$property} = $default;
         return false;
     }
+    $prop_type = gettype($object->{$property});
+    $def_type = gettype($default);
+    if ($def_type !== $prop_type) {
+        if ($def_type === "object") {
+            $object->{$property} = ((object)$object->{$property});
+        } else if ($def_type === "array") {
+            $object->{$property} = ((array)$object->{$property});
+        } // todo else: incompatible type :/
+    }
     return true;
 }
 

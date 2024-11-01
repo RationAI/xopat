@@ -136,8 +136,8 @@ ${UIComponents.Elements.checkBox({
 		);
 
 		const vertSeparator = '<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>';
-		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.back()">undo</span>
-<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.redo()">redo</span>`, vertSeparator],
+		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.undo()">undo</span>
+<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.redo()">redo</span>`, vertSeparator],
 			modes = this.context.Modes;
 		const defaultModeControl = (mode) => {
 			let selected = mode.default() ? "checked" : "";
@@ -238,23 +238,31 @@ ${modeOptions.join("")}</div>`, 'draw');
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
-			// manual mode check factory, which can be re-set only if matches
+			// in case mode does not change, check explicitly custom mode where factory type might change
 			if (id === "custom") {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				if (!preset) {
+				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+				if (!preset && !otherPreset) {
 					return;
 				}
-				if (preset.objectFactory.factoryID !== factory) {
-					this.updatePresetWith(preset.presetID, 'objectFactory', factory);
-					return;
-				}
+
+				this.context.setModeById("auto");  // this forces re-initialization if some object was being created
+				if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+				if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+				this.context.setModeById("custom");
+				return;
 			}
 			this.context.setModeById("auto");
 			$('#auto-annotation-mode').prop('checked', true).trigger('change');
 		} else {
+			// if custom mode also change factories, change both left and right uniformly to not confuse users
 			if (id === "custom" && factory) {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+				if (preset || otherPreset) {
+					if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+					if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+				}
 			}
 			this.context.setModeById(id);
 		}
@@ -315,6 +323,13 @@ ${modeOptions.join("")}</div>`, 'draw');
 	}
 
 	initHandlers() {
+		const refreshHistoryButtons = () => {
+			$("#toolbar-history-redo").css('color', this.context.canRedo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+			$("#toolbar-history-undo").css('color', this.context.canUndo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+		};
+
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => this.setupActiveTissue());
 		VIEWER.addHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
@@ -333,6 +348,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 				$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
 			}
 			USER_INTERFACE.Status.show(e.mode.getDescription());
+			refreshHistoryButtons();
 		};
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
@@ -354,16 +370,11 @@ ${modeOptions.join("")}</div>`, 'draw');
 		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
-		this.context.addHandler('history-change', e => {
-			$("#toolbar-history-redo").css('color', this.context.history.canRedo() ?
-				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
-			$("#toolbar-history-undo").css('color', this.context.history.canUndo() ?
-				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
-		});
+		this.context.addHandler('history-change', refreshHistoryButtons);
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
-			if (this.context.presets.right
+			if ((this.context.presets.right && this.context.mode !== this.context.Modes.AUTO)
 				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
 				return;
 			}
