@@ -1420,7 +1420,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				const mouseY = e.clientY;
 
 				const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
-				const nearTopEdge = mouseY >= 0 && edgeThreshold - mouseY;
+				const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
 				const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
 				const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
 
@@ -1435,7 +1435,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
 					let direction = current.minus(center);
 					direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
-					VIEWER.viewport.panTo(direction.times(0.01 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
+					VIEWER.viewport.panTo(direction.times(0.004 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
 					//_lastCalled = now;
 					//setTimeout(mouseNavigation, 35);
 				}

@@ -208,7 +208,15 @@
                     this.magnificationContainer = document.createElement("div");
                     this.magnificationContainer.style.position = "relative";
                     this.magnificationContainer.style.margin = "0";
+                    this.magnificationContainer.style.background = "var(--color-bg-backdrop)";
+                    this.magnificationContainer.style.paddingBottom = "15px";
+                    this.magnificationContainer.style.paddingTop = "8px";
+                    this.magnificationContainer.style.paddingLeft = "4px";
+                    this.magnificationContainer.style.paddingRight = "4px";
+                    this.magnificationContainer.style.opacity = "0.6";
                     this.magnificationContainer.style.display = "flex";
+                    this.magnificationContainer.style.borderRadius = "7px";
+
                     this.magnificationContainer.id = "viewer-magnification";
 
                     if (this.magnification > 0) {
@@ -226,7 +234,7 @@
                             stepPercIter -= stepPerc;
                         }
                         //few last step manually
-                        range[`${stepPercIter}%`] = [2];
+                        range[`${stepPercIter+stepPerc}%`] = [2];
                         values.push(2, 1);
                         values.reverse();
 
@@ -242,6 +250,17 @@
                                 this.viewer.viewport.zoomTo(desiredZoom);
                             }
                         };
+
+                        const reflectUpdate = (e) => {
+                            const image = this.getReferencedTiledImage();
+                            if (!image) {
+                                console.error("Linked referenced image does not exist!");
+                            }
+                            const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
+                            sliderContainer.noUiSlider.set(desiredZoom);
+                        };
+                        VIEWER.addHandler('zoom', reflectUpdate);
+
                         function closestValue (v) {
                             let d = Infinity, result = -1;
                             for (let i = 0; i < values.length; i++) {
@@ -279,7 +298,7 @@
                             pips: {
                                 mode: 'values',
                                 values: values,
-                                density: 1,
+                                density: 5,
                                 format: {
                                     // 'to' the formatted value. Receives a number.
                                     to: function (value) {

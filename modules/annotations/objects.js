@@ -532,7 +532,7 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = (15 - 12*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 
