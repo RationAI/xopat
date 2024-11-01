@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.0.0",
+    "version": "2.0.1",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -13,7 +13,7 @@
     /**
      * The Client App static configuration
      * @typedef {{
-     *   domain: string
+     *   domain: string,
      *   path: string,
      *   image_group_server: string,
      *   image_group_protocol: string,
@@ -91,7 +91,7 @@
     /**
      * The Viewer Default Settings, all overrideable through params configuration.
      * @typedef {{
-     *   sessionName: ?string
+     *   sessionName: ?string,
      *   locale: ?string,
      *   customBlending: ?boolean,
      *   debugMode: ?boolean,
@@ -163,7 +163,7 @@
      * to provide default values; the server shall set up these properties accordingly.
      * DO NOT modify these
      * @typedef {{
-     *   name: string
+     *   name: string,
      *   supportsPost: boolean
      * }} xoServerState
      */

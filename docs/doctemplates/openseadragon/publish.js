@@ -159,10 +159,10 @@ function updateItemName(item) {
 
 
 function namespaceTextToHeading(inputText, css='font-size: 14px !important;',
-                                subnamespaceClasses='',
-                                separator='.', joinSeparator=separator,
-                                subnamespacePrefix='',
-                                subnamespaceSiffix=separator) {
+    subnamespaceClasses='',
+    separator='.', joinSeparator=separator,
+    subnamespacePrefix='',
+    subnamespaceSiffix=separator) {
     let text = Array.isArray(inputText) ? inputText : inputText.split(separator);
     if (text.length > 1) {
         let final = text.pop();
@@ -173,7 +173,7 @@ function namespaceTextToHeading(inputText, css='font-size: 14px !important;',
 
 function linktoNice(name, linkText, title='') {
     return `<span title="${title}">` + linkto(name, namespaceTextToHeading(linkText, 'max-width: 100px;font-size: inherit !important;',
-            'f3-light left-ellipsis', '.', '.', '.', ''))
+        'f3-light left-ellipsis', '.', '.', '.', ''))
         + '</span>';
 }
 

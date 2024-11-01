@@ -25,43 +25,43 @@ window.AdvancedMenuPages = class {
         let classes;
         try {
             switch (root.type) {
-                case 'vega':
-                    classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
-                    let uid = `vega-${Date.now()}`;
-                    output.push(`<div class="${classes}" id="${uid}"></div>`);
-                    this.vegaInit[uid] = root;
-                    break;
-                case 'columns':
-                    classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
-                    output.push(`<div class="d-flex ${classes}">`);
-                    for (let col of root.children) {
-                        col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
-                        this.buildElements(output, col, sanitizer);
+            case 'vega':
+                classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
+                let uid = `vega-${Date.now()}`;
+                output.push(`<div class="${classes}" id="${uid}"></div>`);
+                this.vegaInit[uid] = root;
+                break;
+            case 'columns':
+                classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
+                output.push(`<div class="d-flex ${classes}">`);
+                for (let col of root.children) {
+                    col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
+                    this.buildElements(output, col, sanitizer);
+                }
+                output.push('</div>');
+                break;
+            case 'html':
+                if (sanitizer) {
+                    output.push(sanitizer(root.html));
+                } else if (!APPLICATION_CONTEXT.secure) {
+                    output.push(root.html);
+                }
+                break;
+            default:
+                function sanitizeDeep(node) {
+                    const t = typeof node;
+                    if (t === "string") return sanitizer ? sanitizer(node) : node;
+                    if (Array.isArray(node)) return node.map(sanitizeDeep);
+                    if (t === "object") {
+                        const result = {};
+                        for (let p in node) result[p] = sanitizeDeep(node[p]);
+                        return result;
                     }
-                    output.push('</div>');
-                    break;
-                case 'html':
-                    if (sanitizer) {
-                        output.push(sanitizer(root.html));
-                    } else if (!APPLICATION_CONTEXT.secure) {
-                        output.push(root.html);
-                    }
-                    break;
-                default:
-                    function sanitizeDeep(node) {
-                        const t = typeof node;
-                        if (t === "string") return sanitizer ? sanitizer(node) : node;
-                        if (Array.isArray(node)) return node.map(sanitizeDeep);
-                        if (t === "object") {
-                            const result = {};
-                            for (let p in node) result[p] = sanitizeDeep(node[p]);
-                            return result;
-                        }
-                        throw "Sanitization failed: possibly malicious or invalid object " + typeof node;
-                    }
-                    const result = UIComponents.Elements[root.type]?.(sanitizeDeep(root));
-                    result && output.push(result);
-                    break;
+                    throw "Sanitization failed: possibly malicious or invalid object " + typeof node;
+                }
+                const result = UIComponents.Elements[root.type]?.(sanitizeDeep(root));
+                result && output.push(result);
+                break;
             }
         } catch (e) {
             console.warn("AdvancedMenuPages: Failed to generate HTML.", root, e);

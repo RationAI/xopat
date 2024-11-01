@@ -41,10 +41,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(instance, options) {
-       if (instance.type === "group") {
-           this._configureParts(instance.item(0), instance.item(1), options);
-           this._configureWrapper(instance, instance.item(0), instance.item(1), options);
-       }
+        if (instance.type === "group") {
+            this._configureParts(instance.item(0), instance.item(1), options);
+            this._configureWrapper(instance, instance.item(0), instance.item(1), options);
+        }
     }
 
     /**
@@ -152,7 +152,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         this._context.deleteHelperAnnotation(obj[0]);
         this._context.deleteHelperAnnotation(obj[1]);
 
@@ -161,7 +161,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             pid = line.presetID;
 
         if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
-            return;
+            return false;
         }
 
         const props = this._presets.getCommonProperties();
@@ -174,6 +174,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         text.calcOCoords();
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     finishIndirect() {
@@ -420,13 +421,14 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //
 //     finishDirect() {
 //         let obj = this.getCurrentObject();
-//         if (!obj) return;
+//         if (!obj) return true;
 //         this._context.deleteHelperAnnotation(obj[0]);
 //         this._context.deleteHelperAnnotation(obj[1]);
 //
 //         obj = this._createWrap(obj, this._presets.getCommonProperties());
 //         this._context.addAnnotation(obj);
 //         this._current = undefined;
+//         return true;
 //     }
 //
 //     /**
@@ -633,7 +635,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //
 //     finishDirect() {
 //         let obj = this.getCurrentObject();
-//         if (!obj) return;
+//         if (!obj) return true;
 //
 //         const self = this;
 //         UTILITIES.uploadFile(url => {
@@ -657,6 +659,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             image.setAttribute('src', url);
 //         }, "image/*", "url");
 //         this._current = undefined;
+//         return true;
 //     }
 //
 //     finishIndirect() {

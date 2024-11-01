@@ -1,10 +1,4 @@
 /**
- * @typedef  { import("./config.json").xoEnv } xoEnv
- * @typedef  { import("./config.json").xoParams } xoParams
- * @typedef  { import("./config.json").xoClientSetup } xoClientSetup
- * @typedef  { import("./config.json").xoServerState } xoServerState
- */
-/**
  * @typedef BackgroundItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
@@ -560,6 +554,22 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             ppm = 1;
         } else ppm = 1e6 / ppm;
 
+        const magMicrons = microns || (micronsX + micronsY) / 2;
+
+        // todo try read metadata about magnification and warn if we try to guess
+        const values = [70, 2, 15, 5, 7, 10, 0.5, 20, 0.25, 40];
+        let index = 0, best = Infinity, mag;
+        if (magMicrons) {
+            while (index < values.length) {
+                const dev = Math.abs(magMicrons - values[index]);
+                if (dev < best && dev < values[index]) {
+                    best = dev;
+                    mag = values[index+1]
+                }
+                index += 2;
+            }
+        }
+
         VIEWER.makeScalebar({
             pixelsPerMeter: ppm,
             pixelsPerMeterX: ppmX,
@@ -572,7 +582,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             backgroundColor: "rgba(255, 255, 255, 0.5)",
             fontSize: "small",
             barThickness: 2,
-            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false)
+            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false),
+            magnification: mag
         });
     };
 

@@ -797,12 +797,12 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         });
         //tests #43ff64 --> [67, 255, 100]
         webglModuleTest.addVisualization({name: "Test", shaders: {
-                test: {
-                    type: "heatmap",
-                    params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
-                    dataReferences: [0]
-                }
-            }});
+            test: {
+                type: "heatmap",
+                params: {color: "#43ff64", threshold: 0, inverse: false, opacity: 1},
+                dataReferences: [0]
+            }
+        }});
         webglModuleTest.prepareAndInit(null, 2, 2);
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");

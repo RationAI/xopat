@@ -1,15 +1,15 @@
 (function ($) {
 /**
  * @typedef {{
- *  _deprecated?: Array<string>
+ *  _deprecated: Array<string> | undefined
  * }} XOpatStorage.SchemaElement
  *
  * @typedef {Object.<string, XOpatStorage.SchemaElement>} XOpatStorage.Schema
  *
  * @typedef {{
  *  id: string,
- *  schema?: XOpatStorage.Schema,
- *  strictSchema?: boolean
+ *  schema: XOpatStorage.Schema | undefined,
+ *  strictSchema: boolean | undefined
  * }} XOpatStorage.StorageOptions
  */
 
@@ -103,6 +103,7 @@ function errInstanceApi(instance, keys) {
     return false;
 }
 function errClassApi(cls, keys) {
+    cls = cls.prototype;
     for (let key of keys) {
         if (!key in cls) return `method ${key} is not implemented!`;
     }

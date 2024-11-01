@@ -31,7 +31,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         "meta":{"category":{"name":"Name","value":"Tumor"}}},{"color":"#96c896","factoryID":"polygon",
         "presetID":"Stroma","meta":{"category":{"name":"Name","value":"Stroma"}}},{"color":"#a05aa0",
         "factoryID":"polygon","presetID":"Immune cells","meta":{"category":{"name":"Name","value":"Immune cells"}}},
-        {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Name",
+    {"color":"#323232","factoryID":"polygon","presetID":"Necrosis","meta":{"category":{"name":"Name",
         "value":"Necrosis"}}},{"color":"#0000b4","factoryID":"polygon","presetID":"Region*","meta":{"category":
         {"name":"Name","value":"Region*"}}},{"color":"#fa3e3e","factoryID":"polygon","presetID":"Positive","meta":
         {"category":{"name":"Name","value":"Positive"}}},{"color":"#7070e1","factoryID":"polygon","presetID":
@@ -274,8 +274,8 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         }
 
         return {
-             objects: annotations,
-             presets: Object.values(presets)
+            objects: annotations,
+            presets: Object.values(presets)
         };
     }
 });

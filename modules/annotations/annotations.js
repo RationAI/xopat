@@ -96,7 +96,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	async importData(data) {
-		await this.import(data);
+		const options = {inheritSession: true};
+		if (typeof data === "object" && data.format) {
+			options.format = data.format;;
+		}
+		await this.import(data, options);
 	}
 
 	/**
@@ -263,7 +267,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
 	 */
 	async export(options={}, withAnnotations=true, withPresets=true) {
-		if (!options?.format) options.format = "asap-xml";
+		if (!options?.format) options.format = "native";
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -1008,6 +1012,48 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Undo action, handled by either a history implementation, or the current mode
+	 */
+	undo() {
+		const can = this.mode.canUndo();
+		if (can === undefined) return this.history.back();
+		this.mode.undo();
+		this.raiseEvent('history-change');
+	}
+
+	/**
+	 * Redo action, handled by either a history implementation, or the current mode
+	 */
+	redo() {
+		const can = this.mode.canRedo();
+		if (can === undefined) return this.history.redo();
+		this.mode.redo();
+		this.raiseEvent('history-change');
+	}
+
+	/**
+	 * Check if undo can be performed, returns true/false. Called does not know wheter undo is being handled
+	 * on the history or active mode level.
+	 * @return {boolean}
+	 */
+	canUndo() {
+		const can = this.mode.canUndo();
+		if (can !== undefined) return can;
+		return this.history.canUndo();
+	}
+
+	/**
+	 * Check if redo can be performed, returns true/false. Called does not know wheter undo is being handled
+	 * on the history or active mode level.
+	 * @return {boolean}
+	 */
+	canRedo() {
+		const can = this.mode.canRedo();
+		if (can !== undefined) return can;
+		return this.history.canRedo();
+	}
+
+	/**
 	 * Clear fabric selection (of any kind)
 	 */
 	clearSelection() {
@@ -1355,8 +1401,48 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
 			} else {
 				_this.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
+
 			}
 		});
+
+		// Cached event that keeps moving the viewport is not useful since it keeps moving when user exist the window
+		// let _lastCalled = 0;
+		// let _cachedEvent = null;
+		const mouseNavigation = e => {
+			// const now = Date.now();
+			if (this.mode !== this.Modes.AUTO /*|| now - _lastCalled > 30*/) {
+				//_cachedEvent = e || _cachedEvent;  // keep reference to the most recent event
+
+				const edgeThreshold = 20;
+				// const mouseX = _cachedEvent.clientX;
+				// const mouseY = _cachedEvent.clientY;
+				const mouseX = e.clientX;
+				const mouseY = e.clientY;
+
+				const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
+				const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
+				const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
+				const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
+
+				if (
+					(nearTopEdge < edgeThreshold && nearTopEdge > 0) ||
+					(nearRightEdge < edgeThreshold && nearRightEdge > 0) ||
+					(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
+					(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
+				) {
+					const center = VIEWER.viewport.getCenter(true);
+					//const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(_cachedEvent.x, _cachedEvent.y));
+					const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
+					let direction = current.minus(center);
+					direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
+					VIEWER.viewport.panTo(direction.times(0.004 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
+					//_lastCalled = now;
+					//setTimeout(mouseNavigation, 35);
+				}
+			}
+		};
+
+		window.addEventListener("mousemove", mouseNavigation);
 
 		this.canvas.on('mouse:wheel', function (o) {
 			if (_this.disabledInteraction) return;
@@ -1455,7 +1541,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (e.focusCanvas) {
 			if (!e.ctrlKey && !e.altKey) {
-				if (e.key === "Delete") return this.removeActiveObject();
+				if (e.key === "Delete" || e.key === "Backspace") return this.removeActiveObject();
 				if (e.key === "Escape") {
 					this.history._boardItemSave();
 					this.setMode(this.Modes.AUTO);
@@ -1463,8 +1549,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				}
 			}
 
-			if (e.ctrlKey && !e.altKey && e.code === "KeyZ") {
-				return e.shiftKey ? this.history.redo() : this.history.back();
+			if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
+				return e.shiftKey ? this.redo() : this.undo();
 			}
 		}
 
@@ -1477,10 +1563,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_objectDeselected(event) {
 		if (this.disabledInteraction || !event.target) return;
 		//todo make sure deselect prevent does not prevent also deletion
-		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
-			this.disabledInteraction = true;
-			this.canvas.setActiveObject(event.target);
-			this.disabledInteraction = false;
+		try {
+			if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
+				this.disabledInteraction = true;
+				this.canvas.setActiveObject(event.target);
+				this.disabledInteraction = false;
+			}
+		} catch (e) {
+			console.error(e);
 		}
 	}
 
@@ -1488,24 +1578,28 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.disabledInteraction) return;
 		let object = event.target;
 
-		if (!this.mode.objectSelected(event, object)) {
-			this.context.disabledInteraction = true;
-			this.context.canvas.discardActiveObject();
-			this.context.disabledInteraction = false;
-		} else {
-			this.history.highlight(object);
-			if (this.history.isOngoingEditOf(object)) {
-				if (this.isMouseOSDInteractive()) {
-					object.set({
-						hasControls: false,
-						lockMovementX: true,
-						lockMovementY: true
-					});
-				}
+		try {
+			if (!this.mode.objectSelected(event, object)) {
+				this.context.disabledInteraction = true;
+				this.context.canvas.discardActiveObject();
+				this.context.disabledInteraction = false;
 			} else {
-				let factory = this.getAnnotationObjectFactory(object.factoryID);
-				if (factory) factory.selected(object);
+				this.history.highlight(object);
+				if (this.history.isOngoingEditOf(object)) {
+					if (this.isMouseOSDInteractive()) {
+						object.set({
+							hasControls: false,
+							lockMovementX: true,
+							lockMovementY: true
+						});
+					}
+				} else {
+					let factory = this.getAnnotationObjectFactory(object.factoryID);
+					if (factory) factory.selected(object);
+				}
 			}
+		} catch (e) {
+			console.error(e);
 		}
 	}
 
@@ -1815,6 +1909,35 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
+	 * Undo action, by default noop
+	 */
+	undo() {
+	}
+
+	/**
+	 * Undo action, by default return undefined: not handled (undo() will not be called)
+	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
+	 */
+	canUndo() {
+		return undefined;
+	}
+
+	/**
+	 * Redo action, by default noop
+	 */
+	redo() {
+
+	}
+
+	/**
+	 * Redo action, by default return undefined: not handled (redo() will not be called)
+	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
+	 */
+	canRedo() {
+		return undefined;
+	}
+
+	/**
 	 * Check whether the mode is default mode.
 	 * @return {boolean} true if the mode is used as a default mode.
 	 */
@@ -1877,6 +2000,8 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
+		if (!isLeftClick) return false;
+
 		let clickTime = Date.now();
 
 		let clickDelta = clickTime - this.context.cursor.mouseTime,
@@ -1892,16 +2017,18 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 			active.sendToBack();
 		}
 		const object = canvas.findNextObjectUnderMouse(o, active);
-		if (object) canvas.setActiveObject(object, o);
+		if (object) {
+			canvas.setActiveObject(object, o);
+		}
+		this.context.canvas.renderAll();
+
 		return true; //considered as handled
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		//if clicked on object, highlight it
 		let active = this.context.canvas.findTarget(o);
-		if (active) {
-			this.context.canvas.setActiveObject(active);
-		} else {
+		if (!active) {
 			this.context.canvas.discardActiveObject();
 		}
 		this.context.canvas.renderAll();
@@ -1925,9 +2052,18 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		super(context, id, icon, description);
 	}
 
+	canUndo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
+	}
+
+	canRedo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
+	}
+
 	fftStartWith(point, ffTool, reference, wasCreated) {
 		this.context.canvas.discardActiveObject();
-
 		if (reference.asPolygon) {
 			ffTool.init(reference.object, wasCreated.asPolygon);
 		} else {
@@ -1947,26 +2083,33 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!result) return false;
 			return {object: o, asPolygon: result};
 		}
+		// This optimization breaks the logics, since click itself has changed the active annotation if nested
+		// const currentObject = this.context.canvas.getActiveObject();
+		// let current = currentObject && getObjectAsCandidateForIntersectionTest(currentObject);
+		// if (current && OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, current.asPolygon)) {
+		// 	return current;
+		// }
 
-		const currentObject = this.context.canvas.getActiveObject();
-		let current = currentObject && getObjectAsCandidateForIntersectionTest(currentObject);
-		if (current && OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, current.asPolygon)) {
-			return current;
-		}
-
+		// Instead, loop only through near polygons in the nice order -> this will process
+		// first top annotations -> potentially selected
 		const candidates = this.context.findIntersectingObjectsByBBox({
 			x: point.x - ffTool.radius - offset,
 			y: point.y - ffTool.radius - offset,
 			width: ffTool.radius * 2 + offset,
 			height: ffTool.radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
+
+		let max = 0,
+			result = candidates; // by default return the whole list if intersections are <= 0
 		for (let i = 0; i < candidates.length; i++) {
 			let candidate = candidates[i];
-			if (OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, candidate.asPolygon)) {
-				return candidate;
+			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, candidate.asPolygon);
+			if (intersection && intersection.length > max) {
+				max = intersection.length;
+				result = candidate;
 			}
 		}
-		return candidates; //converted array of arrays of points
+		return result;
 	}
 
 	fftFoundIntersection(result) {
@@ -2022,8 +2165,9 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 			return;
 		}
 		let created = false;
-		const ffTool = this.context.freeFormTool,
-			newPolygonPoints = ffTool.getCircleShape(point);
+		const ffTool = this.context.freeFormTool;
+		ffTool.recomputeRadius();
+		const newPolygonPoints = ffTool.getCircleShape(point);
 		let targetIntersection = this.fftFindTarget(point, ffTool, newPolygonPoints, 0);
 		if (!this.fftFoundIntersection(targetIntersection)) {
 			targetIntersection = this.context.polygonFactory.create(newPolygonPoints,
@@ -2087,8 +2231,10 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 			this.abortClick(isLeftClick);
 			return;
 		}
-		const ffTool = this.context.freeFormTool,
-			newPolygonPoints = ffTool.getCircleShape(point);
+
+		const ffTool = this.context.freeFormTool;
+		ffTool.recomputeRadius();
+		const newPolygonPoints = ffTool.getCircleShape(point);
 		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
 
 		if (this.fftFoundIntersection(candidates)) {
@@ -2116,11 +2262,26 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
 		super(context, "custom", "format_shapes","🆆  create annotations manually");
+		this._lastUsed = null;
+	}
+
+	canUndo() {
+		if (this._lastUsed) return this._lastUsed.canUndoCreate();
+		return undefined;
+	}
+
+	canRedo() {
+		if (this._lastUsed) return false;
+		return undefined;
+	}
+
+	undo() {
+		if (this._lastUsed) return this._lastUsed.undoCreate();
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) return false;
-		this._finish(objectFactory);
+		this._finish(this._lastUsed);
 		return true;
 	}
 
@@ -2143,6 +2304,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	_init(point, isLeftClick, updater) {
 		if (!updater) return;
 		updater.initCreate(point.x, point.y, isLeftClick);
+		this._lastUsed = updater;
 	}
 
 	_finish(updater) {
@@ -2159,9 +2321,12 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 			} else {
 				this.context.deleteHelperAnnotation(helper);
 			}
+			this._lastUsed = null;
 			return;
 		}
-		updater.finishDirect();
+		if (updater.finishDirect()) {
+			this._lastUsed = null;
+		}
 	}
 
 	setFromAuto() {
@@ -2193,6 +2358,16 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	constructor(context) {
 		super(context, "fft-correct", "brush", "🆉  correction tool");
 		this.candidates = null;
+	}
+
+	canUndo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
+	}
+
+	canRedo() {
+		if (this.context.freeFormTool.isRunning()) return false;
+		return undefined;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {

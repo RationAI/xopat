@@ -31,6 +31,14 @@ function initXopatScripts() {
         focusOnViewer = true;
         e.preventDefaultAction = true;
     });
+    function getIsViewerFocused() {
+        // TODO TEST!!!
+        const focusedElement = document.activeElement;
+        const focusTyping = focusedElement.tagName === 'INPUT' ||
+            focusedElement.tagName === 'TEXTAREA' ||
+            focusedElement.isContentEditable;
+        return focusOnViewer && !focusTyping;
+    }
     /**
      * Allows changing focus state artificially
      * @param {boolean} focused
@@ -39,7 +47,7 @@ function initXopatScripts() {
         focusOnViewer = focused;
     };
     document.addEventListener('keydown', function(e) {
-        e.focusCanvas = focusOnViewer;
+        e.focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {boolean} e.focusCanvas
@@ -49,7 +57,7 @@ function initXopatScripts() {
         VIEWER.raiseEvent('key-down', e);
     });
     document.addEventListener('keyup', function(e) {
-        e.focusCanvas = focusOnViewer;
+        e.focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {boolean} e.focusCanvas
@@ -144,32 +152,32 @@ function initXopatScripts() {
                 let zoom = null,
                     speed = 0.3;
                 switch (e.key) {
-                    case "Down": // IE/Edge specific value
-                    case "ArrowDown":
-                        adjustBounds(0, speed);
-                        break;
-                    case "Up": // IE/Edge specific value
-                    case "ArrowUp":
-                        adjustBounds(0, -speed);
-                        break;
-                    case "Left": // IE/Edge specific value
-                    case "ArrowLeft":
-                        adjustBounds(-speed, 0);
-                        break;
-                    case "Right": // IE/Edge specific value
-                    case "ArrowRight":
-                        adjustBounds(speed, 0);
-                        break;
-                    case "+":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                        return;
-                    case "-":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                        return;
-                    default:
-                        return; // Quit when this doesn't handle the key event.
+                case "Down": // IE/Edge specific value
+                case "ArrowDown":
+                    adjustBounds(0, speed);
+                    break;
+                case "Up": // IE/Edge specific value
+                case "ArrowUp":
+                    adjustBounds(0, -speed);
+                    break;
+                case "Left": // IE/Edge specific value
+                case "ArrowLeft":
+                    adjustBounds(-speed, 0);
+                    break;
+                case "Right": // IE/Edge specific value
+                case "ArrowRight":
+                    adjustBounds(speed, 0);
+                    break;
+                case "+":
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
+                    return;
+                case "-":
+                    zoom = VIEWER.viewport.getZoom();
+                    VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
+                    return;
+                default:
+                    return; // Quit when this doesn't handle the key event.
                 }
             }
 
@@ -253,10 +261,14 @@ function initXopatScripts() {
             point: VIEWER.viewport.getCenter()
         };
 
+        //delete unnecessary data
+        const data = {...APPLICATION_CONTEXT.config};
+        delete data.defaultParams;
+
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
-            : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
+            ? JSON.stringify(data, WebGLModule.jsonReplacer)
+            : JSON.stringify(data, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
         APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;

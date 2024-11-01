@@ -23,15 +23,15 @@ class Presenter extends XOpatPlugin {
 <button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.THIS}.fifthButton();"><span class="material-icons">delete</span></button>`, `
 <br>
 ${UIComponents.Elements.checkBox({
-            label: "Capture visuals",
-            onchange: this.THIS + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
-            default: this.snapshots.capturesVisualization
-        })}&emsp;
+    label: "Capture visuals",
+    onchange: this.THIS + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
+    default: this.snapshots.capturesVisualization
+})}&emsp;
 ${UIComponents.Elements.checkBox({
-            label: "Capture viewport",
-            onchange: this.THIS + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
-            default: this.snapshots.capturesViewport
-        })}
+    label: "Capture viewport",
+    onchange: this.THIS + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
+    default: this.snapshots.capturesViewport
+})}
 <br><br>
 <h5 class="d-inline-block">Annotations in keyframes</h5>&emsp;
 <button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.THIS}.captureAnnotation()">Capture</button>
@@ -265,19 +265,19 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
 
     _getValueFor(key, value) {
         switch (key) {
-            case 'delay': return value * 2;
-            case 'duration': return value * 4 + 6;
-            case 'transition':
-            default: return value;
+        case 'delay': return value * 2;
+        case 'duration': return value * 4 + 6;
+        case 'transition':
+        default: return value;
         }
     }
 
     _getStyleFor(key) {
         switch (key) {
-            case 'delay': return "margin-left";
-            case 'duration': return "width";
-            case 'transition': return "border-bottom-left-radius";
-            default: return value;
+        case 'delay': return "margin-left";
+        case 'duration': return "width";
+        case 'transition': return "border-bottom-left-radius";
+        default: return value;
         }
     }
 

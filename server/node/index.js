@@ -122,15 +122,15 @@ async function responseViewer(req, res) {
 
     try {
         switch (req.headers['content-type']) {
-            case 'application/x-www-form-urlencoded':
-                rawData = decodeURIComponent(rawData || "");
-                postData = querystring.parse(rawData);
-                break;
+        case 'application/x-www-form-urlencoded':
+            rawData = decodeURIComponent(rawData || "");
+            postData = querystring.parse(rawData);
+            break;
 
-            case 'application/json':
-            default:
-                postData = rawData && JSON.parse(rawData) || {};
-                break;
+        case 'application/json':
+        default:
+            postData = rawData && JSON.parse(rawData) || {};
+            break;
         }
 
         // Parse structure
@@ -148,8 +148,8 @@ async function responseViewer(req, res) {
     const replacer = function(match, p1) {
         try {
             switch (p1) {
-                case "head":
-                    return `
+            case "head":
+                return `
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
@@ -158,8 +158,8 @@ ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}`;
 
-                case "app":
-                    return `
+            case "app":
+                return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
@@ -181,15 +181,15 @@ ${core.requireCore("app")}`;
     );
     </script>`;
 
-                case "modules":
-                    return core.requireModules();
+            case "modules":
+                return core.requireModules();
 
-                case "plugins":
-                    return core.requirePlugins();
+            case "plugins":
+                return core.requirePlugins();
 
-                default:
-                    //todo warn
-                    return "";
+            default:
+                //todo warn
+                return "";
             }
         } catch (e) {
             //todo err
@@ -212,15 +212,15 @@ async function responseDeveloperSetup(req, res) {
     const replacer = function(match, p1) {
         try {
             switch (p1) {
-                case "head":
-                    return `
+            case "head":
+                return `
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
 ${core.requireModules()}`;
-                case "form-init":
-                    return `
+            case "form-init":
+                return `
     <script type="text/javascript">
     window.formInit = {
         location: "${constants.PROJECT_ROOT}/",
@@ -230,8 +230,8 @@ ${core.requireModules()}`;
     }
     </script>`;
 
-                default:
-                    return "";
+            default:
+                return "";
             }
         } catch (e) {
             //todo err

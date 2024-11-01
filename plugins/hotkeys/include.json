@@ -2,6 +2,7 @@
     "id": "hotkeys",
     "name": "Hotkeys & Shortcuts",
     "description": "Custom & Buildin Hotkeys extension",
+    "author": "Jiří Horák",
     "includes" : [
         "hotkeys.js",
         "temp.js"

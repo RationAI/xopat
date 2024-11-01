@@ -380,11 +380,11 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 
     /**
      * @typedef {{
-     *  icon?: string,
-     * 	iconCss?: string,
+     *  icon: string | undefined,
+     * 	iconCss: string | undefined,
      * 	title: string,
      * 	action: function,
-     * 	selected?: boolean
+     * 	selected: boolean | undefined
      * }} DropDownItem
      */
 
