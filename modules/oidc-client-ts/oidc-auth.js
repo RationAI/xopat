@@ -205,7 +205,8 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
             } else if (error.message.includes('Invalid refresh token')) {
-                return await this._trySignIn(false, this._connectionRetries > this.maxRetryCount);
+                this.clearSession();
+                return await this._trySignIn(true, this._connectionRetries > this.maxRetryCount);
             } else {
                 Dialogs.show('Login failed due to unknown reasons. Please, <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">try again</a> or notify us about the issue.',
                     this.retryTimeout + 2000, Dialogs.MSG_ERR);
@@ -256,6 +257,11 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return APPLICATION_CONTEXT.AppCookies
             .get(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
         //return sessionStorage.getItem(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`);
+    }
+
+    clearSession() {
+        return APPLICATION_CONTEXT.AppCookies
+            .set(`oidc.user:${this.configuration.authority}:${this.configuration.client_id}`, "{}");
     }
 
     getRefreshTokenExpiration() {
