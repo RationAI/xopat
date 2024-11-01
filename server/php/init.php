@@ -13,7 +13,7 @@ require_once ABSPATH . "server/php/inc/init.php";
 
 if (!count($_POST)) {
     try {
-        $_POST = (array)json_decode(file_get_contents("php://input"), true);
+        $_POST = (array)json_decode(file_get_contents("php://input"), false);
     } catch (Exception $e) {
         //pass not a valid input
         $_POST = (object)[];

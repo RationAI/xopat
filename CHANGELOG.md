@@ -3,7 +3,14 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### v 2.0.0
+### 2.0.2
+New annotation features (edge mouse navigation, undo on manual creation steps, left click works
+in navigation mode regardless of left mouse preset, ...). Fix PHP parsing: avoid 
+
+### 2.0.1
+Improved annotations & bugfixes with storage API.
+
+### 2.0.0
 The version 2 brings:
 * new UI features
   * servers: php & node & static
