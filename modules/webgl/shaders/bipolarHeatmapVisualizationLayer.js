@@ -52,18 +52,21 @@ WebGLModule.BipolarHeatmapLayer = class extends WebGLModule.ShaderLayer {
     };
 
     getFragmentShaderExecution() {
+        // TODO: implement filter function
+        // chan = ${this.filter(`1.0 - chan * 2.0`)};
+        // chan = ${this.filter(`(chan - 0.5) * 2.0`)};
         return `
     float chan = ${this.sampleChannel('v_texture_coords', 0, true)};
     if (!close(chan, .5)) {
         if (chan < .5) {
-            chan = ${this.filter(`1.0 - chan * 2.0`)};
+            chan = 1.0 - chan * 2.0;
             if (chan > ${this.threshold.sample('chan', 'float')}) {
                return vec4(${this.colorLow.sample('chan', 'float')}, chan);
             }
             return vec4(.0);
         } 
         
-        chan = ${this.filter(`(chan - 0.5) * 2.0`)};
+        chan = (chan - 0.5) * 2.0;
         if (chan > ${this.threshold.sample('chan', 'float')}) {
             return vec4(${this.colorHigh.sample('chan', 'float')}, chan);
         }

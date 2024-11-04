@@ -75,6 +75,7 @@ vec3 myFunction(in int param1, out float param2, inout bool param3) {
 }*/`;
     }
 
+    // float filtered = ${this.filter("0.123456")};
     _getDefaultFSExecute() {
         let textures = [];
         for (let i = 0; i < this.texturesCount; i++) {
@@ -87,7 +88,7 @@ ${textures.join("\n")};
 
 --- what filters are requested on this layer? (note: value used is 0.123456
 and the filters -if any- are applied on that number)
-float filtered = ${this.filter("0.123456")}; 
+float filtered = 0.123456; 
 */`;
     }
 
