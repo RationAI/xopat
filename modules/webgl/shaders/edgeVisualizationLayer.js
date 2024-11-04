@@ -72,7 +72,7 @@ int clipToThresholdi_${this.uid}(float value) {
         return `
     float mid = ${this.sampleChannel('v_texture_coords')};
     if (mid < 1e-6) return vec4(.0);
-    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
+    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(u_zoom_level) * 0.005 + 0.008;
     
     float u = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y)')};
     float b = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y)')}; 
