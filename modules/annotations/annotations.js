@@ -98,7 +98,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	async importData(data) {
 		const options = {inheritSession: true};
 		if (typeof data === "object" && data.format) {
-			options.format = data.format;;
+			options.format = data.format;
 		}
 		await this.import(data, options);
 	}
@@ -1541,8 +1541,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (e.focusCanvas) {
 			if (!e.ctrlKey && !e.altKey) {
-				if (e.key === "Delete" || e.key === "Backspace") return this.removeActiveObject();
+				if (e.key === "Delete" || e.key === "Backspace") {
+					this.mode.discard();
+					return;
+				}
 				if (e.key === "Escape") {
+					this.mode.discard();
 					this.history._boardItemSave();
 					this.setMode(this.Modes.AUTO);
 					return;
@@ -1926,7 +1930,13 @@ OSDAnnotations.AnnotationState = class {
 	 * Redo action, by default noop
 	 */
 	redo() {
+	}
 
+	/**
+	 * Discard action: default deletes active object
+	 */
+	discard() {
+		this.context.removeActiveObject();
 	}
 
 	/**
@@ -2265,13 +2275,21 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		this._lastUsed = null;
 	}
 
+	discard() {
+		if (this._lastUsed) {
+			this._lastUsed.discardCreate();
+		} else {
+			super.discard();
+		}
+	}
+
 	canUndo() {
 		if (this._lastUsed) return this._lastUsed.canUndoCreate();
 		return undefined;
 	}
 
 	canRedo() {
-		if (this._lastUsed) return false;
+		if (this._lastUsed) return this._lastUsed.canRedoCreate();
 		return undefined;
 	}
 

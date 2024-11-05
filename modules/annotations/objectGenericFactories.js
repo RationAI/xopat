@@ -181,7 +181,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "circle";
+        return "brightness_1";
     }
 
     fabricStructure() {
@@ -372,7 +372,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "format_shapes";
+        return "language_japanese_kana";
     }
 
     fabricStructure() {
@@ -737,21 +737,38 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._current.set({points: []});
+            this.finishIndirect();
+        }
+    }
+
     undoCreate() {
         if (!this.canUndoCreate()) return;
 
-        const polygon = this._current;
-        polygon.points.pop();
-        if (this._followPoint) {
-            const currentPoint = polygon.points[polygon.points.length - 1];
-            this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+        if (this._current?.points.length < 2) {
+            this.finishIndirect();
+        } else {
+            const polygon = this._current;
+            polygon.points.pop();
+            if (this._followPoint) {
+                const currentPoint = polygon.points[polygon.points.length - 1];
+                this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+            }
+            polygon.setCoords();
+            this._context.canvas.renderAll();
         }
-        polygon.setCoords();
-        this._context.canvas.renderAll();
     }
 
     canUndoCreate() {
-        return this._polygonBeingCreated && this._current?.points.length > 1;
+        if (this._polygonBeingCreated && this._current?.points) return true;
+        return undefined; // allow super execution
+    }
+
+    canRedoCreate() {
+        if (this._polygonBeingCreated && this._current?.points) return false; //not implemented
+        return undefined; // allow super execution
     }
 
     exportsGeometry() {
@@ -1312,7 +1329,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "flash_on";
+        return "pentagon";
     }
 
     fabricStructure() {
