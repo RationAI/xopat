@@ -29,8 +29,8 @@ WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IC
         }, true); //silently fail if registered
     }
 
-    glDrawing(program, dimension, gl) {
-        this._c1.glDrawing(program, dimension, gl);
+    glDrawing(program, gl) {
+        this._c1.glDrawing(program, gl);
     }
 
     glLoaded(program, gl) {
@@ -238,7 +238,7 @@ vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_S
         for (let i = this.pallete.length; i < 3*(this.MAX_SAMPLES); i++) this.pallete.push(0);
     }
 
-    glDrawing(program, dimension, gl) {
+    glDrawing(program, gl) {
         gl.uniform3fv(this.colormap_gluint, Float32Array.from(this.pallete));
         gl.uniform1fv(this.steps_gluint, Float32Array.from(this.steps));
         gl.uniform1i(this.colormap_size_gluint, this.maxSteps);
@@ -579,7 +579,7 @@ float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN
         }
     }
 
-    glDrawing(program, dimension, gl) {
+    glDrawing(program, gl) {
         gl.uniform1fv(this.breaks_gluint, Float32Array.from(this.value));
         gl.uniform1fv(this.mask_gluint, Float32Array.from(this.mask));
     }
@@ -699,7 +699,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //         }
 //     }
 //
-//     glDrawing(program, dimension, gl) {
+//     glDrawing(program, gl) {
 //         gl.uniform1fv(this.kernel_gluint, Float32Array.from(this.value));
 //     }
 //
@@ -795,7 +795,7 @@ WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl 
         }
     }
 
-    glDrawing(program, dimension, gl) {
+    glDrawing(program, gl) {
         //do nothing
     }
 
@@ -874,7 +874,7 @@ WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
         }
     }
 
-    glDrawing(program, dimension, gl) {
+    glDrawing(program, gl) {
         //do nothing
     }
 
