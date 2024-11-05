@@ -1,6 +1,6 @@
 OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "magic-wand", "blur_on", "🆃  automatic selection wand");
+        super(context, "magic-wand", "lasso_select", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.threshold = 10;
