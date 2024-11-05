@@ -379,7 +379,7 @@ input.switch:checked + label span {
 @font-face {
     font-family: 'Material Icons';
     font-style: normal;
-    font-weight: 400;
+    font-weight: 250;
     src: url(icons.woff2) format('woff2');
 }
 
