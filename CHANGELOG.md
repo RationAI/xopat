@@ -3,9 +3,14 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### 2.0.3
+Bugifxes on annotations. Update font + change default weight. More
+events propagated to modes (and recursively factories) to control.
+
 ### 2.0.2
 New annotation features (edge mouse navigation, undo on manual creation steps, left click works
-in navigation mode regardless of left mouse preset, ...). Fix PHP parsing: avoid 
+in navigation mode regardless of left mouse preset, ...). Fix PHP parsing: avoid converting
+objects to arrays.
 
 ### 2.0.1
 Improved annotations & bugfixes with storage API.
