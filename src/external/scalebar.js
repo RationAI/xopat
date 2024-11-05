@@ -206,20 +206,20 @@
 
                 if (!this.magnificationContainer) {
                     this.magnificationContainer = document.createElement("div");
-                    this.magnificationContainer.style.position = "relative";
-                    this.magnificationContainer.style.margin = "0";
-                    this.magnificationContainer.style.background = "var(--color-bg-backdrop)";
-                    this.magnificationContainer.style.paddingBottom = "15px";
-                    this.magnificationContainer.style.paddingTop = "8px";
-                    this.magnificationContainer.style.paddingLeft = "4px";
-                    this.magnificationContainer.style.paddingRight = "4px";
-                    this.magnificationContainer.style.opacity = "0.6";
-                    this.magnificationContainer.style.display = "flex";
-                    this.magnificationContainer.style.borderRadius = "7px";
-
                     this.magnificationContainer.id = "viewer-magnification";
+                    // this.magnificationContainer.style.display = "none";
 
                     if (this.magnification > 0) {
+                        this.magnificationContainer.style.position = "relative";
+                        this.magnificationContainer.style.margin = "0";
+                        this.magnificationContainer.style.background = "var(--color-bg-backdrop)";
+                        this.magnificationContainer.style.paddingBottom = "15px";
+                        this.magnificationContainer.style.paddingTop = "8px";
+                        this.magnificationContainer.style.paddingLeft = "4px";
+                        this.magnificationContainer.style.paddingRight = "4px";
+                        this.magnificationContainer.style.opacity = "0.6";
+                        this.magnificationContainer.style.display = "flex";
+                        this.magnificationContainer.style.borderRadius = "7px";
 
                         const steps = Math.round(Math.sqrt(this.magnification)) - 1;
                         const minValue = 0;
