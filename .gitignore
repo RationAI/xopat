@@ -32,3 +32,6 @@ cypress.env.*
 
 #all hidden files unless explicitly added
 .*
+
+# hidden docs file
+!.readthedocs.yaml
