@@ -1,0 +1,58 @@
+site_name: xOpat Documentation
+repo_url: https://github.com/RationAI/xopat
+repo_name: RationAI/xopat
+docs_dir: ../..
+site_dir: ../../../site
+plugins:
+  - search
+  - same-dir
+
+nav:
+  - Introduction: 'index.md'
+  - 'Getting Started':
+    - 'Integration': 'INTEGRATION.md'
+    - 'Testing': 'test/README.md'
+    - 'Users': 'src/USERS.md'
+    - 'Events': 'src/EVENTS.md'
+    - 'Storage': 'src/STORAGE.md'
+    - 'Server': 'server/README.md'
+    - 'Plugins': 'plugins/README.md'
+    - 'Modules': 'modules/README.md'
+    - 'env': 'env/README.md'
+    - 'Docs': 'docs/README.md'
+    - 'Docker': 'docker/README.md'
+  - 'Changelog': 'CHANGELOG.md'
+  - 'API': 'https://rationai.github.io/xopat/'
+
+markdown_extensions:
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  
+theme:
+  logo: src/assets/android-chrome-512x512.png
+  favicon: src/assets/favicon-32x32.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.path
+  language: en
+  name: material
+  palette:
+
+    # Light mode
+    - scheme: default
+      primary: blue grey
+      accent: blue grey
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to dark mode
+
+    # Dark mode
+    - scheme: slate
+      primary: blue grey
+      accent: blue grey
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to light mode
