@@ -1,16 +1,17 @@
 The first thing, to have working xOpat instance is to have deployed image server.
-We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WSI-Service)
+We will use image server we are maintaining: [WSI-Service](https://github.com/RationAI/WSI-Service).
 
 !!! note 
     If you already have your own Image Server deployed, you can skip this part.
 
-## How to deploy Image Server?
-1. Download some WSI test slides. Test data can be found on [openslide.org](https://openslide.org)
+## How to deploy WSI-Service?
+1. Download some WSI test slides. It does not matter where the slides come from, but they 
+must be compatible with the image server used. Test data can be found for example on [openslide.org](https://openslide.org)
 
     !!! note
-        the Simple Mapper we are using needs to have slides in certain hiearchy:
+        the Simple Mapper we will be using needs to have slides in certain hiearchy:
         ```
-        data
+        root-folder
         ├── case1
         │   ├── slide1_1
         │   └── slide1_2
@@ -20,18 +21,16 @@ We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WS
         ```
 
     !!! tip
-        Existing slides are cached. If you want to be able to add new slides, you need to go to this page: [http://127.0.0.1:8080/refresh_local_mapper]()
-        
+        The server state cached. If you want to add new slides, you need to go to visit [http://localhost:8080/refresh_local_mapper]() 
+        to revalidate the cache.
 
-2. clone WSI-Service repository
+2. Clone WSI-Service repository (note the ```--recursive``` flag: there are submodules):
     ```
     git clone --recursive https://github.com/RationAI/WSI-Service.git
-    ```
+    ``` 
 
-    !!! note
-        be aware of the ```--recursive``` flag
-
-3. create .env file in the root folder of repository
+3. Create .env file in the root folder of repository. Make sure ``COMPOSE_DATA_DIR`` points to the
+folder with downloaded slides, ``root-folder``.
 
     ``` bash title=".env"
         # if true, it will allow logging functionality
@@ -48,7 +47,7 @@ We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WS
         COMPOSE_NETWORK=default
         COMPOSE_WS_PORT=8080
         # directory where the test slides are saved
-        COMPOSE_DATA_DIR=./test_wsis
+        COMPOSE_DATA_DIR=path/to/slides
 
         # server API configuration
         WS_CORS_ALLOW_CREDENTIALS=False
@@ -61,11 +60,13 @@ We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WS
         WS_ENABLE_VIEWER_ROUTES=False
     ```
 
-4. make sure that [Docker](https://docs.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/) is installed on your machine. 
-    - If you do not have these applications, the easiest way is to use [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-    !!! warning
+4. Make sure that [Docker](https://docs.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/) is installed on your machine. 
+   
+    !!! info
+        If you do not have these applications, the easiest way is to use [Docker Desktop](https://www.docker.com/products/docker-desktop/).
         The commands can be different based on used [docker distribution](https://docs.docker.com/compose/support-and-feedback/faq/#what-is-the-difference-between-docker-compose-and-docker-compose).
-    - If you are familiar with Docker Compose, you can go through the following file: 
+   
+    Example of the docker compose yaml used by the environment configuration: 
     ??? example "docker-compose.yml"
 
         ```yml
@@ -94,12 +95,12 @@ We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WS
             - ${COMPOSE_WS_PORT}:8080
         ```
 
-5. finally run the docker container by:
+5. Finally run the docker container by:
     ```bash
-    docker-compose up
+    docker compose up
     ```
 
     !!! tip
         you can add ```-d``` flag, for program to detach from your terminal.
 
-This should make WSI server running on [localhost:8080](http://localhost:8080). For more information feel free to check the repository of [WSI-Service](https://github.com/RationAI/WSI-Service)
+This should make WSI server running on [localhost:8080](http://localhost:8080). For more information feel free to check the repository of [WSI-Service](https://github.com/RationAI/WSI-Service).

@@ -9,7 +9,7 @@ plugins:
   - search
   - same-dir
 
-# Getting started 
+# Getting started
 #   -image server deployment - rationai wsi service co nejvíc zjednodušit - docker compose
 #   -xopat deployment
 #   -kapitola se serverem
@@ -22,7 +22,8 @@ nav:
     - 'Overview': 'docs/web/overview.md'
     - 'Image Server Deployment': 'docs/web/image_server_deployment.md'
     - 'xOpat Deployment': 'docs/web/xopat_deployment.md'
-  #- 'Development': 
+    - 'Viewer Configurations': 'docs/web/xopat_configuration.md'
+  #- 'Development':
   #- 'Deployment':
   #- 'User guide':
   - 'Changelog': 'CHANGELOG.md'
