@@ -1,4 +1,4 @@
-site_name: xOpat Documentation
+site_name: xOpat
 repo_url: https://github.com/RationAI/xopat
 repo_name: RationAI/xopat
 docs_dir: ../..
@@ -7,29 +7,37 @@ plugins:
   - search
   - same-dir
 
+# Getting started 
+#   -image server deployment - rationai wsi service co nejvíc zjednodušit - docker compose
+#   -xopat deployment
+#   -kapitola se serverem
+#   -jak připojit prohlížeč k serveru
+# projít dokumentace a přepsat tak aby to bylo příjemné, ptát se aby to bylo srozumitelné
+
 nav:
   - Introduction: 'index.md'
   - 'Getting Started':
-    - 'Integration': 'INTEGRATION.md'
-    - 'Testing': 'test/README.md'
-    - 'Users': 'src/USERS.md'
-    - 'Events': 'src/EVENTS.md'
-    - 'Storage': 'src/STORAGE.md'
-    - 'Server': 'server/README.md'
-    - 'Plugins': 'plugins/README.md'
-    - 'Modules': 'modules/README.md'
-    - 'env': 'env/README.md'
-    - 'Docs': 'docs/README.md'
-    - 'Docker': 'docker/README.md'
+    - 'Image Server Deployment': 'docs/web/image_server_deployment.md'
+  #- 'Development': 
+  #- 'Deployment':
+  #- 'User guide':
   - 'Changelog': 'CHANGELOG.md'
   - 'API': 'https://rationai.github.io/xopat/'
 
 markdown_extensions:
   - attr_list
   - pymdownx.emoji:
-      emoji_index: !!python/name:material.extensions.emoji.twemoji
-      emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  
+      emoji_index: !!python/name:pymdownx.emoji.twemoji
+      emoji_generator: !!python/name:pymdownx.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
 theme:
   logo: src/assets/android-chrome-512x512.png
   favicon: src/assets/favicon-32x32.png
