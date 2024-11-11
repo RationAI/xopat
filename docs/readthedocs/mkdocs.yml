@@ -1,4 +1,4 @@
-site_name: xOpat
+site_name: XOpat - Explainable Open Pathology Analysis Tool
 repo_url: https://github.com/RationAI/xopat
 repo_name: RationAI/xopat
 docs_dir: ../..
@@ -17,7 +17,9 @@ plugins:
 nav:
   - Introduction: 'index.md'
   - 'Getting Started':
+    - 'Basics': 'docs/web/basics.md'
     - 'Image Server Deployment': 'docs/web/image_server_deployment.md'
+    - 'xOpat Deployment': 'docs/web/xopat_deployment.md'
   #- 'Development': 
   #- 'Deployment':
   #- 'User guide':
@@ -52,7 +54,7 @@ theme:
     # Light mode
     - scheme: default
       primary: blue grey
-      accent: blue grey
+      accent: deep orange
       toggle:
         icon: material/toggle-switch-off-outline
         name: Switch to dark mode
@@ -60,7 +62,7 @@ theme:
     # Dark mode
     - scheme: slate
       primary: blue grey
-      accent: blue grey
+      accent: deep orange
       toggle:
         icon: material/toggle-switch
         name: Switch to light mode

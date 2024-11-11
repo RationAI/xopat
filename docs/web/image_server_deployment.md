@@ -2,6 +2,9 @@
 The first thing, to have working xOpat instance is to have deployed image server.
 We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WSI-Service)
 
+!!! note 
+    If you already have your own Image Server deployed, you can skip this part.
+
 1. Download some WSI test slides. Test data can be found on [openslide.org](https://openslide.org)
 
     !!! note
@@ -31,25 +34,31 @@ We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WS
 3. create .env file in the root folder of repository
 
     ``` bash title=".env"
-    # if true, it will allow logging functionality
-    WS_DEBUG=Falscasese
-    # if true, it will make OpenAPI sites available
-    WS_DISABLE_OPENAPI=True
-    # url of service which maps slide ids to path. We use build in service
-    WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
-    # How the mapper resolves slide paths
-    WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
+        # if true, it will allow logging functionality
+        WS_DEBUG=False
+        # if true, it will make OpenAPI sites available
+        WS_DISABLE_OPENAPI=True
+        # url of service which maps slide ids to path. We use build in service
+        WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
+        # How the mapper resolves slide paths
+        WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
 
-    # this variables are configuring docker compose file
-    COMPOSE_RESTART=no
-    COMPOSE_NETWORK=default
-    COMPOSE_WS_PORT=8080
-    # directory where the test slides are saved
-    COMPOSE_DATA_DIR=/data
+        # this variables are configuring docker compose file
+        COMPOSE_RESTART=no
+        COMPOSE_NETWORK=default
+        COMPOSE_WS_PORT=8080
+        # directory where the test slides are saved
+        COMPOSE_DATA_DIR=./test_wsis
 
-    # server API configuration
-    WS_CORS_ALLOW_CREDENTIALS=False
-    WS_CORS_ALLOW_ORIGINS=["*"]
+        # server API configuration
+        WS_CORS_ALLOW_CREDENTIALS=False
+        WS_CORS_ALLOW_ORIGINS=["*"]
+
+        # Timeouts and size settings
+        WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
+        WS_MAX_RETURNED_REGION_SIZE=25000000
+        WS_MAX_THUMBNAIL_SIZE=500
+        WS_ENABLE_VIEWER_ROUTES=False
     ```
 
 4. make sure that [Docker](https://docs.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/) is installed on your machine. 
