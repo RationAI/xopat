@@ -7,6 +7,9 @@ To deploy xOpat please follow these steps:
         ```
 2. create env.json in env directory
 
+    !!! note
+        this env.json file is suitable for WSI-Server. If you have your own image server you need to create your own.
+
     ``` json title="env.json"
     {
     "core": {
