@@ -1,10 +1,10 @@
-# Image Server Deployment
 The first thing, to have working xOpat instance is to have deployed image server.
 We will use our own from rationAI - [WSI-Service](https://github.com/RationAI/WSI-Service)
 
 !!! note 
     If you already have your own Image Server deployed, you can skip this part.
 
+## How to deploy Image Server?
 1. Download some WSI test slides. Test data can be found on [openslide.org](https://openslide.org)
 
     !!! note
