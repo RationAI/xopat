@@ -43,9 +43,7 @@ we try to cover it all!
 :heavy_check_mark: Server-less: compiled once, used statically!<br>
 </ul>
 
-### Having Issues?
-Please do not hesitate to reach us. We have yet to work in documentation & deployment
-simplification.
+
 
 ## :point_right: What IS NOT xOpat?
 This viewer is not a all-in-one solution out of the box. The viewer does not _support WSI formats_.
@@ -54,43 +52,8 @@ WSI Support is dependent on the WSI Server/Service of your choice - if a server 
 AI jobs can either add their data to xOpat via raster images (just like WSI servers), or via vector graphics using
 to the Annotations plugin. Add your custom plugins to connect to services of your choice & do whatever you need!
 
-## Setup
-First, install development dependencies. You need ``node`` and `npm`. Then just run `npm install`.
+## Documentation
+Please, visit https://xopat.readthedocs.io/.
 
-
-Although very versatile, setting up the viewer correctly requires xOpat configuration & web development knowledge.
-To configure the viewer for deployment, run ``grunt env`` and provide `env/env.json` file with the desired configuration.
-For more, see ``env/README.md``.
-
-> PHP server has available _docker image_. Node server can be run e.g. locally via ``npm run s-node``.
-> However, to really open the viewer with a meaningful data and visualization, you need to provide the data,
-> configure a WSI server and open the viewer session. To simplify all of this, we work on example deployment docker
-> compose we will soon publish. To test the session manually, you can use ``[viewer.url]/dev_setup``.
-
-## Environment, Build & Test
-
-xOpat itself is not based on any framework, it is pure JavaScript application that integrates
-various libraries. That is true for the running deployed application. 
-However, testing and documentation uses ``npm``, `grunt` and `cypress`.
-
-> The build and test framework is still in development - for now, the viewer can be used AS-IS just add the OSD library and run from a PHP server.
-
-To minify (build) the viewer, you can run
-
-> grunt all
-
-and for plugins only
-
-> grunt plugins
-
-or modules only
-
-> grunt modules
-
-This will create ``index.min.js`` files in respective directories. The viewer core recognizes
-existence of these files and loads them instead of all the source scripts.
-
-For more details on components, see README files in respective directories.
-For details on integration, see ``INTEGRATION.md``.
-For documentation, you can run ``npm install && grunt docs && grunt connect watch``
-and open ``localhost:9000/``
+## API
+Please, see https://rationai.github.io/xopat/.
