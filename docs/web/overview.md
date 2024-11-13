@@ -5,11 +5,9 @@ the basic information required.
 ## WSI Slides
 WSI images are high-resolution images, with sizes in hundreads of megabytes to unis of gigabytes.
 The images inside WSIs are saved in "pyramid" structure:
-<div style="margin: 20px;max-width: 450px;">
-
-![](https://www.researchgate.net/publication/353893643/figure/fig2/AS:1056513544179712@1628903866268/WSI-images-are-stored-in-a-pyramidal-format-where-the-base-image-corresponds-to-the.png)
-     
-</div>
+    <div style="margin: 20px;max-width: 450px;">
+    ![WSI Pyramid](https://www.researchgate.net/publication/353893643/figure/fig2/AS:1056513544179712@1628903866268/WSI-images-are-stored-in-a-pyramidal-format-where-the-base-image-corresponds-to-the.png)
+    </div>
 
 ## Image Server
 To load tiles (parts of the image) from these WSI pyramids, we can use High-resolution Image Server. 
