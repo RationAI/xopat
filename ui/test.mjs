@@ -1,4 +1,4 @@
-import van from "vanjs";
+import van from "./vanjs.mjs";
 
 const { button, div, pre } = van.tags
 
@@ -22,5 +22,4 @@ const Hello = () => {
     )
 }
 
-window.UIComponents.Hello = Hello;
 export { Hello };

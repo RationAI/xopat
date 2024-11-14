@@ -19,8 +19,8 @@
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
     <script type="module">
-        import * as ui from "./index.mjs";
-        import * as van from "./vanjs.mjs";
+        import { default as ui } from "./index.mjs";
+        import { default as van } from "./vanjs.mjs";
         function changeTheme(theme = undefined) {
             theme = theme || "auto";
             //["dark", "dark_dimmed", "light", "auto"]
@@ -31,9 +31,9 @@
                 document.documentElement.dataset['darkTheme'] = "dark";
                 document.documentElement.dataset['colorMode'] = theme;
             }
-            console.log("New theme:", theme);
         }
         window.changeTheme = changeTheme;
+        console.log(ui);
         window.onload = () => {
             van.add(document.getElementById("workspace"), ui.Hello());
         }
@@ -42,20 +42,14 @@
 </head>
 
 <body>
-    <div class="color-bg-primary">
-        <div>
-            <p class="name">theme dark</p>
-            <button onclick="changeTheme('dark')">Change to dark</button>
-        </div>
-        <div>
-            <p class="name">theme dark</p>
-            <button onclick="changeTheme('dark')">Change to dark</button>
-        </div>
-        <div>
-            <p class="name">theme light</p>
-            <button onclick="changeTheme('light')">Change to light</button>
-        </div>
-        <div id="workspace">
-        </div>
+    <div class="btn-group">
+        <button onclick="changeTheme('dark')">Change to dark</button>
+        <button onclick="changeTheme('dark_dimmed')">Change to dark dimmed</button>
+        <button onclick="changeTheme('light')">Change to light</button>
+    </div>
+    <div>
+        <p> </p>
+    </div>
+    <div id="workspace">
     </div>
 </body>
