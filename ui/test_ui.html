@@ -7,13 +7,20 @@
     <meta name="msapplication-TileColor" content="#da532c">
     <!--Necessary for OSD on phone portrait mode-->
     <meta name="viewport" content="width=device-width, initial-scale=1">
-
+    <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
+    <link rel="stylesheet" href="../src/assets/xopat.css">
+    <link rel="stylesheet" href="../src/libs/primer_css.css">
+    <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
+    <link rel="stylesheet" href="../src/external/enjoyhint.css">
+    <link rel="stylesheet" href="../src/external/nouislider.css">
     <!-- TODO hardcoded path -->
     <link rel="apple-touch-icon" sizes="180x180" href="src/assets/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
-    <script>
+    <script type="module">
+        import * as ui from "./index.mjs";
+        import * as van from "./vanjs.mjs";
         function changeTheme(theme = undefined) {
             theme = theme || "auto";
             //["dark", "dark_dimmed", "light", "auto"]
@@ -24,10 +31,31 @@
                 document.documentElement.dataset['darkTheme'] = "dark";
                 document.documentElement.dataset['colorMode'] = theme;
             }
+            console.log("New theme:", theme);
         }
+        window.changeTheme = changeTheme;
+        window.onload = () => {
+            van.add(document.getElementById("workspace"), ui.Hello());
+        }
+
     </script>
 </head>
 
 <body>
-    <button type="button">Click Me!</button>
+    <div class="color-bg-primary">
+        <div>
+            <p class="name">theme dark</p>
+            <button onclick="changeTheme('dark')">Change to dark</button>
+        </div>
+        <div>
+            <p class="name">theme dark</p>
+            <button onclick="changeTheme('dark')">Change to dark</button>
+        </div>
+        <div>
+            <p class="name">theme light</p>
+            <button onclick="changeTheme('light')">Change to light</button>
+        </div>
+        <div id="workspace">
+        </div>
+    </div>
 </body>

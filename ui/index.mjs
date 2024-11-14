@@ -1,1 +1,1 @@
-//export * from "./component.mjs"; // TODO
+export * from "./test.mjs"; // TODO
