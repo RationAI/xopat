@@ -1,6 +1,7 @@
 #rubbish
 *.txt
 *.old
+*.temp
 .idea/
 Thumbs.db
 

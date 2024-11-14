@@ -91,6 +91,12 @@ module.exports = function (grunt) {
         grunt.log.writeln(result);
     });
 
+    grunt.registerTask('css', 'Generate Tailwind CSS files for ussage.', function (file) {
+        grunt.log.writeln('Tailwind');
+        const result = execAtPath('npx', 'tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
+        grunt.log.writeln(result);
+    });
+
     grunt.registerTask('env', 'Generate Env Configuration Example.', function () {
         let shortReport = grunt.option('minimal');
         const fullReport = !(shortReport);
