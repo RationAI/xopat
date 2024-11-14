@@ -84,6 +84,11 @@ module.exports = function (grunt) {
         grunt.registerTask('all', ["uglify"]);
         grunt.registerTask('plugins', ["uglify:plugins"]);
         grunt.registerTask('modules', ["uglify:modules"]);
+        grunt.registerTask('css', 'Generate Tailwind CSS files for ussage.', function (file) {
+            grunt.log.writeln('Tailwind');
+            const result = execAtPath('npx', 'tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
+            grunt.log.writeln(result);
+        });
         // Default task(s).
         grunt.registerTask('default', ['env']);
     };
