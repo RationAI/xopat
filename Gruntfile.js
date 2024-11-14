@@ -1,13 +1,13 @@
-const {parse, stringify} = require("comment-json");
-const {execSync: exec} = require("child_process");
+const { parse, stringify } = require("comment-json");
+const { execSync: exec } = require("child_process");
 const path = require("path");
 //if command contains path to the bin file
-const execAtPath = (binPath, cmd, options=undefined) => {
+const execAtPath = (binPath, cmd, options = undefined) => {
     return exec(`${path.relative("", binPath)} ${cmd}`, options);
 };
-const {registerStaticServerTask} = require("./server/static/build.grunt");
+const { registerStaticServerTask } = require("./server/static/build.grunt");
 
-module.exports = function(grunt) {
+module.exports = function (grunt) {
     // Project configuration.
 
     //todo more fancy way of doing this?
@@ -41,17 +41,17 @@ module.exports = function(grunt) {
             server: {
                 options: {
                     port: 9000,
-                    base: 'docs/build/'
+                    base: "ui"
                 }
             }
         },
         watch: {
-            files: [],
-            tasks: ["docs"]
+            files: ["ui/*"],
+            tasks: "watchTask"
         },
         uglify: {
 
-            ...reduceModules( (acc, module, folder) => {
+            ...reduceModules((acc, module, folder) => {
                 //we cannot minify items that have third-party network deps, object describes source URL
                 if (module.includes.some(i => typeof i === "object")) {
                     grunt.log.write(" (non-minifiable)");
@@ -91,7 +91,7 @@ module.exports = function(grunt) {
         grunt.log.writeln(result);
     });
 
-    grunt.registerTask('env', 'Generate Env Configuration Example.', function() {
+    grunt.registerTask('env', 'Generate Env Configuration Example.', function () {
         let shortReport = grunt.option('minimal');
         const fullReport = !(shortReport);
 
@@ -180,7 +180,7 @@ module.exports = function(grunt) {
     }
 }`);
         grunt.file.write("env/env.example.json", output.join(""));
-        grunt.log.write("Saved: "+(fullReport ? 'full configuration' : 'minimal configuration' )+" in 'env/env.example.json'.\n");
+        grunt.log.write("Saved: " + (fullReport ? 'full configuration' : 'minimal configuration') + " in 'env/env.example.json'.\n");
     });
 
     // Default task(s).
@@ -194,7 +194,7 @@ module.exports = function(grunt) {
      * @param log
      * @return {*}
      */
-    function reducePlugins(accumulator, initialValue, parseMeta=true, log=false) {
+    function reducePlugins(accumulator, initialValue, parseMeta = true, log = false) {
         return reduceFolder(accumulator, initialValue, parseMeta, "Plugin", "plugins", log);
     }
 
@@ -206,12 +206,12 @@ module.exports = function(grunt) {
      * @param log
      * @return {*}
      */
-    function reduceModules(accumulator, initialValue, parseMeta=true, log=false) {
+    function reduceModules(accumulator, initialValue, parseMeta = true, log = false) {
         return reduceFolder(accumulator, initialValue, parseMeta, "Module", "modules", log);
     }
 
     function reduceFolder(accumulator, initialValue, parseMeta, contextName, directoryName, log) {
-        const itemDirectory = grunt.file.expand({filter: "isDirectory", cwd: directoryName}, ["*"]);
+        const itemDirectory = grunt.file.expand({ filter: "isDirectory", cwd: directoryName }, ["*"]);
         for (let item of itemDirectory) {
             const file = `${directoryName}/${item}/include.json`;
 

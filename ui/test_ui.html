@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" data-light-theme="light">
+
+<head>
+    <meta charset="utf-8">
+    <title>UI Component Testing</title>
+    <meta name="msapplication-TileColor" content="#da532c">
+    <!--Necessary for OSD on phone portrait mode-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- TODO hardcoded path -->
+    <link rel="apple-touch-icon" sizes="180x180" href="src/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
+    <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+    <script>
+        function changeTheme(theme = undefined) {
+            theme = theme || "auto";
+            //["dark", "dark_dimmed", "light", "auto"]
+            if (theme === "dark_dimmed") {
+                document.documentElement.dataset['darkTheme'] = "dark_dimmed";
+                document.documentElement.dataset['colorMode'] = "dark";
+            } else {
+                document.documentElement.dataset['darkTheme'] = "dark";
+                document.documentElement.dataset['colorMode'] = theme;
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <button type="button">Click Me!</button>
+</body>
