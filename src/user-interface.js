@@ -923,15 +923,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
             },
             refreshPageWithSelectedPlugins() {
-                let formData = [],
-                    plugins = pluginsMenuBuilder.builder.getSelected();
-
-                for (let plugin of plugins) {
-                    formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
-                }
+                let plugins = pluginsMenuBuilder.builder.getSelected();
                 let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
                 APPLICATION_CONTEXT.AppCookies.set('_plugins', pluginCookie); //todo where we want to store this?
-                UTILITIES.refreshPage(formData.join(""), plugins);
+                UTILITIES.refreshPage(plugins);
             },
             /**
              * Add Separator to the menu header at current position (end) of the header labels
