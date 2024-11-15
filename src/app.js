@@ -403,7 +403,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         id: "osd",
         prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
-        maxZoomPixelRatio: 1,
+        maxZoomPixelRatio: 2,
         blendTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
