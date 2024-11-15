@@ -4,8 +4,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     constructor() {
         super("oidc-client-ts");
 
-        console.testt = console.error.bind(console, "<----------->");
-
         this._signinProgress = false;
         this.configuration = this.getStaticMeta('oidc', {});
         this._connectionRetries = 0;
@@ -107,7 +105,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     }
 
     async _trySignIn(allowUserPrompt = false, preventRecurse = false) {
-        console.testt('ATTEMPT SIGNIN');
         if (this._signinProgress) return false;
 
         // Do not perform renew if we try manually for any reason (e.g. user action)
@@ -123,7 +120,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 await this._signInUserInteractive(refreshTokenExpiration);
             } else {
                 USER_INTERFACE.Loading.text("Attempting to log in...");
-                console.testt("OIDC: Signing silently..");
+                console.debug("OIDC: Signing silently..");
                 await this.userManager.signinSilent();
             }
             // TODO singing might fail here, e.g. refresh token not issued... maybe do not log out user
@@ -138,12 +135,12 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             if (typeof error === "string") error = {message: error};
             error.message = error.message || "";
             if (error.message.includes('Failed to fetch')) {
-                console.testt('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
+                console.debug('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
                 return await this._safeRetrySignIn('Failed to login, retrying in 20 seconds.',
                     'Retry now.', preventRecurse);
             }
             if (error.message.includes('disposed window')) {
-                console.testt('OIDC: Signin failed due to popup window blocking.');
+                console.debug('OIDC: Signin failed due to popup window blocking.');
                 return await this._safeRetrySignIn('Login requires opening a popup window. Please, allow popup window in your browser.',
                     'Retry now.', preventRecurse);
             }
@@ -153,7 +150,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 return await this.handleUserDataChanged(true);
             }
             if (error.message.includes('closed by user')) {
-                console.testt('OIDC: Signin failed due to user cancel.');
+                console.debug('OIDC: Signin failed due to user cancel.');
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
                 return await this.handleUserDataChanged(true);
@@ -190,7 +187,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             USER_INTERFACE.Loading.text("Login required: waiting for login...");
             // window.open(this.configuration.redirect_uri, 'xopat-auth');
             if (this.authMethod === "popup") {
-                console.testt('OIDC: Try to sign in via popup.');
+                console.debug('OIDC: Try to sign in via popup.');
                 await this.userManager.signinPopup({
                     popupWindowFeatures: {
                         popup: "no", //open new tab instead of popup window
@@ -201,13 +198,13 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 return false;
             }
 
-            console.testt('OIDC: Try to sign in via redirect.');
+            console.debug('OIDC: Try to sign in via redirect.');
             UTILITIES.storePageState();
             await this.userManager.signinRedirect();
             return false;
         }
         if (alwaysSignIn) {
-            console.testt("OIDC: Signing silently: refresh token available.");
+            console.debug("OIDC: Signing silently: refresh token available.");
             await this.userManager.signinSilent();
         }
         return true;
@@ -323,8 +320,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
             return;
         }
-        console.testt('Silent renew failed. Retrying with signin.');
-        await this._trySignIn();
+        console.debug('Silent renew failed. Retrying with signin.');
+        // Note: we must set popup in order to not to lose the current workspace
+        this.authMethod = 'popup';
+        await this._trySignIn(true);
     }
 }
 oidc.xOpatUser.instance(); //todo consider just executing private code...
