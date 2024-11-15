@@ -9,27 +9,33 @@ Run ``npm run s-node`` to run a node server. Follow instructions in the CLI - op
 some session & start debugging :) Changes in the viewer code (except for the server logics)
 is reflected with window reload.
 
-## Environment, Build & Test
+### Developing modules & plugins
+This feature is coming!
 
-> The build and test framework is still in development - for now, the viewer can be used AS-IS just add the OSD library and run from a PHP server.
+## Build
 
-    To minify (build) the viewer, you can run
+To minify (build) the viewer, you can run
 
-> grunt all
+   !!! tip
+   `grunt all`
 
 and for plugins only
 
-> grunt plugins
+   !!! tip
+   grunt plugins
 
 or modules only
 
-> grunt modules
+   !!! tip
+   grunt modoules
 
 This will create ``index.min.js`` files in respective directories. The viewer core recognizes
-existence of these files and loads them instead of all the source scripts. **These files
-for now block development, since the system will start ignoring non-minified files.**
+existence of these files and loads them instead of all the source scripts.
 
-For more details on components, see README files in respective directories.
+!!! warning
+    For development, you
+    must set `production: false` static client configuration so that these files are ignored.
+
+More documentation is coming. For more details on components, see README files in respective directories.
 For details on integration, see ``INTEGRATION.md``.
-For documentation, you can run ``npm install && grunt docs && grunt connect watch``
-and open ``localhost:9000/``
+
