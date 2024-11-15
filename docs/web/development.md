@@ -9,6 +9,9 @@ Run ``npm run s-node`` to run a node server. Follow instructions in the CLI - op
 some session & start debugging :) Changes in the viewer code (except for the server logics)
 is reflected with window reload.
 
+New features _shall_ be added to ``CHANGELOG.md``. There, always a new chapter `Unreleased` should be
+present, where current modification summary should be maintained.
+
 ### Developing modules & plugins
 Documentation & init feature is coming!
 
