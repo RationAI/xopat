@@ -10,24 +10,21 @@ some session & start debugging :) Changes in the viewer code (except for the ser
 is reflected with window reload.
 
 ### Developing modules & plugins
-This feature is coming!
+Documentation & init feature is coming!
 
 ## Build
 
 To minify (build) the viewer, you can run
 
-   !!! tip
-   `grunt all`
+`grunt all`
 
 and for plugins only
 
-   !!! tip
-   grunt plugins
+``grunt plugins``
 
 or modules only
 
-   !!! tip
-   grunt modoules
+``grunt modules``
 
 This will create ``index.min.js`` files in respective directories. The viewer core recognizes
 existence of these files and loads them instead of all the source scripts.
