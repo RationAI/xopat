@@ -119,10 +119,10 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <div class="d-flex flex-row mt-1">
 <div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 ${UIComponents.Elements.checkBox({
-	label: this.t('outlineOnly'),
-	classes: "pl-2",
-	onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
-	default: this.context.presets.getModeOutline()})}
+				label: this.t('outlineOnly'),
+				classes: "pl-2",
+				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
+				default: this.context.presets.getModeOutline()})}
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
@@ -884,7 +884,9 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;" class="d-inline-block">
+			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
+onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -1073,15 +1075,17 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false);" class="btn m-2">S
 class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2" onclick="Dialogs.closeWindow(\'preset-modify-dialog\');">Save</button></div>');
 	}
 
-	_clickPresetSelect(isLeft) {
-		if (this._presetSelection === undefined) {
+	_clickPresetSelect(isLeft, presetID = undefined) {
+		if (!presetID && this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
 			return false;
 		}
+
+		let preset = presetID ? this.context.presets.get(presetID) : this._presetSelection;
 		const _this = this;
 		setTimeout(function () {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.context.setPreset(_this._presetSelection, isLeft);
+			_this.context.setPreset(preset, isLeft);
 		}, 150);
 		return false;
 	}
