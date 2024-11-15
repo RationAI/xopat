@@ -545,11 +545,16 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         //     }
         // }
         let color = this._context.getAnnotationColor(object),
-            defaultName = this._context.getDefaultAnnotationName(object, false),
+            mainRowContent = this._context.getDefaultAnnotationName(object, false),
             name = this._context.getAnnotationDescription(object, "category", true);
-        if (name) {
-            inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name}">${defaultName} ${object.incrementId}</span>`);
+
+        mainRowContent = mainRowContent ? (mainRowContent + " " + object.incrementId) : '';
+
+        let area = factory.getArea(object);
+        if (area) {
+            mainRowContent += `<span class="float-right">Area ${VIEWER.scalebar.imageAreaToGivenUnits(area)}</span>`;
         }
+        inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name||'unknown'}">${mainRowContent}</span>`);
         // else {  //never happens: description shows at least default description
         //     //with no meta name, object will receive 'category' on edit
         //     inputs.push('<label class="show-hint d-block" data-hint="Name">',

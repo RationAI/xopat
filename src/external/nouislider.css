@@ -56,7 +56,7 @@
  * connect elements.
  */
 .noUi-vertical .noUi-origin {
-    top: -100%;
+    top: 0;
     width: 0;
 }
 .noUi-horizontal .noUi-origin {
@@ -95,10 +95,11 @@
     width: 18px;
 }
 .noUi-vertical .noUi-handle {
-    width: 28px;
-    height: 34px;
+    width: 19px;
+    height: 19px;
     right: -6px;
-    bottom: -17px;
+    top: -10px;
+    border-radius: 50%;
 }
 .noUi-txt-dir-rtl.noUi-horizontal .noUi-handle {
     left: -17px;
