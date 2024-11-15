@@ -183,10 +183,10 @@ ${core.requireCore("app")}`;
     </script>`;
 
                 case "modules":
-                    return core.requireModules();
+                    return core.requireModules(core.CORE.client.production);
 
                 case "plugins":
-                    return core.requirePlugins();
+                    return core.requirePlugins(core.CORE.client.production);
 
                 default:
                     //todo warn
@@ -219,7 +219,7 @@ ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
-${core.requireModules()}`;
+${core.requireModules(true)}`;
                 case "form-init":
                     return `
     <script type="text/javascript">
