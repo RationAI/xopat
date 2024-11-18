@@ -16,7 +16,7 @@
     //Event (login) priority
     "eventBeforeOpenPriority": 0,
     //Mathod used for auth: "redirect", "popup"
-    "method": "popup",
+    "method": "redirect",
     //Whether to store the login session in cookies
     "useCookiesStore": true,
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
@@ -24,9 +24,11 @@
         //We recommend not to modify 'redirect_uri'
         //Authority ID (url) the OIDC sets in the communication, url used for authorization
         "authority": "",
-        //Client ID of this application, its auth secret (or null)
+        //The authorization flow config
         "client_id": "",
-        "client_secret": null,
+        "response_type": "code",
+        //Using Client Secret explicitly here is insecure, since it will be exposed to the outside
+        // "client_secret": will-be-stolen
         //Default scope for the user
         "scope": "openid offline_access",
         //Can specify where to redirect after logout, by default the viewer gateway
