@@ -76,11 +76,7 @@ jobs:
           file: ./docker/php/Dockerfile
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tag_with_ref: true
-          tag_with_sha: true
-          tags: |
-            ${{ steps.get_version.outputs.RELEASE_VERSION }}
-            latest
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
