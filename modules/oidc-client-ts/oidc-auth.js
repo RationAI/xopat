@@ -8,6 +8,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.configuration = this.getStaticMeta('oidc', {});
         this._connectionRetries = 0;
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
+        this.extraSigninRequestArgs = this.getStaticMeta('extraSigninRequestArgs', undefined);
         this.useCookiesStore = this.getStaticMeta('useCookiesStore', true);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'redirect');
@@ -192,18 +193,21 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             if (this.authMethod === "popup") {
                 console.debug('OIDC: Try to sign in via popup.');
                 await this.userManager.signinPopup({
-                    popupWindowFeatures: {
-                        popup: "no", //open new tab instead of popup window
-                        closePopupWindowAfterInSeconds: -1
-                    },
-                    popupWindowTarget: "xopat-auth",
+                    ...this.extraSigninRequestArgs,
+                    ...{
+                        popupWindowFeatures: {
+                            popup: "no", //open new tab instead of popup window
+                                closePopupWindowAfterInSeconds: -1
+                        },
+                        popupWindowTarget: "xopat-auth",
+                    }
                 });
                 return false;
             }
 
             console.debug('OIDC: Try to sign in via redirect.');
             UTILITIES.storePageState();
-            await this.userManager.signinRedirect();
+            await this.userManager.signinRedirect(this.extraSigninRequestArgs);
             return false;
         }
         if (alwaysSignIn) {
