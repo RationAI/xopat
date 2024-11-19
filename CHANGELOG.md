@@ -3,7 +3,7 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### Unreleased
+### 2.0.4
 **Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
 
 **Bugfixes:** OIDC modile, magic wand annotation tool, stacktrace capture.
