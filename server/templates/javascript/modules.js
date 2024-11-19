@@ -98,13 +98,14 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
 
     /**
      * Load all modules
+     * @param {boolean} production if true, prefer minified file over sources
      */
-    core.requireModules = function () {
+    core.requireModules = function (production) {
         core.resolveDependencies(core._MODULE_ORDER, core.MODULES);
         return core._MODULE_ORDER.map(mid => {
             let module = core.MODULES[mid];
             if (core.parseBool(module["loaded"])) {
-                return core.printDependencies(core.MODULES_FOLDER, module);
+                return core.printDependencies(core.MODULES_FOLDER, module, production);
             }
             return "";
         }).join("");
@@ -147,8 +148,9 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
      * Print module or plugin dependency based on its parsed configuration
      * @param directory string parent context directory full path, ending with slash
      * @param item object item to load
+     * @param {boolean} production if true, prefer minified file over sources
      */
-    core.printDependencies = function (directory, item) {
+    core.printDependencies = function (directory, item, production) {
         const version = core.VERSION;
         //add module style sheet if exists
         let result = "";
@@ -156,7 +158,7 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
             result = `<link rel="stylesheet" href="${item["styleSheet"]}?v=${version}" type='text/css'>\n`;
         }
 
-        if (fileExists(`${directory}${item["directory"]}/index.min.js`)) {
+        if (production && fileExists(`${directory}${item["directory"]}/index.min.js`)) {
             return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
         }
 

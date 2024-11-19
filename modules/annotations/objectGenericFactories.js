@@ -67,6 +67,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
+    getArea(theObject) {
+        return theObject.width * theObject.height;
+    }
+
     exportsGeometry() {
         return ["left", "top", "width", "height"];
     }
@@ -245,6 +249,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.rx = parameters.rx;
         copy.ry = parameters.ry;
         return new fabric.Ellipse(copy);
+    }
+
+    getArea(theObject) {
+        return Math.PI * theObject.rx * theObject.ry;
     }
 
     edit(theObject) {
@@ -784,6 +792,19 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         const props = this.copyProperties(ofObject);
         delete props.points;
         return new this.Class(parameters, props);
+    }
+
+    getArea(theObject) {
+        let total = 0;
+        const points = theObject.points;
+        for (let i = 0; i < points.length; i++) {
+            const addX = points[i].x;
+            const addY = points[i === points.length - 1 ? 0 : i + 1].y;
+            const subX = points[i === points.length - 1 ? 0 : i + 1].x;
+            const subY = points[i].y;
+            total += (addX * addY * 0.5) - (subX * subY * 0.5);
+        }
+        return Math.abs(total);
     }
 
     edit(theObject) {

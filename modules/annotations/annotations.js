@@ -2277,7 +2277,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	}
 
 	discard() {
-		if (this._lastUsed) {
+		if (this._lastUsed && this._lastUsed.getCurrentObject()) {
 			this._lastUsed.discardCreate();
 		} else {
 			super.discard();

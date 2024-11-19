@@ -1,0 +1,73 @@
+site_name: xOpat - Explainable Open Pathology Analysis Tool
+repo_url: https://github.com/RationAI/xopat
+repo_name: RationAI/xopat
+docs_dir: ../..
+exclude_docs: |
+  /node_modules/*
+site_dir: ../../../site
+plugins:
+  - search
+  - same-dir
+
+# Getting started
+#   -image server deployment - rationai wsi service co nejvíc zjednodušit - docker compose
+#   -xopat deployment
+#   -kapitola se serverem
+#   -jak připojit prohlížeč k serveru
+# projít dokumentace a přepsat tak aby to bylo příjemné, ptát se aby to bylo srozumitelné
+
+nav:
+  - Introduction: 'index.md'
+  - 'Getting Started':
+    - 'Overview': 'docs/web/overview.md'
+    - 'Image Server Deployment': 'docs/web/image_server_deployment.md'
+    - 'xOpat Deployment': 'docs/web/xopat_deployment.md'
+    - 'Viewer Configurations': 'docs/web/xopat_configuration.md'
+    - 'Development': 'docs/web/development.md'
+
+  #- 'Development':
+  #- 'Deployment':
+  #- 'User guide':
+  - 'Changelog': 'CHANGELOG.md'
+  - 'API': 'https://rationai.github.io/xopat/'
+
+markdown_extensions:
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:pymdownx.emoji.twemoji
+      emoji_generator: !!python/name:pymdownx.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+theme:
+  logo: src/assets/android-chrome-512x512.png
+  favicon: src/assets/favicon-32x32.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.path
+  language: en
+  name: material
+  palette:
+
+    # Light mode
+    - scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to dark mode
+
+    # Dark mode
+    - scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to light mode
