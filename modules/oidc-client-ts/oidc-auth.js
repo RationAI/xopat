@@ -49,8 +49,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         //Create OIDC User Manager
         this.userManager = new oidc.UserManager(this.configuration);
         this.userManager.events.addUserLoaded((user) => {
-            console.log(user);
-            return this.handleUserDataChanged(); // TODO USE USER REF!!
+            return this.handleUserDataChanged(); // TODO USE USER REF
         });
 
         //Resolve once we know if we handle login
@@ -127,12 +126,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                 console.debug("OIDC: Signing silently..");
                 await this.userManager.signinSilent();
             }
-            // TODO singing might fail here, e.g. refresh token not issued... maybe do not log out user
-            // const result = await this.handleUserDataChanged(true);
             this._connectionRetries = 0;
             this._signinProgress = false;
-            return true; // :/ todo might be false
-
+            return;
         } catch (error) {
             this._signinProgress = false;
             USER_INTERFACE.Loading.text("Login not successful! Waiting...");
@@ -151,23 +147,26 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             if (error.message.includes('Popup closed by user')) {
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Log-in in a new window</a>.',
                     300000, Dialogs.MSG_WARN);
-                return false; //await this.handleUserDataChanged(true);
+                await this.handleUserDataChanged(true);
+                return;
             }
             if (error.message.includes('closed by user')) {
                 console.debug('OIDC: Signin failed due to user cancel.');
                 Dialogs.show('You need to login to access the viewer. <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">Retry now</a>.',
                     300000, Dialogs.MSG_WARN);
-                return false; // await this.handleUserDataChanged(true);
+                await this.handleUserDataChanged(true);
+                return;
             }
             if (error.message.includes('Invalid refresh token')) {
                 this.clearSession();
-                return await this._trySignIn(true, this._connectionRetries > this.maxRetryCount);
+                return this._trySignIn(true, this._connectionRetries > this.maxRetryCount);
             }
 
             Dialogs.show('Login failed due to unknown reasons. Please, <a onclick="oidc.xOpatUser.instance()._trySignIn(true, true, true); Dialogs.hide();">try again</a> or notify us about the issue.',
                 this.retryTimeout + 2000, Dialogs.MSG_ERR);
             console.error("OIDC auth attempt: ", error);
-            return false; // await this.handleUserDataChanged(true);
+            await this.handleUserDataChanged(true);
+            return;
         }
     };
 
@@ -181,7 +180,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
         }
         console.error("OIDC: MAX retry exceeded");
-        // await this.handleUserDataChanged(true);
         return false;
     }
 
@@ -189,7 +187,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
     async _signInUserInteractive(refreshTokenExpiration, alwaysSignIn=true) {
         if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
             USER_INTERFACE.Loading.text("Login required: waiting for login...");
-            // window.open(this.configuration.redirect_uri, 'xopat-auth');
             if (this.authMethod === "popup") {
                 console.debug('OIDC: Try to sign in via popup.');
                 await this.userManager.signinPopup({
@@ -264,7 +261,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         const oidcUser = await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
 
-            if (withLogout){
+            if (withLogout) {
                 const refreshTokenExpiration = this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
                     return returnNeedsRefresh();
@@ -306,19 +303,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
                         await this._trySignIn(false, true);
                     }
                 });
-
-                this.userManager.events.addAccessTokenExpired(() => {
-                    // Token can expire while the app is in background
-                    //   -> try a silent renew in that case and otherwise redirect to home
-                    if (XOpatUser.instance().isLogged) {
-                        this.renewErrorHandler();
-                    }
-                });
-                // Preventive removal & set
-                this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
-                this.userManager.events.addSilentRenewError(this.renewErrorHandler);
-                this.userManager.stopSilentRenew();
-                this.userManager.startSilentRenew();
+                this.enableEvents();
             }
             user.setSecret(oidcUser.access_token, "jwt");
             return true;
@@ -328,10 +313,25 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         return returnNeedsRefresh();
     }
 
+    disableEvents() {
+        this.userManager.events.removeAccessTokenExpired(this.renewErrorHandler);
+        this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
+        this.userManager.stopSilentRenew();
+    }
+    enableEvents() {
+        // Preventive removal & set
+        this.disableEvents();
+        this.userManager.events.addAccessTokenExpired(this.renewErrorHandler);
+        this.userManager.events.addSilentRenewError(this.renewErrorHandler);
+        this.userManager.startSilentRenew();
+    }
+
     renewErrorHandler = async () => {
+        this.enableEvents();
         const user = XOpatUser.instance();
+        console.debug("RENEW ERROR HANDLER");
         if (!user.isLogged) {
-            this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
+            this.disableEvents();
             return;
         }
         console.debug('Silent renew failed. Retrying with signin.');
