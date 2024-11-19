@@ -106,13 +106,14 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
 
     /**
      * Load all plugins
+     * @param {boolean} production if true, prefer minified file over sources
      */
-    core.requirePlugins = function () {
+    core.requirePlugins = function (production) {
         return Object.keys(PLUGINS).map(pid => {
             let plugin = PLUGINS[pid];
             if (core.parseBool(plugin["loaded"])) {
                 return `<div id='script-section-${plugin["id"]}'>` +
-                    core.printDependencies(core.PLUGINS_FOLDER, plugin)
+                    core.printDependencies(core.PLUGINS_FOLDER, plugin, production)
                 + "</div>";
             }
             return "";

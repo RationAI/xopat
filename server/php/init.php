@@ -73,7 +73,7 @@ foreach ($_POST as $key=>&$value) {
 $CORE["serverStatus"]["name"] = "php";
 $CORE["serverStatus"]["supportsPost"] = true;
 
-$replacer = function($match) use ($i18n) {
+$replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();
 
     switch ($match[1]) {
@@ -89,7 +89,6 @@ $replacer = function($match) use ($i18n) {
 
         case "app":
             //Todo think of secure way of sharing POST with the app
-            global $PLUGINS, $MODULES, $CORE;
 ?>
     <script type="text/javascript">
         initXopat(
@@ -111,11 +110,11 @@ $replacer = function($match) use ($i18n) {
     </script><?php break;
 
         case "modules":
-            require_modules();
+            require_modules($CORE["client"]["production"]);
             break;
 
         case "plugins":
-            require_plugins();
+            require_plugins($CORE["client"]["production"]);
             break;
 
         default:
