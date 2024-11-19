@@ -1,0 +1,16 @@
+# Read the Docs configuration file for MkDocs projects
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+# Required
+version: 2
+# build configuration
+build:
+  os: ubuntu-22.04
+  jobs:
+    pre_build:
+      - pip install mkdocs-material pymdown-extensions mkdocs-same-dir
+  tools:
+    python: "3.12"
+
+mkdocs:
+  configuration: docs/readthedocs/mkdocs.yml
+  fail_on_warning: false

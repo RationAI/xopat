@@ -3,6 +3,11 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### 2.0.4
+**Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
+
+**Bugfixes:** OIDC modile, magic wand annotation tool, stacktrace capture.
+
 ### 2.0.3
 Bugifxes on annotations. Update font + change default weight. More
 events propagated to modes (and recursively factories) to control.
