@@ -8,6 +8,11 @@ const execAtPath = (binPath, cmd, options = undefined) => {
 const { registerStaticServerTask } = require("./server/static/build.grunt");
 
 module.exports = function (grunt) {
+
+    // import tasks from separated files
+    require('./server/grunt_tasks/generate')(grunt);
+
+
     // Project configuration.
 
     //todo more fancy way of doing this?
