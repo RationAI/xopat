@@ -5,7 +5,12 @@ CONTEXT_TARGET=$(dirname $CONTEXT_TARGET)
 
 cd $CONTEXT_TARGET
 
-: "${XO_IMAGE_NAME:=cerit.io/rationai/production/xopat-standalone:v0.0.1}"
+NAME=$(grep '"name"' src/config.json | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+VERSION=$(grep '"version"' src/config.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')  # transform camelcase
+
+XO_IMAGE_NAME="${NAME}:${VERSION}"
+: "${XO_IMAGE_NAME:=$NAME}"
 
 echo
 echo "Starting build: docker build -t \"$XO_IMAGE_NAME\" -f $BASEDIR/Dockerfile ."

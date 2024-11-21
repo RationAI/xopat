@@ -50,6 +50,18 @@
  * @private
  */
 function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+    const savedState = checkLocalState();
+    if (savedState) {
+        PLUGINS = savedState.PLUGINS;
+        MODULES = savedState.MODULES;
+        ENV = savedState.ENV;
+        POST_DATA = savedState.POST_DATA;
+        PLUGINS_FOLDER = savedState.PLUGINS_FOLDER;
+        MODULES_FOLDER = savedState.MODULES_FOLDER;
+        VERSION = savedState.VERSION;
+        I18NCONFIG = savedState.I18NCONFIG;
+    }
+
     initXopatUI();
 
     //Setup language and parse config if function provided
@@ -391,7 +403,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         id: "osd",
         prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
-        maxZoomPixelRatio: 1,
+        maxZoomPixelRatio: 2,
         blendTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
@@ -955,8 +967,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-                                              background,
-                                              visualizations=undefined) {
+                                                                    background,
+                                                                    visualizations=undefined) {
         try {
             initXopatLayers();
 
@@ -1195,6 +1207,48 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
     initXopatScripts();
+    function checkLocalState() {
+        const data = sessionStorage.getItem('__xopat_session__');
+        sessionStorage.setItem('__xopat_session__', undefined);
+        if (data) {
+            try {
+                return JSON.parse(data);
+            } catch (e) {
+                console.debug("Failed to restore session!", e);
+            }
+        }
+        return null;
+    }
+
+    // Refresh Page & Storage state are defined here since we have reference to the incoming config
+    window.UTILITIES.storePageState = function(includedPluginsList=undefined) {
+        try {
+            // Add plugin definition to CONFIG, which is part of POST_DATA entry. Do not change anything if not requested.
+            if (includedPluginsList) {
+                const pluginRefs = CONFIG.plugins;
+                CONFIG.plugins = {};
+                for (let plugin in includedPluginsList) {
+                    const oldPluginRef = pluginRefs.plugins[plugin];
+                    if (!pluginRefs.plugins[plugin]) {
+                        CONFIG.plugins[plugin] = {};
+                    } else {
+                        // FIXME: if we have configured plugin, and we remove and add this plugin, configuration is lost
+                        CONFIG.plugins[plugin] = oldPluginRef;
+                    }
+                }
+            }
+            // Make sure the reference is really there
+            POST_DATA.visualization = CONFIG;
+
+            sessionStorage.setItem('__xopat_session__', JSON.stringify({
+                PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+            }));
+
+        } catch (e) {
+            console.error("Failed to store application state!", e);
+        }
+        return false;
+    }
 
     if (CONFIG.error) {
         USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,

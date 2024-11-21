@@ -24,17 +24,20 @@
                 let ts = new Date(), pad = "000", ms = ts.getMilliseconds().toString();
                 return ts.toLocaleTimeString("cs-CZ") + "." + pad.substring(0, pad.length - ms.length) + ms + " ";
             };
-            window.console.error = function () {
+            window.console.error = function (...args) {
                 window.console.appTrace.push("ERROR ",
                     // (new Error().stack.split("at ")[1]).trim(), " ",
-                    timestamp(), ...arguments, "\n");
-                defaultError.apply(window.console, arguments);
+                    timestamp(), ...args, "\n");
+
+                const stack = new Error().stack;
+                defaultError.apply(window.console, [...args, stack]);
             };
 
             const defaultWarn = console.warn;
-            window.console.warn = function () {
-                window.console.appTrace.push("WARN  ", ...arguments, "\n");
-                defaultWarn.apply(window.console, arguments);
+            window.console.warn = function (...args) {
+                window.console.appTrace.push("WARN  ", ...args, "\n");
+                const stack = new Error().stack;
+                defaultWarn.apply(window.console, [...args, stack]);
             };
         })();
     </script>
