@@ -25,7 +25,7 @@ viewer tries to address issues in digital pathology related to AI adoption.
 :memo: Versatile annotations and supported annotation formats.  
 :bulb: Flexible tutorial system: send viewer session with custom tutorials!  
 :bookmark_tabs: EMPAIA Integration  
-:keyboard: Screenshot or viewport copy/paste shortcuts  
+:keyboard: Action shortcuts (screenshot, copy of viewport location...)  
 ...  
 :fast_forward: And more including custom functionality!  
 
@@ -36,7 +36,6 @@ we try to cover it all!
 :white_check_mark: PHP Server  
 :white_check_mark: Node.js Server  
 :white_check_mark: Server-less: compiled once, used statically!  
-
 
 
 ## :point_right: What IS NOT xOpat?

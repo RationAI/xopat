@@ -67,6 +67,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
+    getArea(theObject) {
+        return theObject.width * theObject.height;
+    }
+
     exportsGeometry() {
         return ["left", "top", "width", "height"];
     }
@@ -133,11 +137,12 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -180,7 +185,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "circle";
+        return "brightness_1";
     }
 
     fabricStructure() {
@@ -246,6 +251,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Ellipse(copy);
     }
 
+    getArea(theObject) {
+        return Math.PI * theObject.rx * theObject.ry;
+    }
+
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
@@ -309,11 +318,12 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -370,7 +380,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "format_shapes";
+        return "language_japanese_kana";
     }
 
     fabricStructure() {
@@ -735,6 +745,39 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._current.set({points: []});
+            this.finishIndirect();
+        }
+    }
+
+    undoCreate() {
+        if (!this.canUndoCreate()) return;
+
+        if (this._current?.points.length < 2) {
+            this.finishIndirect();
+        } else {
+            const polygon = this._current;
+            polygon.points.pop();
+            if (this._followPoint) {
+                const currentPoint = polygon.points[polygon.points.length - 1];
+                this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+            }
+            polygon.setCoords();
+            this._context.canvas.renderAll();
+        }
+    }
+
+    canUndoCreate() {
+        if (this._polygonBeingCreated && this._current?.points) return true;
+        return undefined; // allow super execution
+    }
+
+    canRedoCreate() {
+        if (this._polygonBeingCreated && this._current?.points) return false; //not implemented
+        return undefined; // allow super execution
+    }
 
     exportsGeometry() {
         return ["points"];
@@ -749,6 +792,19 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         const props = this.copyProperties(ofObject);
         delete props.points;
         return new this.Class(parameters, props);
+    }
+
+    getArea(theObject) {
+        let total = 0;
+        const points = theObject.points;
+        for (let i = 0; i < points.length; i++) {
+            const addX = points[i].x;
+            const addY = points[i === points.length - 1 ? 0 : i + 1].y;
+            const subX = points[i === points.length - 1 ? 0 : i + 1].x;
+            const subY = points[i].y;
+            total += (addX * addY * 0.5) - (subX * subY * 0.5);
+        }
+        return Math.abs(total);
     }
 
     edit(theObject) {
@@ -849,12 +905,8 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return -1; //always allow
     }
 
-    initCreate(x, y, isLeftClick = true) {
-        if (!this._polygonBeingCreated) {
-            this._initialize();
-        }
-
-        let properties = {
+    _getCommonHelperProps() {
+        return  {
             selectable: false,
             hasControls: false,
             evented: false,
@@ -863,6 +915,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             lockMovementX: true,
             lockMovementY: true
         };
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        if (!this._polygonBeingCreated) {
+            this._initialize();
+        }
+
+        const properties = this._getCommonHelperProps();
 
         //create circle representation of the point
         let polygon = this._current,
@@ -977,7 +1037,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
+            radius: 5 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
@@ -1290,7 +1350,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "flash_on";
+        return "pentagon";
     }
 
     fabricStructure() {

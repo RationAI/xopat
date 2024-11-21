@@ -1,6 +1,6 @@
 OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "magic-wand", "blur_on", "🆃  automatic selection wand");
+        super(context, "magic-wand", "lasso_select", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.threshold = 10;
@@ -47,6 +47,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
     handleClickUp(o, point, isLeftClick, objectFactory) {
         if (this._allowCreation && this.result) {
+            delete this.result.strokeDashArray;
             this.context.promoteHelperAnnotation(this.result);
             this.result = null;
             this._allowCreation = false;
@@ -130,7 +131,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         if (largest && factory) {
             largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)));
-            this.result = factory.create(largest, this.context.presets.getAnnotationOptions(this._isLeft));
+            const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
+            visualProps.strokeDashArray = [15, 15];
+            this.result = factory.create(largest, visualProps);
             this.context.addHelperAnnotation(this.result);
         } else {
             this.result = null;
@@ -202,6 +205,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     handleMouseHover(event, point) {
+        if (!this.context.presets.left) return;
         this._isLeft = true;
         this._process(event);
     }
@@ -248,6 +252,11 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return e.code === "KeyT";
     }
 
+    setTiledImageIndex(value) {
+        this._invalidData = Date.now();
+        this.tiledImageIndex = Number.parseInt(value);
+    }
+
     customHtml() {
         let options;
         if (APPLICATION_CONTEXT.config.background.length < 1) {
@@ -265,6 +274,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
 </span><select class="ml-2 form-control text-small"
-onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].tiledImageIndex = Number.parseInt(this.value);">${options}</select>`;
+onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setTiledImageIndex(Number.parseInt(this.value));">${options}</select>`;
     }
 };

@@ -119,10 +119,10 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <div class="d-flex flex-row mt-1">
 <div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 ${UIComponents.Elements.checkBox({
-	label: this.t('outlineOnly'),
-	classes: "pl-2",
-	onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
-	default: this.context.presets.getModeOutline()})}
+				label: this.t('outlineOnly'),
+				classes: "pl-2",
+				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
+				default: this.context.presets.getModeOutline()})}
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
@@ -136,8 +136,8 @@ ${UIComponents.Elements.checkBox({
 		);
 
 		const vertSeparator = '<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>';
-		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.back()">undo</span>
-<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.history.redo()">redo</span>`, vertSeparator],
+		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.undo()">undo</span>
+<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.redo()">redo</span>`, vertSeparator],
 			modes = this.context.Modes;
 		const defaultModeControl = (mode) => {
 			let selected = mode.default() ? "checked" : "";
@@ -238,23 +238,31 @@ ${modeOptions.join("")}</div>`, 'draw');
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
-			// manual mode check factory, which can be re-set only if matches
+			// in case mode does not change, check explicitly custom mode where factory type might change
 			if (id === "custom") {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				if (!preset) {
+				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+				if (!preset && !otherPreset) {
 					return;
 				}
-				if (preset.objectFactory.factoryID !== factory) {
-					this.updatePresetWith(preset.presetID, 'objectFactory', factory);
-					return;
-				}
+
+				this.context.setModeById("auto");  // this forces re-initialization if some object was being created
+				if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+				if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+				this.context.setModeById("custom");
+				return;
 			}
 			this.context.setModeById("auto");
 			$('#auto-annotation-mode').prop('checked', true).trigger('change');
 		} else {
+			// if custom mode also change factories, change both left and right uniformly to not confuse users
 			if (id === "custom" && factory) {
 				const preset = this.context.presets.getActivePreset(isLeftClick);
-				this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+				if (preset || otherPreset) {
+					if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+					if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+				}
 			}
 			this.context.setModeById(id);
 		}
@@ -315,6 +323,13 @@ ${modeOptions.join("")}</div>`, 'draw');
 	}
 
 	initHandlers() {
+		const refreshHistoryButtons = () => {
+			$("#toolbar-history-redo").css('color', this.context.canRedo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+			$("#toolbar-history-undo").css('color', this.context.canUndo() ?
+				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
+		};
+
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => this.setupActiveTissue());
 		VIEWER.addHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
@@ -333,6 +348,7 @@ ${modeOptions.join("")}</div>`, 'draw');
 				$(`#${e.mode.getId()}-annotation-mode`).prop('checked', true);
 			}
 			USER_INTERFACE.Status.show(e.mode.getDescription());
+			refreshHistoryButtons();
 		};
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
@@ -354,16 +370,11 @@ ${modeOptions.join("")}</div>`, 'draw');
 		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
-		this.context.addHandler('history-change', e => {
-			$("#toolbar-history-redo").css('color', this.context.history.canRedo() ?
-				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
-			$("#toolbar-history-undo").css('color', this.context.history.canUndo() ?
-				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
-		});
+		this.context.addHandler('history-change', refreshHistoryButtons);
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
-			if (this.context.presets.right
+			if ((this.context.presets.right && this.context.mode !== this.context.Modes.AUTO)
 				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
 				return;
 			}
@@ -873,7 +884,9 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;" class="d-inline-block">
+			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
+onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -1062,15 +1075,17 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false);" class="btn m-2">S
 class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2" onclick="Dialogs.closeWindow(\'preset-modify-dialog\');">Save</button></div>');
 	}
 
-	_clickPresetSelect(isLeft) {
-		if (this._presetSelection === undefined) {
+	_clickPresetSelect(isLeft, presetID = undefined) {
+		if (!presetID && this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
 			return false;
 		}
+
+		let preset = presetID ? this.context.presets.get(presetID) : this._presetSelection;
 		const _this = this;
 		setTimeout(function () {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.context.setPreset(_this._presetSelection, isLeft);
+			_this.context.setPreset(preset, isLeft);
 		}, 150);
 		return false;
 	}

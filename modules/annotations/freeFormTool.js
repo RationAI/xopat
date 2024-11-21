@@ -208,6 +208,14 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     /**
+     * Check if free form tool is in active mode
+     * @return {boolean}
+     */
+    isRunning() {
+        return !!this.polygon;
+    }
+
+    /**
      * Finalize the object modification
      * @return {fabric.Polygon | null} polygon if successfully updated
      */

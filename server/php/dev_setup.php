@@ -25,7 +25,7 @@ $replacer = function($match) use ($i18n) {
             include_once(PHP_INCLUDES . "plugins.php");
             global $MODULES;
             $MODULES["webgl"]["loaded"] = true;
-            require_modules();
+            require_modules(true);
             break;
 
         case "form-init":

@@ -1,13 +1,13 @@
 FROM ubuntu:jammy AS viewer-build-deps
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
-ENV NVM_DIR /usr/local/nvm
-ENV NODE_VERSION 18.7.0
-ENV NODE_PATH $NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
-ENV PATH      $NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
+ENV NVM_DIR=/usr/local/nvm
+ENV NODE_VERSION=18.7.0
+ENV NODE_PATH=$NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
+ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -y \
@@ -97,9 +97,9 @@ CMD apache2ctl -D FOREGROUND
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 FROM ubuntu:jammy AS viewer-git
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -y \
@@ -146,7 +146,7 @@ USER www-data
 WORKDIR /var/www
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD apache2ctl -D FOREGROUND
+CMD ["apache2ctl", "-D", "FOREGROUND"]
 
 
 ###############################
@@ -166,3 +166,5 @@ COPY plugins/ /var/www/html/xopat/plugins
 COPY modules/ /var/www/html/xopat/modules
 COPY env/ /var/www/html/xopat/env
 COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
+
+LABEL org.opencontainers.image.source="https://github.com/rationAI/xopat"

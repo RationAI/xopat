@@ -233,7 +233,7 @@ onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${
                     }
                 }
             }
-            const fullTitle = title.startsWith("...") ? dataId : title;
+            const fullTitle = title.startsWith("Source: ...") ? dataId : title;
             const cacheApplied = layer._cacheApplied ?
                 `<div class="p2 info-container rounded-2" style="width: 97%">
 ${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";

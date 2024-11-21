@@ -93,22 +93,22 @@ foreach ($PLUGINS as $key => &$plugin) {
 
 
 
-function require_modules() {
+function require_modules($production) {
     global $MODULES;
     resolveDependencies($MODULES);
     foreach ($MODULES as $_ => $mod) {
         if (isset($mod["loaded"]) && $mod["loaded"]) {
-            printDependencies(MODULES_FOLDER, $mod);
+            printDependencies(MODULES_FOLDER, $mod, $production);
         }
     }
 }
 
-function require_plugins() {
+function require_plugins($production) {
     global $PLUGINS;
     foreach ($PLUGINS as $_ => $plugin) {
         if (isset($plugin["loaded"]) && $plugin["loaded"]) {
             echo "<div id='script-section-{$plugin["id"]}'>";
-            printDependencies(PLUGINS_FOLDER, $plugin);
+            printDependencies(PLUGINS_FOLDER, $plugin, $production);
             echo "</div>";
         }
     }

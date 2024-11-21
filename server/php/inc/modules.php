@@ -119,15 +119,16 @@ function getAttributes($source, $properties) {
  * Print module or plugin dependency based on its parsed configuration
  * @param $directory string parent context directory full path, ending with slash
  * @param $item object item to load
+ * @param $production boolean whether to prefer minified files
  */
-function printDependencies($directory, $item) {
+function printDependencies($directory, $item, $production) {
     $version = VERSION;
     //add module style sheet if exists
     if (isset($item["styleSheet"])) {
         echo "<link rel=\"stylesheet\" href=\"{$item["styleSheet"]}?v=$version\" type='text/css'>\n";
     }
 
-    if (file_exists("$directory{$item["directory"]}/index.min.js")) {
+    if ($production && file_exists("$directory{$item["directory"]}/index.min.js")) {
         echo "    <script src=\"$directory{$item["directory"]}/index.min.js?v=$version\"></script>\n";
         return;
     }

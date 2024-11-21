@@ -33,7 +33,8 @@ OSDAnnotations.Convertor.register("native", class extends OSDAnnotations.Convert
         };
     }
 
+    //todo some servers decode data :/ breaks api
     async decode(data) {
-        return JSON.parse(data);
+        return typeof data === "string" ? JSON.parse(data) : data;
     }
 });

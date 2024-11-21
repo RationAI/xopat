@@ -347,6 +347,65 @@ OSDAnnotations.AnnotationObjectFactory = class {
     updateCreate(x, y) {
     }
 
+    /**
+     * Undo of the last manual creation step
+     */
+    undoCreate() {
+    }
+
+    /**
+     * Redo of the last manual creation step
+     */
+    redoCreate() {
+    }
+
+    /**
+     * Discard active creation
+     */
+    discardCreate() {
+    }
+
+    /**
+     * Finish object creation, if in progress. Can be called also if no object
+     * is being created. This action was performed directly by the user.
+     * @return {boolean} true if object finished; when factory for example
+     *   does not support direct finish, or decide not yet to finish, this should
+     *   return false.
+     */
+    finishDirect() {
+        return false;
+    }
+
+    /**
+     * Finish object creation, if in progress. Can be called also if no object
+     * is being created. This action was enforced by the environment (i.e.
+     * performed by the user indirectly). Thus, it shall finish the object creation
+     * at all costs - usually, an annotation mode will be changing.
+     */
+    finishIndirect() {
+    }
+
+    /**
+     * Check if factory (or its current state) will handle undoCreate() call
+     * @return {boolean|undefined}
+     *   true if undoCreate() will undo one manual creation step,
+     *   false if undo will not be able to be called, but should be blocked
+     *   undefined if undo will not be handled and super() logics should take over
+     */
+    canUndoCreate() {
+        return undefined;
+    }
+
+    /**
+     * Check if factory (or its current state) will handle redoCreate() call
+     * @return {boolean|undefined}
+     *   true if redoCreate() will undo one manual creation step,
+     *   false if undo will not be able to be called, but should be blocked
+     *   undefined if undo will not be handled and super() logics should take over
+     */
+    canRedoCreate() {
+        return undefined;
+    }
 
     /**
      * Update the object coordinates by user interaction
@@ -360,6 +419,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} theObject recalculate the object that has been modified
      */
     recalculate(theObject) {
+    }
+
+    /**
+     * Compute the area of the object in pixels (image dimension) squared
+     * @param {fabric.Object} theObject recalculate the object that has been modified
+     * @return {Number|undefined} undefined if area not measure-able
+     */
+    getArea(theObject) {
+        return undefined;
     }
 
     /**
@@ -388,21 +456,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         //         });
         //     }
         // }
-    }
-
-    /**
-     * Finish object creation, if in progress. Can be called also if no object
-     * is being created. This action was performed directly by the user.
-     */
-    finishDirect() {
-    }
-
-    /**
-     * Finish object creation, if in progress. Can be called also if no object
-     * is being created. This action was enforced by the environment (i.e.
-     * performed by the user indirectly).
-     */
-    finishIndirect() {
     }
 
     /**
@@ -496,7 +549,7 @@ OSDAnnotations.PolygonUtilities = {
         }
 
         const dy = a.y - b.y;
-        const py = (a.height + b.height) - Math.abs(dx);
+        const py = (a.height + b.height) - Math.abs(dy);
         return py > 0;
 
     },
@@ -514,7 +567,7 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = (15 - 12*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 

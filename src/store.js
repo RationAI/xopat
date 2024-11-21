@@ -346,6 +346,7 @@ $.XOpatStorage = {
      * Similar to Storage, AsyncStorage supports asynchronous storage interface.
      * see https://developer.mozilla.org/en-US/docs/Web/API/Storage
      * @type {XOpatStorage.AsyncStorage}
+     * @memberOf XOpatStorage
      */
     AsyncStorage: xoAsyncStorage,
 
