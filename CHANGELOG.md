@@ -6,7 +6,7 @@ to the versions 1.x.x.
 ### 2.0.4
 **Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
 
-**Bugfixes:** OIDC modile, magic wand annotation tool, stacktrace capture.
+**Bugfixes:** OIDC module, magic wand annotation tool, stacktrace capture.
 
 ### 2.0.3
 Bugifxes on annotations. Update font + change default weight. More
