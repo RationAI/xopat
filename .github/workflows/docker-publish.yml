@@ -38,8 +38,8 @@ jobs:
         context: .
         push: true
         tags: |
-          ghcr.io/${{ github.repository }}:${{ env.TAG_NAME }}
-          ghcr.io/${{ github.repository }}:latest
+          ghcr.io/rationai/xopat:${{ env.TAG_NAME }}
+          ghcr.io/rationai/xopat:latest
 
     - name: Build and push on dispatch
       if: github.event_name != 'release'
@@ -49,4 +49,4 @@ jobs:
         context: .
         push: true
         tags: |
-          ghcr.io/${{ github.repository }}:${{ env.TAG_NAME }}
+          ghcr.io/rationai/xopat:${{ env.TAG_NAME }}
