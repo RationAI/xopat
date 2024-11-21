@@ -47,7 +47,7 @@ AI jobs can either add their data to xOpat via raster images (just like WSI serv
 to the Annotations plugin. Add your custom plugins to connect to services of your choice & do whatever you need!
 
 ## Documentation
-Please, visit [https://xopat.readthedocs.io/]().
+Please, visit <https://xopat.readthedocs.io/>.
 
 ## API
-Please, see [https://rationai.github.io/xopat/]().
+Please, see <https://rationai.github.io/xopat/>.
