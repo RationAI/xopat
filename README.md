@@ -14,34 +14,28 @@ and bring it to something that covers all your needs. With the focus on flexibil
 viewer tries to address issues in digital pathology related to AI adoption.
 
 ### Behaves as an enhanced OpenSeadragon*, a popular (feature-less) flexible viewer.
-<ul>
-:floppy_disk: Full data & API protocol flexibility. No backend services are hardcoded.<br>
-:bar_chart: Powerful visualization capabilities, similar to Photoshop layers.<br>
-:gear: Configurability: static & runtime.<br>
-:package: Annotations, and other plugins introduce an unusual set of additional features
-     that take the WSI far beyond standard.
-</ul>
+:floppy_disk: Full data & API protocol flexibility. No backend services are hardcoded.  
+:bar_chart: Powerful visualization capabilities, similar to Photoshop layers.  
+:gear: Configurability: static & runtime.  
+:package: Annotations, and other plugins introduce an unusual set of additional features that take the WSI far beyond standard.  
 
 ### Powerful set of modules and plugins: Advanced extensibility & Existing features
-<ul>
-:key: OIDC Authentication<br>
-:book: Visualization Storytelling<br>
-:memo: Versatile annotations and supported annotation formats.<br>
-:bulb: Flexible tutorial system: send viewer session with custom tutorials!<br>
-:bookmark_tabs: EMPAIA Integration<br>
-:keyboard: Screenshot or viewport copy/paste shortcuts<br>
-...<br>
-:fast_forward: And more including custom functionality!<br>
-</ul>
+:key: OIDC Authentication  
+:book: Visualization Storytelling  
+:memo: Versatile annotations and supported annotation formats.  
+:bulb: Flexible tutorial system: send viewer session with custom tutorials!  
+:bookmark_tabs: EMPAIA Integration  
+:keyboard: Screenshot or viewport copy/paste shortcuts  
+...  
+:fast_forward: And more including custom functionality!  
 
 ### Servers
 To parse existing modules, plugins, read POST data the viewer uses a server. Don't worry,
 we try to cover it all!
-<ul>
-:heavy_check_mark: PHP Server<br>
-:heavy_check_mark: Node.js Server<br>
-:heavy_check_mark: Server-less: compiled once, used statically!<br>
-</ul>
+
+:white_check_mark: PHP Server  
+:white_check_mark: Node.js Server  
+:white_check_mark: Server-less: compiled once, used statically!  
 
 
 
