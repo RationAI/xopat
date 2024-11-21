@@ -26,10 +26,9 @@ viewer tries to address issues in digital pathology related to AI adoption.
 <ul>
 :key: OIDC Authentication<br>
 :book: Visualization Storytelling<br>
-:memo: Versatile annotations and supported annotation formats.<br>
+:memo: Versatile annotations and support for multiple annotation formats.<br>
 :bulb: Flexible tutorial system: send viewer session with custom tutorials!<br>
-:bookmark_tabs: EMPAIA Integration<br>
-:keyboard: Screenshot or viewport copy/paste shortcuts<br>
+:keyboard: Action shortcuts (screenshot, copy of viewport location...)<br>
 ...<br>
 :fast_forward: And more including custom functionality!<br>
 </ul>
@@ -42,7 +41,6 @@ we try to cover it all!
 :heavy_check_mark: Node.js Server<br>
 :heavy_check_mark: Server-less: compiled once, used statically!<br>
 </ul>
-
 
 
 ## :point_right: What IS NOT xOpat?
