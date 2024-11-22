@@ -18,7 +18,7 @@ const PROJECT_PATH = "";
 const {getCore} = require("../templates/javascript/core");
 const {loadPlugins} = require("../templates/javascript/plugins");
 
-module.exports.registerStaticServerTask = function (grunt, message) {
+module.exports = function (grunt, message) {
     function throwIfError(core) {
         if (core.exception) {
             grunt.log.error(core.exception);

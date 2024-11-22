@@ -1,67 +1,105 @@
 require("console");
+const inquirer = require("inquirer");
+const fs = require("fs");
+const path = require("path");
+const readline = require("readline");
 
 module.exports = function(grunt) {
-  // required modules
-  const path = require("path");
-  const fs = require("fs");
-  const readline = require("readline");
-
   // initialize grunt configuration
   grunt.initConfig({
     pkg: grunt.file.readJSON("package.json")
   });
 
   // register task
-  grunt.registerTask("generate", "Generate a plugin or module", async function(
-    type
-  ) {
+  grunt.registerTask("generate", "Generate a plugin or module", async function(type) {
 
-
-    // --------------------------
-    // function to handle errors
-    // --------------------------
-    function handleError(message, done = true) {
-      // log error
-      console.log(`\x1b[38;2;206;60;49m`, `× ERROR: ${message}`);
-      if (done) {
-        rl.close();
-        done();
-      }
-    }
-
-
-    // ---------------------------------
-    // helper function to ask a question
-    // ---------------------------------
+    /**
+     * Ask question
+     * @param query
+     * @param mandatory
+     * @return {Promise<unknown>}
+     */
     function askQuestion(query, mandatory = true) {
       // return answer promise
       return new Promise((resolve, reject) => {
         // styled query
         const coloredQuery = `\n\x1b[38;2;50;163;219m→ ${query}\x1b[0m`;
         rl.question(coloredQuery, answer => {
-          // check for emptiness if answer is required
-          if (answer.trim() || !mandatory) {
-            resolve(answer.trim());
+          const res = answer.trim();
+          if (res || !mandatory) {
+            resolve(res);
           } else {
-            reject(Error("answer is required."));
+            resolve("");
           }
         });
       });
     }
 
 
-    // ---------------------------------------
-    // function to validate module name input
-    // ---------------------------------------
-    function validateModules(modules) {
-      // check if modules exist in modules folder
-      modules.forEach(module => {
-        const modulePath = path.join(__dirname, "modules", module);
-        if (!fs.existsSync(modulePath))
-          throw new Error(`module '${module}' does not exist.`);
-      });
+    /**
+     * Select module
+     * @return {Promise<string[]>}
+     */
+    async function selectModules() {
+      // Get the list of available modules from the 'modules' folder
+      const modules = grunt.util.reduceModules( (acc, module, folder) => {
+        acc.push({name: module.name, value: module.id});
+        return acc;
+      }, []);
+
+      const prompt = inquirer.createPromptModule();
+      const answer = await prompt([
+        {
+          type: 'checkbox',
+          name: 'selectedModules',
+          message: 'Select one or more modules:',
+          choices: modules,
+        },
+      ]);
+      return answer.selectedModules;
     }
 
+    /**
+     * Ask question with attempts option
+     * @param question query string
+     * @param parser if undefined, the question is treated as nonmandatory, else a parser that returns value or falsey
+     *    value upon error
+     * @param errorMessage error to show when parser returns falsey value
+     * @param maxAttempts
+     * @return {Promise<*>}
+     */
+    async function askWithValidation(question, parser, errorMessage = "", maxAttempts = 3) {
+      let attempts = 0;
+
+      const mandatory = !!parser;
+      while (attempts < maxAttempts) {
+        if (!mandatory) question = question + " (optional)";
+        const answer = await askQuestion(question + ": ", mandatory);
+        if (!mandatory) return answer;
+        const data = parser(answer);
+        if (data) {
+          return data; // Valid answer
+        }
+
+        console.log(`Invalid input. ${errorMessage}`);
+        attempts++;
+      }
+
+      throw new Error(`Failed to provide a valid input after ${maxAttempts} attempts.`);
+    }
+
+    async function askYesNo(question, maxAttempts = 3) {
+      const answer = await askWithValidation(
+          question + " (y/n)",
+          x => {
+            x = x.toLowerCase();
+            return x === "y" || x === "n" ? x : false
+          },
+          "Use y or n to answer yes or no.",
+          maxAttempts
+      );
+      return answer === "y";
+    }
 
     // ---------------------------------------
     // function to create directory and files
@@ -95,74 +133,48 @@ module.exports = function(grunt) {
       // create folder path
       const folderPath = path.join(basePath, pluginName);
 
-      // try block to create plugin with error handling
-      try {
-        // ask for full name and check
-        let name = await askQuestion("Enter the full name for your plugin: ");
-        if (!name.trim()) throw new Error("name required");
-        name = name.replace(/[^a-zA-Z0-9]/g, "");
+      // ask for full name and check
+      let name = await askWithValidation("Enter the full name for your plugin", x => x.trim(), "Name is required!");
+      name = name.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask for author and check
-        let author = await askQuestion("Enter the plugin author: ");
-        if (!author.trim()) throw new Error("Author required.");
-        author = author.replace(/[^a-zA-Z0-9]/g, "");
+      // ask for author and check
+      let author = await askWithValidation("Enter the plugin author", x => x.trim(), "Author required!");
+      author = author.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask for description (optional)
-        let description = await askQuestion(
-          "Enter the plugin description (optional): ",
-          false
-        );
-        description = description.replace(/[^a-zA-Z0-9]/g, "");
+      // ask for description (optional)
+      let description = await askWithValidation("Enter the plugin description", false);
+      description = description.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask if modules are needed
-        const addModulesAnswer = await askQuestion(
-          "Do you want to add modules? (y/n): "
-        );
-        if (addModulesAnswer !== "y" && addModulesAnswer !== "n")
-          throw new Error("invalid answer");
-        const addModules = addModulesAnswer.toLowerCase() === "y";
-        let modules = [];
+      let modules = [];
+      if (await askYesNo("Do you want to add modules?")) {
+        modules = await selectModules();
+      }
 
-        // ask for modules
-        if (addModules) {
-          const modulesInput = await askQuestion(
-            "Enter modules separated by commas: "
-          );
-          modules = modulesInput.split(",").map(m => m.trim());
-
-          // check if modules exist in modules folder
-          validateModules(modules);
-        }
-
-        // template content
-        const jsContent = createClass
+      // template content
+      const jsContent = createClass
           ? `// '${pluginName}' plugin class\nclass ${className} extends XOpatPlugin {\n  constructor(id) { super(id); }\n  pluginReady() { alert('hello world'); }\n}\naddPlugin('${pluginName}', ${className});`
           : `// '${pluginName}' plugin\naddPlugin('${pluginName}', class extends XOpatPlugin {\n  constructor(id) { super(id); }\n  pluginReady() { alert('hello world'); }\n});`;
 
-        // create json content
-        const jsonContent = {
-          id: pluginName,
-          name,
-          author,
-          version: "1.0.0",
-          description,
-          includes: [`${pluginName}.js`],
-          modules
-        };
-        const cssContent = "/* ADD YOUR CSS STYLES HERE */";
+      // create json content
+      const jsonContent = {
+        id: pluginName,
+        name,
+        author,
+        version: "1.0.0",
+        description,
+        includes: [`${pluginName}.js`],
+        modules
+      };
+      const cssContent = "/* ADD YOUR CSS STYLES HERE */";
 
-        // create files
-        createFiles(folderPath, jsContent, jsonContent, cssContent);
+      // create files
+      createFiles(folderPath, jsContent, jsonContent, cssContent);
 
-        // log success
-        console.log(
+      // log success
+      console.log(
           `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: plugin '${pluginName}' created`
-        );
-      } catch (error) {
-        // handle error
-        handleError(error.message);
-      }
+          `\n✓ SUCCESS: plugin '${pluginName}' created.`
+      );
     }
 
 
@@ -172,152 +184,116 @@ module.exports = function(grunt) {
     async function createModule(basePath, moduleName, classType, className) {
       // create folder path
       const folderPath = path.join(basePath, moduleName);
+      // ask for full name and check
+      let name = await askWithValidation("Enter the full name for your module", x => x.trim(), "Name is required!");
+      name = name.replace(/[^a-zA-Z0-9]/g, "");
 
-      try {
-        // ask for full name
-        let name = await askQuestion("Enter the full name for your module: ");
-        if (!name.trim()) throw new Error("name required");
-        name = name.replace(/[^a-zA-Z0-9]/g, "");
+      // ask for author and check
+      let author = await askWithValidation("Enter the module author", x => x.trim(), "Author required!");
+      author = author.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask if requirements are needed
-        const addRequirementsAnswer = await askQuestion(
-          "Do you want to add any required modules? (y/n): "
-        );
-        if (addRequirementsAnswer !== "y" && addRequirementsAnswer !== "n")
-          throw new Error("invalid answer for requirements");
-        const addRequirements = addRequirementsAnswer.toLowerCase() === "y";
-        let requirements = [];
+      // ask for description (optional)
+      let description = await askWithValidation("Enter the module description", false);
+      description = description.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask for module requirements
-        if (addRequirements) {
-          const requirementsInput = await askQuestion(
-            "Enter modules separated by commas: "
-          );
-          requirements = requirementsInput.split(",").map(r => r.trim());
-        }
-
-        // check if required modules exist in modules folder
-        validateModules(requirements);
-
-        // template content
-        const jsContent =
-          classType === "class"
-            ? `// '${moduleName}' module class\n(function () {\n  class ${className} extends XOpatModule {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
-            : classType == "singleton"
-              ? `// '${moduleName}' module singleton class\n(function () {\n  class ${className} extends XOpatModuleSingleton {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
-              : `// '${moduleName}' module\n(function () {\n  alert('hello world');\n})();`;
-
-        // create json content
-        const jsonContent = {
-          id: moduleName,
-          name: name,
-          version: "0.1.0",
-          includes: [`${moduleName}.js`],
-          requires: requirements
-        };
-
-        // create files
-        createFiles(folderPath, jsContent, jsonContent);
-
-        // log success
-        console.log(
-          `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: module '${moduleName}' created`
-        );
-      } catch (error) {
-        // handle error
-        handleError(error.message);
+      let requirements = [];
+      if (await askYesNo("Do you want to add any required modules?")) {
+        requirements = await selectModules();
       }
+
+      // template content
+      const jsContent =
+          classType === "class"
+              ? `// '${moduleName}' module class\n(function () {\n  class ${className} extends XOpatModule {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
+              : classType == "singleton"
+                  ? `// '${moduleName}' module singleton class\n(function () {\n  class ${className} extends XOpatModuleSingleton {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
+                  : `// '${moduleName}' module\n(function () {\n  alert('hello world');\n})();`;
+
+      // create json content
+      const jsonContent = {
+        id: moduleName,
+        name: name,
+        author: author,
+        version: "0.1.0",
+        includes: [`${moduleName}.js`],
+        requires: requirements
+      };
+      if (description) jsContent["description"] = description;
+
+      // create files
+      createFiles(folderPath, jsContent, jsonContent);
+
+      // log success
+      console.log(
+          `\x1b[38;2;43;199;121m`,
+          `\n✓ SUCCESS: module '${moduleName}' created.`
+      );
     }
 
 
-    // --------------
-    // init function
-    // --------------
     async function initCreate(structureType) {
-      // try block to start main process
-      try {
-        let isPlugin = structureType === "plugin";
+      let isPlugin = structureType === "plugin";
 
-        // ask for name and check
-        let name = await askQuestion(
-          `Enter the identification name for your ${structureType}: `
-        );
-        if (!name.trim()) throw new Error("name required.");
-        name = name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      // ask for name and check
+      let id = await askWithValidation(`Enter ${structureType} id`, x => {
+        x = x.trim();
+        const reducer = isPlugin ? grunt.util.reducePlugins : grunt.util.reduceModules;
+        if (reducer((acc, value, folder) => acc && value.id !== x, true)) return x;
+        return false;
+      }, "ID is required! Id must not be taken by existing " + structureType);
+      id = id.replace(/[^a-zA-Z0-9]/g, "");
 
-        // ask for class creation
-        const createClassAnswer = await askQuestion(
-          `Do you want to create a class for your ${structureType} (y/n): `
-        );
-        if (createClassAnswer !== "y" && createClassAnswer !== "n")
-          throw new Error("invalid answer");
-        let createClass = createClassAnswer.toLowerCase() === "y";
-
-        // ask for module-specific class type
-        createClass = !isPlugin
+      let createClass = await askYesNo(`Do you want to create a class for your ${structureType}`);
+      // ask for module-specific class type
+      createClass = !isPlugin
           ? createClass
-            ? await askQuestion(
-                "XOpatModule class or XOpatModuleSingleton? (class/singleton): "
-              )
-            : ""
+              ? await askWithValidation("XOpatModule class or XOpatModuleSingleton? (class/singleton)", x => {
+                x = x.trim();
+                if (x === "class" || x === "singleton") return x;
+                return false;
+              }, "You must specify one of class / singleton!")
+              : ""
           : createClass;
 
-        // ask for class name and check
-        let className = createClass
-          ? await askQuestion(`Enter the name of your ${structureType} class: `)
+      // ask for class name and check
+      let className = createClass
+          ? await askWithValidation(`Enter the name of your ${structureType} class`, x => x.trim(), "class name required")
           : "";
-        if (createClass && !className.trim())
-          throw new Error("class name required");
-        className = className.replace(/[^a-zA-Z0-9]/g, "");
+      className = className.replace(/[^a-zA-Z0-9]/g, "");
 
-        // --------------------
-        // folder path resolver
-        // --------------------
-        function findProjectRoot(startPath) {
-          let currentDir = startPath;
+      // --------------------
+      // folder path resolver
+      // --------------------
+      function findProjectRoot(startPath) {
+        let currentDir = startPath;
 
-          // Loop upwards until we find a 'package.json' (or use any other root marker)
-          while (!fs.existsSync(path.join(currentDir, "package.json"))) {
-            const parentDir = path.dirname(currentDir);
+        // Loop upwards until we find a 'package.json' (or use any other root marker)
+        while (!fs.existsSync(path.join(currentDir, "package.json"))) {
+          const parentDir = path.dirname(currentDir);
 
-            // If we're at the root directory, stop searching
-            if (currentDir === parentDir) {
-              throw new Error("Project root directory not found.");
-            }
-
-            currentDir = parentDir;
+          // If we're at the root directory, stop searching
+          if (currentDir === parentDir) {
+            throw new Error("Project root directory not found.");
           }
 
-          return currentDir;
+          currentDir = parentDir;
         }
 
-        // define base path
-        const basePath = path.join(
+        return currentDir;
+      }
+
+      // define base path
+      const basePath = path.join(
           findProjectRoot(__dirname),
           structureType === "plugin" ? "plugins" : "modules"
-        );
+      );
 
-        // create plugin or module
-        isPlugin
-          ? await createPlugin(basePath, name, createClass, className)
-          : await createModule(basePath, name, createClass, className);
-
-        // close readline
-        rl.close();
-
-        // finish task
-        done();
-      } catch (error) {
-        // handle error
-        handleError(error.message);
-      }
+      isPlugin
+          ? await createPlugin(basePath, id, createClass, className)
+          : await createModule(basePath, id, createClass, className);
     }
 
-
-
     ////// TASK LOGIC //////
-
     // define done function
     const done = this.async();
 
@@ -328,24 +304,19 @@ module.exports = function(grunt) {
     });
 
     try {
-      const done = this.async();
-
       // check if type argument is provided
       if (type !== "plugin" && type !== "module") {
         grunt.log.error(
-          "ERROR: please specify either 'plugin' or 'module' as an option"
+          "ERROR: please use either 'generate:plugin' or 'generate:module'"
         );
-        done(false);
-        return;
+      } else {
+        // initialize create process
+        await initCreate(type, rl);
       }
-
-      // initialize create process
-      await initCreate(type, rl);
-      rl.close();
-      done();
-
     } catch (error) {
-      handleError(error.message);
+      console.log(`\x1b[38;2;206;60;49m`, `× ERROR: ${error.message}`);
     }
+    rl.close();
+    done();
   });
 };
