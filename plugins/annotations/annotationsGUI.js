@@ -121,7 +121,7 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
 				classes: "pl-2",
-				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
+				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
 				default: this.context.presets.getModeOutline()})}
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
@@ -198,6 +198,9 @@ ${modeOptions.join("")}</div>`, 'draw');
 <h4 class="f3-light header-sep">File Download / Upload</h4><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
 <div id="annotation-convertor-options"></div>
+<br>
+${UIComponents.Elements.checkBox({label: "Replace existing data on import",
+onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption("importReplace", true)})}
 <br><br>
 <div id="annotations-local-export-panel">
 	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn"></button>
@@ -788,7 +791,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		const _this = this;
 		this._ioArgs.format = _this.exportOptions.format;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			return await _this.context.import(data, this._ioArgs, false);
+			return await _this.context.import(data, this._ioArgs, this.getOption("importReplace", true));
 		}).then(r => {
 			Dialogs.show(r ? "Loaded." : "No data was imported! Are you sure you have a correct format set?", 1500,
 				r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
