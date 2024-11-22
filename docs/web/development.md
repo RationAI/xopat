@@ -13,7 +13,11 @@ New features _shall_ be added to ``CHANGELOG.md``. There, always a new chapter `
 present, where current modification summary should be maintained.
 
 ### Developing modules & plugins
-Documentation & init feature is coming!
+You can create new plugin or module simply by running ``grunt generate:plugin``
+or ``grunt generate:module``.
+
+Documentation on plugins/modules can be for now found in READMEs in plugins or modules folders,
+or by search utility in the documentation page. More tutorials are coming!
 
 ## Build
 

@@ -112,7 +112,7 @@ OSDAnnotations.PresetManager = class {
         this.right = undefined;
         this._colorSteps = 8;
         this._colorStep = 0;
-        this._presetsImported = false;
+        this._presetsImported = false;  // todo remove this prop
         this.modeOutline = this._context.cache.get('drawOutline', true);
         this._context.addHandler('preset-delete', e => {
             if (e.preset === this.left) this.selectPreset(undefined, true);
@@ -388,10 +388,6 @@ OSDAnnotations.PresetManager = class {
         const _this = this;
 
         if (clear) {
-            Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
-            this._presets = {};
-            this._presetsImported = false;
-        } else {
             for (let pid in this._presets) {
                 const preset = this._presets[pid];
                 if (this.isUnusedPreset(preset)) {
@@ -400,15 +396,15 @@ OSDAnnotations.PresetManager = class {
                 }
             }
         }
-        let first = undefined;
 
         if (typeof presets === 'string' && presets.length > 10) {
             presets = JSON.parse(presets);
         }
 
+        let first;
         if (Array.isArray(presets)) {
             presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
-                if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
+                if (!_this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
                     _this._colorStep++; //generate new colors
