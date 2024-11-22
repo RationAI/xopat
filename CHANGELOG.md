@@ -3,6 +3,11 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### Unreleased 2.1.0
+**Features:** new system for module/plugin building
+
+**Maintenance:** removed outdated plugins
+
 ### 2.0.4
 **Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
 
