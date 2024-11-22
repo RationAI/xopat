@@ -1114,6 +1114,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		const presetCookiesData = this.cache.get('presets');
 
 		if (presetCookiesData) {
+			// todo this might be invalid since snapshot is imported before load of other functionality..
 			if (ask && this.presets._presetsImported) {
 				this.warn({
 					code: 'W_CACHE_IO_OMMITED',

@@ -5,14 +5,16 @@ const path = require("path");
 const execAtPath = (binPath, cmd, options=undefined) => {
     return exec(`${path.relative("", binPath)} ${cmd}`, options);
 };
-const {registerStaticServerTask} = require("./server/static/build.grunt");
 
 module.exports = function(grunt) {
+    // import utils first to initialize them
+    require('./server/grunt_tasks/utils')(grunt);
+
+    // import tasks from separated files
+    require('./server/grunt_tasks/generate')(grunt);
+    require("./server/static/build.grunt")(grunt);
+
     // Project configuration.
-
-    //todo more fancy way of doing this?
-    registerStaticServerTask(grunt);
-
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks("grunt-contrib-connect");
     grunt.loadNpmTasks("grunt-contrib-watch");
@@ -51,7 +53,7 @@ module.exports = function(grunt) {
         },
         uglify: {
 
-            ...reduceModules( (acc, module, folder) => {
+            ...grunt.util.reduceModules( (acc, module, folder) => {
                 //we cannot minify items that have third-party network deps, object describes source URL
                 if (module.includes.some(i => typeof i === "object")) {
                     grunt.log.write(" (non-minifiable)");
@@ -63,7 +65,7 @@ module.exports = function(grunt) {
                 return acc;
             }, uglification, true, true),
 
-            ...reducePlugins((acc, plugin, folder) => {
+            ...grunt.util.reducePlugins((acc, plugin, folder) => {
                 //we cannot minify items that have third-party network deps, object describes source URL
                 if (plugin.includes.some(i => typeof i === "object")) {
                     grunt.log.write(" (non-minifiable)");
@@ -127,7 +129,7 @@ module.exports = function(grunt) {
      ********************************************************************************/ 
     "plugins": {
         `);
-        let pushed = reducePlugins((acc, plugin) => {
+        let pushed = grunt.util.reducePlugins((acc, plugin) => {
             let id = plugin.id;
             delete plugin.id;
             delete plugin.includes;
@@ -158,7 +160,7 @@ module.exports = function(grunt) {
      ********************************************************************************/ 
     "modules": {
         `);
-        pushed = reduceModules((acc, module) => {
+        pushed = grunt.util.reduceModules((acc, module) => {
             let id = module.id;
             delete module.id;
             delete module.name;
@@ -185,46 +187,4 @@ module.exports = function(grunt) {
 
     // Default task(s).
     grunt.registerTask('default', ['env']);
-
-    /**
-     *
-     * @param accumulator function, accepts (accumulator, newValue, folderName)
-     * @param initialValue
-     * @param parseMeta
-     * @param log
-     * @return {*}
-     */
-    function reducePlugins(accumulator, initialValue, parseMeta=true, log=false) {
-        return reduceFolder(accumulator, initialValue, parseMeta, "Plugin", "plugins", log);
-    }
-
-    /**
-     *
-     * @param accumulator function, accepts (accumulator, newValue, folderName)
-     * @param initialValue
-     * @param parseMeta
-     * @param log
-     * @return {*}
-     */
-    function reduceModules(accumulator, initialValue, parseMeta=true, log=false) {
-        return reduceFolder(accumulator, initialValue, parseMeta, "Module", "modules", log);
-    }
-
-    function reduceFolder(accumulator, initialValue, parseMeta, contextName, directoryName, log) {
-        const itemDirectory = grunt.file.expand({filter: "isDirectory", cwd: directoryName}, ["*"]);
-        for (let item of itemDirectory) {
-            const file = `${directoryName}/${item}/include.json`;
-
-            if (grunt.file.isFile(file)) {
-                if (log) grunt.log.write(`${contextName} found: ${item}`);
-                const content = grunt.file.read(file).toString().trim();
-                const data = parseMeta ? parse(content) : content;
-                initialValue = accumulator(initialValue, data, item);
-                if (log) grunt.log.write("\n");
-            } else {
-                if (log) grunt.log.write(`${contextName} shipped - invalid: ${item}\n`);
-            }
-        }
-        return initialValue;
-    }
 };
