@@ -526,6 +526,24 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Find annotation by its increment ID
+	 * @param id
+	 * @return {null|fabric.Object}
+	 */
+	findObjectOnCanvasByIncrementId(id) {
+		//todo fabric.js should have some way how to avoid linear iteration over all objects...
+		let target = null;
+		this.canvas.getObjects().some(o => {
+			if (o.incrementId === id) {
+				target = o;
+				return true;
+			}
+			return false;
+		});
+		return target;
+	}
+
+	/**
 	 * Hide or show annotations
 	 * @param {boolean} on
 	 */
@@ -661,7 +679,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		return original;
 	}
 
-	checkPreset(object) {
+	checkAnnotation(object) {
 		let preset;
 		if (object.presetID) {
 			preset = this.presets.get(object.presetID);
@@ -675,7 +693,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			preset = this.presets.left || this.presets.getOrCreate("__default__");
 			object.presetID = preset.presetID;
 		}
-
 		const props = this.presets.getCommonProperties(preset);
 		if (!isNaN(object.zoomAtCreation)) {
 			props.zoomAtCreation = object.zoomAtCreation;
@@ -697,6 +714,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		//todo make sure cached zoom value
 		const zoom = this.canvas.getZoom();
+		object.instanceID = object.instanceID || Date.now();
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
 	}
 
@@ -822,6 +840,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.sessionID = this.session;
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
+		annotation.instanceID = annotation.instaceID || annotation.created;
 		this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -830,8 +849,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Add annotation to the canvas. Annotation will have identity
+	 * Add annotation to the canvas. Annotation will have NEW identity
 	 * (unlike helper annotation which is meant for visual purposes only).
+	 * If you wish to update annotation (type / geometry) but keep identity,
+	 * you must use replaceAnnotation() instead!
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
 	 */
@@ -851,7 +872,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (factory !== undefined) {
 			const options = this.presets.getAnnotationOptionsFromInstance(this.presets.get(presetID));
 			factory.configure(annotation, options);
-			if (_raise) this.raiseEvent('annotation-preset', {object: annotation, presetID: presetID});
+			if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID});
 		}
 	}
 
@@ -927,7 +948,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Replace annotation with different one
+	 * Replace annotation with different one. This must not be done by manual removal and creation of a new instance.
 	 * @param {fabric.Object} previous
 	 * @param {fabric.Object} next
 	 * @param {boolean} updateHistory false to ignore the history change, creates artifacts if used incorrectly
@@ -942,6 +963,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		previous.off('selected');
 		previous.off('deselected');
 
+		next.instanceID = previous.instanceID;
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
@@ -1636,7 +1658,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 						}
 
 						self.checkLayer(obj);
-						self.checkPreset(obj);
+						self.checkAnnotation(obj);
 
 						obj.on('selected', self._objectClicked.bind(self));
 						//todo consider annotation creation event?

@@ -25,6 +25,10 @@ OSDAnnotations.History = class {
         this._focusWithScreen = true;
         this._autoDomRenderer = null;
         this._lastOpenedInDetachedWindow = false;
+
+        this._context.addHandler('annotation-preset-change', e => {
+            this._refreshBoardItem(e.object);
+        });
     }
 
     /**
@@ -443,13 +447,13 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         }
     }
 
-    _focus(bbox, objectId = undefined, adjustZoom=true) {
+    _focus(bbox, incrementId = undefined, adjustZoom=true) {
         bbox.left = Number.parseFloat(bbox.left || bbox.x);
         bbox.top = Number.parseFloat(bbox.top || bbox.y);
 
         let targetObj = undefined;
-        if (objectId !== undefined) {
-            targetObj = this._findObjectOnCanvasById(objectId);
+        if (incrementId !== undefined) {
+            targetObj = this._context.findObjectOnCanvasByIncrementId(incrementId);
             if (targetObj) {
                 this.highlight(targetObj);
                 this._context.canvas.setActiveObject(targetObj);
@@ -515,6 +519,16 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         }
     }
 
+    _clickBoardElement(bbox, incrementId, pointerEvent) {
+        if (pointerEvent.isPrimary || pointerEvent.button === 0) this._focus(bbox, incrementId);
+        this._context.raiseEvent('history-select', {incrementId: incrementId, originalEvent: pointerEvent});
+    }
+
+    _refreshBoardItem(object) {
+        this._addToBoard(object, object);
+        this.highlight(object);
+    }
+
     _addToBoard(object, replaced=undefined) {
         let desc, inputs = [];
         let factory = this._context.getAnnotationObjectFactory(object.factoryID);
@@ -571,23 +585,44 @@ title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'e
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
-<div id="log-object-${object.incrementId}" class="rounded-2"
-onclick="${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
+<div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.instanceID}"
+onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
+oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
 </div>`;
+
+
+        const newPosition = object.instanceID;
+        function insertAt(containerRef, newObjectRef) {
+            let inserted = false;
+            containerRef.children('.item').each(function() {
+                const current = $(this);
+                const currentOrder = current.data('order');
+
+                if (newPosition < currentOrder) {
+                    // Insert before the current element
+                    newObjectRef.insertBefore(current);
+                    inserted = true;
+                    return false; // Exit the loop
+                }
+            });
+            if (!inserted) {
+                containerRef.prepend(newObjectRef);
+            }
+        }
 
         if (typeof replaced === "object" && !isNaN(replaced?.incrementId)) {
             this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
                 if (node.length) {
                     node.replaceWith(html);
                 } else {
-                    _this._performAtJQNode("annotation-logs", node => node.prepend(html));
+                    _this._performAtJQNode("annotation-logs", node => insertAt(node, $(html)));
                 }
             });
         } else {
-            this._performAtJQNode("annotation-logs", node => node.prepend(html));
+            this._performAtJQNode("annotation-logs", node => insertAt(node, $(html)));
         }
     }
 
@@ -600,12 +635,12 @@ ${editIcon}
         }
         this._focusWithScreen = false;
 
-        let objectId;
+        let incrementId;
         if (typeof object !== "object") {
-            objectId = object;
-            object = this._focus(focusBBox, objectId) || this._context.canvas.getActiveObject();
+            incrementId = object;
+            object = this._focus(focusBBox, incrementId) || this._context.canvas.getActiveObject();
         } else {
-            objectId = object.incrementId;
+            incrementId = object.incrementId;
         }
 
         if (object) {
@@ -621,7 +656,7 @@ ${editIcon}
                 self.html('save');
 
                 this._editSelection = {
-                    incrementId: objectId,
+                    incrementId: incrementId,
                     self: self,
                     target: object
                 };
@@ -647,7 +682,7 @@ ${editIcon}
         if (!this._editSelection) return;
 
         try {
-            let obj = this._editSelection.target || this._findObjectOnCanvasById(this._editSelection.incrementId);
+            let obj = this._editSelection.target || this._context.findObjectOnCanvasByIncrementId(this._editSelection.incrementId);
             let self = this._editSelection.self,
             //from user testing: disable modification of meta?
                 inputs = self.parent().find("input"),
@@ -735,18 +770,5 @@ ${editIcon}
     _getFocusBBoxAsString(of, factory) {
         let box = this._getFocusBBox(of, factory);
         return `{left: ${box.left},top: ${box.top},width: ${box.width},height: ${box.height}}`;
-    }
-
-    _findObjectOnCanvasById(id) {
-        //todo fabric.js should have some way how to avoid linear iteration over all objects...
-        let target = null;
-        this._context.canvas.getObjects().some(o => {
-            if (o.incrementId === id) {
-                target = o;
-                return true;
-            }
-            return false;
-        });
-        return target;
     }
 };

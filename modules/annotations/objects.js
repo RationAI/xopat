@@ -53,6 +53,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "lockMovementX",
         "lockMovementY",
         "meta",
+        "instanceID",
         "sessionID",
         "presetID",
         "layerID",
@@ -69,11 +70,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "sessionID",
         "zoomAtCreation",
         "meta",
+        "instanceID",
         "presetID",
         "layerID",
         "color",
         "author",
         "created",
+        "id",
     ];
 
     /**
