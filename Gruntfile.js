@@ -73,7 +73,6 @@ module.exports = function (grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 return acc;
             }, uglification, true, true),
-
         }
     });
 
