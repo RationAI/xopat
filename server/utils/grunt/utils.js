@@ -4,6 +4,23 @@ const path = require("path");
 module.exports = function(grunt) {
     grunt.utils = grunt.utils || {};
 
+    let root;
+    try {
+        // Execute Git command to find the repository root
+        root = exec('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+    } catch (error) {
+        throw new Error('Unable to find the Git repository root. Make sure you are in a Git repository.');
+    }
+
+    /**
+     * Get absolute path from relative wrt repository root
+     * @param relativePath
+     * @return {string}
+     */
+    grunt.util.getPath = function (relativePath) {
+        return path.resolve(root, relativePath);
+    };
+
     /**
      * Execute command at given path
      * @param binPath working directory relative to repository root
@@ -12,7 +29,7 @@ module.exports = function(grunt) {
      * @return {string}
      */
     grunt.util.execAtPath = function (binPath, cmd, options=undefined) {
-        return exec(`${path.relative("", binPath)} ${cmd}`, options);
+        return exec(`${grunt.util.getPath(binPath)} ${cmd}`, options);
     };
 
     /**
