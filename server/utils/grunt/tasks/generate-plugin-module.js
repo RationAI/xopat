@@ -1,18 +1,14 @@
-require("console");
 const inquirer = require("inquirer");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 
 module.exports = function(grunt) {
-  // initialize grunt configuration
   grunt.initConfig({
     pkg: grunt.file.readJSON("package.json")
   });
 
-  // register task
-  grunt.registerTask("generate", "Generate a plugin or module", async function(type) {
-
+  return async function(type) {
     /**
      * Ask question
      * @param query
@@ -109,17 +105,16 @@ module.exports = function(grunt) {
         // create folder and files
         fs.mkdirSync(folderPath, { recursive: true });
         fs.writeFileSync(
-          path.join(folderPath, "include.json"),
-          JSON.stringify(jsonContent, null, 2)
+            path.join(folderPath, "include.json"),
+            JSON.stringify(jsonContent, null, 2)
         );
         fs.writeFileSync(
-          path.join(folderPath, `${jsonContent.id}.js`),
-          jsContent
+            path.join(folderPath, `${jsonContent.id}.js`),
+            jsContent
         );
 
         // create css file if content is provided
-        if (cssContent)
-          fs.writeFileSync(path.join(folderPath, "style.css"), cssContent);
+        if (cssContent) fs.writeFileSync(path.join(folderPath, "style.css"), cssContent);
       } catch (error) {
         throw new Error("error creating files.");
       }
@@ -129,9 +124,9 @@ module.exports = function(grunt) {
     // --------------------------
     // function to create plugin
     // --------------------------
-    async function createPlugin(basePath, pluginName, createClass, className) {
+    async function createPlugin(basePath, pluginId, createClass, className) {
       // create folder path
-      const folderPath = path.join(basePath, pluginName);
+      const folderPath = path.join(basePath, pluginId);
 
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your plugin", x => x.trim(), "Name is required!");
@@ -152,17 +147,38 @@ module.exports = function(grunt) {
 
       // template content
       const jsContent = createClass
-          ? `// '${pluginName}' plugin class\nclass ${className} extends XOpatPlugin {\n  constructor(id) { super(id); }\n  pluginReady() { alert('hello world'); }\n}\naddPlugin('${pluginName}', ${className});`
-          : `// '${pluginName}' plugin\naddPlugin('${pluginName}', class extends XOpatPlugin {\n  constructor(id) { super(id); }\n  pluginReady() { alert('hello world'); }\n});`;
+          ?
+`// '${pluginId}' plugin class
+class ${className} extends XOpatPlugin {
+    constructor(id) { 
+        super(id); 
+    }
+  
+    pluginReady() { 
+        alert('Hello World!'); 
+    }
+}
+addPlugin('${pluginId}', ${className});`
+          :
+`// '${pluginId}' plugin
+addPlugin('${pluginId}', class extends XOpatPlugin {
+    constructor(id) { 
+        super(id); 
+    }
+      
+    pluginReady() { 
+        alert('Hello World!'); 
+    }
+});`;
 
       // create json content
       const jsonContent = {
-        id: pluginName,
+        id: pluginId,
         name,
         author,
         version: "1.0.0",
         description,
-        includes: [`${pluginName}.js`],
+        includes: [`${pluginId}.js`],
         modules
       };
       const cssContent = "/* ADD YOUR CSS STYLES HERE */";
@@ -173,7 +189,7 @@ module.exports = function(grunt) {
       // log success
       console.log(
           `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: plugin '${pluginName}' created.`
+          `\n✓ SUCCESS: plugin '${pluginId}' created.`
       );
     }
 
@@ -181,9 +197,9 @@ module.exports = function(grunt) {
     // --------------------------
     // function to create module
     // --------------------------
-    async function createModule(basePath, moduleName, classType, className) {
+    async function createModule(basePath, moduleId, classType, className) {
       // create folder path
-      const folderPath = path.join(basePath, moduleName);
+      const folderPath = path.join(basePath, moduleId);
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your module", x => x.trim(), "Name is required!");
       name = name.replace(/[^a-zA-Z0-9]/g, "");
@@ -204,18 +220,38 @@ module.exports = function(grunt) {
       // template content
       const jsContent =
           classType === "class"
-              ? `// '${moduleName}' module class\n(function () {\n  class ${className} extends XOpatModule {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
-              : classType == "singleton"
-                  ? `// '${moduleName}' module singleton class\n(function () {\n  class ${className} extends XOpatModuleSingleton {\n    constructor() { alert('hello world'); }\n  }\n  new ${className}();\n})();`
-                  : `// '${moduleName}' module\n(function () {\n  alert('hello world');\n})();`;
+              ?
+`// '${moduleId}' module class 
+// expose only necessary properties! hide internals into anonymous functions or namespaces
+class ${className} extends XOpatModule {
+    constructor() {
+        super('${moduleId}');
+        alert('Hello World!'); 
+    }
+}`
+              : classType === "singleton"
+                  ?
+`// '${moduleId}' module singleton class
+// expose only necessary properties! hide internals into anonymous functions or namespaces
+class ${className} extends XOpatModuleSingleton {
+    constructor() { 
+        super('${moduleId}');
+        alert('Hello World!'); 
+    }
+}`
+                  :
+`// '${moduleId}' module
+(function () {
+    alert('Hello World!');
+})();`;
 
       // create json content
       const jsonContent = {
-        id: moduleName,
+        id: moduleId,
         name: name,
         author: author,
         version: "0.1.0",
-        includes: [`${moduleName}.js`],
+        includes: [`${moduleId}.js`],
         requires: requirements
       };
       if (description) jsContent["description"] = description;
@@ -226,7 +262,7 @@ module.exports = function(grunt) {
       // log success
       console.log(
           `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: module '${moduleName}' created.`
+          `\n✓ SUCCESS: module '${moduleId}' created.`
       );
     }
 
@@ -243,7 +279,11 @@ module.exports = function(grunt) {
       }, "ID is required! Id must not be taken by existing " + structureType);
       id = id.replace(/[^a-zA-Z0-9]/g, "");
 
-      let createClass = await askYesNo(`Do you want to create a class for your ${structureType}`);
+      const message = isPlugin ?
+          "Do you want to create a global class for your plugin?" :
+          "Do you want to inherit xOpat module interface?"
+
+      let createClass = await askYesNo(message);
       // ask for module-specific class type
       createClass = !isPlugin
           ? createClass
@@ -255,7 +295,6 @@ module.exports = function(grunt) {
               : ""
           : createClass;
 
-      // ask for class name and check
       let className = createClass
           ? await askWithValidation(`Enter the name of your ${structureType} class`, x => x.trim(), "class name required")
           : "";
@@ -294,23 +333,19 @@ module.exports = function(grunt) {
     }
 
     ////// TASK LOGIC //////
-    // define done function
     const done = this.async();
-
-    // create readline interface
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
     });
 
     try {
-      // check if type argument is provided
+      // require target or exit
       if (type !== "plugin" && type !== "module") {
         grunt.log.error(
-          "ERROR: please use either 'generate:plugin' or 'generate:module'"
+            "ERROR: please use either 'generate:plugin' or 'generate:module'"
         );
       } else {
-        // initialize create process
         await initCreate(type, rl);
       }
     } catch (error) {
@@ -318,5 +353,5 @@ module.exports = function(grunt) {
     }
     rl.close();
     done();
-  });
+  };
 };

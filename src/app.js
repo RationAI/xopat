@@ -467,15 +467,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             let title;
             switch (e.message.statusCode) {
                 case 401:
-                    title = $("#tissue-title-header");
-                    title.children().last().html($.t('main.global.tissue'));
+                    $("#tissue-title-content").html($.t('main.global.tissue'));
                     Dialogs.show($.t('error.slide.401'),
                         20000, Dialogs.MSG_ERR);
                     XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
                     break;
                 case 403:
-                    title = $("#tissue-title-header");
-                    title.children().last().html($.t('main.global.tissue'));
+                    $("#tissue-title-content").html($.t('main.global.tissue'));
                     Dialogs.show($.t('error.slide.403'),
                         20000, Dialogs.MSG_ERR);
                     break;
@@ -512,7 +510,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.children().last().html(name);
+            title.find('#tissue-title-content').html(name);
             title.attr('title', name);
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
@@ -522,7 +520,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                 || 'unknown'
             );
-            title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue', {slide: name}));
+            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
             USER_INTERFACE.toggleDemoPage(true);
         } else {
             USER_INTERFACE.toggleDemoPage(false);

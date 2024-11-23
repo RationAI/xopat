@@ -1,6 +1,19 @@
 const {parse} = require("comment-json");
+const {execSync: exec} = require("child_process");
+const path = require("path");
 module.exports = function(grunt) {
     grunt.utils = grunt.utils || {};
+
+    /**
+     * Execute command at given path
+     * @param binPath working directory relative to repository root
+     * @param cmd command
+     * @param options command options in exec()
+     * @return {string}
+     */
+    grunt.util.execAtPath = function (binPath, cmd, options=undefined) {
+        return exec(`${path.relative("", binPath)} ${cmd}`, options);
+    };
 
     /**
      *

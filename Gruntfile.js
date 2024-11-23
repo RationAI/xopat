@@ -1,25 +1,22 @@
-const {parse, stringify} = require("comment-json");
-const {execSync: exec} = require("child_process");
-const path = require("path");
-//if command contains path to the bin file
-const execAtPath = (binPath, cmd, options=undefined) => {
-    return exec(`${path.relative("", binPath)} ${cmd}`, options);
-};
-
 module.exports = function(grunt) {
     // import utils first to initialize them
-    require('./server/grunt_tasks/utils')(grunt);
+    require('./server/utils/grunt/utils')(grunt);
 
-    // import tasks from separated files
-    require('./server/grunt_tasks/generate')(grunt);
+    // task to compile static server
     require("./server/static/build.grunt")(grunt);
+    // utility tasks from separated files
+    grunt.registerTask('env', 'Generate Env Configuration Example.',
+        require('./server/utils/grunt/tasks/env')(grunt));
+    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file',
+        require('./server/utils/grunt/tasks/jsodc')(grunt));
+    grunt.registerTask("generate", "Generate a plugin or module",
+        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt));
 
-    // Project configuration.
+    // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks("grunt-contrib-connect");
     grunt.loadNpmTasks("grunt-contrib-watch");
     // grunt.loadNpmTasks("grunt-contrib-clean");
-    // grunt.loadNpmTasks('grunt-jsdoc');
 
     const uglification = {
         options: {
@@ -84,107 +81,6 @@ module.exports = function(grunt) {
     grunt.registerTask('all', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
-
-    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file', function (file) {
-        const config = require(file || './docs/openseadragon.conf');
-        grunt.file.write('./docs/build/docs.conf.json', JSON.stringify(config));
-        grunt.file.copy('./docs/assets/xopat-banner.png', './docs/build/docs/assets/xopat-banner.png');
-        const result = execAtPath('./node_modules/.bin/jsdoc', '-c ./docs/build/docs.conf.json --verbose');
-        grunt.log.writeln(result);
-    });
-
-    grunt.registerTask('env', 'Generate Env Configuration Example.', function() {
-        let shortReport = grunt.option('minimal');
-        const fullReport = !(shortReport);
-
-        grunt.log.write("Core configuration...\n");
-        const output = [`
-{
-    /*********************************************************************************
-     *        Core viewer configuration, defaults located at 'src/config.json'       *
-     *                                                                               *
-     *              To build example configuration file, run 'grunt env'             *
-     *        Values unchanged are better to left commented/removed (=defaults)      *
-     *           Configuration is written in JSON with comments (JS style)           *
-     ********************************************************************************/        
-    "core": 
-    `];
-        const core = grunt.file.read("src/config.json");
-        const coreData = parse(core);
-        delete coreData.version;
-        if (!fullReport) {
-            delete coreData.monaco;
-            delete coreData.openSeadragonPrefix;
-            delete coreData.openSeadragon;
-            delete coreData.js;
-            delete coreData.css;
-        }
-        output.push(stringify(coreData, null, '\t').replaceAll(/\n/g, '\n    '));
-        grunt.log.write("Plugins configuration...\n");
-        output.push(`,
-    /*********************************************************************************
-     * Plugins configuration, defaults located at 'plugins/[directory]/include.json' *
-     *              To build example configuration file, run 'grunt env'             *
-     *           Configuration is written in JSON with comments (JS style)           *
-     ********************************************************************************/ 
-    "plugins": {
-        `);
-        let pushed = grunt.util.reducePlugins((acc, plugin) => {
-            let id = plugin.id;
-            delete plugin.id;
-            delete plugin.includes;
-            delete plugin.requires;
-            delete plugin.modules;
-            delete plugin.version;
-            delete plugin.author;
-            delete plugin.icon;
-            if (fullReport) {
-                if (plugin.enabled === undefined) plugin.enabled = true;
-            } else {
-                delete plugin.name;
-                delete plugin.description;
-                delete plugin.permaLoad;
-            }
-            output.push('"', id, '": ', stringify(plugin, null, '\t').replaceAll(/\n/g, '\n        '), `,\n        `);
-            return true; //at least one plugin was parsed
-        }, false, true);
-        grunt.log.write("\n");
-        if (pushed) output.pop();
-        grunt.log.write("Modules configuration...\n");
-        output.push(`
-    },
-    /*********************************************************************************
-     * Modules configuration, defaults located at 'modules/[directory]/include.json' *
-     *              To build example configuration file, run 'grunt env'             *
-     *           Configuration is written in JSON with comments (JS style)           *    
-     ********************************************************************************/ 
-    "modules": {
-        `);
-        pushed = grunt.util.reduceModules((acc, module) => {
-            let id = module.id;
-            delete module.id;
-            delete module.name;
-            delete module.includes;
-            delete module.version;
-            delete module.requires;
-            delete module.description;
-            if (fullReport) {
-                if (module.enabled === undefined) module.enabled = true;
-            } else {
-                if (Object.values(module).length < 1) return false;
-            }
-            output.push('"', id, '": ', stringify(module, null, '\t').replaceAll(/\n/g, '\n        '), `,\n        `);
-            return true; //at least one module was parsed
-        }, false, true);
-        grunt.log.write("\n");
-        if (pushed) output.pop();
-        output.push(`
-    }
-}`);
-        grunt.file.write("env/env.example.json", output.join(""));
-        grunt.log.write("Saved: "+(fullReport ? 'full configuration' : 'minimal configuration' )+" in 'env/env.example.json'.\n");
-    });
-
     // Default task(s).
     grunt.registerTask('default', ['env']);
 };

@@ -106,11 +106,14 @@
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
             <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
-                <div id="tissue-title-header" class="one-liner" style="max-height: 255px; flex-grow: 1">
-                    <span id="global-tissue-visibility">
+                <div id="tissue-title-header" class="d-flex flex-items-center" style="max-height: 255px; flex-grow: 1;">
+                    <span id="global-tissue-visibility" class="d-inline-block">
                         <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
                     </span>
-                    <span class="text-shadow-mild"><!--Inserted slide name--></span>
+                    <span class="tissue-title-container d-flex">
+                        <span id="tissue-title-content" class="text-shadow-mild one-liner" style="flex-grow: 1">Slide<!--Inserted slide name--></span>
+                        <span class="material-icons pointer" onclick="UTILITIES.copyToClipboard(this.previousElementSibling.textContent)">content_copy</span>
+                    </span>
                 </div>
                 <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="
  let self = $(this);
