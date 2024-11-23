@@ -411,6 +411,31 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
+		this.context.addHandler('history-select', e => {
+			if (e.originalEvent.isPrimary) return;
+			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
+			if (!annotationObject) return; //todo error message
+
+			const actions = [{
+				title: `Change annotation to:`
+			}];
+			let handler = this._clickAnnotationChangePreset.bind(this, annotationObject);
+			this.context.presets.foreach(preset => {
+				let category = preset.getMetaValue('category') || 'unknown';
+				let icon = preset.objectFactory.getIcon();
+				actions.push({
+					icon: icon,
+					iconCss: `color: ${preset.color};`,
+					title: category,
+					action: () => {
+						this._presetSelection = preset.presetID;
+						handler();
+					},
+				});
+			});
+
+			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+		});
 
 		// this.context.forEachLayerSorted(l => {
 		// 	  this.insertLayer(l);

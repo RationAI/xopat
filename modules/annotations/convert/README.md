@@ -28,8 +28,17 @@ To register a new converter, register the converter class after its definition w
 Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
 
 ### Native Format
-The format includes the most verbose, detailed export option. The output is a JSON object with three
+This format is used when rendering annotations, and any other format is sooner or later converted to this
+format. It includes the most detailed export data. The output is a JSON object with three
 major keys: ``metadata``, `objects` and `presets`. Metadata includes a timestamp and a version.
+
+#### IDs
+There are three ID types:
+ - ``id``: unused property, left for integration with other logics: gives the annotation identity of the 
+ external (often storage) system
+ - ``incrementID``: unique ID per annotation memory object, even if object is perceived by user the same
+ after e.g. modification, it has different increment ID
+ - ``instanceID``: consistent ID of annotation as perceived by a user
 
 ### Native Format: objects
 The objects build on fabricJS objects, extending them with multiple properties. You can use any fabricJS properties, 
@@ -66,7 +75,8 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
-    id              annotation ID, can be undefined, unused by the core module
+    id              annotation ID, can be undefined, unused by the core module, supported for external use
+    instanceID      instance ID, defines consistently annotation as perceived by the user
     author
     created
 
