@@ -507,6 +507,17 @@ div {box-sizing: initial !important;}
     font-weight: bold;
 }
 
+.tissue-title-container {
+    position: relative;
+    display: inline-block;
+    white-space: nowrap; /* Ensures text stays on one line */
+    overflow: hidden; /* Ensures content beyond the container is hidden */
+    text-overflow: ellipsis; /* Adds ellipsis if text overflows */
+    max-width: 100%; /* Adjust max-width as needed */
+    flex-grow: 1;
+    vertical-align: top;
+}
+
 #tissue-preview-container .pointer {
     cursor: pointer;
     transition: transform .1s ease-out;

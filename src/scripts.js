@@ -344,13 +344,15 @@ form.submit();
     /**
      * Copy content to the user clipboard
      * @param {string} content
+     * @param {boolean} alert
      */
-    window.UTILITIES.copyToClipboard = function(content) {
+    window.UTILITIES.copyToClipboard = function(content, alert=true) {
         let $temp = $("<input>");
         $("body").append($temp);
         $temp.val(content).select();
         document.execCommand("copy");
         $temp.remove();
+        if (alert) Dialogs.show($.t('messages.valueCopied'), 3000, Dialogs.MSG_INFO);
     };
 
     /**
@@ -363,7 +365,6 @@ form.submit();
         }
         const data = UTILITIES.serializeAppConfig();
         UTILITIES.copyToClipboard(baseUrl + "#" + encodeURIComponent(data));
-        Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
     /**
