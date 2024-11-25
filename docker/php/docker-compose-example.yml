@@ -7,7 +7,7 @@ services:
       XOPAT_ENV: >-
         {
           "core": {
-            "gateway": "https://xopat.readthedocs.org",
+            "gateway": "https://xopat.readthedocs.io",
             "active_client": "localhost",
             "client": {
               "localhost": {

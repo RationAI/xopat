@@ -39,7 +39,7 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     # User Id 1000 for kubernetes
     && usermod --non-unique --uid 1000 node
 
-EXPOSE 8000
+EXPOSE 9000
 USER node
 WORKDIR /app
 
@@ -48,5 +48,5 @@ WORKDIR /app
 ###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
-COPY --chown=node:1000 . /app/xopat/
-RUN cd /app/xopat && npm install
+COPY --chown=node:1000 . /app
+RUN cd /app && npm install

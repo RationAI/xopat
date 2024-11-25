@@ -21,7 +21,12 @@ const PROJECT_PATH = "";
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
+const { getCore } = require("../templates/javascript/core");
+const { loadPlugins } = require("../templates/javascript/plugins");
+const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
+const { files } = require("../../docs/include");
+const { ABSPATH } = require("./constants");
 const { files } = require("../../docs/include");
 const { ABSPATH } = require("./constants");
 
@@ -50,6 +55,7 @@ const initViewerCoreAndPlugins = (req, res) => {
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
         { t: function () { return "Unknown Error (e-translate)."; } });
+    { t: function () { return "Unknown Error (e-translate)."; } });
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!")) return null;
     return core;
 }
@@ -127,7 +133,15 @@ async function responseViewer(req, res) {
                 rawData = decodeURIComponent(rawData || "");
                 postData = querystring.parse(rawData);
                 break;
+            case 'application/x-www-form-urlencoded':
+                rawData = decodeURIComponent(rawData || "");
+                postData = querystring.parse(rawData);
+                break;
 
+            case 'application/json':
+            default:
+                postData = rawData && JSON.parse(rawData) || {};
+                break;
             case 'application/json':
             default:
                 postData = rawData && JSON.parse(rawData) || {};
@@ -147,20 +161,25 @@ async function responseViewer(req, res) {
 
 
     const replacer = function (match, p1) {
-        try {
-            switch (p1) {
+        const replacer = function (match, p1) {
+            try {
+                switch (p1) {
+                    case "head":
+                        return `
                 case "head":
                     return `
-${core.requireCore("env")}
-${core.requireLibs()}
-${core.requireOpenseadragon()}
-${core.requireExternal()}
-${core.requireCore("loader")}
-${core.requireCore("deps")}
-${core.requireCore("app")}`;
+${ core.requireCore("env") }
+${ core.requireLibs() }
+${ core.requireOpenseadragon() }
+${ core.requireExternal() }
+${ core.requireCore("loader") }
+${ core.requireCore("deps") }
+${ core.requireCore("app") } `;
 
                 case "app":
                     return `
+                    case "app":
+                        return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
@@ -182,59 +201,70 @@ ${core.requireCore("app")}`;
     );
     </script>`;
 
-                case "modules":
-                    return core.requireModules(core.CORE.client.production);
+                    case "modules":
+                        return core.requireModules(core.CORE.client.production);
+                    case "modules":
+                        return core.requireModules(core.CORE.client.production);
 
-                case "plugins":
-                    return core.requirePlugins(core.CORE.client.production);
+                    case "plugins":
+                        return core.requirePlugins(core.CORE.client.production);
+                    case "plugins":
+                        return core.requirePlugins(core.CORE.client.production);
 
-                default:
-                    //todo warn
-                    return "";
+                    default:
+                        //todo warn
+                        return "";
+                    default:
+                        //todo warn
+                        return "";
+                }
+            } catch (e) {
+                //todo err
+                throw e;
             }
-        } catch (e) {
-            //todo err
-            throw e;
-        }
-    };
+        };
 
-    const html = fs.readFileSync(constants.ABSPATH + "server/templates/index.html", { encoding: 'utf8', flag: 'r' })
-        .replace(constants.TEMPLATE_PATTERN, replacer);
-    res.write(html);
-    res.end();
-}
+        const html = fs.readFileSync(constants.ABSPATH + "server/templates/index.html", { encoding: 'utf8', flag: 'r' })
+            .replace(constants.TEMPLATE_PATTERN, replacer);
+        res.write(html);
+        res.end();
+    }
 
-async function responseDeveloperSetup(req, res) {
-    // Parse the request url
-    const core = initViewerCoreAndPlugins(req, res);
-    if (!core) return;
+    async function responseDeveloperSetup(req, res) {
+        // Parse the request url
+        const core = initViewerCoreAndPlugins(req, res);
+        if (!core) return;
 
-    // Temporary, we also load opensedragon in case some modules got loaded too,
-    // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
-    core.MODULES["webgl"].loaded = true;
-    const replacer = function (match, p1) {
-        try {
-            switch (p1) {
-                case "head":
-                    console.log(core.MODULES);
-                    return `
+        // Temporary, we also load opensedragon in case some modules got loaded too,
+        // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
+        core.MODULES["webgl"].loaded = true;
+        const replacer = function (match, p1) {
+            const replacer = function (match, p1) {
+                try {
+                    switch (p1) {
+                        case "head":
+                            return `
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
 ${core.requireOpenseadragon()}
 ${core.requireModules(true)}`;
+                        case "form-init":
+                            return `
                 case "form-init":
                     return `
-    <script type="text/javascript">
-    window.formInit = {
-        location: "${constants.PROJECT_ROOT}/",
-        lang: {
-            ready: "Ready!"
-        }
-    }
-    </script>`;
+                                < script type = "text/javascript" >
+                                    window.formInit = {
+                                location: "${constants.PROJECT_ROOT}/",
+                                    lang: {
+                                    ready: "Ready!"
+                                }
+                            }
+    </script > `;
 
+                default:
+                    return "";
                 default:
                     return "";
             }
@@ -253,7 +283,7 @@ ${core.requireModules(true)}`;
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
-        const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+        const url = new URL(`${ protocol }://${req.headers.host}${req.url}`);
 
         // Treat suffix paths as attempt to access existing files
         if (url.pathname.match(/.+\..{2,5}$/g)) {
@@ -279,7 +309,7 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-server.listen(9000, 'localhost', () => {
+server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {

@@ -4,6 +4,7 @@
 !*.json
 !*.md
 !docs/assets
+!docs/*.js
 !src
 !server
 !plugins

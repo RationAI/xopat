@@ -1,13 +1,17 @@
 services:
-  xopat-php:
-    image: ghcr.io/rationai/xopat:dev2.0.4 
+  xopat-node:
+    build:
+      context: ../../
+      dockerfile: docker/node/Dockerfile
+      target: viewer-standalone
+    entrypoint: ["node", "index.js"]
     ports:
-      - "9001:8000"
+      - "9001:9000"
     environment:
       XOPAT_ENV: >-
         {
           "core": {
-            "gateway": "https://xopat.readthedocs.org",
+            "gateway": "https://xopat.readthedocs.io",
             "active_client": "localhost",
             "client": {
               "localhost": {
