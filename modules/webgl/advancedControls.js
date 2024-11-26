@@ -279,7 +279,7 @@ uniform int ${this.webGLVariableName}_colormap_size;`;
         return {
             steps: 3,
             default: "YlOrRd",
-            mode: "sequential",
+            mode: "sequential",  // todo provide 'set' of available values for documentation
             interactive: true,
             title: "Colormap",
             continuous: false,
@@ -373,8 +373,8 @@ style="width: 60%;"></span></div>`;
     get supports() {
         return {
             default: ["#000000", "#888888", "#ffffff"],
-            steps: 3,
-            mode: "sequential",
+            steps: 3,  // todo probably not necessary
+            mode: "sequential",  // todo not used
             interactive: true,
             title: "Colormap:",
             continuous: false,
