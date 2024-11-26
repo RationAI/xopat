@@ -131,7 +131,7 @@ ${UIComponents.Elements.checkBox({
 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
 </div>
 <div class="d-flex flex-row mt-1">
-<div>Border Width <input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
+<div class="d-flex flex-row"><span>Border Width&nbsp;</span> <input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
