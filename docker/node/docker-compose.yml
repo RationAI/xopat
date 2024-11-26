@@ -1,0 +1,49 @@
+services:
+  xopat-node:
+    build:
+      context: ../../
+      dockerfile: docker/node/Dockerfile
+      target: viewer-standalone
+    entrypoint: ["node", "index.js"]
+    ports:
+      - "9001:9000"
+    environment:
+      XOPAT_ENV: >-
+        {
+          "core": {
+            "gateway": "https://xopat.readthedocs.io",
+            "active_client": "localhost",
+            "client": {
+              "localhost": {
+                "domain": "http://localhost:9001",
+                "path": "/",
+                "image_group_server": "http://localhost:9002",
+                "image_group_protocol": "`$${path}/v3/batch/info?slides=$${data}`",
+                "image_group_preview": "`$${path}/v3/batch/thumbnail/max_size/250/250?slides=$${data}`",
+                "data_group_server": "http://localhost:9002",
+                "data_group_protocol": "`$${path}/v3/batch/info?slides=$${data.join(\",\")}`",
+                "headers": {},
+                "js_cookie_expire": 365,
+                "js_cookie_path": "/",
+                "js_cookie_same_site": "",
+                "js_cookie_secure": "",
+                "secureMode": false,
+              }
+            },
+            "setup": {
+              "locale": "en",
+              "customBlending": false,
+              "debugMode": false,
+              "webglDebugMode": false,
+            },
+            "openSeadragonPrefix": "https://cdn.jsdelivr.net/npm/openseadragon@4.1.1/build/openseadragon/",
+            "openSeadragon": "openseadragon.min.js"
+          },
+          "plugins": {
+          },
+          "modules": {
+            "empaia-wsi-tile-source": {
+              "permaLoad": true
+            }
+          }
+        }

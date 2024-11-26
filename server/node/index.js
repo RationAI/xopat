@@ -18,12 +18,12 @@ const querystring = require('querystring');
 
 const PROJECT_PATH = "";
 
-const {getCore} = require("../templates/javascript/core");
-const {loadPlugins} = require("../templates/javascript/plugins");
-const {throwFatalErrorIf} = require("./error");
+const { getCore } = require("../templates/javascript/core");
+const { loadPlugins } = require("../templates/javascript/plugins");
+const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
-const {files} = require("../../docs/include");
-const {ABSPATH} = require("./constants");
+const { files } = require("../../docs/include");
+const { ABSPATH } = require("./constants");
 
 const rawReqToString = async (req) => {
     const buffers = [];
@@ -49,7 +49,7 @@ const initViewerCoreAndPlugins = (req, res) => {
     loadPlugins(core, fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
-        {t: function () {return "Unknown Error (e-translate).";}});
+        { t: function () { return "Unknown Error (e-translate)."; } });
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!")) return null;
     return core;
 }
@@ -122,15 +122,15 @@ async function responseViewer(req, res) {
 
     try {
         switch (req.headers['content-type']) {
-        case 'application/x-www-form-urlencoded':
-            rawData = decodeURIComponent(rawData || "");
-            postData = querystring.parse(rawData);
-            break;
+            case 'application/x-www-form-urlencoded':
+                rawData = decodeURIComponent(rawData || "");
+                postData = querystring.parse(rawData);
+                break;
 
-        case 'application/json':
-        default:
-            postData = rawData && JSON.parse(rawData) || {};
-            break;
+            case 'application/json':
+            default:
+                postData = rawData && JSON.parse(rawData) || {};
+                break;
         }
 
         // Parse structure
@@ -208,23 +208,19 @@ async function responseDeveloperSetup(req, res) {
     const core = initViewerCoreAndPlugins(req, res);
     if (!core) return;
 
-    // Temporary, we also load opensedragon in case some modules got loaded too,
-    // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
     core.MODULES["webgl"].loaded = true;
-    const replacer = function(match, p1) {
+    const replacer = function (match, p1) {
         try {
             switch (p1) {
-            case "head":
-                console.log(core.MODULES);
-                return `
+                case "head":
+                    return `
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
-${core.requireOpenseadragon()}
 ${core.requireModules(true)}`;
-            case "form-init":
-                return `
+                case "form-init":
+                    return `
     <script type="text/javascript">
     window.formInit = {
         location: "${constants.PROJECT_ROOT}/",
@@ -234,8 +230,8 @@ ${core.requireModules(true)}`;
     }
     </script>`;
 
-            default:
-                return "";
+                default:
+                    return "";
             }
         } catch (e) {
             //todo err
@@ -278,7 +274,7 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-server.listen(9000, 'localhost', () => {
+server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {

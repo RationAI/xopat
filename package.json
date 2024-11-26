@@ -14,7 +14,9 @@
     "mkdocs": "cd docs/readthedocs && mkdocs serve",
     "format": "npx eslint",
     "test": "npx cypress run --browser chrome --e2e",
-    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open"
+    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
+    "ex-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
+    "ex-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d"
   },
   "repository": {
     "type": "git",
