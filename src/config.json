@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.0.4",
+    "version": "2.1.0",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
