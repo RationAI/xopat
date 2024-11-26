@@ -20,8 +20,8 @@ OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
         //     return canvas;
         // }
         // Treats tiles correctly, supposing all tiles have the same size (or smaller if they do not fit)
-        let dw = tile.sourceBounds.width / tileWidth,
-            dh = tile.sourceBounds.height / tileHeight;
+        let dw = tile.size.x / tileWidth,
+            dh = tile.size.y / tileHeight;
 
         //the value is expected to be up to 1 if sizes equal
         if (dw < 0.999 || dh < 0.999) {
@@ -34,10 +34,10 @@ OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
 
             const canvas = document.createElement('canvas'),
                 context = canvas.getContext('2d'),
-                desiredWidth = tile.sourceBounds.width,
-                desiredHeight = tile.sourceBounds.height;
-            canvas.width = desiredWidth;
-            canvas.height = desiredHeight;
+                desiredWidth = Math.max(tile.size.x, 1),
+                desiredHeight = Math.max(tile.size.y, 1);
+            canvas.width = Math.max(desiredWidth, 1);
+            canvas.height = Math.max(desiredHeight, 1);
             context.drawImage(image, 0, 0, desiredWidth, desiredHeight, 0, 0, desiredWidth, desiredHeight);
             return wasContext ? context : canvas;
         }
