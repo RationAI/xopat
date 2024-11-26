@@ -40,21 +40,22 @@ Thumbs.db
 #builds and binaries
 *.min.js
 *.min.js.map
-openseadragon/
-node_modules/
-build/
-coverage/
-env/
+/openseadragon/
+/node_modules/
+/build/
+/coverage/
+/env/
 !env/README.md
 
 #docs
-docs/build/
+/docs/build/
 !docs/doctemplates/openseadragon
 
 #test suite data
-test/downloads/
-test/screenshots/
-test/videos/
+/test/downloads/
+/test/screenshots/
+/test/videos/
+/wsi_data
 
 #sensitive data
 cypress.env.*
