@@ -1,0 +1,17 @@
+*
+!*.html
+!*.js
+!*.json
+!*.md
+!docs/assets
+!docs/*.js
+!src
+!server
+!plugins
+!modules
+!env
+!/tmp/openseadragon/build
+!docker/php/apache-dev.conf
+!docker/php/apache.conf
+!.htaccess
+!*php

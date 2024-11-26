@@ -96,7 +96,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, width: width, height: height
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -276,7 +276,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, rx: rx, ry: ry
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -456,8 +456,14 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a text has no area
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        // ensure necessary properties are not modified!
+        delete visualProperties["stroke"];
+        delete visualProperties["fill"];
+        delete visualProperties["strokeWidth"];
+        delete visualProperties["originalStrokeWidth"];
+        // no support for internal logics, text driven its own scaling, just set the rest
+        ofObject.set(visualProperties);
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -541,7 +547,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -562,17 +568,9 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         this._context.canvas.renderAll();
     }
 
-    updateCreate(x, y) {
-        //do nothing
-    }
-
     isImplicit() {
         //text is implicitly drawn (using fonts)
         return true;
-    }
-
-    finishIndirect() {
-        //do nothing
     }
 
     title() {
@@ -660,9 +658,11 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         ofObject.scaleY = 1/graphicZoom;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        super.updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke);
-        ofObject.set({fill: ofObject.color});
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = false;
+        visualProperties.stroke = preset.color;
+        delete visualProperties.originalStrokeWidth;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     edit(theObject) {
@@ -681,7 +681,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -697,14 +697,6 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         instance.scaleY = 1/instance.zoomAtCreation;
         this._context.addAnnotation(instance);
         return true;
-    }
-
-    updateCreate(x, y) {
-        //do nothing
-    }
-
-    finishDirect() {
-        //do nothing
     }
 
     supportsBrush() {
@@ -880,7 +872,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             (value, index) => value === this._origPoints[index])) {
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
-            this._context.replaceAnnotation(theObject, newObject, true);
+            this._context.replaceAnnotation(theObject, newObject);
             this._context.canvas.renderAll();
         }
         this._origPoints = null;
@@ -1105,8 +1097,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2"];
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a line is always 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     /**
@@ -1212,7 +1205,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.x2 = this._origPoints[2];
             theObject.y2 = this._origPoints[3];
 
-            this._context.replaceAnnotation(theObject, newObject, true);
+            this._context.replaceAnnotation(theObject, newObject);
             this._context.canvas.renderAll();
         }
         this._origPoints = null;
@@ -1386,8 +1379,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return instance;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a line is always 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     getDescription(ofObject) {
@@ -1433,7 +1427,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     configure(object, options) {
         super.configure(object, options);
 
-        //or extend with all options?
+        //todo use factory instead
         object.forEachObject(o => {
             o.fill = options.fill;
             o.stroke = options.stroke;
@@ -1508,7 +1502,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     //    //      left: left, top: top, rx: rx, ry: ry
     //    //  });
     //    //  theObject.calcACoords();
-    //    //  this._context.replaceAnnotation(theObject, newObject, true);
+    //    //  this._context.replaceAnnotation(theObject, newObject);
     // }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1545,21 +1539,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         ofObject.forEachObject(o => {
-            if (typeof o.color === 'string') {
-                if (isTransparentFill) {
-                    o.set({
-                        fill: "",
-                        stroke: color
-                    });
-                } else {
-                    o.set({
-                        fill: color,
-                        stroke: defaultStroke
-                    });
-                }
-            }
+            const factory = ofObject._factory();
+            factory && factory.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
         });
     }
 

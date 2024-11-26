@@ -1,11 +1,13 @@
 /**
+ * TODO - Move to utils
+ * 
  * Generates list of source files for documentation out of the ENV configuration.
  * For now, static only.
  */
 
 
 'use strict';
-var fs =require("fs");
+var fs = require("fs");
 const { parse } = require('comment-json');
 const parseJsonFile = (file, ...args) => {
     try {

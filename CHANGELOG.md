@@ -4,12 +4,15 @@ The changelog file describes changes made since v2.0.0, which made significant c
 to the versions 1.x.x.
 
 ### Unreleased 2.1.0
-**Features:** new system for module/plugin building
+**Features:** new system for module/plugin building, improvements of annotation listing features,
+support for generic annotation visual style changes.
 
-**Maintenance:** removed outdated plugins
+**Maintenance:** removed outdated plugins.
+
+**Bugfixes:** plugins use also Cache API, annotation visuals updated also with history.
 
 ### 2.0.4
-**Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
+**Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas.
 
 **Bugfixes:** OIDC module, magic wand annotation tool, stacktrace capture.
 

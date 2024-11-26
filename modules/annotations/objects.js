@@ -24,6 +24,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Properties copied with 'all' (+exports())
+     * instance ID is NOT exported and should not be exported.
      * @type {string[]}
      */
     static copiedProperties = [
@@ -74,6 +75,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "color",
         "author",
         "created",
+        "id",
     ];
 
     /**
@@ -369,11 +371,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Finish object creation, if in progress. Can be called also if no object
      * is being created. This action was performed directly by the user.
      * @return {boolean} true if object finished; when factory for example
-     *   does not support direct finish, or decide not yet to finish, this should
-     *   return false.
+     *   decide not yet to finish, this should return false. Return true
+     *   if you are not sure.
      */
     finishDirect() {
-        return false;
+        return true;
     }
 
     /**
@@ -484,24 +486,36 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Update object rendering based on rendering mode
-     * @param {boolean} isTransparentFill
      * @param {object} ofObject
-     * @param {string} color
-     * @param defaultStroke
+     * @param {OSDAnnotations.Preset} preset
+     * @param {OSDAnnotations.CommonAnnotationVisuals} visualProperties must be a modifiable object, will be used
+     * @param {OSDAnnotations.CommonAnnotationVisuals} defaultVisualProperties will not be touched
      */
-    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        //todo possible issue if someone sets manually single object prop
+        // (e.g. show borders) and then system triggers update (open history window)
+
         if (typeof ofObject.color === 'string') {
-            if (isTransparentFill) {
-                ofObject.set({
-                    fill: "",
-                    stroke: color
-                });
+            const props = visualProperties;
+
+            const color = preset.color;
+            const stroke = visualProperties.stroke || defaultVisualProperties.stroke;
+            // todo consider respecting object property here? or implement by locking (see todo above)
+            const modeOutline = visualProperties.modeOutline !== undefined ? visualProperties.modeOutline : defaultVisualProperties.modeOutline;
+            if (modeOutline) {
+                props.stroke = color;
+                props.fill = "";
             } else {
-                ofObject.set({
-                    fill: color,
-                    stroke: defaultStroke
-                });
+                props.stroke = stroke;
+                props.fill = color;
             }
+
+            if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
+                // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
+                const canvas = this._context.canvas;
+                props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+            }
+            ofObject.set(props);
         }
     }
 
