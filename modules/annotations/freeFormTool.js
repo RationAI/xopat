@@ -35,6 +35,8 @@ OSDAnnotations.FreeFormTool = class {
      */
     init(object, created=false) {
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
+        this._created = created;
+
         if (objectFactory !== undefined) {
             if (objectFactory.factoryID !== "polygon") {  //object can be used immedietaly
                 let points = Array.isArray(created) ? points : (
@@ -62,7 +64,6 @@ OSDAnnotations.FreeFormTool = class {
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
         this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(OSDAnnotations.PolygonUtilities);
-        this._created = created;
         this._updatePerformed = false;
     }
 
@@ -227,13 +228,13 @@ OSDAnnotations.FreeFormTool = class {
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
                 //revert annotation replacement and delete the initial (annotation was erased by modification)
-                this._context.replaceAnnotation(this.polygon, this.initial, false, false);
+                this._context.replaceAnnotation(this.polygon, this.initial, true);
                 this._context.deleteAnnotation(this.initial);
             } else if (!this._created) {
                 //revert annotation replacement and when updated, really swap
-                this._context.replaceAnnotation(this.polygon, this.initial, false, false);
+                this._context.replaceAnnotation(this.polygon, this.initial, true);
                 if (this._updatePerformed) {
-                    this._context.replaceAnnotation(this.initial, this.polygon, true);
+                    this._context.replaceAnnotation(this.initial, this.polygon);
                 }
             } else {
                 this._context.deleteHelperAnnotation(this.polygon);
@@ -301,7 +302,7 @@ OSDAnnotations.FreeFormTool = class {
         this.initial = original;
 
         if (!this._created) {
-            this._context.replaceAnnotation(original, polyObject, false, false);
+            this._context.replaceAnnotation(original, polyObject, true);
         } else {
             this._context.addHelperAnnotation(polyObject);
         }
@@ -313,9 +314,6 @@ OSDAnnotations.FreeFormTool = class {
     _createPolygonAndSetupFrom(points, object) {
         let polygon = this._context.polygonFactory.copy(object, points);
         polygon.factoryID = this._context.polygonFactory.factoryID;
-        //preventive update in case we modified a different-visual-like object
-        this._context.polygonFactory.updateRendering(this._context.presets.modeOutline, polygon,
-            polygon.color, OSDAnnotations.PresetManager._commonProperty.stroke);
         this._setupPolygon(polygon, object);
     }
 

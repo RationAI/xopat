@@ -2,7 +2,8 @@
 
 ##### factory-registered | e: `{factory: OSDAnnotations.AnnotationObjectFactory}`
 
-##### opacity-changed | ``{opacity: float}``
+##### visual-property-changed | ``{[name]: any}``
+Common visual property changed.
 
 ##### osd-interactivity-toggle
 
@@ -24,7 +25,7 @@ This event is fired when annotation is replaced, e.g. free-form-tool edit. Such 
 in fact replace annotation with a new one. This event is called only once per update, 
 at the end.
 
-##### annotation-replace-helper | ``{previous: fabric.Object, next: fabric.Object}``
+##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
 It can be called several times during one edit action.
 
@@ -42,6 +43,10 @@ This event is fired when user performs direct annotation editing.
 ##### preset-meta-remove | ``{preset: OSDAnnotations.Preset, key: string}``
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
+
+##### annotation-preset-change | ``{object: fabric.Object, presetID: string}``
+
+##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
 
 ##### import | ``{options: object, clear: boolean, data: object}``
 

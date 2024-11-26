@@ -437,30 +437,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/******************* SETTERS, GETTERS **********************/
 
 	/**
-	 * Set the annotations canvas overlay opacity
-	 * @event opacity-changed
-	 * @param {number} opacity
-	 */
-	setOpacity(opacity) {
-		this.opacity = opacity;
-		//this does not work for overlapping annotations:
-		//this.overlay.canvas.style.opacity = opacity;
-		this.canvas.forEachObject(function (obj) {
-			obj.opacity = opacity;
-		});
-		this.raiseEvent('opacity-changed', {opacity: this.opacity});
-		this.canvas.renderAll();
-	}
-
-	/**
-	 * Get current opacity
-	 * @return {number}
-	 */
-	getOpacity() {
-		return this.opacity;
-	}
-
-	/**
 	 * Change the interactivity - enable or disable navigation in OpenSeadragon
 	 * this is a change meant to be performed from the outside (correctly update pointer etc.)
 	 * @event osd-interactivity-toggle
@@ -518,11 +494,29 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * FabricJS context
-	 * @member OSDAnnotations
+	 * @member OSDdAnAnnotations
 	 * @return {fabric.Canvas}
 	 */
 	get canvas() {
 		return this.overlay.fabric;
+	}
+
+	/**
+	 * Find annotation by its increment ID
+	 * @param id
+	 * @return {null|fabric.Object}
+	 */
+	findObjectOnCanvasByIncrementId(id) {
+		//todo fabric.js should have some way how to avoid linear iteration over all objects...
+		let target = null;
+		this.canvas.getObjects().some(o => {
+			if (o.incrementId === id) {
+				target = o;
+				return true;
+			}
+			return false;
+		});
+		return target;
 	}
 
 	/**
@@ -599,6 +593,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	setMode(mode, force=false) {
 		if (this.disabledInteraction || mode === this.mode) return;
 
+		if (this._dopperlGangerCount > 0) {
+			console.warn("[setMode] doppelganger found while switching modes: this is a bug. Removing...", this._trackedDoppelGangers);
+			for (let dId in this._trackedDoppelGangers) {
+				this.canvas.remove(this._trackedDoppelGangers[dId]);
+			}
+			this._dopperlGangerCount = 0;
+			this._trackedDoppelGangers = {};
+		}
+
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
 		} else if (mode !== this.Modes.AUTO || force) {
@@ -661,7 +664,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		return original;
 	}
 
-	checkPreset(object) {
+	checkAnnotation(object) {
 		let preset;
 		if (object.presetID) {
 			preset = this.presets.get(object.presetID);
@@ -675,7 +678,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			preset = this.presets.left || this.presets.getOrCreate("__default__");
 			object.presetID = preset.presetID;
 		}
-
 		const props = this.presets.getCommonProperties(preset);
 		if (!isNaN(object.zoomAtCreation)) {
 			props.zoomAtCreation = object.zoomAtCreation;
@@ -697,6 +699,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		//todo make sure cached zoom value
 		const zoom = this.canvas.getZoom();
+		object.internalID = object.internalID || Date.now();
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
 	}
 
@@ -809,8 +812,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Convert helper annotation to fully-fledged annotation
 	 * @param {fabric.Object} annotation helper annotation
 	 * @param _raise @private
+	 * @param _dangerousSkipHistory @private, do not touch!
 	 */
-	promoteHelperAnnotation(annotation, _raise=true) {
+	promoteHelperAnnotation(annotation, _raise=true, _dangerousSkipHistory=false) {
 		annotation.off('selected');
 		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.off('deselected');
@@ -823,7 +827,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		console.log("ANNOTATION CREATED");
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
-		this.history.push(annotation);
+		annotation.internalID = annotation.instaceID || annotation.created;
+		if (!_dangerousSkipHistory) this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
 		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
@@ -831,8 +836,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Add annotation to the canvas. Annotation will have identity
+	 * Add annotation to the canvas. Annotation will have NEW identity
 	 * (unlike helper annotation which is meant for visual purposes only).
+	 * If you wish to update annotation (type / geometry) but keep identity,
+	 * you must use replaceAnnotation() instead!
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
 	 */
@@ -852,7 +859,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (factory !== undefined) {
 			const options = this.presets.getAnnotationOptionsFromInstance(this.presets.get(presetID));
 			factory.configure(annotation, options);
-			if (_raise) this.raiseEvent('annotation-preset', {object: annotation, presetID: presetID});
+			if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID});
 		}
 	}
 
@@ -928,37 +935,117 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Replace annotation with different one
+	 * Replace annotation with different one. This must not be done by manual removal and creation of a new instance.
+	 * Previous annotation must be already full annotation (promoted). This method also supports **temporal** replacement
+	 * of annotation by a doppelganger annotation. Doppelganger annotation is the same (structurally) as helper annotation,
+	 * but user expects it to BEHAVE like full annotation (=interactive). Helper annotation is added by addHelperAnnotation,
+	 * doppelganger is added by replaceAnnotation(.., dp, false), and must be removed by replaceAnnotation(dp, .., false) later on.
 	 * @param {fabric.Object} previous
 	 * @param {fabric.Object} next
-	 * @param {boolean} updateHistory false to ignore the history change, creates artifacts if used incorrectly
-	 *    e.g. redo/undo buttons duplicate objects
-	 * @param _raise invoke event if true (default)
+	 * @param {boolean} isDoppelganger
+	 * Example:
+	 *  - user selects annotation x and starts modification procedure: replaceAnnotation(x, y, false)
+	 *  - user drags mouse, the mouse events result in modification of the new HELPER annotation y that shows
+	 *  how user action changes the shape of the original object
+	 *  - user releases the mouse: system MUST call replaceAnnotation(y, x, false) that returns the previous
+	 *  state and optionally sets the final result by replaceAnnotation(x, y).
+	 *
+	 *  It is possible to also perform full exchange circle:
+	 *  replaceAnnotation(x, y, false)  replaceAnnotation(y, z, false) replaceAnnotation(z, x, false)
+	 *  and furthermore use z annotation to e.g. add it back to the canvas.
 	 */
-	replaceAnnotation(previous, next, updateHistory=false, _raise=true) {
-		next.off('selected');
-		next.on('selected', this._objectClicked.bind(this));
-		next.off('deselected');
-		next.on('deselected', this._objectDeselected.bind(this));
-		previous.off('selected');
-		previous.off('deselected');
+	replaceAnnotation(previous, next, isDoppelganger=false) {
+		// We have to skip history since we will add these to history anyway, avoid duplicate entries
+
+		if (isDoppelganger) {
+			// Uses instance ID to track helper annotations on canvas
+			const prevIsBeingReplaced = !!previous.internalID;
+			const nextIsBeingReplaced = !!next.internalID;
+			if (prevIsBeingReplaced && nextIsBeingReplaced) {
+				// step backward, we come full circle (both have record of internalID)
+				if (!this.isAnnotation(next)) {
+					console.error("[replaceAnnotation] next object must be full annotation when returning to the original state!", previous, next);
+					this.canvas.remove(previous);
+					return;
+				}
+				this._trackDoppelganger(next.internalID, previous, next,false);
+				delete previous.internalID;
+			} else if (prevIsBeingReplaced) {
+				// step forward
+				this._trackDoppelganger(previous.internalID, previous, next, true);
+				next.internalID = previous.internalID;
+			} else if (nextIsBeingReplaced) {
+				// bad call, previous object must be on a canvas
+				console.error("[replaceAnnotation] next object is on a canvas, but previous object not!", previous, next);
+			} else {
+				// bad call, no object on the canvas
+				console.error("[replaceAnnotation] no full annotation object with temporary swap!", previous, next);
+			}
+
+		} else {
+			if (!this.isAnnotation(previous)) {
+				// Try to recover
+				console.warn("[replaceAnnotation] annotation is a helper object!", previous);
+				this.promoteHelperAnnotation(previous, false, true);
+			}
+
+			// !! keep reference of entity identity the same !!
+			next.internalID = previous.internalID;
+			if (!this.isAnnotation(next)) {
+				this.promoteHelperAnnotation(next, false, true);
+			}
+		}
 
 		this.canvas.remove(previous);
 		this.canvas.add(next);
 		this.canvas.renderAll();
-		if (updateHistory) this.history.push(next, previous);
 
-		if (_raise) this.raiseEvent('annotation-replace', {previous, next});
-		else this.raiseEvent('annotation-replace-helper', {previous, next});
+		if (isDoppelganger) {
+			this.raiseEvent('annotation-replace-doppelganger', {previous, next});
+		} else {
+			this.history.push(next, previous);
+			this.raiseEvent('annotation-replace', {previous, next});
+		}
 	}
 
 	/**
-	 * Check whether object is not a helper annotation
+	 * Track doppelganger existence to ensure consistency of canvas
+	 * @param id
+	 * @param original
+	 * @param doppelganger
+	 * @param toAdd
+	 * @private
+	 */
+	_trackDoppelganger(id, original, doppelganger, toAdd) {
+		if (toAdd) {
+			const existing = this._trackedDoppelGangers[id];
+			if (existing === original) {
+				this._dopperlGangerCount--;
+			} else if (existing) {
+				console.error("Doppelganger annotation attempt to overwrite existing doppelganger!", id, original, doppelganger);
+				// try being consistent
+				this.canvas.remove(existing);
+				this._dopperlGangerCount--;
+			}
+
+			this._trackedDoppelGangers[id] = doppelganger;
+			this._dopperlGangerCount++;
+		} else {
+			if (!this._trackedDoppelGangers[id]) {
+				console.error("Doppelganger annotation not consistently tracked!", id, original, doppelganger);
+			}
+			delete this._trackedDoppelGangers[id];
+			this._dopperlGangerCount--;
+		}
+	}
+
+	/**
+	 * Check whether object is full annotation (not a helper or doppelganger)
 	 * @param {fabric.Object} o
 	 * @return {boolean}
 	 */
 	isAnnotation(o) {
-		return o.hasOwnProperty("incrementId");
+		return o.hasOwnProperty("incrementId") && o.hasOwnProperty("sessionID");
 	}
 
 	/**
@@ -1070,12 +1157,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Delete currently active object
+	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
-	removeActiveObject() {
+	removeActiveObject(withWarning=true) {
 		let toRemove = this.canvas.getActiveObject();
 		if (toRemove) {
 			this.deleteObject(toRemove);
-		} else {
+		} else if (withWarning) {
 			Dialogs.show("Please select the annotation you would like to delete", 3000, Dialogs.MSG_INFO);
 		}
 	}
@@ -1096,6 +1184,55 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		for (let i = 0; i < objectsLength; i++) {
 			this.deleteObject(objects[objectsLength - i - 1]);
 		}
+	}
+
+	/**
+	 * Update single object visuals
+	 * @param {fabric.Object} object
+	 * @return {boolean} true on update success
+	 */
+	updateSingleAnnotationVisuals(object) {
+		let preset = this.presets.get(object.presetID);
+		if (preset) {
+			const factory = this.getAnnotationObjectFactory(object.factoryID);
+			const visuals = {...this.presets.commonAnnotationVisuals};
+			factory.updateRendering(object, preset, visuals, visuals);
+			return true;
+		}
+		// todo consider adding such preset
+		console.warn("[updateSingleAnnotationVisuals] annotation does not have according preset!", object);
+		return false;
+	}
+
+	/**
+	 * Update all object visuals
+	 * @type function
+	 */
+	updateAnnotationVisuals = UTILITIES.makeThrottled(() => {
+		this.canvas.getObjects().forEach(o => this.updateSingleAnnotationVisuals(o));
+		this.canvas.requestRenderAll();
+		this.history.forEachHistoryCacheObject(o => this.updateSingleAnnotationVisuals(o), true);
+		this.raiseEvent('visual-property-changed', {visuals: this.presets.commonAnnotationVisuals});
+	}, 180);
+
+	/**
+	 * Set annotation visual property to permanent value
+	 * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+	 * @param {any} propertyValue value for the property
+	 */
+	setAnnotationCommonVisualProperty(propertyName, propertyValue) {
+		if (this.presets.setCommonVisualProp(propertyName, propertyValue)) {
+			this.updateAnnotationVisuals();
+		}
+	}
+
+	/**
+	 * Get annotations visual property
+	 * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+	 * @return {*}
+	 */
+	getAnnotationCommonVisualProperty(propertyName) {
+		return this.presets.getCommonVisualProp(propertyName);
 	}
 
 	/**
@@ -1162,12 +1299,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
-		this.opacity = 1.0;
 		this.disabledInteraction = false;
 		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = ["objects"];
 		this._wasModeFiredByKey = false;
+		this._trackedDoppelGangers = {};
+		this._dopperlGangerCount = 0;
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -1544,11 +1682,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (e.focusCanvas) {
 			if (!e.ctrlKey && !e.altKey) {
 				if (e.key === "Delete" || e.key === "Backspace") {
-					this.mode.discard();
+					this.mode.discard(true);
 					return;
 				}
 				if (e.key === "Escape") {
-					this.mode.discard();
+					this.deselectFabricObjects();  // this ensures discard does not delete created object!
+					this.mode.discard(false);
 					this.history._boardItemSave();
 					this.setMode(this.Modes.AUTO);
 					return;
@@ -1637,7 +1776,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 						}
 
 						self.checkLayer(obj);
-						self.checkPreset(obj);
+						self.checkAnnotation(obj);
 
 						obj.on('selected', self._objectClicked.bind(self));
 						//todo consider annotation creation event?
@@ -1936,9 +2075,10 @@ OSDAnnotations.AnnotationState = class {
 
 	/**
 	 * Discard action: default deletes active object
+	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
-	discard() {
-		this.context.removeActiveObject();
+	discard(withWarning=true) {
+		this.context.removeActiveObject(withWarning);
 	}
 
 	/**
@@ -2111,14 +2251,20 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			height: ffTool.radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
 
+		const active = this.context.canvas.getActiveObject();
 		let max = 0,
 			result = candidates; // by default return the whole list if intersections are <= 0
 		for (let i = 0; i < candidates.length; i++) {
 			let candidate = candidates[i];
 			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, candidate.asPolygon);
-			if (intersection && intersection.length > max) {
-				max = intersection.length;
-				result = candidate;
+			if (intersection.length) {
+				if (active) {  // prefer first encountered object if it is also the selection
+					return candidate;
+				}
+				if (intersection.length > max) {
+					max = intersection.length;
+					result = candidate;
+				}
 			}
 		}
 		return result;
@@ -2277,11 +2423,11 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		this._lastUsed = null;
 	}
 
-	discard() {
+	discard(withWarning) {
 		if (this._lastUsed && this._lastUsed.getCurrentObject()) {
 			this._lastUsed.discardCreate();
 		} else {
-			super.discard();
+			super.discard(withWarning);
 		}
 	}
 
