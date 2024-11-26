@@ -34,8 +34,8 @@ OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
 
             const canvas = document.createElement('canvas'),
                 context = canvas.getContext('2d'),
-                desiredWidth = image.width * dw,
-                desiredHeight = image.height * dh;
+                desiredWidth = tile.sourceBounds.width,
+                desiredHeight = tile.sourceBounds.height;
             canvas.width = desiredWidth;
             canvas.height = desiredHeight;
             context.drawImage(image, 0, 0, desiredWidth, desiredHeight, 0, 0, desiredWidth, desiredHeight);
