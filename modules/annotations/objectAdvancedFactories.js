@@ -106,16 +106,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         //not supported error?
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - always same 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true; // we are always transparent
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject._objects) {
             ofObject._objects[1].set({
+                //todo add geometric zoom, do not change opacity
                 scaleX: 1/realZoom,
                 scaleY: 1/realZoom,
-                opacity: realZoom / ofObject.zoomAtCreation
             });
             super.onZoom(ofObject._objects[0], graphicZoom, realZoom);
         }
@@ -161,7 +162,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             pid = line.presetID;
 
         if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
-            return false;
+            return true;
         }
 
         const props = this._presets.getCommonProperties();
@@ -600,7 +601,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         let newObject = this.copy(theObject, {left: left, top: top});
 //         delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
 //         theObject.calcACoords();
-//         this._context.replaceAnnotation(theObject, newObject, true);
+//         this._context.replaceAnnotation(theObject, newObject);
 //     }
 //
 //     instantCreate(screenPoint, isLeftClick = true) {

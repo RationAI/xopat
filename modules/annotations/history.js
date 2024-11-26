@@ -14,9 +14,14 @@ OSDAnnotations.History = class {
         this._canvasFocus = '';
 
         this._buffer = [];
+        // points to the current state in the redo/undo index in circular buffer
         this._buffidx = -1;
-        this.BUFFER_LENGTH = null;
+        // points to the most recent object in cache, when undo action comes full loop to _lastValidIndex
+        // it means the redo action went full circle on the buffer, and we cannot further undo,
+        // if we set this index to buffindex, we throw away ability to redo (diverging future)
         this._lastValidIndex = -1;
+
+        this.BUFFER_LENGTH = null;
         this._autoIncrement = 0;
         this._boardSelected = null;
         this._context = context;
@@ -225,6 +230,20 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     }
 
     /**
+     * Iterate over cached objects, not necessarily visible
+     * @param callback
+     * @param nonActiveOnly if true, only non-visible annotations in cache are iterated
+     */
+    forEachHistoryCacheObject(callback, nonActiveOnly=false) {
+        //TODO possibly optimize by leaving out annotations not on canvas & also implement timeout
+        for (let cache of this._buffer) {
+            if (!cache) continue;
+            cache.forward && callback(cache.forward);
+            cache.back && callback(cache.back);
+        }
+    }
+
+    /**
      * Go step back in the history. Focuses the undo operation, updates window if opened.
      */
     back() {
@@ -292,12 +311,9 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         if (this._context.disabledInteraction) return;
 
         this._performAtJQNode("annotation-logs", node => node.html(""));
-        let _this = this;
         this._context.canvas.getObjects().forEach(o => {
-            if (!isNaN(o.incrementId)) {
-                let preset = this._presets.get(o.presetID);
-                if (preset) this._presets.updateObjectVisuals(o, preset);
-                _this._addToBoard(o);
+            if (this._context.isAnnotation(o) && this._context.updateSingleAnnotationVisuals(o)) {
+                this._addToBoard(o);
             }
         });
     }
@@ -585,7 +601,7 @@ title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'e
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
-<div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.instanceID}"
+<div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.internalID}"
 onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
 oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
@@ -594,7 +610,7 @@ ${editIcon}
 </div>`;
 
 
-        const newPosition = object.instanceID;
+        const newPosition = object.internalID;
         function insertAt(containerRef, newObjectRef) {
             let inserted = false;
             containerRef.children('.item').each(function() {

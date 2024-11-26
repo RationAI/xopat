@@ -396,7 +396,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
      * additional classes and events.
+     * todo add type definitions for OSD
+     *
      * @namespace VIEWER
+     * @type OpenSeadragon.Viewer
      * @see {@link https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html}
      */
     window.VIEWER = OpenSeadragon({
