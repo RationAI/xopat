@@ -208,16 +208,20 @@ async function responseDeveloperSetup(req, res) {
     const core = initViewerCoreAndPlugins(req, res);
     if (!core) return;
 
+    // Temporary, we also load opensedragon in case some modules got loaded too,
+    // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
     core.MODULES["webgl"].loaded = true;
     const replacer = function(match, p1) {
         try {
             switch (p1) {
             case "head":
+                console.log(core.MODULES);
                 return `
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
+${core.requireOpenseadragon()}
 ${core.requireModules(true)}`;
             case "form-init":
                 return `

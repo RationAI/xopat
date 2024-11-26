@@ -77,7 +77,7 @@
      * @return {number}
      */
     fabric.Canvas.prototype.computeGraphicZoom = function (zoom) {
-        return Math.sqrt(zoom) / 2
+        return Math.sqrt(zoom) / 2;
     };
 
     if (!window.OpenSeadragon) {

@@ -38,7 +38,8 @@ There are three ID types:
  external (often storage) system
  - ``incrementID``: unique ID per annotation memory object, even if object is perceived by user the same
  after e.g. modification, it has different increment ID
- - ``instanceID``: consistent ID of annotation as perceived by a user
+ - ``internalID``: consistent ID of annotation as perceived by a user, internal value not to be exported
+ and copied over between objects - the system manages this internally
 
 ### Native Format: objects
 The objects build on fabricJS objects, extending them with multiple properties. You can use any fabricJS properties, 
@@ -76,7 +77,6 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
     id              annotation ID, can be undefined, unused by the core module, supported for external use
-    instanceID      instance ID, defines consistently annotation as perceived by the user
     author
     created
 
