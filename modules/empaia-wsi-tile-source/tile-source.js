@@ -26,7 +26,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     supports( data, url ) {
         if (url && Array.isArray(data)) {
             //multi-tile or single tile access
-            let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
+            let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
             if (match) {
                 data = data || [{}];
                 data[0].tilesUrl = match[1];
@@ -159,11 +159,13 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     }
 
     _getInfo(url, tilesUrl) {
-        fetch(url).then(res => {
+        fetch(url).then(async res => {
+            const text = await res.text();
+            const json = JSON.parse(text);
             if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", res, res.error);
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
             }
-            return res.json();
+            return json;
         }).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
             // necessary TileSource props that wont get set manually
@@ -208,7 +210,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
 
         if (this.multifetch) {
-            //endpoint batch/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
+            //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
             return `${tiles}/tile/level/${level}/tile/${x}/${y}?slides=${this.fileId}`
         }
         //endpoint slides/[SLIDE]/tile/level/[L]/tile/[X]/[Y]/
