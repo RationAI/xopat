@@ -5,6 +5,7 @@
   "main": "index.php",
   "scripts": {
     "build": "grunt all",
+    "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
     "s-static": "grunt html",
     "s-node": "node index.js",
     "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js",
@@ -37,6 +38,7 @@
   },
   "homepage": "https://github.com/RationAI/xopat#readme",
   "devDependencies": {
+    "daisyui": "^4.10.2",
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
     "comment-json": "^4.2.3",

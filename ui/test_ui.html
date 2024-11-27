@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr" data-light-theme="light">
+<html lang="en" dir="ltr" class="h-screen">
 
 <head>
     <meta charset="utf-8">
@@ -9,8 +9,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
     <link rel="stylesheet" href="../src/assets/xopat.css">
-    <link rel="stylesheet" href="../src/libs/primer_css.css">
-    <link rel="stylesheet" href="../src/libs/tailwind.css">
+    <link rel="stylesheet" href="../src/libs/tailwind.min.css">
     <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
     <link rel="stylesheet" href="../src/external/enjoyhint.css">
     <link rel="stylesheet" href="../src/external/nouislider.css">
@@ -22,35 +21,47 @@
     <script type="module">
         import { default as ui } from "./index.mjs";
         import { default as van } from "./vanjs.mjs";
-        function changeTheme(theme = undefined) {
-            theme = theme || "auto";
-            //["dark", "dark_dimmed", "light", "auto"]
-            if (theme === "dark_dimmed") {
-                document.documentElement.dataset['darkTheme'] = "dark_dimmed";
-                document.documentElement.dataset['colorMode'] = "dark";
+        function changeTheme(theme = undefined) { // TODO check auto theme
+            //["dark", "light", "auto"]
+            if (theme === "light") {
+                document.body.setAttribute("data-theme", "catppuccin-latte");
+            } else if (theme === "dark") {
+                document.body.setAttribute("data-theme", "catppuccin-mocha");
             } else {
-                document.documentElement.dataset['darkTheme'] = "dark";
-                document.documentElement.dataset['colorMode'] = theme;
+                document.body.removeAttribute("data-theme");
+            }
+            if (theme === undefined) {
+                window.matchMedia('(prefers-color-scheme: dark)').matches ?
+                    document.body.setAttribute("data-theme", "catppucin-mocha") :
+                    document.body.removeAttribute("data-theme");
             }
         }
         window.changeTheme = changeTheme;
         console.log(ui);
         window.onload = () => {
             van.add(document.getElementById("workspace"), ui.Hello());
+            van.add(document.getElementById("button"), ui.TestButton({
+                text: "Click me",
+                onClick: () => {
+                    console.log("Button clicked");
+                }
+            }));
+            window.changeTheme();
         }
 
     </script>
 </head>
 
-<body>
-    <div class="btn-group">
-        <button onclick="changeTheme('dark')">Change to dark</button>
-        <button onclick="changeTheme('dark_dimmed')">Change to dark dimmed</button>
-        <button onclick="changeTheme('light')">Change to light</button>
+<body class="latte dark:frappe h-full bg-base">
+    <div class="bg-base">
+        <button class="btn btn-primary" onclick="changeTheme('dark')">Change to dark</button>
+        <button class="btn btn-secondary" onclick="changeTheme('light')">Change to light</button>
+        <button onclick="changeTheme('auto')">Change to auto</button>
     </div>
-    <div>
-        <p> </p>
+    <div class="bg-base text-pink">
+        <p>this is my test text</p>
     </div>
-    <div id="workspace">
+    <div id="workspace" class="bg-white dark:bg-black">
     </div>
+    <div id="button">
 </body>

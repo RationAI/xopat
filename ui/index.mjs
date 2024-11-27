@@ -1,6 +1,8 @@
-window.UIComponents = {};
+globalThis.UIComponents = {};
 
 import { Hello } from "./test.mjs"; // TODO
-const UIComponents = { Hello };
-window.UIComponents = UIComponents;
+import { TestButton } from "./components/testButton.mjs"; // TODO
+const UIComponents = { Hello, TestButton };
+globalThis.UIComponents = UIComponents;
 export default UIComponents;
+//console.log(globalThis);
