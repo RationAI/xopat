@@ -1,4 +1,5 @@
 globalThis.UIComponents = {};
+globalThis.UIComponents = {};
 
 import { Hello } from "./test.mjs"; // TODO
 import { PrimaryButton } from "./components/buttons.mjs"; // TODO
