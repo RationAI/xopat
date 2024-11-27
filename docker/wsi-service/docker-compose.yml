@@ -1,18 +1,23 @@
 services:
   wsi_service:
-      image: ghcr.io/rationai/wsi-service:test0.15
-      environment:
-      - WS_CORS_ALLOW_CREDENTIALS=False
-      - WS_CORS_ALLOW_ORIGINS=["*"]
-      - WS_DEBUG=False
-      - WS_DISABLE_OPENAPI=True
-      - WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
-      - WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
-      - WS_ENABLE_VIEWER_ROUTES=False
-      - WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
-      - WS_MAX_RETURNED_REGION_SIZE=25000000
-      volumes:
-      - /home/novby/Documents/RationAI/test_wsis:/data
-      ports:
-      - 9002:8080
+    image: ghcr.io/rationai/wsi-service:test0.15
+    entrypoint: ["/bin/bash", "-c", "/entrypoint.sh"]
+    environment:
+    - WS_CORS_ALLOW_CREDENTIALS=False
+    - WS_CORS_ALLOW_ORIGINS=["*"]
+    - WS_DEBUG=False
+    - WS_DISABLE_OPENAPI=True
+    - WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
+    - WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
+    - WS_ENABLE_VIEWER_ROUTES=False
+    - WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
+    - WS_MAX_RETURNED_REGION_SIZE=25000000
+    volumes:
+    # if you do not have this folder and docker is runned as root, it will create this folder under root
+    - ${DOCKER_COMPOSE_WSI_SERVER_DATA:-../../wsi_data}:/data
+    # this file is runned with another docker compose and chooses their folder as root
+    - ../wsi-service/entrypoint.sh:/entrypoint.sh
+    ports:
+    - 9002:8080
+
     
