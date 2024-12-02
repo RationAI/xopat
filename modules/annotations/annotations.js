@@ -1356,6 +1356,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -2229,8 +2230,11 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
 			if (!factory.isEditable()) return false;
-			const result = factory.isImplicit() ?
-				factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : o.points;
+			const result = factory.isImplicit() 
+    			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) 
+    			: factory.factoryID !== "multipolygon" 
+    			    ? o.points 
+    			    : factory.restoreOriginalCoords(o._objects[0].points, o);  // intersection with only the outer polygon of multipolygon ?
 			if (!result) return false;
 			return {object: o, asPolygon: result};
 		}

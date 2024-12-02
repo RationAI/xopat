@@ -715,7 +715,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 };
 
-OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory {
+OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory { ///
 
     constructor(context, autoCreationStrategy, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
         super(context, autoCreationStrategy, presetManager, factoryID, type);
@@ -1337,7 +1337,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 };
 
-OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory {
+OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory { ///
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon", "polygon", fabric.Polygon, true);
     }
@@ -1420,7 +1420,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Array} parameters array of objects
      * @param {Object} options see parent class
      */
-    create(parameters, options) {
+    create(parameters, options) { /////
         return this.configure(new fabric.Group(parameters), options);
     }
 
@@ -1429,11 +1429,13 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
         //todo use factory instead
         object.forEachObject(o => {
-            o.fill = options.fill;
+            //o.fill = options.fill;
             o.stroke = options.stroke;
             o.color = options.color;
             o.originalStrokeWidth = options.originalStrokeWidth;
         });
+
+        return object;
     }
 
     _eachChildAndFactory(ofObject, executor, method="map") {
@@ -1577,5 +1579,158 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
     title() {
         return "Complex Annotation";
+    }
+};
+
+OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "multipolygon", "group");
+        this._current = null;
+
+        this._polygonFactory = new OSDAnnotations.Polygon(context, autoCreationStrategy, presetManager);
+    }
+
+    getIcon() {
+        return "view_timeline"; 
+    }
+
+    fabricStructure() {
+        return ["polygon"];
+    }
+
+    getDescription(ofObject) {
+        return `Multipolygon [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
+    }
+
+    getCurrentObject() {
+        return this._current;
+    }
+
+    title() {
+        return "Multipolygon";
+    }
+
+    create(parameters, options) {
+        let polygons = this._createPolygons(parameters, options);    
+        let multipolygon = this._createGroup(polygons, options);
+
+        return multipolygon;
+    }
+    
+    _createPolygons(parameters, options) {
+        // to do
+        //let outerPolygon = this._polygonFactory.create(parameters[0], options); // { ...options, globalCompositeOperation: "destination-out" }); //source-out , destination-out, xor
+        //let holes = parameters.slice(1).map(param => {
+        //    let customOptions = { ...options , fill: "transparent", globalCompositeOperation: ' destination-out' };
+        //    return this._polygonFactory.create(param, customOptions);
+        //});
+
+        //clipPath
+        //return [...holes, outerPolygon];
+        return parameters.map(param => this._polygonFactory.create(param, options));
+    }
+    
+    _createGroup(polygons, options) {
+        let multipolygon = new fabric.Group(polygons);
+        multipolygon = this.configure(multipolygon, options);
+    
+        this._adjustPointsRelativeToGroup(multipolygon);
+        return multipolygon;
+    }
+
+    _adjustPointsRelativeToGroup(group) {
+        group._objects.forEach(obj => {
+            obj.points = obj.points.map(p => ({
+                x: p.x - (group.left + group.width / 2),
+                y: p.y - (group.top + group.height / 2)
+            }));
+            obj.setCoords();
+        });
+    }
+
+    configure(object, options) {
+        const instance = super.configure(object, options);
+
+        delete instance.points;
+        return instance
+    }
+
+    restoreOriginalCoords(points, multipolygon) {
+        return points.map(p => ({
+            x: p.x + (multipolygon.left + multipolygon.width / 2),
+            y: p.y + (multipolygon.top + multipolygon.height / 2)
+        }));
+    }
+
+    swapHoles(group, newParameters) {
+        const props = this.copyProperties(group);
+        delete props.left;
+        delete props.top;
+        delete props.width;
+        delete props.height;
+        delete props.points;
+
+        let newPolygons = this._createPolygons(newParameters, props);
+        group._objects = newPolygons;
+    
+        this._adjustPointsRelativeToGroup(group);    
+        return group;
+    }
+
+    copy(ofObject, parameters=undefined) {
+        const props = this.copyProperties(ofObject);
+        delete props.left;
+        delete props.top;
+        delete props.width;
+        delete props.height;
+        delete props.points;
+
+        if (!Array.isArray(parameters)) {
+            parameters = ofObject._objects.map(obj => {
+                return this.restoreOriginalCoords(obj.points, ofObject);
+            });
+        }
+        return this.create(parameters, props);;
+    }
+
+    exportsGeometry() {
+        return [["points"]];
+    }
+
+    // to do
+    //edit(theObject) {
+    //}
+    //recalculate(theObject) {
+    //}
+
+    getArea(theObject) {
+        let area = this._polygonFactory.getArea(theObject._objects[0]);
+
+        for (let i = 1; i < theObject._objects.length; i++) {
+            area -= this._polygonFactory.getArea(theObject._objects[i]);
+        }
+
+        return area;
+    }
+
+    onZoom(ofObject, graphicZoom, realZoom) {
+        ofObject._objects.forEach(o => {
+            o.set({strokeWidth: ofObject.originalStrokeWidth/graphicZoom});
+        });
+    }
+
+    isImplicit() {
+        return false;
+    }
+
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        ofObject._objects.forEach(o => {
+            this._polygonFactory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
+        });
+    }
+
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        return undefined;
     }
 };

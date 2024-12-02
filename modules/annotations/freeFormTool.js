@@ -21,6 +21,15 @@ OSDAnnotations.FreeFormTool = class {
         USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
         this._node = document.getElementById("annotation-cursor");
+
+        this._offscreenCanvas = document.createElement('canvas');
+        this._offscreenCanvas.width = this._context.overlay._containerWidth;
+        this._offscreenCanvas.height = this._context.overlay._containerHeight;
+        this._ctx2d = this._offscreenCanvas.getContext('2d', { willReadFrequently: true });
+        //this._ctx2d.imageSmoothingEnabled = false;
+
+        this.MagicWand = OSDAnnotations.makeMagicWand();
+        this.ref = VIEWER.scalebar.getReferencedTiledImage();
     }
 
     /**
@@ -37,8 +46,11 @@ OSDAnnotations.FreeFormTool = class {
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         this._created = created;
 
+        this._ctx2d.clearRect(0, 0, this._ctx2d.canvas.width, this._ctx2d.canvas.height);
+        this._ctx2d.fillStyle = 'white';
+
         if (objectFactory !== undefined) {
-            if (objectFactory.factoryID !== "polygon") {  //object can be used immedietaly
+            if (objectFactory.factoryID !== "polygon" && objectFactory.factoryID !== "multipolygon") {  //object can be used immedietaly
                 let points = Array.isArray(created) ? points : (
                     objectFactory.supportsBrush() ?
                         objectFactory.toPointArray(object,
@@ -52,7 +64,8 @@ OSDAnnotations.FreeFormTool = class {
                     return;
                 }
             } else {
-                let newPolygon = created ? object : this._context.polygonFactory.copy(object, object.points);
+                const factory = objectFactory.factoryID === "polygon" ? this._context.polygonFactory : this._context.objectFactories.multipolygon;
+                let newPolygon = created ? object : factory.copy(object, null);
                 this._setupPolygon(newPolygon, object);
 
             }
@@ -200,7 +213,14 @@ OSDAnnotations.FreeFormTool = class {
             this._updatePerformed = this._update(point) || this._updatePerformed;
 
             if (this.polygon) {
-                this.polygon._setPositionDimensions({});
+                if (this.polygon.factoryID === "multipolygon") {
+                    this.polygon._objects.forEach(obj => { 
+                        obj._setPositionDimensions({});
+                    });
+                } else {
+                    this.polygon._setPositionDimensions({});
+                }
+
                 this._context.canvas.renderAll();
             }
         } catch (e) {
@@ -251,49 +271,43 @@ OSDAnnotations.FreeFormTool = class {
         return null;
     }
 
-    //TODO sometimes the greinerHormann cycling, vertices are NaN values, do some measurement and kill after it takes too long (2+s ?)
-    _union (nextMousePos) {
-        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+    _drawPolygon(polygon) {
+        this._ctx2d.moveTo(polygon[0].x, polygon[0].y);
 
-        let radPoints = this.getCircleShape(nextMousePos);
-        //console.log(radPoints);
-        let polyPoints = this.polygon.get("points");
-        //avoid 'Leaflet issue' - expecting a polygon that is not 'closed' on points (first != last)
-        if (this._toDistancePointsAsObjects(polyPoints[0], polyPoints[polyPoints.length - 1]) < this.radius) polyPoints.pop();
-        this.mousePos = nextMousePos;
+        for (let i = 1; i < polygon.length; i++) {
+            this._ctx2d.lineTo(polygon[i].x, polygon[i].y);
+        }
+        this._ctx2d.lineTo(polygon[0].x, polygon[0].y);
+        this._ctx2d.closePath();
+    }
 
-        let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
+    _rasterizePolygons(originalPoints, isPolygon) {
+        let points = [];
+        let firstPolygon;
 
-        //compute union
-        try {
-            var union = greinerHormann.union(polyPoints, radPoints);
-        } catch (e) {
-            console.warn("Unable to unify polygon with tool.", this.polygon, radPoints, e);
-            return false;
+        if (isPolygon) {
+            points = originalPoints.map(point => this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y)));
+            firstPolygon = points;
+        } else {
+            points = originalPoints.map(subPolygonPoints => {
+                return subPolygonPoints.map(point => 
+                    this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y))
+                );
+            });
+
+            firstPolygon = points[0];
         }
 
-        if (union) {
-            if (typeof union[0][0] === 'number') { // single linear ring
-                return false;
-            }
+        this._ctx2d.beginPath();
+        this._drawPolygon(firstPolygon);
 
-            if (union.length > 1) union = this._unify(union);
-
-            let maxIdx = 0,maxScore = 0;
-            for (let j = 0; j < union.length; j++) {
-                let measure = calcSize(union[j]);
-                if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
-                let area = measure.diffX * measure.diffY;
-                let score = 2*area + union[j].length;
-                if (score > maxScore) {
-                    maxScore = score;
-                    maxIdx = j;
-                }
+        if (!isPolygon) {
+            for (let i = 1; i < points.length; i++) { 
+                this._drawPolygon(points[i]);
             }
-            this.polygon.set({points: this.simplifier(union[maxIdx])});
-            return true;
         }
-        return false;
+
+        this._ctx2d.fill("evenodd");
     }
 
     //initialize object so that it is ready to be modified
@@ -307,6 +321,18 @@ OSDAnnotations.FreeFormTool = class {
             this._context.addHelperAnnotation(polyObject);
         }
 
+        if (polyObject.factoryID === "polygon") {
+            this._rasterizePolygons(polyObject.points, true);
+        } else {
+            const points = polyObject._objects.map(subPolygon => 
+                this._context.objectFactories.multipolygon.restoreOriginalCoords(
+                    subPolygon.points, 
+                    polyObject
+                )
+            );
+            this._rasterizePolygons(points, false)
+        }
+
         polyObject.moveCursor = 'crosshair';
     }
 
@@ -317,82 +343,135 @@ OSDAnnotations.FreeFormTool = class {
         this._setupPolygon(polygon, object);
     }
 
-    //try to merge polygon list into one polygons using 'greinerHormann.union' repeated call and simplyfiing the polygon
-    _unify(unions) {
-        let i = 0, len = unions.length ** 2 + 10, primary = [], secondary = [];
+    _changeFactory(factory, contourPoints) {
+        let newObject = factory.copy(this.polygon, contourPoints);
+        newObject.factoryID = factory.factoryID;
 
-        unions.forEach(u => {
-            primary.push(this.simplifier(u));
-        });
-        while (i < len) {
-            if (primary.length < 2) break;
-
-            i++;
-            let j = 0;
-            for (; j < primary.length - 1; j += 2) {
-                let ress = greinerHormann.union(primary[j], primary[j + 1]);
-
-                if (typeof ress[0][0] === 'number') {
-                    ress = [ress];
-                }
-                secondary = ress.concat(secondary); //reverse order for different union call in the next loop
-            }
-            if (j === primary.length - 1) secondary.push(primary[j]);
-            primary = secondary;
-            secondary = [];
+        if (!this._created) {
+            this._context.replaceAnnotation(this.polygon, this.initial, true);
+            this.polygon = newObject;
+            this._context.replaceAnnotation(this.initial, this.polygon, true);
+        } else {
+            this._context.deleteHelperAnnotation(this.polygon);
+            this.polygon = newObject;
+            this._context.addHelperAnnotation(this.polygon);
         }
-        return primary;
     }
 
-    _subtract (nextMousePos) {
+    _union (nextMousePos) {
         if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
 
-        let radPoints = this.getCircleShape(nextMousePos);
-        let polyPoints = this.polygon.get("points");
         this.mousePos = nextMousePos;
+        this._ctx2d.fillStyle = 'white';
 
-        let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
+        let contours = this._getContours();
 
-        try {
-            var difference = greinerHormann.diff(polyPoints, radPoints);
-        } catch (e) {
-            console.warn("Unable to diff polygon with tool.", this.polygon, radPoints, e);
-            return false;
-        }
+        // go through contours and delete too small inner polygons
 
-        if (difference) {
-            let polygon;
-            if (typeof difference[0][0] === 'number') { // single linear ring
-                polygon = this.simplifier(difference);
+        if (contours.length === 0 || (contours.length > 1 && (contours[0].inner || !contours[1].inner))) return false;
+        
+        if (contours.length === 1) { // polygon
+            if (contours[0].inner) return false;
+            if (this.initial.factoryID !== "multipolygon") {
+                this.polygon.set({points: contours[0].points});
             } else {
-                if (difference.length > 1) difference = this._unify(difference);
-
-                let maxIdx = 0, maxArea = 0, maxScore = 0;
-                for (let j = 0; j < difference.length; j++) {
-                    let measure = calcSize(difference[j]);
-                    if (measure.diffX < this.radius || measure.diffY < this.radius) continue;
-                    let area = measure.diffX * measure.diffY;
-                    let score = 2*area + difference[j].length;
-                    if (score > maxScore) {
-                        maxArea = area;
-                        maxScore = score;
-                        maxIdx = j;
-                    }
-                }
-
-                if (maxArea < this.radius * this.radius / 2) {  //largest area ceased to exist: finish
-                    delete this.initial.moveCursor;
-                    delete this.polygon.moveCursor;
-                    this.finish(true);
-                    return true;
-                }
-
-                polygon = this.simplifier(difference[maxIdx]);
+                this._changeFactory(this._context.polygonFactory, contours[0].points);
             }
-            this.polygon.set({points: polygon});
+            
+        } else { // multipolygon
+            let contourPoints = contours.map(contour => contour.points);
+            
+            if (this.initial.factoryID === "multipolygon") {
+                this.polygon = this._context.objectFactories.multipolygon.swapHoles(this.polygon, contourPoints);
+            } else {
+                this._changeFactory(this._context.objectFactories.multipolygon, contourPoints);
+            }
+        }
+        return true;
+    }
+
+    _subtract (nextMousePos) {  // to do
+        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+
+        this.mousePos = nextMousePos;
+        this._ctx2d.fillStyle = 'black';
+
+        let contours = this._getContours();
+
+        if (contours.length === 0){ // deletion
+            this.finish(true);
             return true;
         }
-        return false;
+        
+        if (contours.length === 1 ) { //polygon
+            this.polygon.set({points: contours[0].points});
+        } else {
+            
+            let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
+            let points = calcSize(contours[0].points) > calcSize(contours[1].points) ? contours[0].points : contours[1].points;
+            this.polygon.set({points: points});
+        }
+
+        return true;
+    }
+
+    _getContours() {
+        this._rasterizePolygons(this.getCircleShape(this.mousePos), true);
+
+        const imageData = this._ctx2d.getImageData(0, 0, this._ctx2d.canvas.width, this._ctx2d.canvas.height);
+        const mask = this._getBinaryMask(imageData.data, imageData.width, imageData.height);
+        if (!mask.bounds) return [];
+
+        let contours = this.MagicWand.traceContours(mask);
+        contours = this.MagicWand.simplifyContours(contours, 1, 30);
+
+        const imageContours = contours.map(contour => ({
+            ...contour,
+            points: contour.points.map(point => 
+                this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y))
+            )
+        }));
+
+        return imageContours;
+    }
+
+    _getBinaryMask(data, width, height) {
+        let mask = new Uint8ClampedArray(width * height);
+        let maxX = -1, minX = width, maxY = -1, minY = height, bounds;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const index = (y * width + x) * 4;
+                const r = data[index];
+    
+                if (r === 255) {
+                    mask[y * width + x] = 1;
+    
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        if (maxX === -1 || maxY === -1) {
+            bounds = null;
+        } else {
+            bounds = {
+                minX: minX,
+                minY: minY,
+                maxX: maxX,
+                maxY: maxY
+            }
+        }
+
+        return {
+            data: mask,
+            width: width,
+            height: height,
+            bounds: bounds,
+        }
     }
 
     _toDistancePointsAsObjects(pointA, pointB) {
