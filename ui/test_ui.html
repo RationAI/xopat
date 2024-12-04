@@ -28,25 +28,35 @@
             } else if (theme === "dark") {
                 document.body.setAttribute("data-theme", "catppuccin-mocha");
             } else {
-                document.body.removeAttribute("data-theme");
-            }
-            if (theme === undefined) {
                 window.matchMedia('(prefers-color-scheme: dark)').matches ?
-                    document.body.setAttribute("data-theme", "catppucin-mocha") :
+                    document.body.setAttribute("data-theme", "catppuccin-mocha") :
                     document.body.removeAttribute("data-theme");
             }
         }
         window.changeTheme = changeTheme;
         console.log(ui);
         window.onload = () => {
+            var counter = van.state(0);
             van.add(document.getElementById("workspace"), ui.Hello());
-            van.add(document.getElementById("button"), ui.TestButton({
-                text: "Click me",
-                onClick: () => {
-                    console.log("Button clicked");
-                }
-            }));
             window.changeTheme();
+            var b2 = new ui.PrimaryButton({
+                onClick: () => {
+                    counter.val++;
+                    b2.set(ui.PrimaryButton.SIZE.SMALL);
+                    b2.set(ui.PrimaryButton.OUTLINE.DISABLE);
+                },
+                id: "b2",
+            }, "clicked ", counter, " times");
+
+            var b1 = new ui.PrimaryButton({
+                onClick: () => {
+                    counter.val++;
+                    b1.set(ui.PrimaryButton.SIZE.TINY);
+                    b1.set(ui.PrimaryButton.OUTLINE.ENABLE);
+                },
+                id: "b1",
+            }, "Button ", b2);
+            b1.attachTo(document.getElementById("button"));
         }
 
     </script>
@@ -54,9 +64,9 @@
 
 <body class="latte dark:frappe h-full bg-base">
     <div class="bg-base">
-        <button class="btn btn-primary" onclick="changeTheme('dark')">Change to dark</button>
-        <button class="btn btn-secondary" onclick="changeTheme('light')">Change to light</button>
-        <button onclick="changeTheme('auto')">Change to auto</button>
+        <button class="btn btn-primary btn-lg" onclick="changeTheme('dark')">Change to dark</button>
+        <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Change to light</button>
+        <button class="btn btn-accent" onclick="changeTheme('auto')">Change to auto</button>
     </div>
     <div class="bg-base text-pink">
         <p>this is my test text</p>
