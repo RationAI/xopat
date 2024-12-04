@@ -9,6 +9,7 @@
 'use strict';
 var fs = require("fs");
 const { parse } = require('comment-json');
+const { source } = require("./openseadragon.conf");
 const parseJsonFile = (file, ...args) => {
     try {
         return parse(fs.readFileSync(file).toString(), ...args);
@@ -25,7 +26,7 @@ const webglConfig = parseJsonFile('modules/webgl/include.json');
 const config = parseJsonFile('src/config.json');
 
 // add your extensions if necessary, by default all except 'js' have only extracted comments
-const allowedExtensions = ['js', 'json', 'css'];
+const allowedExtensions = ['js', 'json', 'css', 'mjs'];
 module.exports = {
     //source javascript files and README
     files: [
@@ -33,6 +34,8 @@ module.exports = {
         ...flatten(config.js.src).map(x => `src/${x}`),
         ...flatten(webglConfig.includes).map(x => `modules/webgl/${x}`),
         'README.md',
+        'ui/components/buttons.mjs',
+        'ui/components/baseComponent.mjs',
         //other things we want to keep in docs, need @fileoverview tag, input as opts: {include: X }
         // 'src/assets/style.css',
         'src/config.json',
