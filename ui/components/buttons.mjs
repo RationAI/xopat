@@ -8,7 +8,12 @@ const { button, span } = van.tags
  * @extends BaseComponent
  * @description A button component
  * @example
- * const button = new Button({ id: "myButton", size: Button.SIZE.LARGE, outline: Button.OUTLINE.ENABLE }, "Click me");
+ * const button = new Button({ 
+ *                            id: "myButton",
+ *                            size: Button.SIZE.LARGE, 
+ *                            outline: Button.OUTLINE.ENABLE 
+ *                           }, 
+ *                           "Click me");
  * button.attachTo(document.body);
  */
 class Button extends BaseComponent {
@@ -53,6 +58,19 @@ Button.OUTLINE = {
     DISABLE: function () { this.classMap["outline"] = ""; this.refreshState(); }
 };
 
+/**
+ * @class PrimaryButton
+ * @extends Button
+ * @description Button with primary style
+ * @example
+ * const button = new PrimaryButton({ 
+ *                            id: "myButton",
+ *                            size: Button.SIZE.LARGE, 
+ *                            outline: Button.OUTLINE.ENABLE 
+ *                           }, 
+ *                           "Click me");
+ * button.attachTo(document.body);
+ */
 class PrimaryButton extends Button {
 
     constructor(options, ...args) {

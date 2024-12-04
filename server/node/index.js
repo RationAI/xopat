@@ -250,7 +250,6 @@ const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
-        const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
 
         // Treat suffix paths as attempt to access existing files
         if (url.pathname.match(/.+\..{2,5}$/g)) {
