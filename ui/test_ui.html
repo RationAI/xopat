@@ -29,49 +29,41 @@
                 document.body.setAttribute("data-theme", "catppuccin-latte");
             } else if (theme === "dark") {
                 document.body.setAttribute("data-theme", "catppuccin-mocha");
-                function changeTheme(theme = undefined) { // TODO check auto theme
-                    //["dark", "light", "auto"]
-                    if (theme === "light") {
-                        document.body.setAttribute("data-theme", "catppuccin-latte");
-                    } else if (theme === "dark") {
-                        document.body.setAttribute("data-theme", "catppuccin-mocha");
-                    } else {
-                        document.body.removeAttribute("data-theme");
-                    }
-                    if (theme === undefined) {
-                        window.matchMedia('(prefers-color-scheme: dark)').matches ?
-                            document.body.setAttribute("data-theme", "catppucin-mocha") :
-                            document.body.removeAttribute("data-theme");
-                        window.matchMedia('(prefers-color-scheme: dark)').matches ?
-                            document.body.setAttribute("data-theme", "catppuccin-mocha") :
-                            document.body.removeAttribute("data-theme");
-                    }
-                }
-                window.changeTheme = changeTheme;
-                console.log(ui);
-                window.onload = () => {
-                    var counter = van.state(0);
-                    van.add(document.getElementById("workspace"), ui.Hello());
-                    window.changeTheme();
-                    var b2 = new ui.PrimaryButton({
-                        onClick: () => {
-                            counter.val++;
-                            b2.set(ui.PrimaryButton.SIZE.SMALL);
-                            b2.set(ui.PrimaryButton.OUTLINE.DISABLE);
-                        },
-                        id: "b2",
-                    }, "clicked ", counter, " times");
 
-                    var b1 = new ui.PrimaryButton({
-                        onClick: () => {
-                            counter.val++;
-                            b1.set(ui.PrimaryButton.SIZE.TINY);
-                            b1.set(ui.PrimaryButton.OUTLINE.ENABLE);
-                        },
-                        id: "b1",
-                    }, "Button ", b2);
-                    b1.attachTo(document.getElementById("button"));
-                }
+            } if (theme === undefined) {
+                window.matchMedia('(prefers-color-scheme: dark)').matches ?
+                    document.body.setAttribute("data-theme", "catppucin-mocha") :
+                    document.body.removeAttribute("data-theme");
+                window.matchMedia('(prefers-color-scheme: dark)').matches ?
+                    document.body.setAttribute("data-theme", "catppuccin-mocha") :
+                    document.body.removeAttribute("data-theme");
+            }
+        }
+        window.changeTheme = changeTheme;
+        console.log(ui);
+        window.onload = () => {
+            var counter = van.state(0);
+            van.add(document.getElementById("workspace"), ui.Hello());
+            window.changeTheme();
+            var b2 = new ui.PrimaryButton({
+                onClick: () => {
+                    counter.val++;
+                    b2.set(ui.PrimaryButton.SIZE.SMALL);
+                    b2.set(ui.PrimaryButton.OUTLINE.DISABLE);
+                },
+                id: "b2",
+            }, "clicked ", counter, " times");
+
+            var b1 = new ui.PrimaryButton({
+                onClick: () => {
+                    counter.val++;
+                    b1.set(ui.PrimaryButton.SIZE.TINY);
+                    b1.set(ui.PrimaryButton.OUTLINE.ENABLE);
+                },
+                id: "b1",
+            }, "Button ", b2);
+            b1.attachTo(document.getElementById("button"));
+        }
 
     </script>
 </head>
