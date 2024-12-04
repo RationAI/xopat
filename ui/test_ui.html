@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en" dir="ltr" class="h-screen">
 <html lang="en" dir="ltr" class="h-screen">
+<!-- 3 buttons nahoře, vlevo výběr komponent -->
+<!-- server bude mít endpoint na filesystem -->
 
 <head>
     <meta charset="utf-8">
@@ -45,14 +47,6 @@
             var counter = van.state(0);
             van.add(document.getElementById("workspace"), ui.Hello());
             window.changeTheme();
-            var b2 = new ui.PrimaryButton({
-                onClick: () => {
-                    counter.val++;
-                    b2.set(ui.PrimaryButton.SIZE.SMALL);
-                    b2.set(ui.PrimaryButton.OUTLINE.DISABLE);
-                },
-                id: "b2",
-            }, "clicked ", counter, " times");
 
             var b1 = new ui.PrimaryButton({
                 onClick: () => {
@@ -61,7 +55,7 @@
                     b1.set(ui.PrimaryButton.OUTLINE.ENABLE);
                 },
                 id: "b1",
-            }, "Button ", b2);
+            }, "Button ", counter, "times");
             b1.attachTo(document.getElementById("button"));
         }
 

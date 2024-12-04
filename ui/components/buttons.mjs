@@ -41,7 +41,7 @@ class Button extends BaseComponent {
 
     create() {
         return button(
-            { id: this.id, class: Object.values(this.classMap).join(" "), onclick: this.onClick },
+            { ...this.commonOptions, onclick: this.onClick },
             ...this.children)
     }
 }
@@ -54,22 +54,13 @@ Button.SIZE = {
 };
 
 Button.OUTLINE = {
-    ENABLE: function () { this.classMap["outline"] = "btn-outline"; this.refreshState(); },
-    DISABLE: function () { this.classMap["outline"] = ""; this.refreshState(); }
+    ENABLE: function () { this.setClass("outline", "btn-outline"); },
+    DISABLE: function () { this.setClass("outline", ""); }
 };
 
 /**
  * @class PrimaryButton
  * @extends Button
- * @description Button with primary style
- * @example
- * const button = new PrimaryButton({ 
- *                            id: "myButton",
- *                            size: Button.SIZE.LARGE, 
- *                            outline: Button.OUTLINE.ENABLE 
- *                           }, 
- *                           "Click me");
- * button.attachTo(document.body);
  */
 class PrimaryButton extends Button {
 
