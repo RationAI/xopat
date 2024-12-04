@@ -9,7 +9,6 @@
 'use strict';
 var fs = require("fs");
 const { parse } = require('comment-json');
-const { source } = require("./openseadragon.conf");
 const parseJsonFile = (file, ...args) => {
     try {
         return parse(fs.readFileSync(file).toString(), ...args);
