@@ -21,17 +21,7 @@ const PROJECT_PATH = "";
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
-const { getCore } = require("../templates/javascript/core");
-const { loadPlugins } = require("../templates/javascript/plugins");
-const { throwFatalErrorIf } = require("./error");
-const { getCore } = require("../templates/javascript/core");
-const { loadPlugins } = require("../templates/javascript/plugins");
-const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
-const { files } = require("../../docs/include");
-const { ABSPATH } = require("./constants");
-const { files } = require("../../docs/include");
-const { ABSPATH } = require("./constants");
 const { files } = require("../../docs/include");
 const { ABSPATH } = require("./constants");
 
@@ -60,9 +50,6 @@ const initViewerCoreAndPlugins = (req, res) => {
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
         { t: function () { return "Unknown Error (e-translate)."; } });
-    { t: function () { return "Unknown Error (e-translate)."; } });
-    { t: function () { return "Unknown Error (e-translate)."; } });
-    { t: function () { return "Unknown Error (e-translate)."; } });
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!")) return null;
     return core;
 }
@@ -74,7 +61,6 @@ async function responseStaticFile(req, res, targetPath) {
     const mimeTypes = {
         '.html': 'text/html',
         '.js': 'text/javascript',
-        '.mjs': 'application/javascript',
         '.mjs': 'application/javascript',
         '.css': 'text/css',
         '.json': 'application/json',
@@ -141,23 +127,7 @@ async function responseViewer(req, res) {
                 rawData = decodeURIComponent(rawData || "");
                 postData = querystring.parse(rawData);
                 break;
-            case 'application/x-www-form-urlencoded':
-                rawData = decodeURIComponent(rawData || "");
-                postData = querystring.parse(rawData);
-                break;
-            case 'application/x-www-form-urlencoded':
-                rawData = decodeURIComponent(rawData || "");
-                postData = querystring.parse(rawData);
-                break;
 
-            case 'application/json':
-            default:
-                postData = rawData && JSON.parse(rawData) || {};
-                break;
-            case 'application/json':
-            default:
-                postData = rawData && JSON.parse(rawData) || {};
-                break;
             case 'application/json':
             default:
                 postData = rawData && JSON.parse(rawData) || {};
@@ -213,10 +183,10 @@ ${core.requireCore("app")}`;
     </script>`;
 
                 case "modules":
-                    return core.requireModules();
+                    return core.requireModules(core.CORE.client.production);
 
                 case "plugins":
-                    return core.requirePlugins();
+                    return core.requirePlugins(core.CORE.client.production);
 
                 default:
                     //todo warn
@@ -241,33 +211,26 @@ async function responseDeveloperSetup(req, res) {
 
     core.MODULES["webgl"].loaded = true;
     const replacer = function (match, p1) {
-        const replacer = function (match, p1) {
-            try {
-                switch (p1) {
-                    case "head":
-                        return `
+        try {
+            switch (p1) {
                 case "head":
                     return `
-${ core.requireLib('primer') }
-${ core.requireLib('jquery') }
-${ core.requireCore("env") }
-${ core.requireCore("deps") }
-${ core.requireModules() } `;
+${core.requireLib('primer')}
+${core.requireLib('jquery')}
+${core.requireCore("env")}
+${core.requireCore("deps")}
+${core.requireModules(true)}`;
                 case "form-init":
                     return `
-                            < script type = "text/javascript" >
-                                window.formInit = {
-                            location: "${constants.PROJECT_ROOT}/",
-                                lang: {
-                                ready: "Ready!"
-                            }
-                        }
-    </script > `;
+    <script type="text/javascript">
+    window.formInit = {
+        location: "${constants.PROJECT_ROOT}/",
+        lang: {
+            ready: "Ready!"
+        }
+    }
+    </script>`;
 
-                default:
-                    return "";
-                default:
-                    return "";
                 default:
                     return "";
             }
@@ -286,32 +249,32 @@ ${ core.requireModules() } `;
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
-        const url = new URL(`${ protocol }://${req.headers.host}${req.url}`);
-    const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+        const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+        const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
 
-    // Treat suffix paths as attempt to access existing files
-    if (url.pathname.match(/.+\..{2,5}$/g)) {
-        const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
-        if (fs.existsSync(possibleFilePath)) {
-            return responseStaticFile(req, res, possibleFilePath);
+        // Treat suffix paths as attempt to access existing files
+        if (url.pathname.match(/.+\..{2,5}$/g)) {
+            const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
+            if (fs.existsSync(possibleFilePath)) {
+                return responseStaticFile(req, res, possibleFilePath);
+            }
+            res.writeHead(404);
+            res.end();
+            return
         }
-        res.writeHead(404);
+
+        if (url.pathname.startsWith("/dev_setup")) {
+            return responseDeveloperSetup(req, res);
+        }
+
+        return responseViewer(req, res);
+    } catch (e) {
+        console.error(e);
+        res.statusCode = 500;
+        //todo consider JSON structured response similar to fastapi
+        res.write(String(e));
         res.end();
-        return
     }
-
-    if (url.pathname.startsWith("/dev_setup")) {
-        return responseDeveloperSetup(req, res);
-    }
-
-    return responseViewer(req, res);
-} catch (e) {
-    console.error(e);
-    res.statusCode = 500;
-    //todo consider JSON structured response similar to fastapi
-    res.write(String(e));
-    res.end();
-}
 });
 server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
     const ENV = process.env.XOPAT_ENV;
