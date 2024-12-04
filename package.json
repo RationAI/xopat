@@ -43,7 +43,6 @@
   },
   "homepage": "https://github.com/RationAI/xopat#readme",
   "devDependencies": {
-    "daisyui": "^4.10.2",
     "@catppuccin/tailwindcss": "^0.1.6",
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
