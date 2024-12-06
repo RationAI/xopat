@@ -13,6 +13,7 @@ OSDAnnotations.FreeFormTool = class {
         this.radius = 20;
         this.mousePos = null;
         this.SQRT3DIV2 = 0.866025403784;
+        this.zoom = null;
         this._context = context;
         this._update = null;
         this._created = false;
@@ -358,61 +359,88 @@ OSDAnnotations.FreeFormTool = class {
         }
     }
 
-    _union (nextMousePos) {
+    _getValidContours(contours) {
+        const polygonUtils = OSDAnnotations.PolygonUtilities;
+        let innerContours = [];
+        let falseOuterContours = [];
+        let maxArea = -1;
+        let outerContour = null;
+
+        for (let i = 0; i < contours.length; i++) {
+            const size = polygonUtils.approximatePolygonArea(contours[i].points);
+            const area = size.diffX * size.diffY;
+
+            if (contours[i].inner) {
+                //if (area < this.zoom ) continue; // deleting too small holes
+                innerContours.push(contours[i]);
+
+            } else if (area > maxArea) {
+                if (outerContour) falseOuterContours.push(outerContour);
+                maxArea = area;
+                outerContour = contours[i];
+
+            } else {
+                falseOuterContours.push(contours[i]);
+            }
+        }
+
+        if (!outerContour) return innerContours;
+
+        if (falseOuterContours.length !== 0) {
+            innerContours = innerContours.filter(inner => {
+                return falseOuterContours.some(outer => {
+                    if (polygonUtils.intersectAABB(polygonUtils.getBoundingBox(outer.points), polygonUtils.getBoundingBox(inner.points))) {
+                        const intersections = OSDAnnotations.checkPolygonIntersect(inner.points, outer.points);
+                        return intersections.length === 0 || JSON.stringify(intersections) === JSON.stringify(outer.points);
+                    }
+                    return true;
+                });
+            });
+        } 
+
+        return [outerContour, ...innerContours];
+    }
+
+    _processContours(nextMousePos, fillColor) {
         if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
-
+    
         this.mousePos = nextMousePos;
-        this._ctx2d.fillStyle = 'white';
-
+        this._ctx2d.fillStyle = fillColor;
+    
         let contours = this._getContours();
-
-        // go through contours and delete too small inner polygons
-
-        if (contours.length === 0 || (contours.length > 1 && (contours[0].inner || !contours[1].inner))) return false;
-        
+        contours = this._getValidContours(contours);
+    
+        if (contours.length >= 1 && contours[0].inner) return false;
+    
+        if (contours.length === 0) return this.finish(true); // deletion in subtract mode
+    
         if (contours.length === 1) { // polygon
-            if (contours[0].inner) return false;
             if (this.initial.factoryID !== "multipolygon") {
-                this.polygon.set({points: contours[0].points});
+                this.polygon.set({ points: contours[0].points });
             } else {
                 this._changeFactory(this._context.polygonFactory, contours[0].points);
             }
-            
-        } else { // multipolygon
-            let contourPoints = contours.map(contour => contour.points);
-            
-            if (this.initial.factoryID === "multipolygon") {
-                this.polygon = this._context.objectFactories.multipolygon.swapHoles(this.polygon, contourPoints);
-            } else {
-                this._changeFactory(this._context.objectFactories.multipolygon, contourPoints);
-            }
+            return true;
         }
+
+        // multipolygon
+        let contourPoints = contours.map(contour => contour.points);
+
+        if (this.initial.factoryID === "multipolygon") {
+            this.polygon = this._context.objectFactories.multipolygon.swapHoles(this.polygon, contourPoints);
+        } else {
+            this._changeFactory(this._context.objectFactories.multipolygon, contourPoints);
+        }
+    
         return true;
     }
 
-    _subtract (nextMousePos) {  // to do
-        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+    _union (nextMousePos) {
+        return this._processContours(nextMousePos, 'white');
+    }
 
-        this.mousePos = nextMousePos;
-        this._ctx2d.fillStyle = 'black';
-
-        let contours = this._getContours();
-
-        if (contours.length === 0){ // deletion
-            this.finish(true);
-            return true;
-        }
-        
-        if (contours.length === 1 ) { //polygon
-            this.polygon.set({points: contours[0].points});
-        } else {
-            
-            let calcSize = OSDAnnotations.PolygonUtilities.approximatePolygonArea;
-            let points = calcSize(contours[0].points) > calcSize(contours[1].points) ? contours[0].points : contours[1].points;
-            this.polygon.set({points: points});
-        }
-
-        return true;
+    _subtract (nextMousePos) {
+        return this._processContours(nextMousePos, 'black');
     }
 
     _getContours() {
@@ -423,7 +451,7 @@ OSDAnnotations.FreeFormTool = class {
         if (!mask.bounds) return [];
 
         let contours = this.MagicWand.traceContours(mask);
-        contours = this.MagicWand.simplifyContours(contours, 1, 30);
+        contours = this.MagicWand.simplifyContours(contours, 0, 30);
 
         const imageContours = contours.map(contour => ({
             ...contour,

@@ -1620,14 +1620,14 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     
     _createPolygons(parameters, options) {
         // to do
-        //let outerPolygon = this._polygonFactory.create(parameters[0], options); // { ...options, globalCompositeOperation: "destination-out" }); //source-out , destination-out, xor
+        //console.log(options);
+        //let outerPolygon = this._polygonFactory.create(parameters[0], options); // { ...options, globalCompositeOperation: "destination-out" });
         //let holes = parameters.slice(1).map(param => {
-        //    let customOptions = { ...options , fill: "transparent", globalCompositeOperation: ' destination-out' };
+        //    let customOptions = { ...options, globalCompositeOperation: "destination-out" };
         //    return this._polygonFactory.create(param, customOptions);
-        //});
-
-        //clipPath
-        //return [...holes, outerPolygon];
+        //})
+        //
+        //return [outerPolygon, ...holes];
         return parameters.map(param => this._polygonFactory.create(param, options));
     }
     
@@ -1636,6 +1636,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         multipolygon = this.configure(multipolygon, options);
     
         this._adjustPointsRelativeToGroup(multipolygon);
+        multipolygon.globalCompositeOperation = "source-over";
         return multipolygon;
     }
 
@@ -1673,8 +1674,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
         let newPolygons = this._createPolygons(newParameters, props);
         group._objects = newPolygons;
+
+        group._calcBounds(); 
+        group.setCoords();
     
-        this._adjustPointsRelativeToGroup(group);    
+        this._adjustPointsRelativeToGroup(group);
         return group;
     }
 
@@ -1725,12 +1729,23 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
-        ofObject._objects.forEach(o => {
+        console.log(preset);
+        this._polygonFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties);
+
+        //if (visualProperties.modeOutline) {
+        //    visualProperties.globalCompositeOperation = "source-over";
+        //} else {
+        //    visualProperties.globalCompositeOperation = "destination-out";
+        //}
+
+        ofObject._objects.slice(1).forEach(o => {
             this._polygonFactory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
         });
     }
 
-    toPointArray(obj, converter, digits=undefined, quality=1) {
-        return undefined;
+    getMultipolygonPoints(multipolygon) {
+        return multipolygon._objects.map(polygon => 
+            this.restoreOriginalCoords(polygon.points, multipolygon)
+        );
     }
 };

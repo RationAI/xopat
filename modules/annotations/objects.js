@@ -597,6 +597,27 @@ OSDAnnotations.PolygonUtilities = {
         return { diffX: maxX - minX, diffY: maxY - minY };
     },
 
+    getBoundingBox: function (polygonPoints) {
+		if (!polygonPoints || polygonPoints.length === 0) return null;
+	
+		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+	
+		for (let i = 0; i < polygonPoints.length; i++) {
+            const point = polygonPoints[i];
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+	
+		return {
+			x: minX,
+			y: minY,
+			width: maxX - minX,
+			height: maxY - minY
+		};
+	},
+
     /**
      *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
      *  To detect intersection with another Polygon object, this
