@@ -27,7 +27,6 @@ OSDAnnotations.FreeFormTool = class {
         this._offscreenCanvas.width = this._context.overlay._containerWidth;
         this._offscreenCanvas.height = this._context.overlay._containerHeight;
         this._ctx2d = this._offscreenCanvas.getContext('2d', { willReadFrequently: true });
-        //this._ctx2d.imageSmoothingEnabled = false;
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
         this.ref = VIEWER.scalebar.getReferencedTiledImage();
@@ -212,18 +211,7 @@ OSDAnnotations.FreeFormTool = class {
 
         try {
             this._updatePerformed = this._update(point) || this._updatePerformed;
-
-            if (this.polygon) {
-                if (this.polygon.factoryID === "multipolygon") {
-                    this.polygon._objects.forEach(obj => { 
-                        obj._setPositionDimensions({});
-                    });
-                } else {
-                    this.polygon._setPositionDimensions({});
-                }
-
-                this._context.canvas.renderAll();
-            }
+            this._context.canvas.renderAll();
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
         }
@@ -322,17 +310,8 @@ OSDAnnotations.FreeFormTool = class {
             this._context.addHelperAnnotation(polyObject);
         }
 
-        if (polyObject.factoryID === "polygon") {
-            this._rasterizePolygons(polyObject.points, true);
-        } else {
-            const points = polyObject._objects.map(subPolygon => 
-                this._context.objectFactories.multipolygon.restoreOriginalCoords(
-                    subPolygon.points, 
-                    polyObject
-                )
-            );
-            this._rasterizePolygons(points, false)
-        }
+        const isPolygon = polyObject.factoryID === "polygon";
+        this._rasterizePolygons(polyObject.points, isPolygon);
 
         polyObject.moveCursor = 'crosshair';
     }
@@ -417,6 +396,7 @@ OSDAnnotations.FreeFormTool = class {
         if (contours.length === 1) { // polygon
             if (this.initial.factoryID !== "multipolygon") {
                 this.polygon.set({ points: contours[0].points });
+                this.polygon._setPositionDimensions({});
             } else {
                 this._changeFactory(this._context.polygonFactory, contours[0].points);
             }
@@ -427,7 +407,7 @@ OSDAnnotations.FreeFormTool = class {
         let contourPoints = contours.map(contour => contour.points);
 
         if (this.initial.factoryID === "multipolygon") {
-            this.polygon = this._context.objectFactories.multipolygon.swapHoles(this.polygon, contourPoints);
+            this.polygon = this._context.objectFactories.multipolygon.setPoints(this.polygon, contourPoints);
         } else {
             this._changeFactory(this._context.objectFactories.multipolygon, contourPoints);
         }

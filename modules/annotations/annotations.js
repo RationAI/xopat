@@ -2232,9 +2232,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!factory.isEditable()) return false;
 			const result = factory.isImplicit() 
     			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) 
-    			: factory.factoryID !== "multipolygon" 
-    			    ? o.points 
-    			    : factory.getMultipolygonPoints(o); 
+    			: o.points;
 			if (!result) return false;
 			return {object: o, asPolygon: result};
 		}
