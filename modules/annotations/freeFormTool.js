@@ -270,22 +270,18 @@ OSDAnnotations.FreeFormTool = class {
         this._ctx2d.closePath();
     }
 
-    _rasterizePolygons(originalPoints, isPolygon) {
-        let points = [];
-        let firstPolygon;
-
-        if (isPolygon) {
-            points = originalPoints.map(point => this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y)));
-            firstPolygon = points;
-        } else {
-            points = originalPoints.map(subPolygonPoints => {
-                return subPolygonPoints.map(point => 
-                    this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y))
-                );
-            });
-
-            firstPolygon = points[0];
+    _rasterizePolygons(originalPoints, isPolygon, needsConversion=true) {
+        const convertPoints = (points) => 
+            points.map(point => this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y)));
+    
+        if (needsConversion) {
+            originalPoints = isPolygon 
+                ? convertPoints(originalPoints) 
+                : originalPoints.map(convertPoints);
         }
+    
+        const points = originalPoints;
+        const firstPolygon = isPolygon ? points : points[0];
 
         this._ctx2d.beginPath();
         this._drawPolygon(firstPolygon);
@@ -368,45 +364,54 @@ OSDAnnotations.FreeFormTool = class {
         if (falseOuterContours.length !== 0) {
             innerContours = innerContours.filter(inner => {
                 return falseOuterContours.some(outer => {
-                    if (polygonUtils.intersectAABB(polygonUtils.getBoundingBox(outer.points), polygonUtils.getBoundingBox(inner.points))) {
+
+                    const innerBbox = polygonUtils.getBoundingBox(inner.points);
+                    const outerBbox = polygonUtils.getBoundingBox(outer.points);
+        
+                    if (polygonUtils.intersectAABB(innerBbox, outerBbox)) {
                         const intersections = OSDAnnotations.checkPolygonIntersect(inner.points, outer.points);
                         return intersections.length === 0 || JSON.stringify(intersections) === JSON.stringify(outer.points);
                     }
                     return true;
                 });
             });
-        } 
+
+            this._ctx2d.fillStyle = 'white';
+            this._ctx2d.clearRect(0, 0, this._ctx2d.canvas.width, this._ctx2d.canvas.height);
+
+            const newContours = [outerContour, ...innerContours].map(contour => contour.points);
+            this._rasterizePolygons(newContours, false, false);
+        }
 
         return [outerContour, ...innerContours];
     }
 
     _processContours(nextMousePos, fillColor) {
         if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
-    
+
         this.mousePos = nextMousePos;
         this._ctx2d.fillStyle = fillColor;
-    
-        let contours = this._getContours();
-        contours = this._getValidContours(contours);
-    
+        let contours = this._getContours();       
+
         if (contours.length >= 1 && contours[0].inner) return false;
     
         if (contours.length === 0) return this.finish(true); // deletion in subtract mode
     
         if (contours.length === 1) { // polygon
-            if (this.initial.factoryID !== "multipolygon") {
+            if (this.polygon.factoryID !== "multipolygon") {
                 this.polygon.set({ points: contours[0].points });
-                this.polygon._setPositionDimensions({});
             } else {
                 this._changeFactory(this._context.polygonFactory, contours[0].points);
             }
+
+            this.polygon._setPositionDimensions({});
             return true;
         }
 
         // multipolygon
         let contourPoints = contours.map(contour => contour.points);
 
-        if (this.initial.factoryID === "multipolygon") {
+        if (this.polygon.factoryID === "multipolygon") {
             this.polygon = this._context.objectFactories.multipolygon.setPoints(this.polygon, contourPoints);
         } else {
             this._changeFactory(this._context.objectFactories.multipolygon, contourPoints);
@@ -431,13 +436,12 @@ OSDAnnotations.FreeFormTool = class {
         if (!mask.bounds) return [];
 
         let contours = this.MagicWand.traceContours(mask);
+        contours = this._getValidContours(contours);
         contours = this.MagicWand.simplifyContours(contours, 0, 30);
 
         const imageContours = contours.map(contour => ({
             ...contour,
-            points: contour.points.map(point => 
-                this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y))
-            )
+            points: contour.points.map(point => this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y)))
         }));
 
         return imageContours;

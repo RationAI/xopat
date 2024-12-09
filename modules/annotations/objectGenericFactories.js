@@ -1595,7 +1595,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     fabricStructure() {
-        return ["polygon"];
+        return "path";
     }
 
     getDescription(ofObject) {
@@ -1611,7 +1611,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     exportsGeometry() {
-        return [["points"]];
+        return ["path"];
+    }
+
+    exports() {
+        return ["points"];
     }
 
     isImplicit() {
@@ -1630,7 +1634,6 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     configure(object, options) {
         const instance = super.configure(object, options);
         instance.fillRule = "evenodd";
-        delete instance.points;
 
         return instance
     }
