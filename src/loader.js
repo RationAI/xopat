@@ -882,7 +882,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param value
          */
         setLocalOption(key, value) {
-            localStorage.setItem(`${this.id}.${key}`, value);
+            this.cache.set(key, value);
         }
 
         /**

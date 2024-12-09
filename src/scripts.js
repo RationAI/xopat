@@ -232,6 +232,55 @@ function initXopatScripts() {
     };
 
     /**
+     * Convert given function to throttled function, that will be fired only once each delay ms.
+     * Usage: const logicImplementationOfTheFunction = ...;
+     * const calledInstanceOfTheFunction = UTILITIES.makeThrottled(logicImplementationOfTheFunction, 60);
+     * @param {function} callback
+     * @param {number} delay  throttling in ms
+     * @return {function} wrapper
+     */
+    window.UTILITIES.makeThrottled = function (callback, delay) {
+        let lastCallTime = 0;
+        let timeoutId = null;
+        let pendingArgs = null;
+
+        const invoke = () => {
+            timeoutId = null;
+            lastCallTime = Date.now();
+            if (pendingArgs) {
+                callback(...pendingArgs);
+                pendingArgs = null;
+            }
+        };
+
+        const wrapper = (...args) => {
+            const now = Date.now();
+
+            if (!lastCallTime || now - lastCallTime >= delay) {
+                // Execute immediately if outside the throttling window
+                lastCallTime = now;
+                callback(...args);
+            } else {
+                // Skip this call but store arguments for the next possible execution
+                pendingArgs = args;
+
+                if (!timeoutId) {
+                    timeoutId = setTimeout(invoke, delay - (now - lastCallTime));
+                }
+            }
+        };
+
+        wrapper.finish = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                invoke();
+            }
+        };
+
+        return wrapper;
+    }
+
+    /**
      * Set the App theme
      * @param {?string} theme primer_css theme
      */
@@ -344,13 +393,15 @@ form.submit();
     /**
      * Copy content to the user clipboard
      * @param {string} content
+     * @param {boolean} alert
      */
-    window.UTILITIES.copyToClipboard = function(content) {
+    window.UTILITIES.copyToClipboard = function(content, alert=true) {
         let $temp = $("<input>");
         $("body").append($temp);
         $temp.val(content).select();
         document.execCommand("copy");
         $temp.remove();
+        if (alert) Dialogs.show($.t('messages.valueCopied'), 3000, Dialogs.MSG_INFO);
     };
 
     /**
@@ -363,7 +414,6 @@ form.submit();
         }
         const data = UTILITIES.serializeAppConfig();
         UTILITIES.copyToClipboard(baseUrl + "#" + encodeURIComponent(data));
-        Dialogs.show($.t('messages.urlCopied'), 4000, Dialogs.MSG_INFO);
     };
 
     /**

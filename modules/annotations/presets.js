@@ -86,18 +86,41 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Shared options, set to each annotation object.
+     * @typedef {Object} OSDAnnotations.CommonAnnotationVisuals
+     * @property {boolean} [selectable] - Whether the annotation is selectable.
+     * @property {number} [originalStrokeWidth] - The original width of the stroke.
+     * @property {string} [borderColor] - The color of the border.
+     * @property {string} [cornerColor] - The color of the corners.
+     * @property {string} [stroke] - The color of the stroke.
+     * @property {string} [strokeSide] - Position of the stroke (center, inside, outside).
+     * @property {number} [borderScaleFactor] - The factor by which the border is scaled.
+     * @property {boolean} [hasControls] - Whether the annotation has controls.
+     * @property {boolean} [lockMovementY] - Whether movement along the Y-axis is locked.
+     * @property {boolean} [lockMovementX] - Whether movement along the X-axis is locked.
+     * @property {boolean} [hasRotatingPoint] - Whether the annotation has a rotating point.
+     * @property {boolean} [modeOutline] - Whether the annotation is in outline mode.
+     * @property {number} [opacity]
      */
-    static _commonProperty = {
+
+    /**
+     * Default visual settings for annotations.
+     * todo make this cache-loaded, parametrized
+     * @type {OSDAnnotations.CommonAnnotationVisuals}
+     */
+    static commonAnnotationVisuals = {
         selectable: true,
         originalStrokeWidth: 3,
         borderColor: '#fbb802',
         cornerColor: '#fbb802',
         stroke: 'black',
         borderScaleFactor: 3,
+        strokeSide: 'center',
         hasControls: false,
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,
+        modeOutline: false,
+        opacity: 0.4
     };
 
     /**
@@ -113,8 +136,25 @@ OSDAnnotations.PresetManager = class {
         this.right = undefined;
         this._colorSteps = 8;
         this._colorStep = 0;
-        this._presetsImported = false;
-        this.modeOutline = this._context.cache.get('drawOutline', true);
+        this._presetsImported = false;  // todo remove this prop
+
+        const cache = this._context.cache;
+        this.commonAnnotationVisuals = { ... this.constructor.commonAnnotationVisuals };
+
+        //todo: consider cache api that supports type conversions
+        const _parseCachedProps = (convertor, ...names) => {
+            for (let name of names) {
+                const value = cache.get('visuals.' + name);
+                if (value !== undefined && value !== null) {
+                    this.commonAnnotationVisuals[name] = convertor ? convertor(value) : value;
+                }
+            }
+        };
+        _parseCachedProps(x => !!x, 'modeOutline');
+        _parseCachedProps(x => Number.parseFloat(x), 'opacity');
+        _parseCachedProps(x => Number.parseInt(x), 'originalStrokeWidth');
+        _parseCachedProps(undefined, 'borderColor', 'cornerColor', 'stroke');
+
         this._context.addHandler('preset-delete', e => {
             if (e.preset === this.left) this.selectPreset(undefined, true);
             else if (e.preset === this.right) this.selectPreset(undefined, false);
@@ -140,22 +180,6 @@ OSDAnnotations.PresetManager = class {
     getAnnotationOptions(isLeftClick) {
         let preset = this.getActivePreset(isLeftClick);
         return this.getAnnotationOptionsFromInstance(preset, isLeftClick);
-    }
-
-    /**
-     * Set annotations to mode filled or outlined
-     * @param isOutline true if outlined
-     */
-    setModeOutline(isOutline) {
-        if (this.modeOutline === isOutline) return;
-        this._context.cache.set('drawOutline', isOutline);
-        this.modeOutline = isOutline;
-        this.updateAllObjectsVisuals();
-        this._context.canvas.requestRenderAll();
-    }
-
-    getModeOutline() {
-        return this.modeOutline;
     }
 
     /**
@@ -185,7 +209,7 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Alias for static _commonProperty
+     * Alias for static commonAnnotationVisuals
      * @param {OSDAnnotations.Preset} withPreset
      */
     getCommonProperties(withPreset=undefined) {
@@ -193,7 +217,7 @@ OSDAnnotations.PresetManager = class {
             withPreset._used = true;
             return this._withDynamicOptions(this._populateObjectOptions(withPreset));
         }
-        return this._withDynamicOptions(this.constructor._commonProperty);
+        return this._withDynamicOptions(this.commonAnnotationVisuals);
     }
 
     /**
@@ -295,26 +319,6 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Correctly and safely reflect object appearance based on mode
-     * @param object object to update
-     * @param withPreset preset that obect belongs to
-     */
-    updateObjectVisuals(object, withPreset) {
-        const factory = this._context.getAnnotationObjectFactory(object.factoryID);
-        factory.updateRendering(this.modeOutline, object, withPreset.color, this.constructor._commonProperty.stroke);
-    }
-
-    /**
-     * Update all object visuals
-     */
-    updateAllObjectsVisuals() {
-        this._context.canvas.getObjects().forEach(o => {
-            let preset = this.get(o.presetID);
-            if (preset) this.updateObjectVisuals(o, preset);
-        });
-    }
-
-    /**
      * Add new metadata field to preset
      * @event preset-meta-add
      * @param {string} id preset id
@@ -347,6 +351,31 @@ OSDAnnotations.PresetManager = class {
         }
         this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
         return false;
+    }
+
+    /**
+     * Set common rendering visual property (stroke, opacity...)
+     * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+     * @param {any} propertyValue value for the property
+     * @return {boolean} true if value changed, false if invalid key
+     */
+    setCommonVisualProp(propertyName, propertyValue) {
+        if (this.commonAnnotationVisuals[propertyName] === undefined) {
+            console.error("[setCommonVisualProp] property name not one of", this.presets.constructor.commonAnnotationVisuals, propertyName);
+            return false;
+        }
+        this._context.cache.set('visuals.' + propertyName, propertyValue);
+        this.commonAnnotationVisuals[propertyName] = propertyValue;
+        return true;
+    }
+
+    /**
+     * Get annotations visual property
+     * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+     * @return {*}
+     */
+    getCommonVisualProp(propertyName) {
+        return this.commonAnnotationVisuals[propertyName];
     }
 
     /**
@@ -389,10 +418,6 @@ OSDAnnotations.PresetManager = class {
         const _this = this;
 
         if (clear) {
-            Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
-            this._presets = {};
-            this._presetsImported = false;
-        } else {
             for (let pid in this._presets) {
                 const preset = this._presets[pid];
                 if (this.isUnusedPreset(preset)) {
@@ -401,15 +426,15 @@ OSDAnnotations.PresetManager = class {
                 }
             }
         }
-        let first = undefined;
 
         if (typeof presets === 'string' && presets.length > 10) {
             presets = JSON.parse(presets);
         }
 
+        let first;
         if (Array.isArray(presets)) {
             presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
-                if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
+                if (!_this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
                     _this._colorStep++; //generate new colors
@@ -467,9 +492,8 @@ OSDAnnotations.PresetManager = class {
 
         return $.extend(options, {
             layerID: this._context.getLayer().id,
-            opacity: this._context.getOpacity(),
             zoomAtCreation: zoom,
-            strokeWidth: 3 / gZoom
+            strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
     }
 
@@ -478,9 +502,9 @@ OSDAnnotations.PresetManager = class {
             console.warn("Attempt to retrieve metadata without a preset!");
             return {};
         }
-        if (this.modeOutline) {
+        if (this.commonAnnotationVisuals.modeOutline) {
             return $.extend({fill: ""},
-                OSDAnnotations.PresetManager._commonProperty,
+                this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
                     stroke: withPreset.color,
@@ -490,7 +514,7 @@ OSDAnnotations.PresetManager = class {
         } else {
             //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
             return $.extend({fill: withPreset.color},
-                OSDAnnotations.PresetManager._commonProperty,
+                this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
                     color: withPreset.color,

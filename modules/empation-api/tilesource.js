@@ -34,10 +34,10 @@ OpenSeadragon.TiledImage.prototype._loadTile = function(tile, time ) {
 
             const canvas = document.createElement('canvas'),
                 context = canvas.getContext('2d'),
-                desiredWidth = image.width * dw,
-                desiredHeight = image.height * dh;
-            canvas.width = desiredWidth;
-            canvas.height = desiredHeight;
+                desiredWidth = Math.max(tile.sourceBounds.width, 1),
+                desiredHeight = Math.max(tile.sourceBounds.height, 1);
+            canvas.width = Math.max(desiredWidth, 1);
+            canvas.height = Math.max(desiredHeight, 1);
             context.drawImage(image, 0, 0, desiredWidth, desiredHeight, 0, 0, desiredWidth, desiredHeight);
             return wasContext ? context : canvas;
         }

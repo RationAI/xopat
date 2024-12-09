@@ -3,10 +3,22 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### 2.0.4
-**Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas
+### Unreleased 2.1.1
+**Features:** standalone wsi tile source module.
 
-**Bugfixes:** OIDC modile, magic wand annotation tool, stacktrace capture.
+### 2.1.0
+**Features:** new system for module/plugin building, improvements of annotation listing features,
+support for generic annotation visual style changes.
+
+**Maintenance:** removed outdated plugins.
+
+**Bugfixes:** plugins use also Cache API, annotation visuals updated also with history.
+Fix oidc login with events.
+
+### 2.0.4
+**Features:** vertical magnification slider, allow 2x artificial zoom, annotation areas.
+
+**Bugfixes:** OIDC module, magic wand annotation tool, stacktrace capture.
 
 ### 2.0.3
 Bugifxes on annotations. Update font + change default weight. More

@@ -39,10 +39,17 @@ class AnnotationsGUI extends XOpatPlugin {
 		//after html initialized, request preset assignment,
 
 		let opacityControl = $("#annotations-opacity");
-		opacityControl.val(this.context.getOpacity());
+		opacityControl.val(this.context.getAnnotationCommonVisualProperty('opacity'));
 		opacityControl.on("input", function () {
 			if (_this.context.disabledInteraction) return;
-			_this.context.setOpacity(Number.parseFloat($(this).val()));
+			_this.context.setAnnotationCommonVisualProperty('opacity', Number.parseFloat($(this).val()));
+		});
+
+		let borderControl = $("#annotations-border-width");
+		borderControl.val(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
+		borderControl.on("input", function () {
+			if (_this.context.disabledInteraction) return;
+			_this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat($(this).val()));
 		});
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 	}
@@ -98,8 +105,7 @@ class AnnotationsGUI extends XOpatPlugin {
 	 *****************************************************************************************************************/
 
 	setDrawOutline(drawOutline) {
-		this.setOption('drawOutline', drawOutline, true);
-		this.context.presets.setModeOutline(drawOutline);
+		this.context.setAnnotationCommonVisualProperty('modeOutline', drawOutline);
 	}
 
 	initHTML() {
@@ -116,13 +122,16 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
 			`
-<div class="d-flex flex-row mt-1">
-<div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
+<div class="d-flex flex-row mt-1 width-full">
+<div class=""><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
 				classes: "pl-2",
-				onchange: `${this.THIS}.setDrawOutline(this.checked == true)`,
-				default: this.context.presets.getModeOutline()})}
+				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
+				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
+</div>
+<div class="d-flex flex-row mt-1 width-full">
+<div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
@@ -198,6 +207,9 @@ ${modeOptions.join("")}</div>`, 'draw');
 <h4 class="f3-light header-sep">File Download / Upload</h4><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
 <div id="annotation-convertor-options"></div>
+<br>
+${UIComponents.Elements.checkBox({label: "Replace existing data on import",
+onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption("importReplace", true)})}
 <br><br>
 <div id="annotations-local-export-panel">
 	<button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn"></button>
@@ -408,6 +420,31 @@ ${modeOptions.join("")}</div>`, 'draw');
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
+		this.context.addHandler('history-select', e => {
+			if (e.originalEvent.isPrimary) return;
+			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
+			if (!annotationObject) return; //todo error message
+
+			const actions = [{
+				title: `Change annotation to:`
+			}];
+			let handler = this._clickAnnotationChangePreset.bind(this, annotationObject);
+			this.context.presets.foreach(preset => {
+				let category = preset.getMetaValue('category') || 'unknown';
+				let icon = preset.objectFactory.getIcon();
+				actions.push({
+					icon: icon,
+					iconCss: `color: ${preset.color};`,
+					title: category,
+					action: () => {
+						this._presetSelection = preset.presetID;
+						handler();
+					},
+				});
+			});
+
+			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+		});
 
 		// this.context.forEachLayerSorted(l => {
 		// 	  this.insertLayer(l);
@@ -424,7 +461,8 @@ ${modeOptions.join("")}</div>`, 'draw');
 		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
-				this.freeFormToolControls.bind(this);
+				this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =
+					this.freeFormToolControls.bind(this);
 
 		this.context.addHandler('free-form-tool-radius', function (e) {
 			$("#fft-size").val(e.radius);
@@ -587,9 +625,11 @@ ${modeOptions.join("")}</div>`, 'draw');
 		if (e.isEnabled) {
 			$("#annotations-tool-bar").removeClass('disabled');
 			$("#annotations-opacity").attr("disabled", false);
+			$("#annotations-border-width").attr("disabled", false);
 		} else {
 			$("#annotations-tool-bar").addClass('disabled');
 			$("#annotations-opacity").attr("disabled", true);
+			$("#annotations-border-width").attr("disabled", true);
 		}
 	}
 
@@ -788,7 +828,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		const _this = this;
 		this._ioArgs.format = _this.exportOptions.format;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			return await _this.context.import(data, this._ioArgs, false);
+			return await _this.context.import(data, this._ioArgs, this.getOption("importReplace", true));
 		}).then(r => {
 			Dialogs.show(r ? "Loaded." : "No data was imported! Are you sure you have a correct format set?", 1500,
 				r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
@@ -894,8 +934,11 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 
 		if (!pushed) html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
 		html.push('</div>');
-		$("#preset-list-inner-mp").html(html.join(''));;
-		this.context.history.refresh();
+		$("#preset-list-inner-mp").html(html.join(''));
+		if (this._fireBoardUpdate) {
+			this.context.history.refresh();
+		}
+		this._fireBoardUpdate = true;
 	}
 
 	/**
@@ -961,7 +1004,10 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 		return html.join("");
 	}
 
-	updatePresetWith(idOrBoolean, propName, value) {
+	updatePresetWith(idOrBoolean, propName, value, fireBoardUpdate=true) {
+		//optimization, update preset might trigger update of all annotations - do only if necessary (e.g. not a factory swap)
+		this._fireBoardUpdate = fireBoardUpdate;
+
 		//object factory can be changed, it does not change the semantic meaning
 		if (!this.enablePresetModify && propName !== 'objectFactory') return;
 		let preset = idOrBoolean;

@@ -14,3 +14,6 @@ Furthermore, the built index file respects the state of the source files, meanin
 the source build task ``grunt build``, it recognizes there are files that are minified versions
 of the source code and loads these instead. The recognition is simply based on the minified
 source code index file presence and does not recognize file updates.
+
+### Ports:
+the application is listening on port 9000 by default, But you can change the port by enviromental variable called "XOPAT_NODE_PORT"

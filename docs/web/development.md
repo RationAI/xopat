@@ -9,11 +9,25 @@ Run ``npm run s-node`` to run a node server. Follow instructions in the CLI - op
 some session & start debugging :) Changes in the viewer code (except for the server logics)
 is reflected with window reload.
 
-New features _shall_ be added to ``CHANGELOG.md``. There, always a new chapter `Unreleased` should be
+### Development Guidelines
+
+- Use conventional commit messages.
+
+- New features _shall_ be added to ``CHANGELOG.md``. There, always a new chapter `Unreleased` should be
 present, where current modification summary should be maintained.
 
+- Document public APIs using jsDoc, update documentation where necessary based on your changes,
+and provide a _tutorial_ if your feature is one of the main features or brings some core changes.
+
+- Do not pollute global space - expose ideally up to one function / class name and hide everything inside
+namespaces or anonymous functions, modules etc.
+
 ### Developing modules & plugins
-Documentation & init feature is coming!
+You can create new plugin or module simply by running ``grunt generate:plugin``
+or ``grunt generate:module``.
+
+Documentation on plugins/modules can be for now found in READMEs in plugins or modules folders,
+or by search utility in the documentation page. More tutorials are coming!
 
 ## Build
 
