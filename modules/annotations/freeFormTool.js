@@ -338,7 +338,7 @@ OSDAnnotations.FreeFormTool = class {
         const polygonUtils = OSDAnnotations.PolygonUtilities;
         let innerContours = [];
         let falseOuterContours = [];
-        let maxArea = -1;
+        let maxArea = 0;
         let outerContour = null;
 
         for (let i = 0; i < contours.length; i++) {
@@ -361,6 +361,7 @@ OSDAnnotations.FreeFormTool = class {
 
         if (!outerContour) return innerContours;
 
+        // deleting inner contours (holes) which are found inside deleted outer contours 
         if (falseOuterContours.length !== 0) {
             innerContours = innerContours.filter(inner => {
                 return falseOuterContours.some(outer => {

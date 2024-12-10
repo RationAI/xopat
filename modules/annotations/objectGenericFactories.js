@@ -1586,7 +1586,6 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "multipolygon", "path");
-        this._current = null;
         this._polygonFactory = new OSDAnnotations.Polygon(context, autoCreationStrategy, presetManager);
     }
 
@@ -1600,10 +1599,6 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
     getDescription(ofObject) {
         return `Multipolygon [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
-    }
-
-    getCurrentObject() {
-        return this._current;
     }
 
     title() {
@@ -1668,7 +1663,9 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         delete props.points;
 
         if (!parameters) parameters = ofObject.points;
-        return this.create(parameters, props);
+        props.points = parameters;
+        
+        return new fabric.Path(this._createPathFromPoints(parameters), props);
     }
 
     setPoints(object, points) {

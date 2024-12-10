@@ -2274,7 +2274,11 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 			if (holes) {
 				notFullyInHoles = holes.every(hole => {
-					if (polygonUtils.intersectAABB(polygonUtils.getBoundingBox(brushPolygon), polygonUtils.getBoundingBox(hole))) {
+
+					const bboxBrush = polygonUtils.getBoundingBox(brushPolygon);
+					const bboxHole = polygonUtils.getBoundingBox(hole);
+
+					if (polygonUtils.intersectAABB(bboxBrush, bboxHole)) {
 						const preciseIntersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, hole);
 						return !(JSON.stringify(preciseIntersection) === JSON.stringify(brushPolygon));
 					}
