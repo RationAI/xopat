@@ -1,7 +1,7 @@
 import van from "../vanjs.mjs";
 import { BaseComponent } from "./baseComponent.mjs";
 
-const { button, span } = van.tags
+const { button } = van.tags
 
 /**
  * @class Button
@@ -41,7 +41,7 @@ class Button extends BaseComponent {
 
     create() {
         return button(
-            { ...this.commonOptions, onclick: this.onClick },
+            { ...this.commonProperties, onclick: this.onClick },
             ...this.children)
     }
 }

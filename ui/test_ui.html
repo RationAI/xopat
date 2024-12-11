@@ -56,22 +56,26 @@
                 },
                 id: "b1",
             }, "Button ", counter, "times");
-            b1.attachTo(document.getElementById("button"));
+            b1.attachTo(document.getElementById("workspace"));
+            const { div } = van.tags
+
+            var c1 = new ui.Collapse({
+                summary: "hello there",
+                startOpen: true
+            }, div("hello there"), div("general kenobi"));
+            c1.attachTo(document.getElementById("workspace"));
         }
 
     </script>
 </head>
 
 <body class="latte dark:frappe h-full bg-base">
-    <div class="bg-base">
+    <div class="flex item-center">
         <button class="btn btn-primary btn-lg" onclick="changeTheme('dark')">Change to dark</button>
         <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Change to light</button>
         <button class="btn btn-accent" onclick="changeTheme('auto')">Change to auto</button>
     </div>
-    <div class="bg-base text-pink">
-        <p>this is my test text</p>
-    </div>
-    <div id="workspace" class="bg-white dark:bg-black">
-    </div>
-    <div id="button">
+    <div id="workspace"></div>
+
+
 </body>

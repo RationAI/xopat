@@ -65,9 +65,9 @@ class BaseComponent {
     }
 
     /**
-     * getter for commonOptions which are shared against all components
+     * getter for commonProperties which are shared against all components
      */
-    get commonOptions() {
+    get commonProperties() {
         return {
             id: this.id,
             class: this.classState
