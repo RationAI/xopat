@@ -1,6 +1,6 @@
-const {parse} = require("comment-json");
+const { parse } = require("comment-json");
 
-module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv) {
+module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, readEnv) {
 
     function parseBool(x) {
         const type = typeof x;
@@ -36,6 +36,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         PROJECT_ROOT: projectRoot,
         PROJECT_SOURCES: projectRoot + 'src/',
         EXTERNAL_SOURCES: projectRoot + 'src/external/',
+        UI_SOURCES: projectRoot + 'ui/',
         LIBS_ROOT: projectRoot + 'src/libs/',
         ASSETS_ROOT: projectRoot + 'src/assets/',
         LOCALES_ROOT: projectRoot + 'src/locales/',
@@ -82,28 +83,33 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
          * Printing Functions - dependencies from the config
          */
 
-        printJs: function(conf, path) {
+        printJs: function (conf, path) {
             if (isType(conf, "string")) return this.printJsSingle(conf, path);
             if (!isType(conf, "object")) return "";
             return Object.values(conf).map(files => this.printJsSingle(files, path)).join("");
         },
 
-        printJsSingle: function(files, path) {
+        printJsSingle: function (files, path) {
             const version = this.VERSION;
 
             if (Array.isArray(files)) {
-                return files.map(file => `    <script src="${path}${file}?v=${version}"></script>\n`).join("");
+                return files.map(file => file.endsWith(".mjs") ?
+                    `    <script type="module" src="${path}${file}?v=${version}"></script>\n` :
+                    `    <script src="${path}${file}?v=${version}"></script>\n`)
+                    .join("");
             }
-            return `    <script src="${path}${files}?v=${version}"></script>\n`;
+            return files.endsWith(".mjs") ?
+                `    <script type="module" src="${path}${files}?v=${version}"></script>\n` :
+                `    <script src="${path}${files}?v=${version}"></script>\n`;
         },
 
-        printCss: function(conf, path) {
+        printCss: function (conf, path) {
             if (isType(conf, "string")) return this.printCssSingle(conf, path);
             if (!isType(conf, "object")) return "";
             return Object.values(conf).map(files => this.printCssSingle(files, path)).join("");
         },
 
-        printCssSingle: function(files, path) {
+        printCssSingle: function (files, path) {
             const version = this.VERSION;
 
             if (Array.isArray(files)) {
@@ -112,7 +118,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return `    <link rel="stylesheet" href="${path}${files}?v=${version}">\n`;
         },
 
-        requireOpenseadragon: function() {
+        requireOpenseadragon: function () {
             const version = this.VERSION;
             return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
@@ -133,7 +139,11 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return this._requireNested("src", type, this.PROJECT_SOURCES);
         },
 
-        _require: function(namespace, path) {
+        requireUI: function () {
+            return this._require("ui", this.UI_SOURCES);
+        },
+
+        _require: function (namespace, path) {
             let result = "";
             if (this.CORE["css"][namespace] !== undefined) {
                 result += this.printCss(this.CORE["css"][namespace], path);
@@ -141,6 +151,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             if (this.CORE["js"][namespace] !== undefined) {
                 result += this.printJs(this.CORE["js"][namespace], path);
             }
+
             return result;
         },
 
@@ -164,7 +175,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
     function parseEnvConfig(data, err) {
         try {
-            let replacer = function(match, p1) {
+            let replacer = function (match, p1) {
                 let env = readEnv(p1);
                 //not specified returns false
                 //todo correct?

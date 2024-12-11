@@ -239,6 +239,11 @@
                 "layers.js",
                 "user.js"
             ]
+        },
+        "ui": {
+            "components": [
+                "index.mjs"
+            ]
         }
     },
     /**
