@@ -252,7 +252,8 @@
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css"
+            "fontawesome": "fontawesome/css/v6-all.css",
+            "tailwind": "tailwind.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

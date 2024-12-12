@@ -13,7 +13,6 @@
     <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
     <link rel="stylesheet" href="../src/assets/xopat.css">
     <link rel="stylesheet" href="../src/libs/tailwind.min.css">
-    <link rel="stylesheet" href="../src/libs/tailwind.min.css">
     <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
     <link rel="stylesheet" href="../src/external/enjoyhint.css">
     <link rel="stylesheet" href="../src/external/nouislider.css">
@@ -60,9 +59,9 @@
             const { div } = van.tags
 
             var c1 = new ui.Collapse({
-                summary: "hello there",
+                summary: "hello",
                 startOpen: true
-            }, div("hello there"), div("general kenobi"));
+            }, div("hello there1"), div("general kenobi"));
             c1.attachTo(document.getElementById("workspace"));
         }
 
@@ -71,11 +70,14 @@
 
 <body class="latte dark:frappe h-full bg-base">
     <div class="flex item-center">
-        <button class="btn btn-primary btn-lg" onclick="changeTheme('dark')">Change to dark</button>
+        <button class="btn btn-primary btn-lg" onclick="changeTheme('dark')"><i class="fa-solid fa-gear"></i></button>
         <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Change to light</button>
         <button class="btn btn-accent" onclick="changeTheme('auto')">Change to auto</button>
     </div>
     <div id="workspace"></div>
+    <script>
+            van.add(document.getElementById("workspace"), ui.Hello());
+    </script>
 
 
 </body>
