@@ -51,7 +51,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         //Create OIDC User Manager
         this.userManager = new oidc.UserManager(this.configuration);
         this.userManager.events.addUserLoaded((user) => {
-            return this.handleUserDataChanged(); // TODO USE USER REF
+            return this.handleUserDataChanged(false, user);
         });
 
         //Resolve once we know if we handle login
@@ -131,8 +131,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             this._signinProgress = false;
             return;
         } catch (error) {
-            debugger;
-
             this._signinProgress = false;
             USER_INTERFACE.Loading.text("Login not successful! Waiting...");
             if (typeof error === "string") error = {message: error};
@@ -249,9 +247,12 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
     /**
      * @param withLogout set false when just logged in
+     * @param oidcUser userManager.getUser() instance (fetched dynamically if not provided),
+     *    sometimes userManager.getUser() can be null if this method reacts on an event that logs in new user,
+     *    in that case it is safer to send the reference directly from the event
      * @return {Promise<boolean>}
      */
-    async handleUserDataChanged(withLogout = false) {
+    async handleUserDataChanged(withLogout = false, oidcUser = null) {
         const user = XOpatUser.instance();
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
@@ -261,7 +262,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return false;
         };
 
-        const oidcUser = await this.userManager.getUser();
+        oidcUser = oidcUser || await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
 
             if (withLogout) {
@@ -339,7 +340,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
         console.debug('Silent renew failed. Retrying with signin.');
         // Note: we must set popup in order to not to lose the current workspace
-        debugger;
         this.authMethod = 'popup';
         this._connectionRetries++;
         await this._trySignIn(true);
