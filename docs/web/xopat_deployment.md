@@ -66,7 +66,9 @@ is to be viewed in a what way, and possibly also other things (active plugins an
 
 ## Accessing WSIs
 The simples way of opening a slide is through URL parameters.
-1. Go to image server deployment and add "/cases" to the url: <http://localhost:8080/cases>
-2. Find slide id and add it to the xOpat deployment url: <http://localhost:9000/?slides=*SLIDE_ID*>
+
+1. Go to image server deployment and inspect "cases" to the url: <http://localhost:8080/v3/cases>
+2. Fetch desired case ID and use it to get its slides: <http://localhost:8080/v3/cases/slides?case_id=*CASE_ID>
+3. Find desired slide ID and add it to the xOpat deployment url: <http://localhost:9000/?slides=*SLIDE_ID*>
 
 Now you should have working xOpat instance. 
