@@ -178,12 +178,15 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         Dialogs.show(`${message} <a onclick="oidc.xOpatUser.instance().signIn(); Dialogs.hide();">${retryMessage}</a>`,
             this.retryTimeout, Dialogs.MSG_WARN, {onHide: resolved});
         await dialogWait;
-        if (this._manualCoroutine) await this._manualCoroutine;
-        if (!preventRecurse) {
-            return await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
+
+        if (!this._manualCoroutine) {
+            if (!preventRecurse) {
+                return await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
+            }
+            console.error("OIDC: No longer attempting to log in: user action needed.");
+        } else {
+            return this._manualCoroutine;
         }
-        console.error("OIDC: MAX retry exceeded");
-        return false;
     }
 
     async _promptLogin() {

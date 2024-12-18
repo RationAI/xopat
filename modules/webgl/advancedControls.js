@@ -608,6 +608,7 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
     }
 
     sample(value=undefined, valueGlType='void') {
+        // TODO: throwing & managing exception would be better, now we don't know what happened when this gets baked to GLSL
         if (!value || valueGlType !== 'float') {
             return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
         }
