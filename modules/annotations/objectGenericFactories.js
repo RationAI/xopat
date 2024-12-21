@@ -715,7 +715,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 };
 
-OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory { ///
+OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory {
 
     constructor(context, autoCreationStrategy, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
         super(context, autoCreationStrategy, presetManager, factoryID, type);
@@ -1337,7 +1337,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 };
 
-OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory { ///
+OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, autoCreationStrategy, presetManager) {
         super(context, autoCreationStrategy, presetManager, "polygon", "polygon", fabric.Polygon, true);
     }
@@ -1420,7 +1420,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Array} parameters array of objects
      * @param {Object} options see parent class
      */
-    create(parameters, options) { /////
+    create(parameters, options) {
         return this.configure(new fabric.Group(parameters), options);
     }
 
@@ -1429,13 +1429,11 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
         //todo use factory instead
         object.forEachObject(o => {
-            //o.fill = options.fill;
+            o.fill = options.fill;
             o.stroke = options.stroke;
             o.color = options.color;
             o.originalStrokeWidth = options.originalStrokeWidth;
         });
-
-        return object;
     }
 
     _eachChildAndFactory(ofObject, executor, method="map") {
@@ -1621,16 +1619,14 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         const path = this._createPathFromPoints(parameters);
         let multipolygon = new fabric.Path(path);
 
-        multipolygon = this.configure(multipolygon, options);
+        this.configure(multipolygon, options);
         multipolygon.points = parameters;
         return multipolygon;
     }
 
     configure(object, options) {
-        const instance = super.configure(object, options);
-        instance.fillRule = "evenodd";
-
-        return instance
+        super.configure(object, options);
+        object.fillRule = "evenodd";
     }
 
     _createPathFromPoints(multiPoints) {
