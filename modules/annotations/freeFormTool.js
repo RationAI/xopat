@@ -210,8 +210,15 @@ OSDAnnotations.FreeFormTool = class {
         }
 
         try {
-            this._updatePerformed = this._update(point) || this._updatePerformed;
-            this._context.canvas.renderAll();
+            const cursorPolygon = this.getCircleShape(point);
+            const polygon = this.polygon.factoryID === "multipolygon" ? this.polygon.points[0] : this.polygon.points;
+
+            const intersect = OSDAnnotations.checkPolygonIntersect(cursorPolygon, polygon);
+            if (intersect.length !== 0) {
+                this._updatePerformed = this._update(point) || this._updatePerformed;
+                this._context.canvas.renderAll();
+            }
+
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
         }
