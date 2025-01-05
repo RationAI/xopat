@@ -703,6 +703,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
 	}
 
+	setCloseEdgeMouseNavigation(enable) {
+		window.removeEventListener("mousemove", this._edgesMouseNavigation);
+		if (enable) {
+			window.addEventListener("mousemove", this._edgesMouseNavigation);
+		}
+	}
+
 	/************************ Layers *******************************/
 
 	/**
@@ -1045,6 +1052,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	isAnnotation(o) {
 		return o.hasOwnProperty("incrementId") && o.hasOwnProperty("sessionID");
+	}
+
+	/**
+	 * Find annotations by a predicate
+	 * @param callback
+	 * @return {*}
+	 */
+	find(callback) {
+		return this.canvas._objects.find(callback);
+	}
+
+	filter(callback) {
+		return this.canvas._objects.filter(callback);
 	}
 
 	/**
@@ -1540,48 +1560,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				_this.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
 			} else {
 				_this.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
-
 			}
 		});
-
-		// Cached event that keeps moving the viewport is not useful since it keeps moving when user exist the window
-		// let _lastCalled = 0;
-		// let _cachedEvent = null;
-		const mouseNavigation = e => {
-			// const now = Date.now();
-			if (this.mode !== this.Modes.AUTO /*|| now - _lastCalled > 30*/) {
-				//_cachedEvent = e || _cachedEvent;  // keep reference to the most recent event
-
-				const edgeThreshold = 20;
-				// const mouseX = _cachedEvent.clientX;
-				// const mouseY = _cachedEvent.clientY;
-				const mouseX = e.clientX;
-				const mouseY = e.clientY;
-
-				const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
-				const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
-				const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
-				const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
-
-				if (
-					(nearTopEdge < edgeThreshold && nearTopEdge > 0) ||
-					(nearRightEdge < edgeThreshold && nearRightEdge > 0) ||
-					(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
-					(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
-				) {
-					const center = VIEWER.viewport.getCenter(true);
-					//const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(_cachedEvent.x, _cachedEvent.y));
-					const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
-					let direction = current.minus(center);
-					direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
-					VIEWER.viewport.panTo(direction.times(0.004 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
-					//_lastCalled = now;
-					//setTimeout(mouseNavigation, 35);
-				}
-			}
-		};
-
-		window.addEventListener("mousemove", mouseNavigation);
 
 		this.canvas.on('mouse:wheel', function (o) {
 			if (_this.disabledInteraction) return;
@@ -1618,6 +1598,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		// Wheel while viewer runs not enabled because this already performs zoom.
 		// VIEWER.addHandler("canvas-scroll", function (e) { ... });
+
+		// Rewrite with bind this arg to use in events
+		this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
 	}
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
@@ -1797,6 +1780,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw e;
 		}); //todo rethrow? rewrite as async call with try finally
 	}
+
+	_edgesMouseNavigation(e) {
+		if (this.mode !== this.Modes.AUTO) {
+
+			const edgeThreshold = 20;
+			const mouseX = e.clientX;
+			const mouseY = e.clientY;
+
+			const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
+			const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
+			const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
+			const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
+
+			if (
+				(nearTopEdge < edgeThreshold && nearTopEdge > 0) ||
+				(nearRightEdge < edgeThreshold && nearRightEdge > 0) ||
+				(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
+				(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
+			) {
+				const center = VIEWER.viewport.getCenter(true);
+				const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
+				let direction = current.minus(center);
+				direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
+				VIEWER.viewport.panTo(direction.times(0.004 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
+			}
+		}
+	};
 
 	// Copied out of OpenSeadragon private code scope to allow manual scroll navigation
 	_fireMouseWheelNavigation(event) {

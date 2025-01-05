@@ -607,6 +607,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.getHandler = events.getHandler.bind(events);
             this.numberOfHandlers = events.numberOfHandlers.bind(events);
             this.raiseEvent = events.raiseEvent.bind(events);
+            this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
             this.removeAllHandlers = events.removeAllHandlers.bind(events);
             this.removeHandler = events.removeHandler.bind(events);
             this.__errorBindingOnViewer = errorBindingOnViewer;
@@ -673,6 +674,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Note: noop if registerAsEventSource() not called.
          */
         raiseEvent () {}
+        /**
+         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseAwaitEvent.
+         * Awaits async handlers.
+         * Note: noop if registerAsEventSource() not called.
+         */
+        raiseAwaitEvent() {}
         /**
          * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
          * Note: noop if registerAsEventSource() not called.

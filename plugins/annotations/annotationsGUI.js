@@ -3,8 +3,6 @@ class AnnotationsGUI extends XOpatPlugin {
 	//todo test with multiple swap bgimages
 	constructor(id) {
 		super(id);
-
-		this._server = this.getStaticMeta("server");
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
 		this.registerAsEventSource();
@@ -86,6 +84,9 @@ class AnnotationsGUI extends XOpatPlugin {
 		}
 
 		this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
+		if (this.getOption("edgeCursorNavigate", true)) {
+			this.context.setCloseEdgeMouseNavigation(true);
+		}
 	}
 
 	setupActiveTissue(bgImageConfigObject) {
@@ -104,8 +105,13 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	 *****************************************************************************************************************/
 
-	setDrawOutline(drawOutline) {
-		this.context.setAnnotationCommonVisualProperty('modeOutline', drawOutline);
+	setDrawOutline(enable) {
+		this.context.setAnnotationCommonVisualProperty('modeOutline', enable);
+	}
+
+	setEdgeCursorNavigate(enable) {
+		this.setOption("edgeCursorNavigate", enable);
+		this.context.setCloseEdgeMouseNavigation(enable);
 	}
 
 	initHTML() {
@@ -123,7 +129,7 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 // <div id="annotations-layers"></div>`,
 			`
 <div class="d-flex flex-row mt-1 width-full">
-<div class=""><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
+<div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
 				classes: "pl-2",
@@ -131,7 +137,13 @@ ${UIComponents.Elements.checkBox({
 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
 </div>
 <div class="d-flex flex-row mt-1 width-full">
-<div>Opacity <input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
+<div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1">
+${UIComponents.Elements.checkBox({
+				label: 'Enable edge navigation',
+				classes: "pl-2",
+				onchange: `${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
+				default: this.getOption("edgeCursorNavigate", true)})}
+</div>
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
@@ -839,16 +851,26 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	}
 
 	/**
+	 * Export annotations for one-time state save
+	 * @param preferredFormat
+	 * @param withObjects
+	 * @param withPresets
+	 * @return {Promise<*>}
+	 */
+	async getExportData(preferredFormat = null, withObjects=true, withPresets=true) {
+		this._ioArgs.format = preferredFormat || this._defaultFormat;
+		return this.context.export(this._ioArgs, withObjects, withPresets);
+	}
+
+	/**
 	 * Export annotations and download them
 	 */
 	exportToFile(withObjects=true, withPresets=true) {
-		const toFormat = this.exportOptions.format || this._defaultFormat;
-		this._ioArgs.format = toFormat;
-
+		const toFormat = this.exportOptions.format;
 		const name = APPLICATION_CONTEXT.referencedName(true)
 			+ "-" + UTILITIES.todayISOReversed() + "-"
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
-		this.context.export(this._ioArgs, withObjects, withPresets).then(result => {
+		this.getExportData(toFormat, withObjects, withPresets).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
@@ -1164,13 +1186,18 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 		return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}<br>`;
 	}
 
-	saveDefault() {
-		if (!this._server) {
+	async saveDefault() {
+		this.needsSave = false;
+		await this.raiseAwaitEvent('save-annotations', {
+			getData: this.getExportData.bind(this),
+			setNeedsDownload: (needsDownload) => {
+				this.needsSave = needsDownload;
+			}
+		})
+
+		if (this.needsSave) {
 			this.exportToFile();
-			return;
 		}
-		Dialogs.show("Server-side storage is in the process of implementation. Please, save the data locally for now.");
-		//todo server upload!!!
 	}
 }
 

@@ -159,15 +159,21 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
 
         if (!session) {
             // Try to restore past state
-            const strData = window.localStorage.getItem("xoSessionCache");
-            if (strData) {
-                const data = JSON.parse(strData);
+            let strData = window.localStorage.getItem("xoSessionCache");
+            if (strData && strData !== "undefined") {
+                let data = JSON.parse(strData);
                 // consider the session alive for at most 30 minutes
                 const viz = data.visualization;
                 if (viz && viz.__age && Date.now() - viz.__age < 1800e3) {
                     postData = data; // override post
                     delete viz.__age;
                     session = _parse(viz);
+                    session.__fromLocalStorage = true;
+                } else {
+                    strData = window.sessionStorage.getItem("xoSessionCache");
+                    data = strData && strData !== "undefined" && JSON.parse(strData);
+                    postData = data;
+                    session = data.visualization && _parse(data.visualization);
                     session.__fromLocalStorage = true;
                 }
                 //window.localStorage.removeItem("xoSessionCache");
@@ -177,7 +183,12 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             const data = postData || {};
             session.__age = Date.now();
             data.visualization = session;
-            window.localStorage.setItem("xoSessionCache", JSON.stringify(data));
+
+            const sessionData = JSON.stringify(data);
+            // Local Storage is meant for 'last session', available accross windows, session storage is to prevent
+            // losing context at any cost
+            window.localStorage.setItem("xoSessionCache", sessionData);
+            window.sessionStorage.setItem("xoSessionCache", sessionData);
         }
 
         // Todo this will make the viewer to not show any error - handled by the default screen... any better solution?
