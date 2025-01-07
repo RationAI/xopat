@@ -46,6 +46,9 @@ addPlugin('empaia', class extends XOpatPlugin {
                         const toUpload = convertor.encodeSingleObject(annotation, empaiaTiledImage.source);
                         const annot = await this.scopeAPI.annotations.create(toUpload);
                         annotation.id = annot.id;
+
+                        const preset = convertor.getPreset(annotation.id, annotation.presetID);
+                        await this.scopeAPI.annotations.addClass(preset);
                     }
 
                     e.setNeedsDownload(false);
@@ -80,6 +83,8 @@ addPlugin('empaia', class extends XOpatPlugin {
                     const annotation = convertor.encodeSingleObject(ev.object, empaiaTiledImage.source);
                     const annot = await this.scopeAPI.annotations.create(annotation);
                     ev.object.id = annot.id;
+                    const preset = convertor.getPreset(ev.object.id, ev.object.presetID);
+                    await this.scopeAPI.annotations.addClass(preset);
                 } catch (e) {
                     console.error(e);
                 }
@@ -110,7 +115,10 @@ addPlugin('empaia', class extends XOpatPlugin {
                         const empaiaTiledImage = VIEWER.scalebar.getReferencedTiledImage();
                         const annotation = convertor.encodeSingleObject(ev.next, empaiaTiledImage.source);
                         const annot = await this.scopeAPI.annotations.create(annotation);
+
                         ev.next.id = annot.id;
+                        const preset = convertor.getPreset(ev.next.id, ev.next.presetID);
+                        await this.scopeAPI.annotations.addClass(preset);
                     }
                 } catch (e) {
                     console.error(e);

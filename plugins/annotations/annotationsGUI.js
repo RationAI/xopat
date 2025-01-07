@@ -137,13 +137,12 @@ ${UIComponents.Elements.checkBox({
 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
 </div>
 <div class="d-flex flex-row mt-1 width-full">
-<div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1">
+<div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
 ${UIComponents.Elements.checkBox({
 				label: 'Enable edge navigation',
 				classes: "pl-2",
 				onchange: `${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
 				default: this.getOption("edgeCursorNavigate", true)})}
-</div>
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
