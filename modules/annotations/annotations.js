@@ -898,7 +898,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean} defaultIfUnknown if false, empty string is returned in case no property was found
 	 * @return {string|*} annotation description
 	 */
-	getAnnotationDescription(annotation, desiredKey="category", defaultIfUnknown=true) {
+	getAnnotationDescription(annotation, desiredKey="category", defaultIfUnknown=true, withCoordinates=true) {
 		let preset = this.presets.get(annotation.presetID);
 		if (preset) {
 			for (let key in preset.meta) {
@@ -906,11 +906,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				let metaElement = preset.meta[key];
 				if (key === desiredKey) {
 					return overridingValue || metaElement.value ||
-						(defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "");
+						(defaultIfUnknown ? this.getDefaultAnnotationName(annotation, withCoordinates) : "");
 				}
 			}
 		}
-		return defaultIfUnknown ? this.getDefaultAnnotationName(annotation) : "";
+		return defaultIfUnknown ? this.getDefaultAnnotationName(annotation, withCoordinates) : "";
 	}
 
 	/**
@@ -1731,15 +1731,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	_loadObjects(input, clear, reviver, inheritSession) {
-		const originalToObject = fabric.Object.prototype.toObject;
-		const inclusionProps = this._exportedPropertiesGlobal();
-
-		//we ignore incoming props as we later reset the override
-		fabric.Object.prototype.toObject = function (_) {
-			return originalToObject.call(this, inclusionProps);
-		}
-		const resetToObjectCall = () => fabric.Object.prototype.toObject = originalToObject;
-
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		return new Promise((resolve, reject) => {
@@ -1775,10 +1766,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					return resolve();
 				});
 			}, reviver);
-		}).then(resetToObjectCall).catch(e => {
-			resetToObjectCall();
-			throw e;
-		}); //todo rethrow? rewrite as async call with try finally
+		});
 	}
 
 	_edgesMouseNavigation(e) {

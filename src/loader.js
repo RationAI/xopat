@@ -867,7 +867,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
 
             //options are stored only for plugins, so we store them at the lowest level
-            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            let value = cache ? this.cache.get(key, null) : null;
             if (value === null) {
                 // read default value from static context if exists
                 if (defaultValue === undefined && key !== "instance") {
@@ -885,6 +885,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Ability to cache a value locally into the browser,
          * the value can be retrieved using this.getOption(...)
+         * todo rename to setCacheOption
          * @param key
          * @param value
          */
