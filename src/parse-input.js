@@ -161,7 +161,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             // Try to restore past state
             let strData = window.localStorage.getItem("xoSessionCache");
             if (strData && strData !== "undefined") {
-                let data = JSON.parse(strData);
+                const data = JSON.parse(strData);
                 // consider the session alive for at most 30 minutes
                 const viz = data.visualization;
                 if (viz && viz.__age && Date.now() - viz.__age < 1800e3) {
@@ -169,14 +169,14 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     delete viz.__age;
                     session = _parse(viz);
                     session.__fromLocalStorage = true;
-                } else {
-                    strData = window.sessionStorage.getItem("xoSessionCache");
-                    data = strData && strData !== "undefined" && JSON.parse(strData);
-                    postData = data;
-                    session = data.visualization && _parse(data.visualization);
-                    session.__fromLocalStorage = true;
                 }
-                //window.localStorage.removeItem("xoSessionCache");
+                window.localStorage.removeItem("xoSessionCache");
+            } else {
+                strData = window.sessionStorage.getItem("xoSessionCache");
+                const data = strData && strData !== "undefined" && JSON.parse(strData);
+                postData = data;
+                session = data.visualization && _parse(data.visualization);
+                session.__fromLocalStorage = true;
             }
         } else if (!session.error) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)
