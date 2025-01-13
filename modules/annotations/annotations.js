@@ -1376,6 +1376,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
 		/**
 		 * Polygon factory, the only factory required within the module
@@ -2227,8 +2228,9 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
 			if (!factory.isEditable()) return false;
-			const result = factory.isImplicit() ?
-				factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : o.points;
+			const result = factory.isImplicit() 
+    			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) 
+    			: o.points;
 			if (!result) return false;
 			return {object: o, asPolygon: result};
 		}
@@ -2248,19 +2250,47 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			height: ffTool.radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
 
+		const polygonUtils = OSDAnnotations.PolygonUtilities;
 		const active = this.context.canvas.getActiveObject();
-		let max = 0,
-			result = candidates; // by default return the whole list if intersections are <= 0
-		for (let i = 0; i < candidates.length; i++) {
-			let candidate = candidates[i];
-			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, candidate.asPolygon);
-			if (intersection.length) {
-				if (active) {  // prefer first encountered object if it is also the selection
-					return candidate;
+		let max = 0, result = candidates; // by default return the whole list if intersections are <= 0
+
+		for (let candidate of candidates) {
+			let outerPolygon;
+			let holes = null;
+			let notFullyInHoles = false;
+			let isMultipolygon = candidate.object.factoryID === "multipolygon";
+
+			if (isMultipolygon) {
+				outerPolygon = candidate.asPolygon[0];
+				holes = candidate.asPolygon.slice(1);
+			} else {
+				outerPolygon = candidate.asPolygon;
+			}
+
+			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, outerPolygon);
+			if (!intersection.length) continue;
+
+			if (holes) {
+				notFullyInHoles = holes.every(hole => {
+
+					const bboxBrush = polygonUtils.getBoundingBox(brushPolygon);
+					const bboxHole = polygonUtils.getBoundingBox(hole);
+
+					if (polygonUtils.intersectAABB(bboxBrush, bboxHole)) {
+						const preciseIntersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, hole);
+						return !(JSON.stringify(preciseIntersection) === JSON.stringify(brushPolygon));
+					}
+					return true;
+				});
+			}
+
+			if (!isMultipolygon || notFullyInHoles) {
+				if (active) {  // prefer first encounhtered object if it is also the selection
+					return candidate.object;
 				}
 				if (intersection.length > max) {
 					max = intersection.length;
-					result = candidate;
+					result = candidate.object;
 				}
 			}
 		}
@@ -2321,6 +2351,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 		}
 		let created = false;
 		const ffTool = this.context.freeFormTool;
+		ffTool.zoom = this.context.canvas.getZoom();
 		ffTool.recomputeRadius();
 		const newPolygonPoints = ffTool.getCircleShape(point);
 		let targetIntersection = this.fftFindTarget(point, ffTool, newPolygonPoints, 0);
@@ -2388,6 +2419,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		}
 
 		const ffTool = this.context.freeFormTool;
+		ffTool.zoom = this.context.canvas.getZoom();
 		ffTool.recomputeRadius();
 		const newPolygonPoints = ffTool.getCircleShape(point);
 		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
@@ -2571,6 +2603,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 
 		const ffTool = this.context.freeFormTool,
 			newPolygonPoints = ffTool.getCircleShape(point);
+		ffTool.zoom = this.context.canvas.getZoom();
 		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
 
 		if (this.fftFoundIntersection(candidates)) {
