@@ -233,21 +233,25 @@
 
                         this.magnificationContainer.style.borderRadius = "7px";
 
-                        const steps = Math.round(Math.sqrt(this.magnification)) - 1;
+                        let steps = 0;
+                        let testMag = this.magnification;
+                        while (testMag > 4) {
+                            testMag = Math.round(testMag / 2);
+                            steps++;
+                        }
+
                         const minValue = 0;
                         const sliderContainer = document.createElement("span");
 
                         const range = {max: [this.magnification], min: [1]}, values = [this.magnification];
-                        let mag = this.magnification, stepPerc = Math.round(89 / (steps-1)), stepPercIter = 100 - stepPerc;
-                        while (mag > 5) {
-                            mag = Math.round(mag / 2);
+                        let mag = this.magnification, stepPerc = Math.round(100 / (steps+1)), stepPercIter = 100;
+                        while (mag > 4) {
+                            mag = Math.floor(mag / 2);
+                            stepPercIter -= stepPerc;
                             range[`${stepPercIter}%`] = [mag];
                             values.push(mag);
-                            stepPercIter -= stepPerc;
                         }
-                        //few last step manually, make 2 more distant from home
-                        range[`${stepPercIter+stepPerc*0.3}%`] = [2];
-                        values.push(2, 1);
+                        values.push(1);
                         values.reverse();
 
                         const updateZoom = (mag) => {

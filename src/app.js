@@ -570,7 +570,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const magMicrons = microns || (micronsX + micronsY) / 2;
 
         // todo try read metadata about magnification and warn if we try to guess
-        const values = [70, 2, 15, 5, 7, 10, 0.5, 20, 0.25, 40];
+        const values = [2.4, 2, 1.2, 4, 0.6, 10, 0.3, 20, 0.15, 40];
         let index = 0, best = Infinity, mag;
         if (magMicrons) {
             while (index < values.length) {
@@ -1241,8 +1241,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // Make sure the reference is really there
             POST_DATA.visualization = CONFIG;
 
+            // Clean up instance references before serialization
+            const plugins = {...PLUGINS};
+            const modules = {...MODULES};
+            for (let id in plugins) delete plugins[id].instance;
+            for (let id in modules) delete modules[id].instance;
             sessionStorage.setItem('__xopat_session__', JSON.stringify({
-                PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+                PLUGINS: plugins, MODULES: modules,
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
             }));
 
         } catch (e) {

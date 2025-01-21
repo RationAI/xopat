@@ -101,7 +101,8 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 factoryID: "polygon",
                 type: "polygon",
                 npp_created: object.npp_created,
-                points: [object.head, object.tail]
+                points: [object.head, object.tail],
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
             "rectangle": (object) => ({
                 id: object.id,
@@ -112,6 +113,7 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 npp_created: object.npp_created,
                 left: object.upper_left[0],
                 top: object.upper_left[1],
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
             "circle": (object) => ({
                 id: object.id,
@@ -122,20 +124,23 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 npp_created: object.npp_created,
                 left: object.center[0] - object.rx,
                 top: object.center[1] - object.ry,
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
             "polygon": (object) => ({
                 id: object.id,
                 factoryID: "polygon",
                 type: "polygon",
                 npp_created: object.npp_created,
-                points: object.coordinates.map(p => ({x: p[0], y: p[1]}))
+                points: object.coordinates.map(p => ({x: p[0], y: p[1]})),
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
             "line": (object) => ({
                 id: object.id,
                 factoryID: "polygon",
                 type: "polygon",
                 npp_created: object.npp_created,
-                points: object.coordinates.map(p => ({x: p[0], y: p[1]}))
+                points: object.coordinates.map(p => ({x: p[0], y: p[1]})),
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
             "point": (object) => ({
                 id: object.id,
@@ -143,9 +148,22 @@ EmpationAPI.integrateWithAnnotations = function (annotationsModule) {
                 type: "ellipse",
                 npp_created: object.npp_created,
                 left: object.coordinates[0],
-                top: object.coordinates[1]
+                top: object.coordinates[1],
+                presetID: object.classes && object.classes.length && object.classes[0].value
             }),
         }
+
+        getPreset(annotId, presetID) {
+            return {
+                creator_id: this.empaia.defaultScope.id,
+                creator_type: "scope",
+                reference_id: annotId,
+                reference_type: "annotation",
+                type: "class",
+                value: presetID
+            }
+        }
+
 
         _encodeAsEmpaiaObject(object, preset, tileSource, props) {
             //todo encode type and try to recover? ruler, text...
