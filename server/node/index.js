@@ -40,7 +40,7 @@ const initViewerCoreAndPlugins = (req, res) => {
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key]);
 
-    if (throwFatalErrorIf(res, core.exception, "Failed to parse the CORE initialization!")) return null;
+    if (throwFatalErrorIf(res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
     core.CORE.serverStatus.name = "node";
     core.CORE.serverStatus.supportsPost = true;
 
@@ -50,7 +50,7 @@ const initViewerCoreAndPlugins = (req, res) => {
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
         { t: function () { return "Unknown Error (e-translate)."; } });
-    if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!")) return null;
+    if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
     return core;
 }
 
@@ -144,7 +144,6 @@ async function responseViewer(req, res) {
     const core = initViewerCoreAndPlugins(req, res);
     if (!core) return;
 
-
     const replacer = function(match, p1) {
         try {
             switch (p1) {
@@ -208,7 +207,11 @@ async function responseDeveloperSetup(req, res) {
     const core = initViewerCoreAndPlugins(req, res);
     if (!core) return;
 
-    core.MODULES["webgl"].loaded = true;
+    if (core.MODULES["webgl"]) {
+        core.MODULES["webgl"].loaded = true;
+    } else {
+        console.warn("Could not find webgl module: visualizations will not work!");
+    }
     const replacer = function (match, p1) {
         try {
             switch (p1) {
@@ -281,7 +284,7 @@ server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
         console.log("Using env/env.json..");
     } else if (ENV) {
         if (fs.existsSync(ENV)) console.log("Using static ENV from ", ENV);
-        else console.log("Using static ENV directly from the variable data: ", ENV.substring(0, 31) + "...");
+        else console.log("Using configuration from XOPAT_ENV: ", ENV.substring(0, 31) + "...");
     } else {
         console.log("Using default ENV (no overrides).");
     }
