@@ -1,5 +1,6 @@
 const {parse} = require("comment-json")
 const {loadModules} = require("./modules");
+const {safeScanDir} = require("./utils");
 
 module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n) {
 
@@ -19,7 +20,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
         MODULES = core.MODULES,
         ENV = core.ENV;
 
-    let pluginPaths = scanDir(core.ABS_PLUGINS);
+    let pluginPaths = safeScanDir(core.ABS_PLUGINS);
     for (let dir of pluginPaths) {
         if (dir == "." || dir == "..") continue;
 
