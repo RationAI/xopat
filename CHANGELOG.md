@@ -3,7 +3,7 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### Unreleased 2.1.1
+### 2.1.1
 **Features:** standalone wsi tile source module. Edge navigation optional.
 
 **Bugfixes:** OIDC module popup method - await login.

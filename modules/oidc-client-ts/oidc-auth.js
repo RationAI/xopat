@@ -9,7 +9,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this._connectionRetries = 0;
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
         this.extraSigninRequestArgs = this.getStaticMeta('extraSigninRequestArgs', undefined);
-        this.useCookiesStore = this.getStaticMeta('useCookiesStore', true);
+        this.usesStore = this.getStaticMeta('usesStore', true);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'redirect');
         this.cookieRefreshTokenName = this.getStaticMeta('cookieRefreshTokenName');
@@ -19,6 +19,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return;
         }
 
+        // Overwrite some properties we don't want to allow for modification
         this.configuration.redirect_uri = this.configuration.redirect_uri
             || window.location.href.split('#')[0].split('?')[0];
 
@@ -26,6 +27,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             || APPLICATION_CONTEXT.env.gateway || this.configuration.redirect_uri;
 
         this.configuration.automaticSilentRenew = false;
+        this.configuration.storeState = this.configuration.userStore = undefined;
 
         VIEWER.addHandler('before-first-open', this.init.bind(this),
             null, this.getStaticMeta('eventBeforeOpenPriority', 0));
@@ -40,12 +42,23 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return;
         }
 
-        // Make sure these are not set by the config - it could mess up
-        this.configuration.userStore = this.configuration.stateStore = undefined;
-        if (this.useCookiesStore) {
-            this.configuration.userStore = new oidc.WebStorageStateStore({
-                store: APPLICATION_CONTEXT.AppCookies.getStore()
-            });
+        // NOTE! Cookies storage limits size to 4096B, which is easily exceeded here!
+        let store = false;
+        switch (this.usesStore) {
+            case "cookie":
+                store = APPLICATION_CONTEXT.AppCookies.getStore();
+                break;
+            case "cache":
+                store = APPLICATION_CONTEXT.AppCache.getStore();
+                break;
+            case "default":
+            default:
+                //default == "session", undefined
+                break;
+        }
+        if (store) {
+            this.configuration.userStore = new oidc.WebStorageStateStore({store: store});
+            this.configuration.stateStore = new oidc.WebStorageStateStore({store: store});
         }
 
         //Create OIDC User Manager
