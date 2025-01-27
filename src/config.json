@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.1.1-dev",
+    "version": "2.1.1",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -204,7 +204,7 @@
             ],
             "common": [
                 "enjoyhint.js",
-                //"cookie-storage.js",
+                "cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",

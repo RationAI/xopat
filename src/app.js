@@ -120,14 +120,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
     if (!XOpatStorage.Cookies.registered()) {
-        // const storage = new CookieStorage({
-        //     path: ENV.client.js_cookie_path,
-        //     domain: ENV.client.js_cookie_domain || ENV.client.domain,
-        //     expires: new Date(new Date() + ENV.client.js_cookie_expire * 86400000),
-        //     secure:  typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : true,
-        //     sameSite: ENV.client.js_cookie_same_site,
-        // });
-        // XOpatStorage.Cookies.registerInstance(storage);
+        const storage = new CookieStorage({
+            path: ENV.client.js_cookie_path,
+            domain: ENV.client.js_cookie_domain || ENV.client.domain,
+            expires: new Date(new Date() + ENV.client.js_cookie_expire * 86400000),
+            secure:  typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : true,
+            sameSite: ENV.client.js_cookie_same_site,
+        });
+        XOpatStorage.Cookies.registerInstance(storage);
 
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
