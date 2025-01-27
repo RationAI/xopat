@@ -48,10 +48,10 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             case "cookie":
                 store = APPLICATION_CONTEXT.AppCookies.getStore();
                 break;
-            case "local":
+            case "cache":
                 store = APPLICATION_CONTEXT.AppCache.getStore();
                 break;
-            case "session":
+            case "default":
             default:
                 //default == "session", undefined
                 break;
