@@ -46,6 +46,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             this.configuration.userStore = new oidc.WebStorageStateStore({
                 store: APPLICATION_CONTEXT.AppCookies.getStore()
             });
+            this.configuration.stateStore = new oidc.WebStorageStateStore({
+                store: APPLICATION_CONTEXT.AppCookies.getStore()
+            });
         }
 
         //Create OIDC User Manager

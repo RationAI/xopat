@@ -204,7 +204,7 @@
             ],
             "common": [
                 "enjoyhint.js",
-                "cookie-storage.js",
+//                "cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
