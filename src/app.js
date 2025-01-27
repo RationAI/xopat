@@ -156,13 +156,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             });
         } else {
             console.warn("Cookie.js seems to be blocked.");
+            console.log("Cookies are implemented using local storage. This might be a security vulnerability!");
+            XOpatStorage.Cookies.registerInstance(localStorage);
         }
         Cookies.remove("test");
     }
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE CACHE STORAGE
     if (!XOpatStorage.Cache.registered()) {
-        console.warn("Cookies are implemented using local storage! This might be a security vulnerability!");
         XOpatStorage.Cache.registerInstance(localStorage);
     }
 
