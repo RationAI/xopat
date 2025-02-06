@@ -281,6 +281,15 @@ function initXopatScripts() {
     }
 
     /**
+     * Sleep in miliseconds
+     * @param {number} ms
+     * @return {Promise<void>}
+     */
+    window.UTILITIES.sleep = async function(ms=undefined) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
      * Set the App theme
      * @param {?string} theme primer_css theme
      */
