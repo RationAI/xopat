@@ -107,7 +107,7 @@ OpenSeadragon.Tools = class {
 
     /**
      * Create viewport screenshot
-     * @param toImage true if <img> element should be created, otherwise Context2D
+     * @param {boolean} toImage true if <img> element should be created, otherwise Context2D
      * @param {object} size the output size
      * @param {number} size.width
      * @param {number} size.height
@@ -115,10 +115,10 @@ OpenSeadragon.Tools = class {
      *   focus area (screen coordinates), by default thw whole viewport
      * @return {CanvasRenderingContext2D|Image}
      */
-    screenshot(toImage, size, focus=undefined) {
+    screenshot(toImage, size = {}, focus=undefined) {
         return this.constructor.screenshot(this.viewer, toImage, size, focus);
     }
-    static screenshot(context, toImage, size, focus) {
+    static screenshot(context, toImage, size = {}, focus=undefined) {
         if (context.drawer.canvas.width < 1) return undefined;
         let drawCtx = context.drawer.context;
         if (!drawCtx) throw "OpenSeadragon must render with canvasses!";

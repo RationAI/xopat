@@ -12,7 +12,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.usesStore = this.getStaticMeta('usesStore', true);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'redirect');
-        this.cookieRefreshTokenName = this.getStaticMeta('cookieRefreshTokenName');
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
@@ -336,6 +335,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
         this.userManager.stopSilentRenew();
     }
+
     enableEvents() {
         // Preventive removal & set
         this.disableEvents();
