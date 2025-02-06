@@ -42,5 +42,5 @@
     "extraSigninRequestArgs": {
     },
     // endpoint to read user info from (if the token e.g. does not cover username)
-    "oidcUserInfo": null,
+    "oidcUserInfo": null
 }
