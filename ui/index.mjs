@@ -1,10 +1,10 @@
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 
-import { PrimaryButton } from "./components/buttons.mjs"; // TODO
+import { Button } from "./components/buttons.mjs"; // TODO
 import { Collapse } from "./components/collapse.mjs"; // TODO
 import { FAIcon } from "./components/fa-icon.mjs";
-const UI = { PrimaryButton, Collapse, FAIcon };
+const UI = { Button, Collapse, FAIcon };
 globalThis.UI = UI;
 export default UI;
 //console.log(globalThis);
@@ -27,14 +27,14 @@ globalThis.vanRegister = function (id, component) {
 var settingsIcon = new FAIcon({
     name: "fa-gear"
 });
-var settings = new PrimaryButton({
+var settings = new Button({
     onClick: () => {
         USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);
     },
     id: "settingsButton",
 }, settingsIcon);
 
-settings.set(PrimaryButton.SIZE.SMALL)
+settings.set(Button.SIZE.SMALL)
 
 vanRegister("settings", settings);
 
@@ -42,25 +42,25 @@ var tutorialIcon = new FAIcon({
     name: "fa-graduation-cap"
 });
 
-var tutorial = new PrimaryButton({
+var tutorial = new Button({
     onClick: () => {
         USER_INTERFACE.Tutorials.show();
     },
     id: "tutorialButton",
 }, tutorialIcon, "tutorial");
-tutorial.set(PrimaryButton.SIZE.SMALL)
+tutorial.set(Button.SIZE.SMALL)
 vanRegister("tutorial", tutorial);
 
 var pluginsIcon = new FAIcon({
     name: "fa-puzzle-piece"
 });
-var plugins = new PrimaryButton({
+var plugins = new Button({
     onClick: () => {
         USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);
     },
     id: "pluginsButton",
 }, pluginsIcon, "plugins");
-plugins.set(PrimaryButton.SIZE.SMALL)
+plugins.set(Button.SIZE.SMALL)
 vanRegister("plugins", plugins);
 
 globalThis.window.addEventListener("load", function () {

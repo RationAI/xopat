@@ -41,7 +41,7 @@
             var counter = van.state(0);
             window.changeTheme();
 
-            var b1 = new ui.PrimaryButton({
+            var b1 = new ui.Button({
                 onClick: () => {
                     counter.val++;
                 },
@@ -53,20 +53,95 @@
                 summary: "hello there",
             }, div("general kenobi"));
 
+            // example button settings
+            var b_large = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.LARGE)
+                },
+                id: "b2",
+            }, "Set size to large")
+
+            var b_normal = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.NORMAL)
+                },
+                id: "b2",
+            }, "Set size to normal")
+
+            var b_small = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.SMALL)
+                },
+                id: "b2",
+            }, "Set size to small")
+
+            var b_tiny = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.TINY)
+                },
+                id: "b2",
+            }, "Set size to tiny")
+
+            var b_outline = new ui.Button({
+                onClick: () => {
+                    if (b1.classMap["outline"] == "") {
+                        b1.set(ui.Button.OUTLINE.ENABLE)
+                    } else {
+                        b1.set(ui.Button.OUTLINE.DISABLE)
+                    }
+                },
+                id: "b2",
+            }, "Set outline on/off")
+
+
+            var b_toPrimary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.PRIMARY);
+                },
+                id: "b2",
+            }, "Set button to primary")
+
+            var b_toSecondary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.SECONDARY);
+                },
+                id: "b2",
+            }, "Set button to secondary")
+
+
+            var b_toTernary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.TERNARY);
+                },
+                id: "b2",
+            }, "Set button to ternary")
+
+
+
             // buttons for picking components
-            var b_pickbutton = new ui.PrimaryButton({
+            var b_pickbutton = new ui.Button({
                 onClick: () => {
                     document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
                     b1.attachTo(document.getElementById("workspace"));
+                    b_large.attachTo(document.getElementById("settings"));
+                    b_normal.attachTo(document.getElementById("settings"));
+                    b_small.attachTo(document.getElementById("settings"));
+                    b_tiny.attachTo(document.getElementById("settings"));
+                    b_outline.attachTo(document.getElementById("settings"));
+                    b_toPrimary.attachTo(document.getElementById("settings"));
+                    b_toSecondary.attachTo(document.getElementById("settings"));
+                    b_toTernary.attachTo(document.getElementById("settings"));
                     counter.val = 0;
                 },
                 id: "b_pickbutton",
-            }, "Show example button")
+            }, "Show example primary button")
             b_pickbutton.attachTo(document.getElementById("component-picker"));
 
-            var b_pickCollapse = new ui.PrimaryButton({
+            var b_pickCollapse = new ui.Button({
                 onClick: () => {
                     document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
                     c1.attachTo(document.getElementById("workspace"));
                 },
                 id: "b_pickCollapse",
@@ -90,6 +165,10 @@
         <h1>Component picker:</h1>
     </div>
     <div id="component-picker"></div>
+    <div>
+        <h1>Settings:</h1>
+    </div>
+    <div id="settings"></div>
     <div>
         <h1>Workspace:</h1>
     </div>
