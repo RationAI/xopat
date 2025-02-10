@@ -61,9 +61,9 @@ Button.OUTLINE = {
 };
 
 Button.TYPE = {
-    PRIMARY: function () { this.setClass("base", "btn btn-primary") },
-    SECONDARY: function () { this.setClass("base", "btn btn-secondary") },
-    TERNARY: function () { this.setClass("base", "btn btn-accent") }
+    PRIMARY: function () { this.setClass("type", "btn-primary") },
+    SECONDARY: function () { this.setClass("type", "btn-secondary") },
+    TERNARY: function () { this.setClass("type", "btn-accent") }
 }
 
 export { Button };
