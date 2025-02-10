@@ -28,7 +28,8 @@ class Button extends BaseComponent {
     constructor(options, ...args) {
         super(options, ...args);
 
-        this.classMap["base"] = "btn btn-primary";
+        this.classMap["base"] = "btn";
+        this.classMap["type"] = "btn-primary";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
 
@@ -36,6 +37,7 @@ class Button extends BaseComponent {
             if (options.onClick) this.onClick = options.onClick;
             if (options.size) this.classMap["size"] = options.size;
             if (options.outline) this.classMap["outline"] = "btn-outline";
+            if (options.type) this.classMap["type"] = options.type;
         }
     }
 
