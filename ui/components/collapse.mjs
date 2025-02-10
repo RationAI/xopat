@@ -15,7 +15,7 @@ class Collapse extends BaseComponent {
         this.classMap["summaryClassList"] = [];
         this.classMap["detailsClassList"] = [];
         this.input = "checkbox";
-        this.summary = "Expand"; // TODO -> translation
+        this.summary = "Expand"; // TODO -> tryanslation
         this.startOpen = !!options.startOpen;
 
         if (options) {
