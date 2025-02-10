@@ -1,6 +1,6 @@
-const { parse } = require("comment-json");
+const {parse} = require("comment-json");
 
-module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, readEnv) {
+module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv) {
 
     function parseBool(x) {
         const type = typeof x;
@@ -83,13 +83,13 @@ module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, r
          * Printing Functions - dependencies from the config
          */
 
-        printJs: function (conf, path) {
+        printJs: function(conf, path) {
             if (isType(conf, "string")) return this.printJsSingle(conf, path);
             if (!isType(conf, "object")) return "";
             return Object.values(conf).map(files => this.printJsSingle(files, path)).join("");
         },
 
-        printJsSingle: function (files, path) {
+        printJsSingle: function(files, path) {
             const version = this.VERSION;
 
             if (Array.isArray(files)) {
@@ -103,13 +103,13 @@ module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, r
                 `    <script src="${path}${files}?v=${version}"></script>\n`;
         },
 
-        printCss: function (conf, path) {
+        printCss: function(conf, path) {
             if (isType(conf, "string")) return this.printCssSingle(conf, path);
             if (!isType(conf, "object")) return "";
             return Object.values(conf).map(files => this.printCssSingle(files, path)).join("");
         },
 
-        printCssSingle: function (files, path) {
+        printCssSingle: function(files, path) {
             const version = this.VERSION;
 
             if (Array.isArray(files)) {
@@ -118,7 +118,7 @@ module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, r
             return `    <link rel="stylesheet" href="${path}${files}?v=${version}">\n`;
         },
 
-        requireOpenseadragon: function () {
+        requireOpenseadragon: function() {
             const version = this.VERSION;
             return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
@@ -151,7 +151,6 @@ module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, r
             if (this.CORE["js"][namespace] !== undefined) {
                 result += this.printJs(this.CORE["js"][namespace], path);
             }
-
             return result;
         },
 
@@ -175,7 +174,7 @@ module.exports.getCore = function (absPath, projectRoot, fileExists, readFile, r
 
     function parseEnvConfig(data, err) {
         try {
-            let replacer = function (match, p1) {
+            let replacer = function(match, p1) {
                 let env = readEnv(p1);
                 //not specified returns false
                 //todo correct?

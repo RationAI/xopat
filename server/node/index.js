@@ -148,8 +148,8 @@ async function responseViewer(req, res) {
     const replacer = function(match, p1) {
         try {
             switch (p1) {
-                case "head":
-                    return `
+            case "head":
+                return `
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
@@ -159,8 +159,8 @@ ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}`;
 
-                case "app":
-                    return `
+            case "app":
+                return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
@@ -182,15 +182,15 @@ ${core.requireCore("app")}`;
     );
     </script>`;
 
-                case "modules":
-                    return core.requireModules(core.CORE.client.production);
+            case "modules":
+                return core.requireModules(core.CORE.client.production);
 
-                case "plugins":
-                    return core.requirePlugins(core.CORE.client.production);
+            case "plugins":
+                return core.requirePlugins(core.CORE.client.production);
 
-                default:
-                    //todo warn
-                    return "";
+            default:
+                //todo warn
+                return "";
             }
         } catch (e) {
             //todo err

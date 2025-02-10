@@ -26,7 +26,7 @@
      *   js_cookie_same_site: ?string,
      *   js_cookie_secure: ?boolean,
      *   secureMode: ?boolean,
-     *   redirectUrl: ?string,
+     *   redirectUrl: ?string
      *   production: ?boolean
      * }} xoClientSetup
      */
@@ -119,7 +119,7 @@
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
-     *   disablePluginsUi: ?boolean
+     *   disablePluginsUi: ?boolean,
      * }} xoParams
      */
     "setup": {
@@ -176,12 +176,14 @@
         // Disable for servers that do not support POST parsing: will not support direct data sharing
         "supportsPost": true
     },
+
     /**
      * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.
      */
     "monaco": "src/libs/monaco/",
     "openSeadragonPrefix": "openseadragon/build/openseadragon/",
     "openSeadragon": "openseadragon.js",
+
     /**
      * JS Source files. Each group conforms to pre-determined folder path.
      */
@@ -189,10 +191,7 @@
         // src/libs      key: source / [sources,list]
         "libs": {
             "jquery": "jquery.min.js",
-            "i18n": [
-                "i18next.jquery.min.js",
-                "i18next.min.js"
-            ],
+            "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js"
@@ -223,27 +222,12 @@
          */
         "src": {
             //"env": "",
-            "loader": [
-                "store.js",
-                "loader.js"
-            ],
-            "deps": [
-                "ui-components.js",
-                "shader-configurator.js"
-            ],
-            "app": [
-                "parse-input.js",
-                "app.js",
-                "user-interface.js",
-                "scripts.js",
-                "layers.js",
-                "user.js"
-            ]
+            "loader": ["store.js", "loader.js"],
+            "deps": ["ui-components.js", "shader-configurator.js"],
+            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         },
         "ui": {
-            "components": [
-                "index.mjs"
-            ]
+            "components": ["index.mjs"]
         }
     },
     /**
@@ -260,10 +244,7 @@
             "nouislider": "nouislider.css"
         },
         "src": {
-            "env": [
-                "assets/style.css",
-                "assets/xopat.css"
-            ]
+            "env": ["assets/style.css", "assets/xopat.css"]
         }
     }
 }

@@ -1,4 +1,4 @@
-module.exports = function (grunt) {
+module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
 
@@ -50,7 +50,7 @@ module.exports = function (grunt) {
         },
         uglify: {
 
-            ...grunt.util.reduceModules((acc, module, folder) => {
+            ...grunt.util.reduceModules( (acc, module, folder) => {
                 //we cannot minify items that have third-party network deps, object describes source URL
                 if (module.includes.some(i => typeof i === "object")) {
                     grunt.log.write(" (non-minifiable)");
