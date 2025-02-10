@@ -17,8 +17,9 @@
     "eventBeforeOpenPriority": 0,
     //Mathod used for auth: "redirect", "popup"
     "method": "redirect",
-    //Whether to store the login session in cookies
-    "useCookiesStore": true,
+    //Whether to store the login session in: "default" (usually sessionStorage) / "cache" (usually localStorage) / "cookies" store
+    // Note that cookies store might fail silently due to size limitations: in that case, use local storage instead.
+    "usesStore": "local",
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'
@@ -41,7 +42,5 @@
     "extraSigninRequestArgs": {
     },
     // endpoint to read user info from (if the token e.g. does not cover username)
-    "oidcUserInfo": null,
-    // if the refresh token is stored in cookies, provide the name to sync apps
-    "cookieRefreshTokenName": "_sharedEmpaiaRefreshToken"
+    "oidcUserInfo": null
 }

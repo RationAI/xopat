@@ -607,6 +607,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.getHandler = events.getHandler.bind(events);
             this.numberOfHandlers = events.numberOfHandlers.bind(events);
             this.raiseEvent = events.raiseEvent.bind(events);
+            this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
             this.removeAllHandlers = events.removeAllHandlers.bind(events);
             this.removeHandler = events.removeHandler.bind(events);
             this.__errorBindingOnViewer = errorBindingOnViewer;
@@ -673,6 +674,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Note: noop if registerAsEventSource() not called.
          */
         raiseEvent () {}
+        /**
+         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseAwaitEvent.
+         * Awaits async handlers.
+         * Note: noop if registerAsEventSource() not called.
+         */
+        raiseAwaitEvent() {}
         /**
          * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
          * Note: noop if registerAsEventSource() not called.
@@ -860,7 +867,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
 
             //options are stored only for plugins, so we store them at the lowest level
-            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            let value = cache ? this.cache.get(key, null) : null;
             if (value === null) {
                 // read default value from static context if exists
                 if (defaultValue === undefined && key !== "instance") {
@@ -878,6 +885,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Ability to cache a value locally into the browser,
          * the value can be retrieved using this.getOption(...)
+         * todo rename to setCacheOption
          * @param key
          * @param value
          */

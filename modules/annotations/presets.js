@@ -109,8 +109,8 @@ OSDAnnotations.PresetManager = class {
     static commonAnnotationVisuals = {
         selectable: true,
         originalStrokeWidth: 3,
-        borderColor: '#fbb802',
-        cornerColor: '#fbb802',
+        borderColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251,184,2,0.35)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',
@@ -203,7 +203,7 @@ OSDAnnotations.PresetManager = class {
      */
     isUnusedPreset(p) {
         return !p._used && p.objectFactory == this._context.polygonFactory
-            && p.meta.category?.value === ""
+            && !p.meta.category?.value
             && Object.keys(p.meta).length === 1;
     }
 
@@ -416,13 +416,12 @@ OSDAnnotations.PresetManager = class {
     async import(presets, clear=false) {
         const _this = this;
 
-        if (clear) {
-            for (let pid in this._presets) {
-                const preset = this._presets[pid];
-                if (this.isUnusedPreset(preset)) {
-                    this._context.raiseEvent('preset-delete', {preset});
-                    delete this._presets[pid];
-                }
+        for (let pid in this._presets) {
+            const preset = this._presets[pid];
+            // TODO: clear might remove presets that are attached to existing annotations!
+            if (clear || this.isUnusedPreset(preset)) {
+                this._context.raiseEvent('preset-delete', {preset});
+                delete this._presets[pid];
             }
         }
 
@@ -530,12 +529,12 @@ OSDAnnotations.PresetManager = class {
         let f = h * 6 - i;
         let q = 1 - f;
         switch(i % 6){
-        case 0: r = 1; g = f; b = 0; break;
-        case 1: r = q; g = 1; b = 0; break;
-        case 2: r = 0; g = 1; b = f; break;
-        case 3: r = 0; g = q; b = 1; break;
-        case 4: r = f; g = 0; b = 1; break;
-        case 5: r = 1; g = 0; b = q; break;
+            case 0: r = 1; g = f; b = 0; break;
+            case 1: r = q; g = 1; b = 0; break;
+            case 2: r = 0; g = 1; b = f; break;
+            case 3: r = 0; g = q; b = 1; break;
+            case 4: r = f; g = 0; b = 1; break;
+            case 5: r = 1; g = 0; b = q; break;
         }
         let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
             + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)
