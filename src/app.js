@@ -361,11 +361,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          */
         referencedId() {
             if (CONFIG.background.length < 0) {
-                return undefined;
+                return "__anonymous__";
             }
             const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
             if (bgConfig) return CONFIG.data[bgConfig.dataReference];
-            return undefined;
+            return "__anonymous__";
         },
         _dangerouslyAccessConfig() {
             //remove in the future?

@@ -93,8 +93,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             layerID: ofObject.layerID,
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
-            selectable: false,
-            hasControls: false
+            selectable: true,
+            hasControls: true
         });
     }
 
@@ -149,6 +149,14 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             text = this._current[1];
         line.set({ x2: x, y2: y });
         this._updateText(line, text);
+    }
+
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current[0]);
+            this._context.deleteHelperAnnotation(this._current[1]);
+            this._current = undefined;
+        }
     }
 
     finishDirect() {
@@ -268,8 +276,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: this._updateText(line, text),
-            selectable: false,
-            hasBorders: false,
             originX: 'left',
             originY: 'top'
         });

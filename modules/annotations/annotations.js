@@ -163,30 +163,40 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// also problem: if cache implemented over DB? we could add cache.local option that could
 		// explicitly request / enforce local storage usage
 		let data = this.cache.get("_unsaved");
+		let loaded = false;
 		if (data) {
 			try {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
 						//todo do not avoid import but import to a new layer!!!
 						this._avoidImport = true;
-						if (data?.presets) await this.presets.import(data?.presets, true);
-						if (data?.objects) await this._loadObjects({objects: data.objects}, true);
-						this.raiseEvent('import', {
-							options: {},
-							clear: true,
-							data: {
-								objects: data.objects,
-								presets: data.presets
-							},
-						});
-					} else {
-						this._avoidImport = false;
-						//do not erase cache upon load, still not saved anywhere
-						await this.cache.set('_unsaved', null);
+						if (data?.presets) {
+							await this.presets.import(data?.presets, true);
+							loaded = true;
+						}
+						if (data?.objects) {
+							await this._loadObjects({objects: data.objects}, true);
+							loaded = true;
+						}
 					}
 				}
 			} catch (e) {
 				console.error("Faulty cached data!", e);
+			}
+
+			if (loaded) {
+				this.raiseEvent('import', {
+					options: {},
+					clear: true,
+					data: {
+						objects: data.objects,
+						presets: data.presets
+					},
+				});
+			} else {
+				this._avoidImport = false;
+				//do not erase cache upon load, still not saved anywhere
+				await this.cache.set('_unsaved', null);
 			}
 		}
 	}
