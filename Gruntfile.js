@@ -40,13 +40,18 @@ module.exports = function(grunt) {
             server: {
                 options: {
                     port: 9000,
-                    base: "ui"
+                    base: ""
                 }
             }
         },
         watch: {
-            files: ["ui/*"],
-            tasks: "watchTask"
+            options: {
+                livereload: true
+            },
+            components: {
+                files: ["ui/*", "./tailwind.config.js"],
+                tasks: "css"
+            }
         },
         uglify: {
 
@@ -82,9 +87,8 @@ module.exports = function(grunt) {
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('css', 'Generate Tailwind CSS files for ussage.', function (file) {
         grunt.log.writeln('Tailwind');
-        const result = execAtPath('npx', 'tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
+        const result = grunt.util.execAtPath('/usr/bin/npx', 'tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
         grunt.log.writeln(result);
     });
     // Default task(s).
-    grunt.registerTask('default', ['env']);
 };

@@ -22,7 +22,6 @@ $replacer = function($match) use ($i18n) {
             require_lib("primer");
             require_lib("jquery");
             require_ui();
-            ("env");
             require_core("deps");
             require_openseadragon();
 
