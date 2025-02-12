@@ -13,7 +13,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
-    
+
     <!--Remember WARNS/ERRORS to be able to export-->
     <script type="text/javascript">
         (function () {
@@ -186,9 +186,15 @@
                     </span>
                 </div>
             </span>
-            <span data-van="plugins"></span>
-            <span data-van="tutorial"></span>
-            <span data-van="settings"></span>
+            <span id="add-plugins" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+                <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
+                <span class="pl-1" data-i18n="main.bar.plugins">Plugins</span>
+            </span>
+            <span id="global-help" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+                <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
+                <span class="pl-1" data-i18n="main.bar.tutorials">Tutorial</span>
+            </span>
+            <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
     </div>
 </div>
