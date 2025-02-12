@@ -1,10 +1,11 @@
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 
-import { Button } from "./components/buttons.mjs"; // TODO
-import { Collapse } from "./components/collapse.mjs"; // TODO
+import { Button } from "./components/buttons.mjs";
+import { Collapse } from "./components/collapse.mjs";
 import { FAIcon } from "./components/fa-icon.mjs";
-const UI = { Button, Collapse, FAIcon };
+import { Join } from "./components/join.mjs";
+const UI = { Button, Collapse, FAIcon, Join };
 globalThis.UI = UI;
 export default UI;
 //console.log(globalThis);

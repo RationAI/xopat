@@ -11,7 +11,7 @@ const { i } = van.tags
  * const settingsIcon = new FAIcon({
  *    name: "fa-gear"
  * });
- * 
+ *
  * //then we need to add it as an child to the another component:
  * const settings = new Button({
  *   onClick: () => {
@@ -31,17 +31,11 @@ class FAIcon extends BaseComponent {
         super(options, ...args);
 
         this.classMap["base"] = "fa-solid";
-        this.classMap["name"] = "";
-
-        if (options) {
-            this._applyOptions(options, "name");
-        }
+        this.classMap["name"] = options && options["name"] || "";
     }
 
     create() {
-        return i(
-            { ...this.commonProperties},
-        )
+        return i(this.commonProperties);
     }
 }
 

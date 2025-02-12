@@ -157,27 +157,27 @@
 <body class="latte dark:frappe h-full bg-base">
     <div style="max-width: 1200px; margin: 0 auto;" class="px-2 py-2">
         <div class="flex item-center flex-col items-center">
-            <span class="text-sm">Light theme settings:</span>
-            <div class="flex item-center flex-row">
-                <button class="btn btn-primary btn-xs" onclick="changeTheme('dark')">Dark</button>
-                <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Light</button>
-                <button class="btn btn-primary btn-xs" onclick="changeTheme(undefined)">Auto</button>
+            <span class="text-sm">Theme settings</span>
+            <div class="flex item-center flex-row join">
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('dark')">Dark</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('light')">Light</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme(undefined)">Auto</button>
             </div>
         </div>
         <div class="flex flex-row">
             <div class="flex-1 p-2">
                 <div>
-                    <h1>Settings:</h1>
+                    <h3 class="text-lg font-bold">Settings</h3>
                 </div>
                 <div id="settings"></div>
                 <div>
-                    <h1>Workspace:</h1>
+                    <h3 class="text-lg font-bold">Workspace</h3>
                 </div>
                 <div id="workspace"></div>
             </div>
             <div class="flex flex-col mt-2">
-                <h3>Component picker:</h3>
-                <div id="component-picker" class="flex flex-col"></div>
+                <h3 class="text-lg font-bold">Component picker</h3>
+                <div id="component-picker" class="flex flex-col gap-1"></div>
             </div>
         </div>
     </div>

@@ -108,12 +108,20 @@ class BaseComponent {
      * and for each component, calls the initialization where necessary.
      *
      * Usage (in constructor): this._applyOptions(options, "X", "Y");
+     *
+     * @param options
+     * @param {string} names keys to the options object, values of the keys
+     * should be functions
      */
     _applyOptions(options, ...names) {
         this._initializing = true;
         for (let prop of names) {
             const option = options[prop];
-            if (option) option.call(this);
+            try {
+                if (option) option.call(this);
+            } catch (e) {
+                console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
+            }
         }
         this._initializing = false;
     }
