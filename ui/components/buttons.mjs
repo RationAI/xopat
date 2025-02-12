@@ -8,22 +8,23 @@ const { button } = van.tags
  * @extends BaseComponent
  * @description A button component
  * @example
- * const button = new Button({ 
+ * const button = new Button({
  *                            id: "myButton",
- *                            size: Button.SIZE.LARGE, 
- *                            outline: Button.OUTLINE.ENABLE 
- *                           }, 
+ *                            size: Button.SIZE.LARGE,
+ *                            outline: Button.OUTLINE.ENABLE
+ *                           },
  *                           "Click me");
  * button.attachTo(document.body);
  */
 class Button extends BaseComponent {
 
     /**
-     * @param {*} options 
-     * @param  {...any} args 
+     * @param {*} options
+     * @param  {...any} args
      * @param {Function} [options.onClick] - The click event handler
-     * @param {Button.SIZE} [options.size] - The size of the button
-     * @param {Button.OUTLINE} [options.outline] - The outline style of the button
+     * @param {keyof typeof Button.SIZE} [options.size] - The size of the button
+     * @param {keyof typeof Button.OUTLINE} [options.outline] - The outline style of the button
+     * @param {keyof typeof Button.TYPE} [options.type] - The button type
      */
     constructor(options, ...args) {
         super(options, ...args);
@@ -35,9 +36,7 @@ class Button extends BaseComponent {
 
         if (options) {
             if (options.onClick) this.onClick = options.onClick;
-            if (options.size) this.classMap["size"] = options.size;
-            if (options.outline) this.classMap["outline"] = "btn-outline";
-            if (options.type) this.classMap["type"] = options.type;
+            this._applyOptions(options, "size", "outline", "type");
         }
     }
 

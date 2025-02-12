@@ -3,8 +3,14 @@ import { BaseComponent } from "./baseComponent.mjs";
 
 const { div, input, details, summary } = van.tags
 
+/**
+ * TODO
+ */
 class Collapse extends BaseComponent {
 
+    /**
+     * TODO
+     */
     constructor(options, ...args) {
         super(options, ...args);
 

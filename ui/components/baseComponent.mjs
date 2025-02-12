@@ -7,15 +7,16 @@ import van from "../vanjs.mjs";
 class BaseComponent {
 
     /**
-     * 
+     *
      * @param {*} options - other options are defined in the constructor of the derived class
-     * @param  {...any} args 
+     * @param  {...any} args
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...args) {
 
         this.classMap = {};
         this._children = args;
+        this._initializing = false;
         this.options = options;
         this.classState = van.state("");
 
@@ -25,7 +26,7 @@ class BaseComponent {
     }
 
     /**
-     * 
+     *
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
@@ -42,7 +43,7 @@ class BaseComponent {
     }
 
     /**
-     * 
+     *
      * @param  {...any} properties - functions to set the state of the component
      */
     set(...properties) {
@@ -75,7 +76,7 @@ class BaseComponent {
     }
 
     /**
-     * 
+     *
      * @param {string} key - The key of the class
      * @param {string} value - The value of the class
      * @description Set the class of the component
@@ -84,7 +85,9 @@ class BaseComponent {
      */
     setClass(key, value) {
         this.classMap[key] = value;
-        this.classState.val = Object.values(this.classMap).join(" ");
+        if (!this._initializing) {
+            this.classState.val = Object.values(this.classMap).join(" ");
+        }
     }
 
     /**
@@ -93,6 +96,24 @@ class BaseComponent {
      */
     create() {
         throw new Error("Component must override create method");
+    }
+
+    /**
+     * If you document a component properties like this:
+     * Component.PROPERTY = {
+     *     X: function () { ... do something ... },
+     *     Y: function () { ... do something ... },
+     * };
+     * You can use this function that will iterate options object
+     * and for each component, calls the initialization where necessary.
+     */
+    _applyOptions(options, ...names) {
+        this._initializing = true;
+        for (let prop of names) {
+            const option = options[prop];
+            if (option) option.call(this);
+        }
+        this._initializing = false;
     }
 }
 

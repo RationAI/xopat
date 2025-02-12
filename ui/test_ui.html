@@ -120,6 +120,7 @@
 
             // buttons for picking components
             var b_pickbutton = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
                 onClick: () => {
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
@@ -139,6 +140,7 @@
             b_pickbutton.attachTo(document.getElementById("component-picker"));
 
             var b_pickCollapse = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
                 onClick: () => {
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
@@ -153,25 +155,31 @@
 </head>
 
 <body class="latte dark:frappe h-full bg-base">
-    <div>
-        <h1>Light theme settings:</h1>
+    <div style="max-width: 1200px; margin: 0 auto;" class="px-2 py-2">
+        <div class="flex item-center flex-col items-center">
+            <span class="text-sm">Light theme settings:</span>
+            <div class="flex item-center flex-row">
+                <button class="btn btn-primary btn-xs" onclick="changeTheme('dark')">Dark</button>
+                <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Light</button>
+                <button class="btn btn-primary btn-xs" onclick="changeTheme(undefined)">Auto</button>
+            </div>
+        </div>
+        <div class="flex flex-row">
+            <div class="flex-1 p-2">
+                <div>
+                    <h1>Settings:</h1>
+                </div>
+                <div id="settings"></div>
+                <div>
+                    <h1>Workspace:</h1>
+                </div>
+                <div id="workspace"></div>
+            </div>
+            <div class="flex flex-col mt-2">
+                <h3>Component picker:</h3>
+                <div id="component-picker" class="flex flex-col"></div>
+            </div>
+        </div>
     </div>
-    <div class="flex item-center">
-        <button class="btn btn-primary btn-xs" onclick="changeTheme('dark')">Dark</button>
-        <button class="btn btn-primary btn-xs" onclick="changeTheme('light')">Light</button>
-        <button class="btn btn-primary btn-xs" onclick="changeTheme(undefined)">Auto</button>
-    </div>
-    <div>
-        <h1>Component picker:</h1>
-    </div>
-    <div id="component-picker"></div>
-    <div>
-        <h1>Settings:</h1>
-    </div>
-    <div id="settings"></div>
-    <div>
-        <h1>Workspace:</h1>
-    </div>
-    <div id="workspace"></div>
     <script src="http://localhost:35729/livereload.js"></script>
 </body>

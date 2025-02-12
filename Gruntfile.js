@@ -1,3 +1,4 @@
+const {execSync: exec} = require("child_process");
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
@@ -85,9 +86,9 @@ module.exports = function(grunt) {
     grunt.registerTask('all', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
-    grunt.registerTask('css', 'Generate Tailwind CSS files for ussage.', function (file) {
+    grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
         grunt.log.writeln('Tailwind');
-        const result = grunt.util.execAtPath('/usr/bin/npx', 'tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
+        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
         grunt.log.writeln(result);
     });
     // Default task(s).

@@ -3,7 +3,14 @@ import { BaseComponent } from "./baseComponent.mjs";
 
 const { i } = van.tags
 
+/**
+ * TODO
+ */
 class FAIcon extends BaseComponent {
+
+    /**
+     * TODO
+     */
     constructor(options, ...args) {
         super(options, ...args);
 
@@ -14,6 +21,7 @@ class FAIcon extends BaseComponent {
             if (options.name) this.classMap["name"] = options.name;
         }
     }
+
     create() {
         return i(
             { ...this.commonProperties},
