@@ -4,13 +4,29 @@ import { BaseComponent } from "./baseComponent.mjs";
 const { i } = van.tags
 
 /**
- * TODO
- */
+ * @class FAIcon
+ * @extends BaseComponent
+ * @description A icon component
+ * @example
+ * const settingsIcon = new FAIcon({
+ *    name: "fa-gear"
+ * });
+ * 
+ * //then we need to add it as an child to the another component:
+ * const settings = new Button({
+ *   onClick: () => {
+ *      USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);
+ *  },
+ * id: "settingsButton",
+ * }, settingsIcon);
+*/
 class FAIcon extends BaseComponent {
 
     /**
-     * TODO
-     */
+     * @param {*} options
+     * @param  {...any} args
+     * @param {string} [options.name] - The name of the icon
+    **/
     constructor(options, ...args) {
         super(options, ...args);
 
@@ -18,7 +34,7 @@ class FAIcon extends BaseComponent {
         this.classMap["name"] = "";
 
         if (options) {
-            if (options.name) this.classMap["name"] = options.name;
+            this._applyOptions(options, "name");
         }
     }
 

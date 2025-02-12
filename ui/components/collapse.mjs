@@ -4,12 +4,27 @@ import { BaseComponent } from "./baseComponent.mjs";
 const { div, input, details, summary } = van.tags
 
 /**
- * TODO
+ * @class Collapse
+ * @extends BaseComponent
+ * @description A collapse component
+ * @example
+ * const collapse = new Collapse({
+ *    id: "myCollapse",
+ *   summary: "Click me",
+ * },
+ * div("I am in the collapse"));
+ * collapse.attachTo(document.body);
  */
 class Collapse extends BaseComponent {
 
     /**
-     * TODO
+     * @param {*} options
+     * @param  {...any} args
+     * @param {string} [options.summary] - The text of the summary
+     * @param {boolean} [options.startOpen] - Whether the collapse should start open
+     * @param {string} [options.textSize] - The text size of the summary
+     * @param {string} [options.font] - The font of the summary
+     * @param {string} [options.customSummary] - The custom summary
      */
     constructor(options, ...args) {
         super(options, ...args);
@@ -25,10 +40,8 @@ class Collapse extends BaseComponent {
         this.startOpen = !!options.startOpen;
 
         if (options) {
-            if (options.size) this.classMap["textSize"] = options.size;
-            if (options.font) this.classMap["font"] = options.font;
             if (options.summary) this.summary = options.summary;
-            if (options.customSummary) this.classMap["customSummary"] = options.customSummary;
+            this._applyOptions(options, "textSize", "font", "customSummary");
         }
     }
 
