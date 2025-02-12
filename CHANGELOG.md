@@ -11,6 +11,8 @@ separated from the viewer core in the future.
 **Features:** new UI component system & developer UI tools. Server support for .mjs files - 
 support for native JS modules.
 
+**Bugfixes:** improved behavior for touchpad zooming.
+
 ### 2.1.1
 **Features:** standalone wsi tile source module. Edge navigation optional.
 

@@ -106,33 +106,31 @@ function initXopatScripts() {
         e.tiledImage._failedDate = e.time;
     });
 
+    let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
     /**
      * From https://github.com/openseadragon/openseadragon/issues/1690
      * brings better zooming behaviour
      */
-    window.VIEWER.addHandler("canvas-scroll", function() {
-        if (typeof this.scrollNum == 'undefined') {
-            this.scrollNum = 0;
+    window.VIEWER.addHandler("canvas-scroll", function(e) {
+        if (Math.abs(e.originalEvent.deltaY) < 100) {
+            // touchpad has lesser values, do not change scroll behavior for touchpads
+            VIEWER.zoomPerScroll = 0.5;
+            _scrollCount = 0;
+            return;
         }
 
-        if (typeof this.lastScroll == 'undefined') {
-            this.lastScroll = new Date();
-        }
-
-        this.currentScroll = new Date(); //Time that this scroll occurred at
-
-        if (this.currentScroll - this.lastScroll < 400) {
-            this.scrollNum++;
+        _currentScroll = Date.now();
+        if (_currentScroll - _lastScroll < 400) {
+            _scrollCount++;
         } else {
-            this.scrollNum = 0;
+            _scrollCount = 0;
             VIEWER.zoomPerScroll = 1.2;
         }
 
-        if (this.scrollNum > 2 && VIEWER.zoomPerScroll <= 2.5) {
+        if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
             VIEWER.zoomPerScroll += 0.2;
         }
-
-        this.lastScroll = this.currentScroll; //Set last scroll to now
+        _lastScroll = _currentScroll;
     });
 
     window.VIEWER.addHandler('navigator-scroll', function(e) {
