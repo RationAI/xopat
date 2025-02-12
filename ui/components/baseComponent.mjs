@@ -106,6 +106,8 @@ class BaseComponent {
      * };
      * You can use this function that will iterate options object
      * and for each component, calls the initialization where necessary.
+     *
+     * Usage (in constructor): this._applyOptions(options, "X", "Y");
      */
     _applyOptions(options, ...names) {
         this._initializing = true;
