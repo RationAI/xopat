@@ -133,10 +133,14 @@ function print_js_single($files, $path) {
     $version = VERSION;
     if (is_array($files)) {
         foreach ($files as $file) {
-            echo "    <script src=\"$path$file?v=$version\"></script>\n";
+            echo str_ends_with($file, ".mjs") ? 
+            "    <script type=\"module\" src=\"$path$file?v=$version\"></script>\n" : 
+            "    <script src=\"$path$file?v=$version\"></script>\n";
         }
     } else {
-        echo "    <script src=\"$path$files?v=$version\"></script>\n";
+        echo str_ends_with($files, ".mjs") ? 
+        "    <script type=\"module\" src=\"$path$files?v=$version\"></script>\n" : 
+        "    <script src=\"$path$files?v=$version\"></script>\n";
     }
 }
 
@@ -186,6 +190,11 @@ function require_core($type) {
     global $CORE;
     if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
     if (isset($CORE["js"]["src"][$type])) print_js_single($CORE["js"]["src"][$type], PROJECT_SOURCES);
+}
+
+function require_ui() {
+    global $CORE;
+    print_js($CORE["js"]["ui"], UI_SOURCES);
 }
 
 if ($parse_exception !== null) {

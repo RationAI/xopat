@@ -225,16 +225,19 @@
             "loader": ["store.js", "loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
+        },
+        "ui": {
+            "components": ["index.mjs"]
         }
     },
-
     /**
      * Css files shadow the JS structure, with custom keys except for "src"
      */
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css"
+            "fontawesome": "fontawesome/css/v6-all.css",
+            "tailwind": "tailwind.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

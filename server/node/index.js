@@ -61,6 +61,7 @@ async function responseStaticFile(req, res, targetPath) {
     const mimeTypes = {
         '.html': 'text/html',
         '.js': 'text/javascript',
+        '.mjs': 'application/javascript',
         '.css': 'text/css',
         '.json': 'application/json',
         '.png': 'image/png',
@@ -152,6 +153,7 @@ async function responseViewer(req, res) {
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
+${core.requireUI()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -219,6 +221,7 @@ async function responseDeveloperSetup(req, res) {
                     return `
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
+${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
 ${core.requireModules(true)}`;

@@ -202,6 +202,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             if (session.description) session.description = i18n.t(session.description);
         }
     } catch (e) {
+        postData = postData || {};
         session = {error: e};
     }
 

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" class="h-screen">
+<html lang="en" dir="ltr" class="h-screen">
+<!-- 3 buttons nahoře, vlevo výběr komponent -->
+<!-- server bude mít endpoint na filesystem -->
+
+<head>
+    <meta charset="utf-8">
+    <title>UI Component Testing</title>
+    <meta name="msapplication-TileColor" content="#da532c">
+    <!--Necessary for OSD on phone portrait mode-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
+    <link rel="stylesheet" href="../src/assets/xopat.css">
+    <link rel="stylesheet" href="../src/libs/tailwind.min.css">
+    <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
+    <link rel="stylesheet" href="../src/external/enjoyhint.css">
+    <link rel="stylesheet" href="../src/external/nouislider.css">
+    <!-- TODO hardcoded path -->
+    <link rel="apple-touch-icon" sizes="180x180" href="src/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
+    <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+    <script type="module">
+        import { default as ui } from "./index.mjs";
+        import { default as van } from "./vanjs.mjs";
+
+        function changeTheme(theme = undefined) {
+            //["dark", "light", undefined]
+            if (theme === "dark" ||
+                (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.body.setAttribute("data-theme", "catppuccin-mocha");
+            } else {
+                document.body.removeAttribute("data-theme"); // light theme
+            }
+        }
+
+        window.changeTheme = changeTheme;
+
+        window.onload = () => {
+            var counter = van.state(0);
+            window.changeTheme();
+
+            var b1 = new ui.Button({
+                onClick: () => {
+                    counter.val++;
+                },
+                id: "b1",
+            }, "Button clicked ", counter, " times");
+            const { div } = van.tags
+
+            var c1 = new ui.Collapse({
+                summary: "hello there",
+            }, div("general kenobi"));
+
+            // example button settings
+            var b_large = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.LARGE)
+                },
+                id: "b2",
+            }, "Set size to large")
+
+            var b_normal = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.NORMAL)
+                },
+                id: "b2",
+            }, "Set size to normal")
+
+            var b_small = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.SMALL)
+                },
+                id: "b2",
+            }, "Set size to small")
+
+            var b_tiny = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.SIZE.TINY)
+                },
+                id: "b2",
+            }, "Set size to tiny")
+
+            var b_outline = new ui.Button({
+                onClick: () => {
+                    if (b1.classMap["outline"] == "") {
+                        b1.set(ui.Button.OUTLINE.ENABLE)
+                    } else {
+                        b1.set(ui.Button.OUTLINE.DISABLE)
+                    }
+                },
+                id: "b2",
+            }, "Set outline on/off")
+
+
+            var b_toPrimary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.PRIMARY);
+                },
+                id: "b2",
+            }, "Set button to primary")
+
+            var b_toSecondary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.SECONDARY);
+                },
+                id: "b2",
+            }, "Set button to secondary")
+
+
+            var b_toTernary = new ui.Button({
+                onClick: () => {
+                    b1.set(ui.Button.TYPE.TERNARY);
+                },
+                id: "b2",
+            }, "Set button to ternary")
+
+
+
+            // buttons for picking components
+            var b_pickbutton = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    b1.attachTo(document.getElementById("workspace"));
+                    b_large.attachTo(document.getElementById("settings"));
+                    b_normal.attachTo(document.getElementById("settings"));
+                    b_small.attachTo(document.getElementById("settings"));
+                    b_tiny.attachTo(document.getElementById("settings"));
+                    b_outline.attachTo(document.getElementById("settings"));
+                    b_toPrimary.attachTo(document.getElementById("settings"));
+                    b_toSecondary.attachTo(document.getElementById("settings"));
+                    b_toTernary.attachTo(document.getElementById("settings"));
+                    counter.val = 0;
+                },
+                id: "b_pickbutton",
+            }, "Show example primary button")
+            b_pickbutton.attachTo(document.getElementById("component-picker"));
+
+            var b_pickCollapse = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    c1.attachTo(document.getElementById("workspace"));
+                },
+                id: "b_pickCollapse",
+            }, "Show example collapse")
+            b_pickCollapse.attachTo(document.getElementById("component-picker"));
+        }
+
+    </script>
+</head>
+
+<body class="latte dark:frappe h-full bg-base">
+    <div style="max-width: 1200px; margin: 0 auto;" class="px-2 py-2">
+        <div class="flex item-center flex-col items-center">
+            <span class="text-sm">Theme settings</span>
+            <div class="flex item-center flex-row join">
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('dark')">Dark</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('light')">Light</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme(undefined)">Auto</button>
+            </div>
+        </div>
+        <div class="flex flex-row">
+            <div class="flex-1 p-2">
+                <div>
+                    <h3 class="text-lg font-bold">Settings</h3>
+                </div>
+                <div id="settings"></div>
+                <div>
+                    <h3 class="text-lg font-bold">Workspace</h3>
+                </div>
+                <div id="workspace"></div>
+            </div>
+            <div class="flex flex-col mt-2">
+                <h3 class="text-lg font-bold">Component picker</h3>
+                <div id="component-picker" class="flex flex-col gap-1"></div>
+            </div>
+        </div>
+    </div>
+    <script src="http://localhost:35729/livereload.js"></script>
+</body>
