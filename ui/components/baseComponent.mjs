@@ -1,5 +1,11 @@
 import van from "../vanjs.mjs";
 
+const HtmlRenderer = (htmlString) => {
+    const container = van.tags.div(); // Create a container div
+    container.innerHTML = htmlString; // Set innerHTML to render safely
+    return container;
+};
+
 /**
  * @class BaseComponent
  * @description The base class for all components
@@ -16,6 +22,7 @@ class BaseComponent {
 
         this.classMap = {};
         this._children = args;
+        this._renderedChildren = null;
         this._initializing = false;
         this.options = options;
         this.classState = van.state("");
@@ -56,13 +63,19 @@ class BaseComponent {
      * getter for children which will automatically refresh them and create them if they are BaseComponent
      */
     get children() {
-        return (this._children || []).map(child => {
+        if (this._renderedChildren) return this._renderedChildren;
+        this._renderedChildren = (this._children || []).map(child => {
             if (child instanceof BaseComponent) {
                 child.refreshState();
                 return child.create();
             }
-            return child;
-        });
+            if (typeof child === "string") {
+                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : child;
+            }
+            console.warn("Invalid child component provided: ", child);
+            return undefined;
+        }).filter(Boolean);
+        return this._renderedChildren;
     }
 
     /**

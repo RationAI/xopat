@@ -45,7 +45,14 @@
     <!-- Template head -->
     <template id="template-head"></template>
 </head>
-<body style="overflow: hidden;">
+<body style="overflow: hidden; height: 100vh; width: 100vw">
+<script>
+if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.body.setAttribute("data-theme", "catppuccin-mocha");
+} else {
+    document.body.removeAttribute("data-theme");
+}
+</script>
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
     <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
