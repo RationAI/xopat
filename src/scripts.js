@@ -182,6 +182,7 @@ function initXopatScripts() {
             if (e.key === 'Escape') {
                 USER_INTERFACE.AdvancedMenu.close();
                 USER_INTERFACE.Tutorials.hide();
+                USER_INTERFACE.DropDown.hide();
             }
         });
     }
@@ -297,9 +298,15 @@ function initXopatScripts() {
         if (theme === "dark_dimmed") {
             document.documentElement.dataset['darkTheme'] = "dark_dimmed";
             document.documentElement.dataset['colorMode'] = "dark";
+            document.body.setAttribute("data-theme", "catppuccin-mocha");
         } else {
             document.documentElement.dataset['darkTheme'] = "dark";
             document.documentElement.dataset['colorMode'] = theme;
+            if (theme === "dark") {
+                document.body.setAttribute("data-theme", "catppuccin-mocha");
+            } else {
+                document.body.removeAttribute("data-theme");
+            }
         }
     };
 

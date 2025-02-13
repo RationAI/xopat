@@ -41,7 +41,10 @@ module.exports = function(grunt) {
             server: {
                 options: {
                     port: 9000,
-                    base: ""
+                    base: '.',
+                    open: {
+                        target: 'http://localhost:9000/ui/test_ui.html'
+                    }
                 }
             }
         },
@@ -50,7 +53,7 @@ module.exports = function(grunt) {
                 livereload: true
             },
             components: {
-                files: ["ui/*", "./tailwind.config.js"],
+                files: ["ui/*", "./tailwind.config.js", "Gruntfile.js"],
                 tasks: "css"
             }
         },

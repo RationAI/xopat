@@ -51,7 +51,7 @@
 
             var c1 = new ui.Collapse({
                 summary: "hello there",
-            }, div("general kenobi"));
+            }, "<div class=\"float-right\">\n<span class=\"material-icons p-1 mr-3\" id=\"enable-disable-annotations\" title=\"${this.t('onOff')}\" data-ref=\"on\" \nonclick=\"${this.THIS}._toggleEnabled(this)\">visibility</span>\n<button class=\"btn btn-outline btn-sm\" id=\"server-primary-save\" onclick=\"${this.THIS}.saveDefault();\"><span class=\"material-icons pl-0 pr-1 v-align-text-top\" style=\"font-size: 19px;\">save</span>Save</button>\n<button class=\"btn-pointer btn btn-sm mr-1 px-1 material-icons\" title=\"More options\" id=\"show-annotation-export\" onclick=\"USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');\">more_vert</button>\n</div>");
 
             // example button settings
             var b_large = new ui.Button({
