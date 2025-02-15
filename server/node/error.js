@@ -22,7 +22,7 @@ function throwFatalErrorIfFallback(res, condition, title, description, details="
         res.end();
         return;
     }
-    //try to add additional info to the file
+    console.error(`${title}: ${description}`);
 
     const replacer = function(match, p1) {
         switch (p1) {
@@ -64,6 +64,7 @@ function showError(res, errTitle, errDesc, errDetails, locale='en') {
         return throwFatalErrorIfFallback(res, true, errTitle, errDesc, errDetails);
     }
 
+    console.error(`${title}: ${description}`);
 
     const replacer = function(match, p1) {
         switch (p1) {

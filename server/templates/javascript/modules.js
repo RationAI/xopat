@@ -1,4 +1,5 @@
 const {parse} = require("comment-json");
+const {safeScanDir} = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n) {
 
@@ -6,7 +7,7 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
     const MODULES = core.MODULES,
         ENV = core.ENV;
 
-    let modulePaths = scanDir(core.ABS_MODULES);
+    let modulePaths = safeScanDir(core.ABS_MODULES);
 
     for (let dir of modulePaths) {
         if (dir == "." || dir == "..") continue;
@@ -55,9 +56,7 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                 console.error(core.exception, e);
             }
         }
-
     }
-
 
     let order = 0;
 

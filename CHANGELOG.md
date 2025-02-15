@@ -3,8 +3,13 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### Unreleased 2.1.1
-**Features:** standalone wsi tile source module.
+### 2.1.1
+**Features:** standalone wsi tile source module. Edge navigation optional.
+
+**Bugfixes:** OIDC module popup method - await login.
+Use session storage to store xOpat sessions as well.
+Fixed scalebar magnification estimates. Annotations IO bugfixes.
+Extend await event support.
 
 ### 2.1.0
 **Features:** new system for module/plugin building, improvements of annotation listing features,

@@ -57,11 +57,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "sessionID",
         "presetID",
         "layerID",
-        "id"
+        "id",
+        "author",
+        "created",
     ];
 
     /**
-     * Properties copied with 'necessary' (+exports())
+     * Properties copied with 'necessary' (+exports()), subset of copiedProperties
      * @type {string[]}
      */
     static necessaryProperties = [

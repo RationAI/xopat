@@ -52,7 +52,7 @@ ${UIComponents.Elements.checkBox({
 <div id='playback-timeline' style="white-space: nowrap; overflow-x: auto; overflow-y: hidden; height: 48px" class="d-inline-block v-align-top position-relative flex-1 ml-3"></div>
 
 
-</div>`, 'play_circle_outline');
+</div>`, 'play_circle');
 
         const _this = this;
         this.setDraggable = UIComponents.Actions.draggable("playback-timeline",

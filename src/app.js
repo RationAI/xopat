@@ -120,15 +120,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
     if (!XOpatStorage.Cookies.registered()) {
-        // const storage = new CookieStorage({
-        //     path: ENV.client.js_cookie_path,
-        //     domain: ENV.client.js_cookie_domain || ENV.client.domain,
-        //     expires: new Date(new Date() + ENV.client.js_cookie_expire * 86400000),
-        //     secure:  typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : true,
-        //     sameSite: ENV.client.js_cookie_same_site,
-        // });
-        // XOpatStorage.Cookies.registerInstance(storage);
-
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -136,32 +127,39 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-        XOpatStorage.Cookies.register(class {
-            getItem(key) {
-                return Cookies.get(key) || null;
-            }
-            setItem(key, value) {
-                Cookies.set(key, value);
-            }
-            removeItem(key) {
-                Cookies.remove(key);
-            }
-            clear() {
-                const allCookies = Cookies.get();
-                for (let key in allCookies) {
+
+        Cookies.set("test", "test");
+        if (Cookies.get("test") === "test") {
+            XOpatStorage.Cookies.registerClass(class {
+                getItem(key) {
+                    return Cookies.get(key) || null;
+                }
+                setItem(key, value) {
+                    Cookies.set(key, value);
+                }
+                removeItem(key) {
                     Cookies.remove(key);
                 }
-            }
-            get length() {
-                return Object.keys(Cookies.get()).length;
-            }
-            key(index) {
-                const keys = Object.keys(Cookies.get());
-                return keys[index] || null;
-            }
-        });
-    } else {
-        delete window.Cookies;
+                clear() {
+                    const allCookies = Cookies.get();
+                    for (let key in allCookies) {
+                        Cookies.remove(key);
+                    }
+                }
+                get length() {
+                    return Object.keys(Cookies.get()).length;
+                }
+                key(index) {
+                    const keys = Object.keys(Cookies.get());
+                    return keys[index] || null;
+                }
+            });
+        } else {
+            console.warn("Cookie.js seems to be blocked.");
+            console.log("Cookies are implemented using local storage. This might be a security vulnerability!");
+            XOpatStorage.Cookies.registerInstance(localStorage);
+        }
+        Cookies.remove("test");
     }
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE CACHE STORAGE
@@ -570,7 +568,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const magMicrons = microns || (micronsX + micronsY) / 2;
 
         // todo try read metadata about magnification and warn if we try to guess
-        const values = [70, 2, 15, 5, 7, 10, 0.5, 20, 0.25, 40];
+        const values = [2.4, 2, 1.2, 4, 0.6, 10, 0.3, 20, 0.15, 40];
         let index = 0, best = Infinity, mag;
         if (magMicrons) {
             while (index < values.length) {
@@ -1241,8 +1239,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // Make sure the reference is really there
             POST_DATA.visualization = CONFIG;
 
+            // Clean up instance references before serialization
+            const plugins = {...PLUGINS};
+            const modules = {...MODULES};
+            for (let id in plugins) delete plugins[id].instance;
+            for (let id in modules) delete modules[id].instance;
             sessionStorage.setItem('__xopat_session__', JSON.stringify({
-                PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+                PLUGINS: plugins, MODULES: modules,
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
             }));
 
         } catch (e) {
