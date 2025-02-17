@@ -21,6 +21,64 @@
     <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+    <script type="text/javascript" src="../src/libs/monaco/loader.js"></script>
+    <script type="text/javascript">
+        require.config({ paths: { 'vs': '../src/libs/monaco' } });
+        const DEFAULT_EDITOR_OPTIONS = {
+            value: ``,
+            lineNumbers: "on",
+            roundedSelection: false,
+            ariaLabel: "",
+            //accessibilityHelpUrl: "Nothing yet...",
+            readOnly: false,
+            theme: "hc-black",
+            language: "javascript",
+            scrollBeyondLastLine: false,
+            automaticLayout: true
+        };
+        function editorResize(editor) {
+            editor.layout();
+        }
+
+        var editor;
+        const onCreated = (_editor) => {
+            editor = _editor; //set global ref
+            editor.layout();
+        };
+        const save = () => {
+            localStorage.setItem("monaco", editor.getValue());
+            document.getElementById("workspace").innerHTML = "";
+            document.getElementById("settings").innerHTML = "";
+            if (document.getElementById("custom")) {
+                document.getElementById("custom").remove();
+            }
+            var scriptElement = document.createElement('script');
+            scriptElement.id = "custom";
+            scriptElement.type = 'module';
+            scriptElement.textContent = localStorage.getItem("monaco");
+            document.body.appendChild(scriptElement);
+        };
+
+        //Creating the editor & adding Event listeners.
+        require(["vs/editor/editor.main"], () => {
+            monaco.editor.onDidCreateEditor(onCreated);
+            monaco.editor.create(
+                document.getElementById("container"),
+                DEFAULT_EDITOR_OPTIONS
+            );
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.code === "KeyS" && e.ctrlKey) {
+                save();
+                event.preventDefault();
+            }
+        });
+        window.addEventListener("beforeunload", (e) => {
+            save();
+        }, false);
+
+    </script>
     <script type="module">
         import { default as ui } from "./index.mjs";
         import { default as van } from "./vanjs.mjs";
@@ -149,6 +207,21 @@
                 id: "b_pickCollapse",
             }, "Show example collapse")
             b_pickCollapse.attachTo(document.getElementById("component-picker"));
+
+            var b_pickCustom = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    var scriptElement = document.createElement('script');
+                    scriptElement.type = 'text/javascript';
+                    scriptElement.textContent = localStorage.getItem("monaco");
+                    document.body.appendChild(scriptElement);
+                    //custom.attachTo(document.getElementById("workspace"));
+                },
+                id: "b_pickCustom",
+            }, "Show custom component")
+            b_pickCustom.attachTo(document.getElementById("component-picker"));
         }
 
     </script>
@@ -181,5 +254,6 @@
             </div>
         </div>
     </div>
+    <div id="container" style="width:100%; height:100%;"></div>
     <script src="http://localhost:35729/livereload.js"></script>
 </body>
