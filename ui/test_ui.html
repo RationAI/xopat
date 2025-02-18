@@ -96,25 +96,26 @@
         window.changeTheme = changeTheme;
 
         window.onload = () => {
-            var counter = van.state(0);
             window.changeTheme();
 
             var b1 = new ui.Button({
-                onClick: () => {
-                    counter.val++;
-                },
+                base: "btn",
+                type: ui.Button.TYPE.PRIMARY,
+                size: "",
+                outline: "",
+                onClick: () => { },
                 id: "b1",
-            }, "Button clicked ", counter, " times");
-            const { div } = van.tags
+            }, "Button")
 
             var c1 = new ui.Collapse({
                 summary: "hello there",
-            }, div("general kenobi"));
+            }, "<div>general kenobi</div>");
 
             // example button settings
             var b_large = new ui.Button({
                 onClick: () => {
                     b1.set(ui.Button.SIZE.LARGE)
+                    editor.setValue(b1.generateCode());
                 },
                 id: "b2",
             }, "Set size to large")
@@ -191,7 +192,8 @@
                     b_toPrimary.attachTo(document.getElementById("settings"));
                     b_toSecondary.attachTo(document.getElementById("settings"));
                     b_toTernary.attachTo(document.getElementById("settings"));
-                    counter.val = 0;
+                    editor.setValue(b1.generateCode());
+                    editorResize(editor);
                 },
                 id: "b_pickbutton",
             }, "Show example primary button")
@@ -203,27 +205,14 @@
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
                     c1.attachTo(document.getElementById("workspace"));
+                    editor.setValue(c1.generateCode());
+
+                    editorResize(editor);
                 },
                 id: "b_pickCollapse",
             }, "Show example collapse")
             b_pickCollapse.attachTo(document.getElementById("component-picker"));
-
-            var b_pickCustom = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    var scriptElement = document.createElement('script');
-                    scriptElement.type = 'text/javascript';
-                    scriptElement.textContent = localStorage.getItem("monaco");
-                    document.body.appendChild(scriptElement);
-                    //custom.attachTo(document.getElementById("workspace"));
-                },
-                id: "b_pickCustom",
-            }, "Show custom component")
-            b_pickCustom.attachTo(document.getElementById("component-picker"));
         }
-
     </script>
 </head>
 

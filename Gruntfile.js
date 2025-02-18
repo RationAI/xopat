@@ -53,7 +53,7 @@ module.exports = function(grunt) {
                 livereload: true
             },
             components: {
-                files: ["ui/*", "./tailwind.config.js", "Gruntfile.js"],
+                files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js"],
                 tasks: "css"
             }
         },

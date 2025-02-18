@@ -138,6 +138,41 @@ class BaseComponent {
         }
         this._initializing = false;
     }
+
+    // type je tam dvakrát, checknout
+    _generateCodeOptions() {
+        var result = "";
+        var entries = Object.assign({}, this.classMap, this.options);
+        for (const [key, value] of Object.entries(entries)) {
+            if (value instanceof Function) {
+                result += `${key}: ${value},\n`;
+            } else {
+                result += `${key}: "${value}",\n`;
+            }
+        }
+        return result;
+    }
+
+    _generateCodeChildren() {
+        var result = "";
+        for (var ch of this._children) {
+            if (ch instanceof BaseComponent) {
+                result += ch.generateCode() + ",\n";
+            } else {
+                if (ch === this._children[this._children.length - 1]) {
+                    result += `"${ch}"`;
+                } else {
+                    result += `"${ch}",\n`;
+                }
+            }
+        }
+        return result
+    }
+    generateCode(component) {
+        return `import { default as ui } from "./index.mjs";\n
+var b = new ui.${component}({\n${this._generateCodeOptions()}}, ${this._generateCodeChildren()})\n
+b.attachTo(document.getElementById("workspace"));`;
+    }
 }
 
 export { BaseComponent };

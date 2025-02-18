@@ -46,6 +46,10 @@ class Button extends BaseComponent {
             ...this.children
         );
     }
+
+    generateCode() {
+        return super.generateCode("Button");
+    }
 }
 
 Button.SIZE = {

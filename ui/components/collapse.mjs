@@ -54,6 +54,11 @@ class Collapse extends BaseComponent {
             )
         );
     }
+
+    generateCode() {
+        return super.generateCode("Collapse");
+    }
+
 }
 
 export { Collapse };
