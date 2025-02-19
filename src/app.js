@@ -910,8 +910,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
-            if (window.innerHeight < 630) {
-                $('#navigator-pin').click();
+            if (window.innerHeight < 630 || window.innerWidth < 900) {
+                if (window.innerWidth >= 900) {
+                    $('#navigator-pin').click();
+                }
                 USER_INTERFACE.MainMenu.close();
             }
 

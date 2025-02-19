@@ -97,7 +97,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 <!-- Main Panel -->
 <span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
-<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
+<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px; max-width: 100vw;">
     <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
         <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1 flex-content-between">
             <span id="main-panel-hide" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
@@ -108,12 +108,12 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
             </div>
         </div>
 
-        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
+        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; max-width: 100vw; position: relative; background-color: var(--color-bg-canvas)">
             <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
                 <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
             </div>
             <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
-                <div id="tissue-title-header" class="d-flex flex-items-center" style="max-height: 255px; flex-grow: 1;">
+                <div id="tissue-title-header" class="d-flex flex-items-center" style="max-height: 255px; max-width: 90%; flex-grow: 1;">
                     <span id="global-tissue-visibility" class="d-inline-block">
                         <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
                     </span>
@@ -175,9 +175,9 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
         <!-- Appended controls for other plugins -->
     </div>
 
-    <div class="d-flex flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
+    <div class="d-flex flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px; max-width: 100vw;">
         <div class="width-full d-flex flex-justify-between mx-4">
-            <span id="copy-url" class="hover-selectable py-2 pr-1" data-i18n="[title]main.bar.explainExportUrl">
+            <span id="copy-url" class="hover-selectable py-2 pr-1" style="flex: none" data-i18n="[title]main.bar.explainExportUrl">
                 <span class="material-icons pr-0" style="font-size: 22px;">share</span>
                 <span class="pl-1" data-i18n="main.bar.share">Share &emsp;</span>
 
@@ -187,21 +187,21 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
                         <span class="material-icons px-0 py-1" style="font-size: 22px;">download</span>
                         <span data-i18n="main.bar.exportFile">Export</span>
                     </span>
-                    <span id="copy-url-inner" class="btn-pointer flex-row" onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
+                    <span id="copy-url-inner" class="btn-pointer flex-row"  onclick="UTILITIES.copyUrlToClipboard();" data-i18n="[title]main.bar.explainExportUrl">
                         <span class="material-icons px-0" style="font-size: 22px;">link</span>
                         <span data-i18n="main.bar.exportUrl">URL</span>
                     </span>
                 </div>
             </span>
-            <span id="add-plugins" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
+            <span id="add-plugins" class="btn-pointer py-2 pr-1" style="flex: none" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
                 <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
                 <span class="pl-1" data-i18n="main.bar.plugins">Plugins</span>
             </span>
-            <span id="global-help" class="btn-pointer py-2 pr-1" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
+            <span id="global-help" class="btn-pointer py-2 pr-1"  style="flex: none" onclick="USER_INTERFACE.Tutorials.show();" data-i18n="[title]main.bar.explainTutorials">
                 <span class="material-icons pr-0 pointer" style="font-size: 22px;">school</span>
                 <span class="pl-1" data-i18n="main.bar.tutorials">Tutorial</span>
             </span>
-            <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
+            <span id="settings" class="p-0 material-icons btn-pointer py-2 pr-1" style="flex: none" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);" data-i18n="[title]main.bar.settings">settings</span>
         </div>
     </div>
 </div>
