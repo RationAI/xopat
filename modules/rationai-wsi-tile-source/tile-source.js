@@ -50,7 +50,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             return true;
         }
 
-        if (!url || !Array.isArray(data) || typeof data !== "object") return false;
+        if (!url && !Array.isArray(data) && typeof data !== "object") return false;
         //multi-tile or single tile access
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
