@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
     <link rel="stylesheet" href="../src/assets/xopat.css">
     <link rel="stylesheet" href="../src/libs/tailwind.min.css">
+    <link rel="stylesheet" href="../src/assets/display.css">
     <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
     <link rel="stylesheet" href="../src/external/enjoyhint.css">
     <link rel="stylesheet" href="../src/external/nouislider.css">
@@ -212,11 +213,63 @@
                 id: "b_pickCollapse",
             }, "Show example collapse")
             b_pickCollapse.attachTo(document.getElementById("component-picker"));
+
             var menu = new ui.Menu(undefined, {
                 "button1": [b1],
                 "button2": [c1]
             })
             menu.attachTo(document.getElementById("workspace"));
+
+            var b_menuTop = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.ORIENTATION.TOP);
+                },
+                id: "b_menuToTop",
+            }, "Set menu to TOP")
+
+            var b_menuBottom = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.ORIENTATION.BOTTOM);
+                },
+                id: "b_menuToBottom",
+            }, "Set menu to BOT")
+
+            var b_menuToLeft = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.ORIENTATION.LEFT);
+                },
+                id: "b_menuToLeft",
+            }, "Set menu to LEFT")
+
+            var b_menuToRight = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.ORIENTATION.RIGHT);
+                },
+                id: "b_menuToRight",
+            }, "Set menu to RIGHT")
+
+            var b_buttonsToLeft = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.BUTTONSIDE.LEFT);
+                },
+                id: "b_buttonsToLeft",
+            }, "Set buttons to LEFT")
+
+            var b_buttonsToRight = new ui.Button({
+                onClick: () => {
+                    menu.set(ui.Menu.BUTTONSIDE.RIGHT);
+                },
+                id: "b_buttonsToRight",
+            }, "Set buttons to RIGHT")
+
+
+            b_menuTop.attachTo(document.getElementById("settings"));
+            b_menuBottom.attachTo(document.getElementById("settings"));
+            b_menuToLeft.attachTo(document.getElementById("settings"));
+            b_menuToRight.attachTo(document.getElementById("settings"));
+            b_buttonsToLeft.attachTo(document.getElementById("settings"));
+            b_buttonsToRight.attachTo(document.getElementById("settings"));
+
         }
     </script>
 </head>
