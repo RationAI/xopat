@@ -26,6 +26,7 @@ class Join extends BaseComponent {
 
         //Todo add support for tracking the selected button if the join is a list of buttons (possibly define component buttongroup that inherits from a join)
         this.classMap["base"] = "join";
+        this.classMap["flex"];
         if (!options) options = {};
         options.style = options.style || Join.STYLE.VERTICAL;
         this._applyOptions(options, "style");
