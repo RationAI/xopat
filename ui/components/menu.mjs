@@ -9,17 +9,24 @@ class Menu extends BaseComponent {
         super(options, ...args);
 
         this.tabs = args[0];
+        this.buttonGroup;
         this.buttons = [];
         this.content = [];
+        this.buttonDiv;
+        this.contentDiv;
+        this.mainDiv;
+
+        this.classMap["base"] = "flex gap-1 bg-base-200";
+        this.classMap["orientation"] = "flex-col";
         if (options) { //TODO Options
-            this._applyOptions(options, "left", "top")
+            this._applyOptions(options, "orientation")
         }
     }
 
 
     create() {
-        var buttons = div({ "class": "flex flex-col gap-1", "id": "tabs" },)
-        var content = div({ "class": "flex flex-col", "id": "content" },)
+        this.contentDiv = new ui.Div({ id: "content" },);
+        this.buttonGroup = new ui.Join({ id: "buttonGroup", style: ui.Join.STYLE.HORIZONTAL },);
 
         for (const [t, _] of Object.entries(this.tabs)) {
             var b = new ui.Button({
@@ -40,29 +47,31 @@ class Menu extends BaseComponent {
                 id: "b-" + t,
             }, t)
 
-            this.buttons[t] = b;
-            b.attachTo(buttons)
-
-            var content_div = div({ "id": "c-" + t, "style": "display: none" });
-            for (const c of this.tabs[t]) {
-                if (c instanceof BaseComponent) {
-                    c.attachTo(content_div);
-                }
-                else {
-                    van.add(content_div, c);
-                }
-            }
-
-            this.content[t] = content_div;
-            van.add(content, content_div);
+            var content_div = new ui.Div({ id: "c-" + t, display: "display-none" }, ...this.tabs[t]);
+            content_div.attachTo(this.contentDiv);
+            b.attachTo(this.buttonGroup);
         }
-        return (
-            div({ "class": "flex flex-row gap-1 bg-base-200" }, buttons, content));
+
+        this.mainDiv = new ui.Div({ id: "main", base: "flex gap-1 bg-base-200", flex: "flex-col" }, this.buttonGroup, this.contentDiv);
+        this.mainDiv.refreshState(); // TODO why is this needed??????
+        return this.mainDiv.create();
     }
 
     generateCode() {
         return super.generateCode("Menu");
     }
+}
+
+Menu.ORIENTATION = {
+    TOP: function () { this.mainDiv.setClass("flex", "flex-col"); this.buttonGroup.set(ui.Join.STYLE.HORIZONTAL); },
+    BOTTOM: function () { this.mainDiv.setClass("flex", "flex-col-reverse"); this.buttonGroup.set(ui.Join.STYLE.HORIZONTAL); },
+    LEFT: function () { this.mainDiv.setClass("flex", "flex-row"); this.buttonGroup.set(ui.Join.STYLE.VERTICAL); },
+    RIGHT: function () { this.mainDiv.setClass("flex", "flex-row-reverse"); this.buttonGroup.set(ui.Join.STYLE.VERTICAL); }
+}
+
+Menu.BUTTONSIDE = {
+    LEFT: function () { this.buttonGroup.setClass("flex", ""); },
+    RIGHT: function () { this.buttonGroup.setClass("flex", "flex-end"); },
 }
 
 export { Menu };
