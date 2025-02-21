@@ -38,8 +38,12 @@ class BaseComponent {
      */
     attachTo(element) {
         this.refreshState();
-        van.add(element,
-            this.create());
+        if (element instanceof BaseComponent) {
+            element.addChildren(this);
+        } else {
+            van.add(element,
+                this.create());
+        }
     }
 
     /**
@@ -57,6 +61,10 @@ class BaseComponent {
         for (let property of properties) {
             property.call(this);
         }
+    }
+
+    addChildren(...children) {
+        this._children.push(...children);
     }
 
     /**
