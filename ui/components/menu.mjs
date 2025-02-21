@@ -8,17 +8,19 @@ class Menu extends BaseComponent {
     constructor(options, ...args) {
         super(options, ...args);
 
-        this.tabs = args[0]
-        if (options) {
+        this.tabs = args[0];
+        this.buttons = [];
+        this.content = [];
+        if (options) { //TODO Options
             this._applyOptions(options, "left", "top")
         }
     }
 
 
-    create() { //todo
-        //generate buttons and pages
+    create() {
         var buttons = div({ "class": "flex flex-col gap-1", "id": "tabs" },)
         var content = div({ "class": "flex flex-col", "id": "content" },)
+
         for (const [t, _] of Object.entries(this.tabs)) {
             var b = new ui.Button({
                 base: "btn",
@@ -37,7 +39,10 @@ class Menu extends BaseComponent {
                 },
                 id: "b-" + t,
             }, t)
+
+            this.buttons[t] = b;
             b.attachTo(buttons)
+
             var content_div = div({ "id": "c-" + t, "style": "display: none" });
             for (const c of this.tabs[t]) {
                 if (c instanceof BaseComponent) {
@@ -47,18 +52,12 @@ class Menu extends BaseComponent {
                     van.add(content_div, c);
                 }
             }
+
+            this.content[t] = content_div;
             van.add(content, content_div);
         }
-        //add them to divs
         return (
-            div({ "class": "flex flex-row gap-1" }, buttons, content));
-    }
-
-    addToTab(tab, content) {
-        if (!(tab in this.tabs)) {
-            console.warn("This tab does not exists between tabs " + tab);
-        }
-        this.tabs["tab"].push(...content);
+            div({ "class": "flex flex-row gap-1 bg-base-200" }, buttons, content));
     }
 
     generateCode() {
