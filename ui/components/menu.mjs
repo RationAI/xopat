@@ -30,51 +30,39 @@ class Menu extends BaseComponent {
         super(options, ...args);
 
         this.tabs = args[0];
-        this.buttonGroup;
-        this.buttons = [];
-        this.content = [];
-        this.buttonDiv;
-        this.contentDiv;
-        this.mainDiv;
+        this.buttonGroup = new ui.Join({ id: this.hash + "buttonGroup", style: ui.Join.STYLE.HORIZONTAL },);
+        this.contentDiv = new ui.Div({ id: this.hash + "content" },);;
+        this.mainDiv = new ui.Div({ id: this.hash + "main", base: "flex gap-1 bg-base-200", flex: "flex-col" }, this.buttonGroup, this.contentDiv);
 
         this.classMap["base"] = "flex gap-1 bg-base-200";
-        this.classMap["orientation"] = "flex-col";
-        if (options) { //TODO Options
-            this._applyOptions(options, "orientation")
+        this.classMap["orientation"] = Menu.ORIENTATION.TOP;
+        this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
+        if (options) {
+            this._applyOptions(options, "orientation", "buttonSide");
         }
     }
 
 
     create() {
-        this.contentDiv = new ui.Div({ id: "content" },);
-        this.buttonGroup = new ui.Join({ id: "buttonGroup", style: ui.Join.STYLE.HORIZONTAL },);
-
         for (const [t, _] of Object.entries(this.tabs)) {
-            var b = new ui.Button({
-                base: "btn",
-                type: ui.Button.TYPE.PRIMARY,
-                size: "",
-                outline: "",
+            new ui.Button({
                 onClick: () => {
-                    var was_visible = document.getElementById("c-" + t).style.display === "block";
-                    var content_divs = document.getElementById("content").childNodes;
+                    var was_visible = document.getElementById(this.hash + "c-" + t).style.display === "block";
+                    var content_divs = document.getElementById(this.hash + "content").childNodes;
                     for (var c_d of content_divs) {
                         c_d.style.display = "none";
                     }
                     if (!was_visible) {
-                        document.getElementById("c-" + t).style.display = "block";
+                        document.getElementById(this.hash + "c-" + t).style.display = "block";
                     }
                 },
-                id: "b-" + t,
-            }, t)
+                id: this.hash + "b-" + t,
+            }, t).attachTo(this.buttonGroup);
 
-            var content_div = new ui.Div({ id: "c-" + t, display: "display-none" }, ...this.tabs[t]);
-            content_div.attachTo(this.contentDiv);
-            b.attachTo(this.buttonGroup);
+            new ui.Div({ id: this.hash + "c-" + t, display: "display-none" }, ...this.tabs[t]).attachTo(this.contentDiv);
         }
 
-        this.mainDiv = new ui.Div({ id: "main", base: "flex gap-1 bg-base-200", flex: "flex-col" }, this.buttonGroup, this.contentDiv);
-        this.mainDiv.refreshState(); // TODO why is this needed??????
+        this.mainDiv.refreshState(); // TODO why is this needed?????? -> its not children of this component, that is why its not called in the base class
         return this.mainDiv.create();
     }
 
