@@ -176,49 +176,10 @@
                 id: "b2",
             }, "Set button to ternary")
 
-
-
-            // buttons for picking components
-            var b_pickbutton = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    b1.attachTo(document.getElementById("workspace"));
-                    b_large.attachTo(document.getElementById("settings"));
-                    b_normal.attachTo(document.getElementById("settings"));
-                    b_small.attachTo(document.getElementById("settings"));
-                    b_tiny.attachTo(document.getElementById("settings"));
-                    b_outline.attachTo(document.getElementById("settings"));
-                    b_toPrimary.attachTo(document.getElementById("settings"));
-                    b_toSecondary.attachTo(document.getElementById("settings"));
-                    b_toTernary.attachTo(document.getElementById("settings"));
-                    editor.setValue(b1.generateCode());
-                    editorResize(editor);
-                },
-                id: "b_pickbutton",
-            }, "Show example primary button")
-            b_pickbutton.attachTo(document.getElementById("component-picker"));
-
-            var b_pickCollapse = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    c1.attachTo(document.getElementById("workspace"));
-                    editor.setValue(c1.generateCode());
-
-                    editorResize(editor);
-                },
-                id: "b_pickCollapse",
-            }, "Show example collapse")
-            b_pickCollapse.attachTo(document.getElementById("component-picker"));
-
             var menu = new ui.Menu(undefined, {
                 "button1": [b1],
                 "button2": [c1]
             })
-            menu.attachTo(document.getElementById("workspace"));
 
             var b_menuTop = new ui.Button({
                 onClick: () => {
@@ -262,13 +223,60 @@
                 id: "b_buttonsToRight",
             }, "Set buttons to RIGHT")
 
+            // buttons for picking components
+            var b_pickbutton = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    b1.attachTo(document.getElementById("workspace"));
+                    b_large.attachTo(document.getElementById("settings"));
+                    b_normal.attachTo(document.getElementById("settings"));
+                    b_small.attachTo(document.getElementById("settings"));
+                    b_tiny.attachTo(document.getElementById("settings"));
+                    b_outline.attachTo(document.getElementById("settings"));
+                    b_toPrimary.attachTo(document.getElementById("settings"));
+                    b_toSecondary.attachTo(document.getElementById("settings"));
+                    b_toTernary.attachTo(document.getElementById("settings"));
+                    editor.setValue(b1.generateCode());
+                    editorResize(editor);
+                },
+                id: "b_pickbutton",
+            }, "Show example primary button")
+            b_pickbutton.attachTo(document.getElementById("component-picker"));
 
-            b_menuTop.attachTo(document.getElementById("settings"));
-            b_menuBottom.attachTo(document.getElementById("settings"));
-            b_menuToLeft.attachTo(document.getElementById("settings"));
-            b_menuToRight.attachTo(document.getElementById("settings"));
-            b_buttonsToLeft.attachTo(document.getElementById("settings"));
-            b_buttonsToRight.attachTo(document.getElementById("settings"));
+            var b_pickCollapse = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    c1.attachTo(document.getElementById("workspace"));
+                    editor.setValue(c1.generateCode());
+
+                    editorResize(editor);
+                },
+                id: "b_pickCollapse",
+            }, "Show example collapse")
+            b_pickCollapse.attachTo(document.getElementById("component-picker"));
+
+            var b_pickMenu = new ui.Button({
+                size: ui.Button.SIZE.SMALL,
+                onClick: () => {
+                    document.getElementById("workspace").innerHTML = "";
+                    document.getElementById("settings").innerHTML = "";
+                    menu.attachTo(document.getElementById("workspace"));
+                    b_menuTop.attachTo(document.getElementById("settings"));
+                    b_menuBottom.attachTo(document.getElementById("settings"));
+                    b_menuToLeft.attachTo(document.getElementById("settings"));
+                    b_menuToRight.attachTo(document.getElementById("settings"));
+                    b_buttonsToLeft.attachTo(document.getElementById("settings"));
+                    b_buttonsToRight.attachTo(document.getElementById("settings"));
+                    editor.setValue(menu.generateCode());
+                    editorResize(editor);
+                },
+                id: "b_pickMenu",
+            }, "Show example menu")
+            b_pickMenu.attachTo(document.getElementById("component-picker"));
 
         }
     </script>
