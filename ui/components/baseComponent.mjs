@@ -26,6 +26,7 @@ class BaseComponent {
         this._initializing = false;
         this.options = options;
         this.classState = van.state("");
+        this.hash = Math.random().toString(36).substring(7) + "-";
 
         if (options) {
             if (options.id) this.id = options.id;
