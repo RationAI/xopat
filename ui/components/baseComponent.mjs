@@ -62,7 +62,10 @@ class BaseComponent {
             property.call(this);
         }
     }
-
+    /**
+     * 
+     * @param  {...any} children - children to add to the component
+     */
     addChildren(...children) {
         this._children.push(...children);
     }
@@ -147,7 +150,10 @@ class BaseComponent {
         this._initializing = false;
     }
 
-    // type je tam dvakrát, checknout
+    /**
+     * 
+     * @returns {string} - The generated code
+     */
     _generateCodeOptions() {
         var result = "";
         var entries = Object.assign({}, this.classMap, this.options);
@@ -161,6 +167,10 @@ class BaseComponent {
         return result;
     }
 
+    /**
+     * 
+     * @returns {string} - The generated code
+     */
     _generateCodeChildren() {
         var result = "";
         for (var ch of this._children) {
@@ -176,6 +186,11 @@ class BaseComponent {
         }
         return result
     }
+
+    /**
+     * @param {string} component - The name of the component
+     * @description Generate the code for the component
+     */
     generateCode(component) {
         return `import { default as ui } from "./index.mjs";\n
 var b = new ui.${component}({\n${this._generateCodeOptions()}}, ${this._generateCodeChildren()})\n

@@ -4,7 +4,28 @@ import { default as ui } from "../index.mjs";
 
 const { div } = van.tags
 
+/**
+ * @class Menu
+ * @extends BaseComponent
+ * @description A menu component to group e.g. buttons, inputs..
+ * @example
+ * const menu = new Menu({
+ *                         id: "myMenu",
+ *                        orientation: Menu.ORIENTATION.TOP
+ *                       }, 
+ *                       {
+ *                        "Tab1": button1,
+ *                        "Tab2": button2,
+ *                        "Tab3": button3
+ *                       });
+ * menu.attachTo(document.body);
+ */
 class Menu extends BaseComponent {
+    /**
+     * 
+     * @param {*} options 
+     * @param  {...any} args 
+     */
     constructor(options, ...args) {
         super(options, ...args);
 
