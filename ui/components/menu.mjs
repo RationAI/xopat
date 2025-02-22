@@ -46,6 +46,7 @@ class Menu extends BaseComponent {
     create() {
         for (const [t, _] of Object.entries(this.tabs)) {
             new ui.Button({
+                join: "join-item",
                 onClick: () => {
                     var was_visible = document.getElementById(this.hash + "c-" + t).style.display === "block";
                     var content_divs = document.getElementById(this.hash + "content").childNodes;
