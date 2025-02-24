@@ -152,51 +152,46 @@ class BaseComponent {
     }
 
     /**
-     * 
-     * @returns {string} - The generated code
-     */
-    _generateCodeOptions() {
-        var result = "";
-        var entries = Object.assign({}, this.classMap, this.options);
-        for (const [key, value] of Object.entries(entries)) {
-            if (value instanceof Function) {
-                result += `${key}: ${value},\n`;
-            } else {
-                result += `${key}: "${value}",\n`;
-            }
-        }
-        return result;
-    }
-
-    /**
-     * 
-     * @returns {string} - The generated code
-     */
-    _generateCodeChildren() {
-        var result = "";
-        for (var ch of this._children) {
-            if (ch instanceof BaseComponent) {
-                result += ch.generateCode() + ",\n";
-            } else {
-                if (ch === this._children[this._children.length - 1]) {
-                    result += `"${ch}"`;
-                } else {
-                    result += `"${ch}",\n`;
-                }
-            }
-        }
-        return result
-    }
-
-    /**
      * @param {string} component - The name of the component
      * @description Generate the code for the component
      */
     generateCode(component) {
-        return `import { default as ui } from "./index.mjs";\n
-var b = new ui.${component}({\n${this._generateCodeOptions()}}, ${this._generateCodeChildren()})\n
-b.attachTo(document.getElementById("workspace"));`;
+        return `var b = new ui.${component}({\n${_generateCodeOptions(this)}}, ${_generateCodeChildren(this)})\n`;
     }
+}
+
+/**
+ * 
+ * @returns {string} - The generated code
+ */
+function _generateCodeOptions(component) {
+    var result = "";
+    var entries = Object.assign({}, component.classMap, component.options);
+    for (const [key, value] of Object.entries(entries)) {
+        if (value instanceof Function) {
+            result += `${key}: ${value},\n`;
+        } else {
+            result += `${key}: "${value}",\n`;
+        }
+    }
+    return result;
+}
+
+/**
+ * 
+ * @returns {string} - The generated code
+ */
+function _generateCodeChildren(component) {
+    var result = "";
+    for (var ch of component._children) {
+        if (ch === component._children[component._children.length - 1]) {
+            result += `"${ch}"`;
+        } else {
+            result += `"${ch}",\n`;
+        }
+    }
+
+    return result
 }
 
 export { BaseComponent };
