@@ -25,12 +25,15 @@ class Div extends BaseComponent {
     constructor(options, ...args) {
         super(options, ...args);
 
-        // feel free to add your custom classMap properties here
         this.classMap["base"] = options["base"] || "";
-        this.classMap["flex"] = options["flex"] || "";
-        this.classMap["gap"] = options["gap"] || "";
-        this.classMap["background"] = options["background"] || "";
-        this.classMap["display"] = options["display"] || "";
+
+        if (options) {
+            for (const [key, val] of Object.entries(options)) {
+                if (key !== "base") {
+                    this.classMap[key] = val;
+                }
+            }
+        }
 
     }
 
