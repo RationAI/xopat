@@ -30,16 +30,15 @@ class Join extends BaseComponent {
         if (!options) options = {};
         options.style = options.style || Join.STYLE.VERTICAL;
         this._applyOptions(options, "style");
+    }
 
+    create() {
         // Todo we might support also string children, detect type and convert to DOM objects if found to attach to classList manually...
-        for (let child in this._children) {
+        for (let child of this._children) {
             if (child instanceof BaseComponent) {
                 child.setClass("join", "join-item");
             }
         }
-    }
-
-    create() {
         return div(this.commonProperties, ...this.children);
     }
 }
