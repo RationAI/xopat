@@ -45,7 +45,6 @@ class Menu extends BaseComponent {
 
 
     create() {
-        var buttons = [];
         for (const [t, _] of Object.entries(this.tabs)) {
             new ui.Button({
                 onClick: () => {
@@ -63,8 +62,10 @@ class Menu extends BaseComponent {
 
             new ui.Div({ id: this.hash + "c-" + t, display: "display-none" }, ...this.tabs[t]).attachTo(this.body);
         }
+
         this.header.attachTo(this);
         this.body.attachTo(this);
+
         return div(
             { ...this.commonProperties },
             ...this.children
