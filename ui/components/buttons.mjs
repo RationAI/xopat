@@ -33,11 +33,11 @@ class Button extends BaseComponent {
         this.classMap["type"] = "btn-primary";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
-        this.classMap["join"] = options.join || "";
+        this.classMap["join"] = "";
 
         if (options) {
             if (options.onClick) this.onClick = options.onClick;
-            this._applyOptions(options, "size", "outline", "type");
+            this._applyOptions(options, "size", "outline", "type", "join");
         }
     }
 
@@ -69,6 +69,11 @@ Button.TYPE = {
     PRIMARY: function () { this.setClass("type", "btn-primary") },
     SECONDARY: function () { this.setClass("type", "btn-secondary") },
     TERNARY: function () { this.setClass("type", "btn-accent") }
+}
+
+Button.JOIN = {
+    ON: function () { this.setClass("join", "join-item") },
+    OFF: function () { this.setClass("join", "") }
 }
 
 export { Button };
