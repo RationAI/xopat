@@ -23,8 +23,11 @@
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
     <script type="text/javascript" src="../src/libs/monaco/loader.js"></script>
-    <script type="text/javascript">
+    <script type="module">
         require.config({ paths: { 'vs': '../src/libs/monaco' } });
+        import { default as ui } from "./index.mjs";
+        import { default as van } from "./vanjs.mjs";
+
         const DEFAULT_EDITOR_OPTIONS = {
             value: ``,
             lineNumbers: "on",
@@ -49,7 +52,6 @@
         const save = () => {
             localStorage.setItem("monaco", editor.getValue());
             document.getElementById("workspace").innerHTML = "";
-            document.getElementById("settings").innerHTML = "";
             if (document.getElementById("custom")) {
                 document.getElementById("custom").remove();
             }
@@ -79,11 +81,6 @@
             save();
         }, false);
 
-    </script>
-    <script type="module">
-        import { default as ui } from "./index.mjs";
-        import { default as van } from "./vanjs.mjs";
-
         function changeTheme(theme = undefined) {
             //["dark", "light", undefined]
             if (theme === "dark" ||
@@ -99,55 +96,41 @@
         window.onload = () => {
             window.changeTheme();
 
-            var b1 = new ui.Button({
-                base: "btn",
-                type: ui.Button.TYPE.PRIMARY,
-                size: "",
-                outline: "",
-                onClick: () => { },
-                id: "b1",
-            }, "Button")
-
-            var c1 = new ui.Collapse({
-                summary: "hello there",
-            }, "<div>general kenobi</div>");
-
             // example button settings
             var b_large = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.SIZE.LARGE)
-                    editor.setValue(b1.generateCode());
+                    window["workspaceItem"].set(ui.Button.SIZE.LARGE)
                 },
                 id: "b2",
             }, "Set size to large")
 
             var b_normal = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.SIZE.NORMAL)
+                    window["workspaceItem"].set(ui.Button.SIZE.NORMAL)
                 },
                 id: "b2",
             }, "Set size to normal")
 
             var b_small = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.SIZE.SMALL)
+                    window["workspaceItem"].set(ui.Button.SIZE.SMALL)
                 },
                 id: "b2",
             }, "Set size to small")
 
             var b_tiny = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.SIZE.TINY)
+                    window["workspaceItem"].set(ui.Button.SIZE.TINY)
                 },
                 id: "b2",
             }, "Set size to tiny")
 
             var b_outline = new ui.Button({
                 onClick: () => {
-                    if (b1.classMap["outline"] == "") {
-                        b1.set(ui.Button.OUTLINE.ENABLE)
+                    if (window["workspaceItem"].classMap["outline"] == "") {
+                        window["workspaceItem"].set(ui.Button.OUTLINE.ENABLE)
                     } else {
-                        b1.set(ui.Button.OUTLINE.DISABLE)
+                        window["workspaceItem"].set(ui.Button.OUTLINE.DISABLE)
                     }
                 },
                 id: "b2",
@@ -156,14 +139,14 @@
 
             var b_toPrimary = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.TYPE.PRIMARY);
+                    window["workspaceItem"].set(ui.Button.TYPE.PRIMARY);
                 },
                 id: "b2",
             }, "Set button to primary")
 
             var b_toSecondary = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.TYPE.SECONDARY);
+                    window["workspaceItem"].set(ui.Button.TYPE.SECONDARY);
                 },
                 id: "b2",
             }, "Set button to secondary")
@@ -171,54 +154,50 @@
 
             var b_toTernary = new ui.Button({
                 onClick: () => {
-                    b1.set(ui.Button.TYPE.TERNARY);
+                    window["workspaceItem"].set(ui.Button.TYPE.TERNARY);
                 },
                 id: "b2",
             }, "Set button to ternary")
 
-            var menu = new ui.Menu(undefined, {
-                "button1": [b1],
-                "button2": [c1]
-            })
-
+            // example menu settings
             var b_menuTop = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.ORIENTATION.TOP);
+                    window["workspaceItem"].set(ui.Menu.ORIENTATION.TOP);
                 },
                 id: "b_menuToTop",
             }, "Set menu to TOP")
 
             var b_menuBottom = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.ORIENTATION.BOTTOM);
+                    window["workspaceItem"].set(ui.Menu.ORIENTATION.BOTTOM);
                 },
                 id: "b_menuToBottom",
             }, "Set menu to BOT")
 
             var b_menuToLeft = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.ORIENTATION.LEFT);
+                    window["workspaceItem"].set(ui.Menu.ORIENTATION.LEFT);
                 },
                 id: "b_menuToLeft",
             }, "Set menu to LEFT")
 
             var b_menuToRight = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.ORIENTATION.RIGHT);
+                    window["workspaceItem"].set(ui.Menu.ORIENTATION.RIGHT);
                 },
                 id: "b_menuToRight",
             }, "Set menu to RIGHT")
 
             var b_buttonsToLeft = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.BUTTONSIDE.LEFT);
+                    window["workspaceItem"].set(ui.Menu.BUTTONSIDE.LEFT);
                 },
                 id: "b_buttonsToLeft",
             }, "Set buttons to LEFT")
 
             var b_buttonsToRight = new ui.Button({
                 onClick: () => {
-                    menu.set(ui.Menu.BUTTONSIDE.RIGHT);
+                    window["workspaceItem"].set(ui.Menu.BUTTONSIDE.RIGHT);
                 },
                 id: "b_buttonsToRight",
             }, "Set buttons to RIGHT")
@@ -227,9 +206,12 @@
             var b_pickbutton = new ui.Button({
                 size: ui.Button.SIZE.SMALL,
                 onClick: () => {
+                    editor.setValue(ui.Button.generateCode());
+                    save();
+                    editorResize(editor);
+
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
-                    b1.attachTo(document.getElementById("workspace"));
                     b_large.attachTo(document.getElementById("settings"));
                     b_normal.attachTo(document.getElementById("settings"));
                     b_small.attachTo(document.getElementById("settings"));
@@ -238,22 +220,20 @@
                     b_toPrimary.attachTo(document.getElementById("settings"));
                     b_toSecondary.attachTo(document.getElementById("settings"));
                     b_toTernary.attachTo(document.getElementById("settings"));
-                    editor.setValue(b1.generateCode());
-                    editorResize(editor);
                 },
                 id: "b_pickbutton",
-            }, "Show example primary button")
+            }, "Show example button")
             b_pickbutton.attachTo(document.getElementById("component-picker"));
 
             var b_pickCollapse = new ui.Button({
                 size: ui.Button.SIZE.SMALL,
                 onClick: () => {
+                    editor.setValue(ui.Collapse.generateCode());
+                    save();
+                    editorResize(editor);
+
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
-                    c1.attachTo(document.getElementById("workspace"));
-                    editor.setValue(c1.generateCode());
-
-                    editorResize(editor);
                 },
                 id: "b_pickCollapse",
             }, "Show example collapse")
@@ -262,17 +242,18 @@
             var b_pickMenu = new ui.Button({
                 size: ui.Button.SIZE.SMALL,
                 onClick: () => {
+                    editor.setValue(ui.Menu.generateCode());
+                    save();
+                    editorResize(editor);
+
                     document.getElementById("workspace").innerHTML = "";
                     document.getElementById("settings").innerHTML = "";
-                    menu.attachTo(document.getElementById("workspace"));
                     b_menuTop.attachTo(document.getElementById("settings"));
                     b_menuBottom.attachTo(document.getElementById("settings"));
                     b_menuToLeft.attachTo(document.getElementById("settings"));
                     b_menuToRight.attachTo(document.getElementById("settings"));
                     b_buttonsToLeft.attachTo(document.getElementById("settings"));
                     b_buttonsToRight.attachTo(document.getElementById("settings"));
-                    editor.setValue(menu.generateCode());
-                    editorResize(editor);
                 },
                 id: "b_pickMenu",
             }, "Show example menu")
@@ -283,7 +264,7 @@
 </head>
 
 <body class="latte dark:frappe h-full bg-base">
-    <div style="max-width: 1200px; margin: 0 auto;" class="px-2 py-2">
+    <div style="max-width: 1200px; margin: 0 auto; height : 50%" class="px-2 py-2">
         <div class="flex item-center flex-col items-center">
             <span class="text-sm">Theme settings</span>
             <div class="flex item-center flex-row join">
@@ -292,16 +273,16 @@
                 <button class="btn btn-primary btn-xs join-item" onclick="changeTheme(undefined)">Auto</button>
             </div>
         </div>
-        <div class="flex flex-row">
+        <div class="flex flex-row" style="height: 90%;">
             <div class="flex-1 p-2">
                 <div>
                     <h3 class="text-lg font-bold">Settings</h3>
                 </div>
-                <div id="settings"></div>
+                <div id="settings" style="height: 25%;"></div>
                 <div>
                     <h3 class="text-lg font-bold">Workspace</h3>
                 </div>
-                <div id="workspace"></div>
+                <div id="workspace" style="border: thin solid rgb(150, 150, 150); height: 65%;"></div>
             </div>
             <div class="flex flex-col mt-2">
                 <h3 class="text-lg font-bold">Component picker</h3>

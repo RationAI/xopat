@@ -2149,6 +2149,10 @@ details.collapse summary::-webkit-details-marker {
   visibility: collapse;
 }
 
+.static {
+  position: static;
+}
+
 .mt-2 {
   margin-top: 0.5rem;
 }
@@ -2201,6 +2205,10 @@ details.collapse summary::-webkit-details-marker {
 
 .gap-1 {
   gap: 0.25rem;
+}
+
+.border {
+  border-width: 1px;
 }
 
 .bg-base {

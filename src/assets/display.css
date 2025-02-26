@@ -6,3 +6,24 @@
     display: flex;
     justify-content: flex-end;
 }
+
+.menu-item-vertical {
+    max-width: 150px;
+}
+
+.menu-item-horizontal {
+    max-width: 250px;
+}
+
+.menu-item-horizontal,
+.menu-item-vertical {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-item-horizontal:hover,
+.menu-item-vertical:hover {
+    max-width: none;
+}

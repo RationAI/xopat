@@ -150,51 +150,6 @@ class BaseComponent {
         }
         this._initializing = false;
     }
-
-    /**
-     * @param {string} component - The name of the component
-     * @description Generate the code for the component
-     */
-    generateCode(component) {
-        return (
-            `import { default as ui } from "/ui/index.mjs";\n
-var b = new ui.${component}({\n${_generateCodeOptions(this)}},\n ${_generateCodeChildren(this)})\n
-b.attachTo(document.getElementById("workspace"));`);
-    }
-}
-
-/**
- * 
- * @returns {string} - The generated code
- */
-function _generateCodeOptions(component) {
-    var result = "";
-    var entries = Object.assign({}, component.classMap, component.options);
-    for (const [key, value] of Object.entries(entries)) {
-        if (value instanceof Function) {
-            result += `${key}: ${value},\n`;
-        } else {
-            result += `${key}: "${value}",\n`;
-        }
-    }
-    return result;
-}
-
-/**
- * 
- * @returns {string} - The generated code
- */
-function _generateCodeChildren(component) {
-    var result = "";
-    for (var ch of component._children) {
-        if (ch === component._children[component._children.length - 1]) {
-            result += `"${ch.id}"`;
-        } else {
-            result += `"${ch.id}",\n`;
-        }
-    }
-
-    return result
 }
 
 export { BaseComponent };
