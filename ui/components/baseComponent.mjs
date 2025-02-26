@@ -156,7 +156,10 @@ class BaseComponent {
      * @description Generate the code for the component
      */
     generateCode(component) {
-        return `var b = new ui.${component}({\n${_generateCodeOptions(this)}}, ${_generateCodeChildren(this)})\n`;
+        return (
+            `import { default as ui } from "/ui/index.mjs";\n
+var b = new ui.${component}({\n${_generateCodeOptions(this)}},\n ${_generateCodeChildren(this)})\n
+b.attachTo(document.getElementById("workspace"));`);
     }
 }
 
@@ -185,9 +188,9 @@ function _generateCodeChildren(component) {
     var result = "";
     for (var ch of component._children) {
         if (ch === component._children[component._children.length - 1]) {
-            result += `"${ch}"`;
+            result += `"${ch.id}"`;
         } else {
-            result += `"${ch}",\n`;
+            result += `"${ch.id}",\n`;
         }
     }
 

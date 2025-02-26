@@ -1,3 +1,4 @@
+// TODO hardcoded class codes
 import van from "../vanjs.mjs";
 import { BaseComponent } from "./baseComponent.mjs";
 import { default as ui } from "../index.mjs";
