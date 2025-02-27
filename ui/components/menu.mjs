@@ -28,7 +28,13 @@ class Menu extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options,);
-        this.tabs = args[0];
+        this.content = args[0];
+        this.text = args[1] || [];
+        this.icons = args[2] || [];
+
+        if (!this.text && !this.icons) {
+            throw new Error("At least one of text or icons must be provided");
+        }
 
         this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL },); // TODO create header component with Icon/text/ICON+text options
         this.body = new ui.Div({ id: this.hash + "body" },);
@@ -46,34 +52,10 @@ class Menu extends BaseComponent {
 
 
     create() {
-        for (const [t, _] of Object.entries(this.tabs)) {
-            var b = new ui.Button({
-                id: this.hash + "b-" + t,
-                size: ui.Button.SIZE.SMALL,
-                additionalProperties: { title: t },
-                additionalClassProperties: { item: "menu-item-horizontal" },
-                onClick: () => {
-                    for (var div of document.getElementById(this.hash + "body").childNodes) {
-                        if (div.style.display !== "block" && div.id === this.hash + "c-" + t) {
-                            div.style.display = "block";
-                        } else {
-                            div.style.display = "none";
-                        }
-                    }
-
-                    for (var button of this.headerButtons) {
-                        if (button.classMap["type"] !== "btn-secondary" && button.id === this.hash + "b-" + t) {
-                            button.setClass("type", "btn-secondary");
-                        } else {
-                            button.setClass("type", "btn-primary");
-                        }
-                    }
-                }
-            }, t);
-            this.headerButtons.push(b);
+        for (let i = 0; i < this.content.length; i++) {
+            var [b, c] = this._addTabInternal(this.content[i], this.text[i], this.icons[i], i);
             b.attachTo(this.header);
-
-            new ui.Div({ id: this.hash + "c-" + t, display: "display-none" }, ...this.tabs[t]).attachTo(this.body);
+            c.attachTo(this.body);
         }
 
         this.header.attachTo(this);
@@ -85,6 +67,73 @@ class Menu extends BaseComponent {
         );
     }
 
+    deleteTab(index) {
+        if (index < 0 || index >= this.content.length) {
+            throw new Error("Index out of bounds");
+        }
+
+        this.content.splice(index, 1);
+        this.text.splice(index, 1);
+        this.icons.splice(index, 1);
+        this.headerButtons.splice(index, 1);
+
+        document.getElementById(this.hash + "c-" + index).remove();
+        document.getElementById(this.hash + "b-" + index).remove();
+    }
+
+    addTab(content, text, icon) {
+        var [b, c] = this._addTabInternal(content, text, icon, this.content.length);
+
+        this.content.push(content);
+        this.text.push(text);
+        this.icons.push(icon);
+
+        b.setClass("join", "join-item");
+        b.attachTo(document.getElementById(this.hash + "header"));
+        c.attachTo(document.getElementById(this.hash + "body"));
+    }
+
+    _addTabInternal(content, inText, inIcon, i) {
+        if (!inText && !inIcon) {
+            throw new Error("At least one of text or icons must be provided");
+        }
+
+        var text = inText || "";
+        var icon = inIcon || "";
+        if (inText && inIcon) {
+            text = " " + text;
+        }
+
+        var b = new ui.Button({
+            id: this.hash + "b-" + i,
+            size: ui.Button.SIZE.SMALL,
+            additionalProperties: { title: text },
+            additionalClassProperties: { item: "menu-item-horizontal" },
+            onClick: () => {
+                for (var div of document.getElementById(this.hash + "body").childNodes) {
+                    if (div.style.display !== "block" && div.id === this.hash + "c-" + i) {
+                        div.style.display = "block";
+                    } else {
+                        div.style.display = "none";
+                    }
+                }
+
+                for (var button of this.headerButtons) {
+                    if (button.classMap["type"] !== "btn-secondary" && button.id === this.hash + "b-" + i) {
+                        button.setClass("type", "btn-secondary");
+                    } else {
+                        button.setClass("type", "btn-primary");
+                    }
+                }
+            }
+        }, icon, text);
+        this.headerButtons.push(b);
+
+        var c = new ui.Div({ id: this.hash + "c-" + i, display: "display-none" }, ...content);
+
+        return [b, c];
+    }
+
     static generateCode() {
         return `
 // DISCLAIMER this is static example code, it does not change based on the actual component configuration
@@ -93,16 +142,22 @@ class Menu extends BaseComponent {
 
 import { default as ui } from "/ui/index.mjs";
 
+const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+
 window["workspaceItem"] = new ui.Menu({
     id: "myMenu",
     orientation: ui.Menu.ORIENTATION.TOP,
     buttonSide: ui.Menu.BUTTONSIDE.LEFT
-},{
-    "Tab1": "Hello",
-    "Tab2": "World"
-    });
+},
+["Hello", "World"],
+["button1", "button2"],
+[settingsIcon, settingsIcon]);
 
 window["workspaceItem"].attachTo(document.getElementById("workspace"));
+
+window["workspaceItem"].addTab("!!!!", "button3", settingsIcon);
+
+window["workspaceItem"].deleteTab(1);
 `;
 
     }

@@ -25,13 +25,9 @@ class Div extends BaseComponent {
     constructor(options, ...args) {
         super(options, ...args);
 
-        this.classMap["base"] = options["base"] || "";
-
         if (options) {
             for (const [key, val] of Object.entries(options)) {
-                if (key !== "base") {
-                    this.classMap[key] = val;
-                }
+                this.classMap[key] = val;
             }
         }
 
@@ -42,10 +38,6 @@ class Div extends BaseComponent {
             { ...this.commonProperties },
             ...this.children
         );
-    }
-
-    generateCode() {
-        return super.generateCode("Div");
     }
 }
 

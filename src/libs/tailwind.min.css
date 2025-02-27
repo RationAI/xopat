@@ -1300,11 +1300,6 @@ html {
   justify-self: end;
 }
 
-.tabs {
-  display: grid;
-  align-items: flex-end;
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .btn {
     animation: button-pop var(--animation-btn, 0.25s) ease-out;
