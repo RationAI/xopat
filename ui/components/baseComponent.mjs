@@ -26,6 +26,7 @@ class BaseComponent {
         this._initializing = false;
         this.options = options;
         this.classState = van.state("");
+        this.hash = Math.random().toString(36).substring(7) + "-";
 
         if (options) {
             if (options.id) this.id = options.id;
@@ -38,8 +39,12 @@ class BaseComponent {
      */
     attachTo(element) {
         this.refreshState();
-        van.add(element,
-            this.create());
+        if (element instanceof BaseComponent) {
+            element.addChildren(this);
+        } else {
+            van.add(element,
+                this.create());
+        }
     }
 
     /**
@@ -57,6 +62,13 @@ class BaseComponent {
         for (let property of properties) {
             property.call(this);
         }
+    }
+    /**
+     * 
+     * @param  {...any} children - children to add to the component
+     */
+    addChildren(...children) {
+        this._children.push(...children);
     }
 
     /**
