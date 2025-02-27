@@ -29,6 +29,8 @@ class Menu extends BaseComponent {
         this.text = args[1] || [];
         this.icons = args[2] || [];
 
+        this.idCounter = this.content.length;
+
         if (!this.text && !this.icons) {
             throw new Error("At least one of text or icons must be provided");
         }
@@ -79,7 +81,7 @@ class Menu extends BaseComponent {
     }
 
     addTab(content, text, icon) {
-        var [b, c] = this._addTabInternal(content, text, icon, this.content.length);
+        var [b, c] = this._addTabInternal(content, text, icon, this.idCounter++);
 
         this.content.push(content);
         this.text.push(text);
