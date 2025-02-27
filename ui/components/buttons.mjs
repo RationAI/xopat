@@ -97,9 +97,4 @@ Button.TYPE = {
     TERNARY: function () { this.setClass("type", "btn-accent") }
 }
 
-Button.JOIN = {
-    ON: function () { this.setClass("join", "join-item") },
-    OFF: function () { this.setClass("join", "") }
-}
-
 export { Button };

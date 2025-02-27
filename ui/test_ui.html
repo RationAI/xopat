@@ -96,169 +96,38 @@
         window.onload = () => {
             window.changeTheme();
 
-            // example button settings
-            var b_large = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.SIZE.LARGE)
-                },
-                id: "b2",
-            }, "Set size to large")
-
-            var b_normal = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.SIZE.NORMAL)
-                },
-                id: "b2",
-            }, "Set size to normal")
-
-            var b_small = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.SIZE.SMALL)
-                },
-                id: "b2",
-            }, "Set size to small")
-
-            var b_tiny = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.SIZE.TINY)
-                },
-                id: "b2",
-            }, "Set size to tiny")
-
-            var b_outline = new ui.Button({
-                onClick: () => {
-                    if (window["workspaceItem"].classMap["outline"] == "") {
-                        window["workspaceItem"].set(ui.Button.OUTLINE.ENABLE)
-                    } else {
-                        window["workspaceItem"].set(ui.Button.OUTLINE.DISABLE)
+            for (let cName in ui) {
+                const Component = ui[cName];
+                let buttons = [];
+                for (let prop in Component) {
+                    // Props are capital   PROP_NAME
+                    if (prop.match("[A-Z0-9_]*") && typeof (Component[prop]) === "object") {
+                        const propertyMap = Component[prop];
+                        for (let propValue in propertyMap) {
+                            buttons.push(new ui.Button({
+                                onClick: () => {
+                                    window["workspaceItem"].set(propertyMap[propValue]);
+                                },
+                                id: prop + "--" + propValue,
+                            }, `Set ${prop} to ${propValue}`));
+                        }
                     }
-                },
-                id: "b2",
-            }, "Set outline on/off")
+                }
+                new ui.Button({
+                    size: ui.Button.SIZE.SMALL,
+                    onClick: () => {
+                        editor.setValue(Component.generateCode ? Component.generateCode() : "// Error: component has no usage defined!");
+                        save();
+                        editorResize(editor);
 
-
-            var b_toPrimary = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.TYPE.PRIMARY);
-                },
-                id: "b2",
-            }, "Set button to primary")
-
-            var b_toSecondary = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.TYPE.SECONDARY);
-                },
-                id: "b2",
-            }, "Set button to secondary")
-
-
-            var b_toTernary = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Button.TYPE.TERNARY);
-                },
-                id: "b2",
-            }, "Set button to ternary")
-
-            // example menu settings
-            var b_menuTop = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.ORIENTATION.TOP);
-                },
-                id: "b_menuToTop",
-            }, "Set menu to TOP")
-
-            var b_menuBottom = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.ORIENTATION.BOTTOM);
-                },
-                id: "b_menuToBottom",
-            }, "Set menu to BOT")
-
-            var b_menuToLeft = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.ORIENTATION.LEFT);
-                },
-                id: "b_menuToLeft",
-            }, "Set menu to LEFT")
-
-            var b_menuToRight = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.ORIENTATION.RIGHT);
-                },
-                id: "b_menuToRight",
-            }, "Set menu to RIGHT")
-
-            var b_buttonsToLeft = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.BUTTONSIDE.LEFT);
-                },
-                id: "b_buttonsToLeft",
-            }, "Set buttons to LEFT")
-
-            var b_buttonsToRight = new ui.Button({
-                onClick: () => {
-                    window["workspaceItem"].set(ui.Menu.BUTTONSIDE.RIGHT);
-                },
-                id: "b_buttonsToRight",
-            }, "Set buttons to RIGHT")
-
-            // buttons for picking components
-            var b_pickbutton = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    editor.setValue(ui.Button.generateCode());
-                    save();
-                    editorResize(editor);
-
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    b_large.attachTo(document.getElementById("settings"));
-                    b_normal.attachTo(document.getElementById("settings"));
-                    b_small.attachTo(document.getElementById("settings"));
-                    b_tiny.attachTo(document.getElementById("settings"));
-                    b_outline.attachTo(document.getElementById("settings"));
-                    b_toPrimary.attachTo(document.getElementById("settings"));
-                    b_toSecondary.attachTo(document.getElementById("settings"));
-                    b_toTernary.attachTo(document.getElementById("settings"));
-                },
-                id: "b_pickbutton",
-            }, "Show example button")
-            b_pickbutton.attachTo(document.getElementById("component-picker"));
-
-            var b_pickCollapse = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    editor.setValue(ui.Collapse.generateCode());
-                    save();
-                    editorResize(editor);
-
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                },
-                id: "b_pickCollapse",
-            }, "Show example collapse")
-            b_pickCollapse.attachTo(document.getElementById("component-picker"));
-
-            var b_pickMenu = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    editor.setValue(ui.Menu.generateCode());
-                    save();
-                    editorResize(editor);
-
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    b_menuTop.attachTo(document.getElementById("settings"));
-                    b_menuBottom.attachTo(document.getElementById("settings"));
-                    b_menuToLeft.attachTo(document.getElementById("settings"));
-                    b_menuToRight.attachTo(document.getElementById("settings"));
-                    b_buttonsToLeft.attachTo(document.getElementById("settings"));
-                    b_buttonsToRight.attachTo(document.getElementById("settings"));
-                },
-                id: "b_pickMenu",
-            }, "Show example menu")
-            b_pickMenu.attachTo(document.getElementById("component-picker"));
-
+                        document.getElementById("workspace").innerHTML = "";
+                        document.getElementById("settings").innerHTML = "";
+                        const settings = document.getElementById("settings");
+                        buttons.forEach(x => x.attachTo(settings));
+                    },
+                    id: "component--" + cName,
+                }, "Show example " + Component.name).attachTo(document.getElementById("component-picker"));
+            }
         }
     </script>
 </head>
