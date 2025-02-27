@@ -13,11 +13,8 @@ const { div } = van.tags
  *                         id: "myMenu",
  *                        orientation: Menu.ORIENTATION.TOP
  *                       }, 
- *                       {
- *                        "Tab1": button1,
- *                        "Tab2": button2,
- *                        "Tab3": button3
- *                       });
+ *                      ["Hello", "World"],
+ *                     ["button1", "button2"]);
  * menu.attachTo(document.body);
  */
 class Menu extends BaseComponent {
