@@ -12,16 +12,16 @@ const { div } = van.tags
  * const menu = new Menu({
  *                         id: "myMenu",
  *                        orientation: Menu.ORIENTATION.TOP
- *                       }, 
+ *                       },
  *                      ["Hello", "World"],
  *                     ["button1", "button2"]);
  * menu.attachTo(document.body);
  */
 class Menu extends BaseComponent {
     /**
-     * 
-     * @param {*} options 
-     * @param  {...any} args 
+     *
+     * @param {*} options
+     * @param  {...any} args
      */
     constructor(options, ...args) {
         super(options,);
@@ -46,7 +46,7 @@ class Menu extends BaseComponent {
 
     create() {
         for (let i = 0; i < this.items.length; i++) {
-            var [b, c] = this._addTabInternal(this.items[i], i);
+            const [b, c] = this._addTabInternal(this.items[i], i);
             b.attachTo(this.header);
             c.attachTo(this.body);
         }
@@ -73,19 +73,19 @@ class Menu extends BaseComponent {
     }
 
     addTab(item) {
-        var [b, c] = this._addTabInternal(item, this.idCounter++);
+        const [b, c] = this._addTabInternal(item, this.idCounter++);
 
         this.items.push(item);
-    
+
         b.setClass("join", "join-item");
         b.attachTo(document.getElementById(this.hash + "header"));
         c.attachTo(document.getElementById(this.hash + "body"));
     }
 
     _addTabInternal(item, i) {
-        var content = item["body"];
-        var inText = item["title"];
-        var inIcon = item["icon"];
+        const content = item["body"];
+        const inText = item["title"];
+        let inIcon = item["icon"];
 
         if (!inText && !inIcon) {
             throw new Error("At least one of text or icons must be provided");
@@ -95,19 +95,19 @@ class Menu extends BaseComponent {
             inIcon = new ui.FAIcon({ name: inIcon });
         }
 
-        var text = inText || "";
-        var icon = inIcon || "";
+        let text = inText || "";
+        let icon = inIcon || "";
         if (inText && inIcon) {
             text = " " + text;
         }
 
-        var b = new ui.Button({
+        const b = new ui.Button({
             id: this.hash + "b-" + i,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: text },
             additionalClassProperties: { item: "menu-item-horizontal" },
             onClick: () => {
-                for (var div of document.getElementById(this.hash + "body").childNodes) {
+                for (let div of document.getElementById(this.hash + "body").childNodes) {
                     if (div.style.display !== "block" && div.id === this.hash + "c-" + i) {
                         div.style.display = "block";
                     } else {
@@ -115,7 +115,7 @@ class Menu extends BaseComponent {
                     }
                 }
 
-                for (var button of this.headerButtons) {
+                for (let button of this.headerButtons) {
                     if (button.classMap["type"] !== "btn-secondary" && button.id === this.hash + "b-" + i) {
                         button.setClass("type", "btn-secondary");
                     } else {
@@ -126,7 +126,7 @@ class Menu extends BaseComponent {
         }, icon, text);
         this.headerButtons.push(b);
 
-        var c = new ui.Div({ id: this.hash + "c-" + i, display: "display-none" }, ...content);
+        const c = new ui.Div({ id: this.hash + "c-" + i, display: "display-none" }, ...content);
 
         return [b, c];
     }
@@ -165,28 +165,32 @@ Menu.ORIENTATION = {
     TOP: function () {
         this.setClass("flex", "flex-col");
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (var b of this.headerButtons) { b.setClass("item", "menu-item-horizontal"); }
+        for (let b of this.headerButtons) { b.setClass("item", "menu-item-horizontal"); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (var b of this.headerButtons) { b.setClass("item", "menu-item-horizontal"); }
+        for (let b of this.headerButtons) { b.setClass("item", "menu-item-horizontal"); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (var b of this.headerButtons) { b.setClass("item", "menu-item-vertical"); }
+        for (let b of this.headerButtons) { b.setClass("item", "menu-item-vertical"); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (var b of this.headerButtons) { b.setClass("item", "menu-item-vertical"); }
+        for (let b of this.headerButtons) { b.setClass("item", "menu-item-vertical"); }
     }
 }
 
 Menu.BUTTONSIDE = {
     LEFT: function () { this.header.setClass("flex", ""); },
     RIGHT: function () { this.header.setClass("flex", "flex-end"); },
+}
+
+Menu.HEADER = {
+    ICON: function () {}
 }
 
 export { Menu };
