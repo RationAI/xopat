@@ -28,8 +28,12 @@ class FAIcon extends BaseComponent {
      * @param {string} [options.name] - The name of the icon
     **/
     constructor(options, ...args) {
-        super(options, ...args);
 
+        if (typeof options === "string") {
+            options = { name: options };
+        }
+
+        super(options, ...args);
         this.classMap["base"] = "fa-solid";
         this.classMap["name"] = options && options["name"] || "";
     }

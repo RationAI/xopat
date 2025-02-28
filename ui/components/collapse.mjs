@@ -27,6 +27,9 @@ class Collapse extends BaseComponent {
      * @param {string} [options.customSummary] - The custom summary
      */
     constructor(options, ...args) {
+        if (typeof options === "string") {
+            options = { summary: options };
+        };
         super(options, ...args);
 
         this.classMap["base"] = "collapse bg-base-200 collapse-arrow";

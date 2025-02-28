@@ -27,3 +27,28 @@
 .menu-item-vertical:hover {
     max-width: none;
 }
+
+.btn {
+    height: 2.5rem;
+    min-height: 2.5rem;
+}
+
+.btn-xs {
+    height: 1.8rem;
+    min-height: 1.8rem;
+}
+
+.btn-sm {
+    height: 2.2rem;
+    min-height: 2.2rem;
+}
+
+.btn-md {
+    height: 3rem;
+    min-height: 3rem;
+}
+
+.btn-lg {
+    height: 4rem;
+    min-height: 4rem;
+}

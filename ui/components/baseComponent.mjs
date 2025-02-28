@@ -29,7 +29,7 @@ class BaseComponent {
         this.hash = Math.random().toString(36).substring(7) + "-";
 
         if (options) {
-            if (options.id) this.id = options.id;
+            if (options.id) this.id = options.id; else this.id = this.hash.slice(0, -1);
         }
     }
 
