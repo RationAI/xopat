@@ -47,9 +47,11 @@ class Menu extends BaseComponent {
         this.classMap["base"] = "flex gap-1 bg-base-200";
         this.classMap["orientation"] = Menu.ORIENTATION.TOP;
         this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
+        this.classMap["design"] = Menu.DESIGN.TEXTICON;
         this.classMap["flex"] = "flex-col";
+
         if (options) {
-            this._applyOptions(options, "orientation", "buttonSide");
+            this._applyOptions(options, "orientation", "buttonSide", "design");
         }
     }
 
@@ -131,7 +133,8 @@ const settingsIcon = new ui.FAIcon({name: "fa-gear"});
 window["workspaceItem"] = new ui.Menu({
     id: "myMenu",
     orientation: ui.Menu.ORIENTATION.TOP,
-    buttonSide: ui.Menu.BUTTONSIDE.LEFT
+    buttonSide: ui.Menu.BUTTONSIDE.LEFT,
+    design: ui.Menu.DESIGN.TEXTICON
 },
 {id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"},
 {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"},
@@ -174,6 +177,18 @@ Menu.ORIENTATION = {
 Menu.BUTTONSIDE = {
     LEFT: function () { this.header.setClass("flex", ""); },
     RIGHT: function () { this.header.setClass("flex", "flex-end"); },
+}
+
+Menu.DESIGN = {
+    ICONONLY: function () {
+        for (let t of Object.values(this.tabs)) { t.iconOnly(); }
+    },
+    TITLEONLY: function () {
+        for (let t of Object.values(this.tabs)) { t.titleOnly(); }
+    },
+    TITLEICON: function () {
+        for (let t of Object.values(this.tabs)) { t.titleIcon(); }
+    }
 }
 
 export { Menu };

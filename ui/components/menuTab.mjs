@@ -19,6 +19,9 @@ class MenuTab {
 
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
+
+        this.icon;
+        this.title = item["title"];
     }
 
     /**
@@ -33,6 +36,8 @@ class MenuTab {
         if (!(inIcon instanceof BaseComponent)) {
             inIcon = new ui.FAIcon({ name: inIcon });
         }
+
+        this.icon = inIcon;
 
         const b = new ui.Button({
             id: "b-" + item.id,
@@ -63,18 +68,28 @@ class MenuTab {
         return [b, c];
     }
 
-    /**
-     * remove tab from the DOM tree
-     */
     removeTab() {
         document.getElementById(this.headerButton.id).remove();
         document.getElementById(this.contentDiv.id).remove();
     }
-    /**
-     * set focus on the tab
-     */
+
     focus() {
         document.getElementById(this.headerButton.id).click();
+    }
+
+    titleOnly() {
+        document.getElementById(this.headerButton.id).innerHTML = this.title;
+    }
+
+    titleIcon() {
+        document.getElementById(this.headerButton.id).innerHTML = "";
+        this.icon.attachTo(document.getElementById(this.headerButton.id));
+        document.getElementById(this.headerButton.id).innerHTML += this.title;
+    }
+
+    iconOnly() {
+        document.getElementById(this.headerButton.id).innerHTML = "";
+        this.icon.attachTo(document.getElementById(this.headerButton.id));
     }
 }
 export { MenuTab };
