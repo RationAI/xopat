@@ -21,7 +21,9 @@ class Menu extends BaseComponent {
     /**
      *
      * @param {*} options
-     * @param  {...any} args
+     * @param {keyof typeof Menu.ORIENTATION} [options.orientation] - The orientation of the menu
+     * @param {keyof typeof Menu.BUTTONSIDE} [options.buttonSide] - The side of the buttons
+     * @param  {...any} args - items to be added to the menu in format {icon: string, title: string, body: string} where you can leave out icon or title but not both
      */
     constructor(options, ...args) {
         super(options,);
@@ -187,10 +189,6 @@ Menu.ORIENTATION = {
 Menu.BUTTONSIDE = {
     LEFT: function () { this.header.setClass("flex", ""); },
     RIGHT: function () { this.header.setClass("flex", "flex-end"); },
-}
-
-Menu.HEADER = {
-    ICON: function () {}
 }
 
 export { Menu };
