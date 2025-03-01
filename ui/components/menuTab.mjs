@@ -1,7 +1,17 @@
 import { BaseComponent } from "./baseComponent.mjs";
 import { default as ui } from "../index.mjs";
 
+/**
+ * @class MenuTab
+ * @description A internal tab component for the menu component
+ * @example
+ * const tab = new MenuTab({id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"}, menu);
+ */
 class MenuTab {
+    /**
+     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {*} parent parent menu component
+     */
     constructor(item, parent) {
         this.parent = parent;
 
@@ -11,6 +21,10 @@ class MenuTab {
         this.contentDiv = contentDiv;
     }
 
+    /**
+     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @returns {*} Button and Div components from VanJS framework
+     */
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
@@ -49,9 +63,18 @@ class MenuTab {
         return [b, c];
     }
 
+    /**
+     * remove tab from the DOM tree
+     */
     removeTab() {
         document.getElementById(this.headerButton.id).remove();
         document.getElementById(this.contentDiv.id).remove();
+    }
+    /**
+     * set focus on the tab
+     */
+    focus() {
+        document.getElementById(this.headerButton.id).click();
     }
 }
 export { MenuTab };

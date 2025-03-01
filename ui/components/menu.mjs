@@ -35,8 +35,9 @@ class Menu extends BaseComponent {
 
         for (let i of args) {
             if (!(i.id && i.icon && i.title && i.body)) {
-                throw new Error("MenuTab needs every item to have an id, icon, title, and body");
+                throw new Error("Item for menu needs every property set.");
             }
+
             const tab = new MenuTab(i, this);
             this.tabs[i.id] = tab;
             tab.headerButton.attachTo(this.header);
@@ -63,13 +64,24 @@ class Menu extends BaseComponent {
         );
     }
 
+    /**
+     * 
+     * @param {*} id id of the item we want to delete
+     */
     deleteTab(id) {
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
         this.tabs[id].removeTab();
         delete this.tabs[id];
     }
 
+    /**
+     * 
+     * @param {*} item dictionary with id, icon, title, body which will be added to the menu
+     */
     addTab(item) {
+        if (!(item.id && item.icon && item.title && item.body)) {
+            throw new Error("Item for menu needs every property set.");
+        }
         const tab = new MenuTab(item, this);
 
         this.tabs[item.id] = tab;
@@ -77,6 +89,33 @@ class Menu extends BaseComponent {
         tab.headerButton.setClass("join", "join-item");
         tab.headerButton.attachTo(document.getElementById(this.hash + "header"));
         tab.contentDiv.attachTo(document.getElementById(this.hash + "body"));
+    }
+
+    /**
+     * @param {*} id of the item we want to focus
+     */
+    focus(id) {
+        if (id in this.tabs) {
+            this.tabs[id].focus();
+        } else {
+            throw new Error("Tab with id " + id + " does not exist");
+        }
+    }
+
+    /**
+     * 
+     * @returns {HTMLElement} The body of the menu
+     */
+    getBodyDomNode() {
+        return document.getElementById(this.hash + "body");
+    }
+
+    /**
+     * 
+     * @returns {HTMLElement} The header of the menu
+     */
+    getHeaderDomNode() {
+        return document.getElementById(this.hash + "header");
     }
 
     static generateCode() {
