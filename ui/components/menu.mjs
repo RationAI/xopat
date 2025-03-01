@@ -48,10 +48,11 @@ class Menu extends BaseComponent {
         this.classMap["orientation"] = Menu.ORIENTATION.TOP;
         this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
         this.classMap["design"] = Menu.DESIGN.TEXTICON;
+        this.classMap["rounded"] = Menu.ROUNDED.DISABLE;
         this.classMap["flex"] = "flex-col";
 
         if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design");
+            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
         }
     }
 
@@ -190,5 +191,10 @@ Menu.DESIGN = {
         for (let t of Object.values(this.tabs)) { t.titleIcon(); }
     }
 }
+
+Menu.ROUNDED = {
+    ENABLE: function () { ui.Join.ROUNDED.ENABLE.call(this.header); },
+    DISABLE: function () { ui.Join.ROUNDED.DISABLE.call(this.header); },
+};
 
 export { Menu };

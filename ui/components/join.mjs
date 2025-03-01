@@ -25,11 +25,11 @@ class Join extends BaseComponent {
         super(options, ...args);
 
         //Todo add support for tracking the selected button if the join is a list of buttons (possibly define component buttongroup that inherits from a join)
-        this.classMap["base"] = "join";
+        this.classMap["base"] = "join bg-join";
         this.classMap["flex"];
         if (!options) options = {};
         options.style = options.style || Join.STYLE.VERTICAL;
-        this._applyOptions(options, "style");
+        this._applyOptions(options, "style", "rounded");
     }
 
     create() {
@@ -46,6 +46,11 @@ class Join extends BaseComponent {
 Join.STYLE = {
     VERTICAL: function () { this.setClass("direction", "join-vertical"); },
     HORIZONTAL: function () { this.setClass("direction", "join-horizontal"); },
+};
+
+Join.ROUNDED = {
+    ENABLE: function () { this.setClass("rounded", ""); },
+    DISABLE: function () { this.setClass("rounded", "join-unrounded"); },
 };
 
 export { Join };

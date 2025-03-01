@@ -52,3 +52,12 @@
     height: 4rem;
     min-height: 4rem;
 }
+
+.join-unrounded {
+    --rounded-btn: 0;
+}
+
+.bg-join {
+    --tw-bg-opacity: 1;
+    background-color: rgba(var(--ctp-text), var(--tw-bg-opacity, 1));
+}
