@@ -28,6 +28,14 @@ class BaseComponent {
         this.classState = van.state("");
         this.hash = Math.random().toString(36).substring(7) + "-";
 
+        this.additionalClassProperties = options["extraClass"] || undefined;
+
+        if (this.additionalClassProperties) {
+            for (const [key, val] of Object.entries(this.additionalClassProperties)) {
+                this.setClass(key, val);
+            }
+        }
+
         if (options) {
             if (options.id) this.id = options.id; else this.id = this.hash.slice(0, -1);
         }
