@@ -10,11 +10,11 @@ const { div } = van.tags
  * @description A menu component to group e.g. buttons, inputs..
  * @example
  * const menu = new Menu({
- *                         id: "myMenu",
+ *                        id: "myMenu",
  *                        orientation: Menu.ORIENTATION.TOP
  *                       },
- *                      ["Hello", "World"],
- *                     ["button1", "button2"]);
+ *                       {icon: settingsIcon, title: "Content1", body: "Settings1"},
+ *                       {icon: settingsIcon, title: "Content2", body: "Settings2"});
  * menu.attachTo(document.body);
  */
 class Menu extends BaseComponent {
@@ -29,7 +29,7 @@ class Menu extends BaseComponent {
 
         this.idCounter = this.items.length;
 
-        this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL },); // TODO create header component with Icon/text/ICON+text options
+        this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL },);
         this.body = new ui.Div({ id: this.hash + "body" },);
 
         this.headerButtons = [];
