@@ -31,7 +31,7 @@ class Menu extends BaseComponent {
         this.tabs = {};
 
         this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL },);
-        this.body = new ui.Div({ id: this.hash + "body" },);
+        this.body = new ui.Div({ id: this.hash + "body", height: "h-full" },);
 
         for (let i of args) {
             if (!(i.id && i.icon && i.title && i.body)) {
@@ -47,7 +47,7 @@ class Menu extends BaseComponent {
         this.classMap["base"] = "flex gap-1 bg-base-200";
         this.classMap["orientation"] = Menu.ORIENTATION.TOP;
         this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
-        this.classMap["design"] = Menu.DESIGN.TEXTICON;
+        this.classMap["design"] = Menu.DESIGN.TITLEICON;
         this.classMap["rounded"] = Menu.ROUNDED.DISABLE;
         this.classMap["flex"] = "flex-col";
 
@@ -68,7 +68,7 @@ class Menu extends BaseComponent {
     }
 
     /**
-     * 
+     *
      * @param {*} id id of the item we want to delete
      */
     deleteTab(id) {
@@ -78,7 +78,7 @@ class Menu extends BaseComponent {
     }
 
     /**
-     * 
+     *
      * @param {*} item dictionary with id, icon, title, body which will be added to the menu
      */
     addTab(item) {
@@ -100,13 +100,13 @@ class Menu extends BaseComponent {
     focus(id) {
         if (id in this.tabs) {
             this.tabs[id].focus();
-        } else {
-            throw new Error("Tab with id " + id + " does not exist");
+            return true;
         }
+        return false;
     }
 
     /**
-     * 
+     *
      * @returns {HTMLElement} The body of the menu
      */
     getBodyDomNode() {
@@ -114,7 +114,7 @@ class Menu extends BaseComponent {
     }
 
     /**
-     * 
+     *
      * @returns {HTMLElement} The header of the menu
      */
     getHeaderDomNode() {

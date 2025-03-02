@@ -20,21 +20,14 @@ class BaseComponent {
      */
     constructor(options, ...args) {
 
-        this.classMap = {};
+        const extraClasses = options["extraClass"];
+        this.classMap = typeof extraClasses === "object" ? extraClasses : {};
         this._children = args;
         this._renderedChildren = null;
-        this._initializing = false;
+        this._initializing = true;
         this.options = options;
         this.classState = van.state("");
         this.hash = Math.random().toString(36).substring(7) + "-";
-
-        this.additionalClassProperties = options["extraClass"] || undefined;
-
-        if (this.additionalClassProperties) {
-            for (const [key, val] of Object.entries(this.additionalClassProperties)) {
-                this.setClass(key, val);
-            }
-        }
 
         if (options) {
             if (options.id) this.id = options.id; else this.id = this.hash.slice(0, -1);
@@ -46,6 +39,7 @@ class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
+        this._initializing = false;
         this.refreshState();
         if (element instanceof BaseComponent) {
             element.addChildren(this);
@@ -72,7 +66,7 @@ class BaseComponent {
         }
     }
     /**
-     * 
+     *
      * @param  {...any} children - children to add to the component
      */
     addChildren(...children) {
@@ -147,6 +141,7 @@ class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
+        const wasInitializing = this._initializing;
         this._initializing = true;
         for (let prop of names) {
             const option = options[prop];
@@ -156,7 +151,11 @@ class BaseComponent {
                 console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
             }
         }
-        this._initializing = false;
+        this._initializing = wasInitializing;
+        if (wasInitializing) {
+            this.refreshState();
+        }
+
     }
 }
 

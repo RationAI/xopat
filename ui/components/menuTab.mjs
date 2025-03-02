@@ -1,5 +1,8 @@
 import { BaseComponent } from "./baseComponent.mjs";
 import { default as ui } from "../index.mjs";
+import van from "../vanjs.mjs";
+
+const { span } = van.tags
 
 /**
  * @class MenuTab
@@ -38,12 +41,13 @@ class MenuTab {
         }
 
         this.icon = inIcon;
+        this.icon.setClass("padding", "pl-2");
 
         const b = new ui.Button({
             id: "b-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
-            extraClass: { item: "menu-item-horizontal" },
+            extraClass: { item: "menu-item-horizontal", "padding-left": "pl-0" },
             onClick: () => {
                 for (let div of document.getElementById(this.parent.hash + "body").childNodes) {
                     if (div.style.display !== "block" && div.id === "c-" + item.id) {
@@ -62,9 +66,9 @@ class MenuTab {
                     }
                 }
             }
-        }, inIcon, inText);
+        }, inIcon, span({ class: "pl-2"}, inText));  // todo span does not work for some reason
 
-        const c = new ui.Div({ id: "c-" + item.id, display: "display-none" }, ...content);
+        const c = new ui.Div({ id: "c-" + item.id, display: "display-none", height: "h-full" }, ...content);
         return [b, c];
     }
 
