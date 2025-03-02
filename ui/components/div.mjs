@@ -9,9 +9,9 @@ const { div } = van.tags
  * @description A div component
  * @example
  * const div = new Div({
- *                      id: "myDiv", 
- *                      base: "flex gap-1 bg-base-200", 
- *                      flex: "flex-col" 
+ *                      id: "myDiv",
+ *                      base: "flex gap-1 bg-base-200",
+ *                      flex: "flex-col"
  *                      }, myButton, MyDiv
  *                     );
  * div.attachTo(document.body);
@@ -24,13 +24,7 @@ class Div extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-
-        if (options) {
-            for (const [key, val] of Object.entries(options)) {
-                this.classMap[key] = val;
-            }
-        }
-
+        this.classMap = this.options;
     }
 
     create() {

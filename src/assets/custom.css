@@ -61,3 +61,7 @@
     --tw-bg-opacity: 1;
     background-color: rgba(var(--ctp-text), var(--tw-bg-opacity, 1));
 }
+
+.hidden {
+    display: none !important;
+}

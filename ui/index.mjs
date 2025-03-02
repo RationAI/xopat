@@ -1,6 +1,8 @@
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 
+import van from "./vanjs.mjs";
+
 import { Button } from "./components/buttons.mjs";
 import { Collapse } from "./components/collapse.mjs";
 import { FAIcon } from "./components/fa-icon.mjs";
@@ -14,3 +16,5 @@ export default UI;
 globalThis.vanRegister = function (id, component) {
     globalThis.VANCOMPONENTS[id] = component;
 }
+// Allow also external code to use vanjs
+globalThis.van = van;

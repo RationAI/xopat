@@ -30,8 +30,8 @@ class Menu extends BaseComponent {
 
         this.tabs = {};
 
-        this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL },);
-        this.body = new ui.Div({ id: this.hash + "body", height: "h-full" },);
+        this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL });
+        this.body = new ui.Div({ id: this.hash + "body", height: "h-full" });
 
         for (let i of args) {
             if (!(i.id && i.icon && i.title && i.body)) {
@@ -44,7 +44,7 @@ class Menu extends BaseComponent {
             tab.contentDiv.attachTo(this.body);
         }
 
-        this.classMap["base"] = "flex gap-1 bg-base-200";
+        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["orientation"] = Menu.ORIENTATION.TOP;
         this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
         this.classMap["design"] = Menu.DESIGN.TITLEICON;

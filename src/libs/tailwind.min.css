@@ -2382,6 +2382,10 @@ details.collapse summary::-webkit-details-marker {
   display: flex;
 }
 
+.hidden {
+  display: none;
+}
+
 .h-full {
   height: 100%;
 }
@@ -2462,6 +2466,10 @@ details.collapse summary::-webkit-details-marker {
 
 .pl-2 {
   padding-left: 0.5rem;
+}
+
+.pl-3 {
+  padding-left: 0.75rem;
 }
 
 .text-lg {

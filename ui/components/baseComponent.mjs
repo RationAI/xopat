@@ -19,18 +19,22 @@ class BaseComponent {
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...args) {
-
         const extraClasses = options["extraClass"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
         this._children = args;
         this._renderedChildren = null;
         this._initializing = true;
-        this.options = options;
         this.classState = van.state("");
         this.hash = Math.random().toString(36).substring(7) + "-";
 
         if (options) {
-            if (options.id) this.id = options.id; else this.id = this.hash.slice(0, -1);
+            if (options.id) {
+                this.id = options.id;
+                delete options.id;
+            }
+            this.options = options;
+        } else {
+            this.options = {};
         }
     }
 
@@ -83,10 +87,13 @@ class BaseComponent {
                 child.refreshState();
                 return child.create();
             }
+            if (child instanceof Element) {
+                return child;
+            }
             if (typeof child === "string") {
                 return child.trimStart().startsWith("<") ? HtmlRenderer(child) : child;
             }
-            console.warn("Invalid child component provided: ", child);
+            console.warn(`Invalid child component provided - ${typeof child}:`, child);
             return undefined;
         }).filter(Boolean);
         return this._renderedChildren;

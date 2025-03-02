@@ -22,9 +22,6 @@ class MenuTab {
 
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
-
-        this.icon;
-        this.title = item["title"];
     }
 
     /**
@@ -41,7 +38,8 @@ class MenuTab {
         }
 
         this.icon = inIcon;
-        this.icon.setClass("padding", "pl-2");
+        this.icon.setClass("padding", "pl-3");
+        this.title = span({ class: "pl-2" }, inText);
 
         const b = new ui.Button({
             id: "b-" + item.id,
@@ -66,7 +64,7 @@ class MenuTab {
                     }
                 }
             }
-        }, inIcon, span({ class: "pl-2"}, inText));  // todo span does not work for some reason
+        }, this.icon, this.title);
 
         const c = new ui.Div({ id: "c-" + item.id, display: "display-none", height: "h-full" }, ...content);
         return [b, c];
@@ -82,18 +80,22 @@ class MenuTab {
     }
 
     titleOnly() {
-        document.getElementById(this.headerButton.id).innerHTML = this.title;
+        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        nodes[0].classList.add("hidden");
+        nodes[1].classList.remove("hidden");
+
     }
 
     titleIcon() {
-        document.getElementById(this.headerButton.id).innerHTML = "";
-        this.icon.attachTo(document.getElementById(this.headerButton.id));
-        document.getElementById(this.headerButton.id).innerHTML += this.title;
+        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        nodes[0].classList.remove("hidden");
+        nodes[1].classList.remove("hidden");
     }
 
     iconOnly() {
-        document.getElementById(this.headerButton.id).innerHTML = "";
-        this.icon.attachTo(document.getElementById(this.headerButton.id));
+        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        nodes[0].classList.remove("hidden");
+        nodes[1].classList.add("hidden");
     }
 }
 export { MenuTab };
