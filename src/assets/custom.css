@@ -1,0 +1,67 @@
+.display-none {
+    display: none;
+}
+
+.flex-end {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.menu-item-vertical {
+    max-width: 150px;
+}
+
+.menu-item-horizontal {
+    max-width: 250px;
+}
+
+.menu-item-horizontal,
+.menu-item-vertical {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-item-horizontal:hover,
+.menu-item-vertical:hover {
+    max-width: none;
+}
+
+.btn {
+    height: 2.5rem;
+    min-height: 2.5rem;
+}
+
+.btn-xs {
+    height: 1.8rem;
+    min-height: 1.8rem;
+}
+
+.btn-sm {
+    height: 2.2rem;
+    min-height: 2.2rem;
+}
+
+.btn-md {
+    height: 3rem;
+    min-height: 3rem;
+}
+
+.btn-lg {
+    height: 4rem;
+    min-height: 4rem;
+}
+
+.join-unrounded {
+    --rounded-btn: 0;
+}
+
+.bg-join {
+    --tw-bg-opacity: 1;
+    background-color: rgba(var(--ctp-text), var(--tw-bg-opacity, 1));
+}
+
+.hidden {
+    display: none !important;
+}

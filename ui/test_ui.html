@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
     <link rel="stylesheet" href="../src/assets/xopat.css">
     <link rel="stylesheet" href="../src/libs/tailwind.min.css">
+    <link rel="stylesheet" href="../src/assets/custom.css">
     <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
     <link rel="stylesheet" href="../src/external/enjoyhint.css">
     <link rel="stylesheet" href="../src/external/nouislider.css">
@@ -21,9 +22,64 @@
     <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+    <script type="text/javascript" src="../src/libs/monaco/loader.js"></script>
     <script type="module">
+        require.config({ paths: { 'vs': '../src/libs/monaco' } });
         import { default as ui } from "./index.mjs";
         import { default as van } from "./vanjs.mjs";
+
+        const DEFAULT_EDITOR_OPTIONS = {
+            value: ``,
+            lineNumbers: "on",
+            roundedSelection: false,
+            ariaLabel: "",
+            //accessibilityHelpUrl: "Nothing yet...",
+            readOnly: false,
+            theme: "hc-black",
+            language: "javascript",
+            scrollBeyondLastLine: false,
+            automaticLayout: true
+        };
+        function editorResize(editor) {
+            editor.layout();
+        }
+
+        var editor;
+        const onCreated = (_editor) => {
+            editor = _editor; //set global ref
+            editor.layout();
+        };
+        const save = () => {
+            localStorage.setItem("monaco", editor.getValue());
+            document.getElementById("workspace").innerHTML = "";
+            if (document.getElementById("custom")) {
+                document.getElementById("custom").remove();
+            }
+            var scriptElement = document.createElement('script');
+            scriptElement.id = "custom";
+            scriptElement.type = 'module';
+            scriptElement.textContent = localStorage.getItem("monaco");
+            document.body.appendChild(scriptElement);
+        };
+
+        //Creating the editor & adding Event listeners.
+        require(["vs/editor/editor.main"], () => {
+            monaco.editor.onDidCreateEditor(onCreated);
+            monaco.editor.create(
+                document.getElementById("container"),
+                DEFAULT_EDITOR_OPTIONS
+            );
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.code === "KeyS" && e.ctrlKey) {
+                save();
+                event.preventDefault();
+            }
+        });
+        window.addEventListener("beforeunload", (e) => {
+            save();
+        }, false);
 
         function changeTheme(theme = undefined) {
             //["dark", "light", undefined]
@@ -38,124 +94,46 @@
         window.changeTheme = changeTheme;
 
         window.onload = () => {
-            var counter = van.state(0);
             window.changeTheme();
 
-            var b1 = new ui.Button({
-                onClick: () => {
-                    counter.val++;
-                },
-                id: "b1",
-            }, "Button clicked ", counter, " times");
-            const { div } = van.tags
-
-            var c1 = new ui.Collapse({
-                summary: "hello there",
-            }, div("general kenobi"));
-
-            // example button settings
-            var b_large = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.SIZE.LARGE)
-                },
-                id: "b2",
-            }, "Set size to large")
-
-            var b_normal = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.SIZE.NORMAL)
-                },
-                id: "b2",
-            }, "Set size to normal")
-
-            var b_small = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.SIZE.SMALL)
-                },
-                id: "b2",
-            }, "Set size to small")
-
-            var b_tiny = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.SIZE.TINY)
-                },
-                id: "b2",
-            }, "Set size to tiny")
-
-            var b_outline = new ui.Button({
-                onClick: () => {
-                    if (b1.classMap["outline"] == "") {
-                        b1.set(ui.Button.OUTLINE.ENABLE)
-                    } else {
-                        b1.set(ui.Button.OUTLINE.DISABLE)
+            for (let cName in ui) {
+                const Component = ui[cName];
+                let buttons = [];
+                for (let prop in Component) {
+                    // Props are capital   PROP_NAME
+                    if (prop.match("[A-Z0-9_]*") && typeof (Component[prop]) === "object") {
+                        const propertyMap = Component[prop];
+                        for (let propValue in propertyMap) {
+                            buttons.push(new ui.Button({
+                                onClick: () => {
+                                    window["workspaceItem"].set(propertyMap[propValue]);
+                                },
+                                id: prop + "--" + propValue,
+                            }, `Set ${prop} to ${propValue}`));
+                        }
                     }
-                },
-                id: "b2",
-            }, "Set outline on/off")
+                }
+                new ui.Button({
+                    size: ui.Button.SIZE.SMALL,
+                    onClick: () => {
+                        editor.setValue(Component.generateCode ? Component.generateCode() : "// Error: component has no usage defined!");
+                        save();
+                        editorResize(editor);
 
-
-            var b_toPrimary = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.TYPE.PRIMARY);
-                },
-                id: "b2",
-            }, "Set button to primary")
-
-            var b_toSecondary = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.TYPE.SECONDARY);
-                },
-                id: "b2",
-            }, "Set button to secondary")
-
-
-            var b_toTernary = new ui.Button({
-                onClick: () => {
-                    b1.set(ui.Button.TYPE.TERNARY);
-                },
-                id: "b2",
-            }, "Set button to ternary")
-
-
-
-            // buttons for picking components
-            var b_pickbutton = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    b1.attachTo(document.getElementById("workspace"));
-                    b_large.attachTo(document.getElementById("settings"));
-                    b_normal.attachTo(document.getElementById("settings"));
-                    b_small.attachTo(document.getElementById("settings"));
-                    b_tiny.attachTo(document.getElementById("settings"));
-                    b_outline.attachTo(document.getElementById("settings"));
-                    b_toPrimary.attachTo(document.getElementById("settings"));
-                    b_toSecondary.attachTo(document.getElementById("settings"));
-                    b_toTernary.attachTo(document.getElementById("settings"));
-                    counter.val = 0;
-                },
-                id: "b_pickbutton",
-            }, "Show example primary button")
-            b_pickbutton.attachTo(document.getElementById("component-picker"));
-
-            var b_pickCollapse = new ui.Button({
-                size: ui.Button.SIZE.SMALL,
-                onClick: () => {
-                    document.getElementById("workspace").innerHTML = "";
-                    document.getElementById("settings").innerHTML = "";
-                    c1.attachTo(document.getElementById("workspace"));
-                },
-                id: "b_pickCollapse",
-            }, "Show example collapse")
-            b_pickCollapse.attachTo(document.getElementById("component-picker"));
+                        document.getElementById("workspace").innerHTML = "";
+                        document.getElementById("settings").innerHTML = "";
+                        const settings = document.getElementById("settings");
+                        buttons.forEach(x => x.attachTo(settings));
+                    },
+                    id: "component--" + cName,
+                }, "Show example " + Component.name).attachTo(document.getElementById("component-picker"));
+            }
         }
-
     </script>
 </head>
 
 <body class="latte dark:frappe h-full bg-base">
-    <div style="max-width: 1200px; margin: 0 auto;" class="px-2 py-2">
+    <div style="max-width: 1200px; margin: 0 auto; height : 50%" class="px-2 py-2">
         <div class="flex item-center flex-col items-center">
             <span class="text-sm">Theme settings</span>
             <div class="flex item-center flex-row join">
@@ -164,16 +142,16 @@
                 <button class="btn btn-primary btn-xs join-item" onclick="changeTheme(undefined)">Auto</button>
             </div>
         </div>
-        <div class="flex flex-row">
+        <div class="flex flex-row" style="height: 90%;">
             <div class="flex-1 p-2">
                 <div>
                     <h3 class="text-lg font-bold">Settings</h3>
                 </div>
-                <div id="settings"></div>
+                <div id="settings" style="height:30%;"></div>
                 <div>
                     <h3 class="text-lg font-bold">Workspace</h3>
                 </div>
-                <div id="workspace"></div>
+                <div id="workspace" style="border: thin solid rgb(150, 150, 150); height: 60%;"></div>
             </div>
             <div class="flex flex-col mt-2">
                 <h3 class="text-lg font-bold">Component picker</h3>
@@ -181,5 +159,6 @@
             </div>
         </div>
     </div>
+    <div id="container" style="width:100%; height:100%;"></div>
     <script src="http://localhost:35729/livereload.js"></script>
 </body>

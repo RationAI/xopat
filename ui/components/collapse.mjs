@@ -27,6 +27,9 @@ class Collapse extends BaseComponent {
      * @param {string} [options.customSummary] - The custom summary
      */
     constructor(options, ...args) {
+        if (typeof options === "string") {
+            options = { summary: options };
+        };
         super(options, ...args);
 
         this.classMap["base"] = "collapse bg-base-200 collapse-arrow";
@@ -47,13 +50,31 @@ class Collapse extends BaseComponent {
 
     create() {
         return details(
-            { ...this.commonProperties, class: this.classMap["base"], open: this.startOpen },
+            { ...this.commonProperties, ...this.additionalProperties, open: this.startOpen },
             summary({ class: ["collapse-title select-none", this.classMap["textSize"], this.classMap["font"], ...this.classMap["summaryClassList"]].join(" ") }, this.summary),
             div({ class: "collapse-content" + " " + this.classMap["detailsClassList"].join(" ") },
                 ...this.children
             )
         );
     }
+
+    static generateCode() {
+        return `
+// DISCLAIMER this is static example code, it does not change based on the actual component configuration
+// but everything what you rewrite here will be reflected on the component in the workspace
+// after using ctrl + s
+
+import { default as ui } from "/ui/index.mjs";
+
+window["workspaceItem"] = new ui.Collapse({
+    id: "myCollapse",
+    summary: "Click me",
+},"you clicked on collapse");
+
+window["workspaceItem"].attachTo(document.getElementById("workspace"));
+`
+    }
+
 }
 
 export { Collapse };

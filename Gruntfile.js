@@ -53,7 +53,7 @@ module.exports = function(grunt) {
                 livereload: true
             },
             components: {
-                files: ["ui/*", "./tailwind.config.js", "Gruntfile.js"],
+                files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js", "src/assets/custom.css"],
                 tasks: "css"
             }
         },
@@ -91,7 +91,8 @@ module.exports = function(grunt) {
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
         grunt.log.writeln('Tailwind');
-        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify');
+        //TODO change back to minify
+        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --no-minify');
         grunt.log.writeln(result);
     });
     // Default task(s).
