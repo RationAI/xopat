@@ -109,6 +109,17 @@ class Menu extends BaseComponent {
     }
 
     /**
+     * @param {*} id of the item we want to close
+     */
+    closeTab(id) {
+        if (id in this.tabs) {
+            this.tabs[id].close();
+            return true;
+        }
+        return false;
+    }
+
+    /**
      *
      * @returns {HTMLElement} The body of the menu
      */

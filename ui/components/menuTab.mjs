@@ -47,22 +47,7 @@ class MenuTab {
             additionalProperties: { title: inText },
             extraClass: { item: "menu-item-horizontal", "padding-left": "pl-0" },
             onClick: () => {
-                for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
-                    if (div.style.display !== "block" && div.id === this.parent.id + "-c-" + item.id) {
-                        div.style.display = "block";
-                    } else {
-                        div.style.display = "none";
-                    }
-                }
-
-                for (let i of Object.values(this.parent.tabs)) {
-                    const button = i.headerButton;
-                    if (button.classMap["type"] !== "btn-secondary" && button.id === this.parent.id + "-b-" + item.id) {
-                        button.setClass("type", "btn-secondary");
-                    } else {
-                        button.setClass("type", "btn-primary");
-                    }
-                }
+                this.focus();
             }
         }, this.icon, this.title);
 
@@ -76,7 +61,25 @@ class MenuTab {
     }
 
     focus() {
-        document.getElementById(this.headerButton.id).click();
+        for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
+            div.style.display = "none";
+            if (div.id === this.contentDiv.id) {
+                div.style.display = "block";
+            }
+        }
+
+        for (let i of Object.values(this.parent.tabs)) {
+            const button = i.headerButton;
+            button.setClass("type", "btn-primary");
+            if (button.id === this.headerButton.id) {
+                button.setClass("type", "btn-secondary");
+            }
+        }
+    }
+
+    close() {
+        this.headerButton.setClass("type", "btn-primary");
+        document.getElementById(this.contentDiv.id).style.display = "none";
     }
 
     titleOnly() {
