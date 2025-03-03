@@ -48,7 +48,7 @@ class MenuTab {
             extraClass: { item: "menu-item-horizontal", "padding-left": "pl-0" },
             onClick: () => {
                 for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
-                    if (div.style.display !== "block" && div.id === "c-" + item.id) {
+                    if (div.style.display !== "block" && div.id === this.parent.id + "-c-" + item.id) {
                         div.style.display = "block";
                     } else {
                         div.style.display = "none";
