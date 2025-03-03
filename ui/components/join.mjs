@@ -25,27 +25,32 @@ class Join extends BaseComponent {
         super(options, ...args);
 
         //Todo add support for tracking the selected button if the join is a list of buttons (possibly define component buttongroup that inherits from a join)
-        this.classMap["base"] = "join";
+        this.classMap["base"] = "join bg-join";
+        this.classMap["flex"];
         if (!options) options = {};
         options.style = options.style || Join.STYLE.VERTICAL;
-        this._applyOptions(options, "style");
+        this._applyOptions(options, "style", "rounded");
+    }
 
+    create() {
         // Todo we might support also string children, detect type and convert to DOM objects if found to attach to classList manually...
-        for (let child in this._children) {
+        for (let child of this._children) {
             if (child instanceof BaseComponent) {
                 child.setClass("join", "join-item");
             }
         }
-    }
-
-    create() {
-        return div(this.commonProperties, ...this.children);
+        return div({ ...this.commonProperties, ...this.additionalProperties }, ...this.children);
     }
 }
 
 Join.STYLE = {
     VERTICAL: function () { this.setClass("direction", "join-vertical"); },
     HORIZONTAL: function () { this.setClass("direction", "join-horizontal"); },
+};
+
+Join.ROUNDED = {
+    ENABLE: function () { this.setClass("rounded", ""); },
+    DISABLE: function () { this.setClass("rounded", "join-unrounded"); },
 };
 
 export { Join };
