@@ -103,8 +103,14 @@ class BaseComponent {
      * getter for commonProperties which are shared against all components
      */
     get commonProperties() {
+        if (this.id) {
+            return {
+                id: this.id,
+                class: this.classState
+            };
+        };
+
         return {
-            id: this.id,
             class: this.classState
         };
     }
