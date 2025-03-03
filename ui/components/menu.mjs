@@ -27,11 +27,14 @@ class Menu extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options,);
+        if (!this.id) {
+            this.id = "menu-" + Math.random().toString(36).substring(7);
+        }
 
         this.tabs = {};
 
-        this.header = new ui.Join({ id: this.hash + "header", style: ui.Join.STYLE.HORIZONTAL });
-        this.body = new ui.Div({ id: this.hash + "body", height: "h-full" });
+        this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
+        this.body = new ui.Div({ id: this.id + "-body", height: "h-full" });
 
         for (let i of args) {
             if (!(i.id && i.icon && i.title && i.body)) {
@@ -62,7 +65,7 @@ class Menu extends BaseComponent {
         this.body.attachTo(this);
 
         return div(
-            { ...this.commonProperties },
+            { ...this.commonProperties, ...this.additionalProperties },
             ...this.children
         );
     }
@@ -90,8 +93,8 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
-        tab.headerButton.attachTo(document.getElementById(this.hash + "header"));
-        tab.contentDiv.attachTo(document.getElementById(this.hash + "body"));
+        tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
+        tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
     }
 
     /**
@@ -110,7 +113,7 @@ class Menu extends BaseComponent {
      * @returns {HTMLElement} The body of the menu
      */
     getBodyDomNode() {
-        return document.getElementById(this.hash + "body");
+        return document.getElementById(this.id + "-body");
     }
 
     /**
@@ -118,7 +121,7 @@ class Menu extends BaseComponent {
      * @returns {HTMLElement} The header of the menu
      */
     getHeaderDomNode() {
-        return document.getElementById(this.hash + "header");
+        return document.getElementById(this.id + "-header");
     }
 
     static generateCode() {

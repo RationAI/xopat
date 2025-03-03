@@ -21,11 +21,11 @@ class BaseComponent {
     constructor(options, ...args) {
         const extraClasses = options["extraClass"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
+        this.additionalProperties = options["additionalProperties"] || {};
         this._children = args;
         this._renderedChildren = null;
         this._initializing = true;
         this.classState = van.state("");
-        this.hash = Math.random().toString(36).substring(7) + "-";
 
         if (options) {
             if (options.id) {

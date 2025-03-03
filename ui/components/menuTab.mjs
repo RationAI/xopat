@@ -42,12 +42,12 @@ class MenuTab {
         this.title = span({ class: "pl-2" }, inText);
 
         const b = new ui.Button({
-            id: "b-" + item.id,
+            id: this.parent.id + "-b-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
             extraClass: { item: "menu-item-horizontal", "padding-left": "pl-0" },
             onClick: () => {
-                for (let div of document.getElementById(this.parent.hash + "body").childNodes) {
+                for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
                     if (div.style.display !== "block" && div.id === "c-" + item.id) {
                         div.style.display = "block";
                     } else {
@@ -57,7 +57,7 @@ class MenuTab {
 
                 for (let i of Object.values(this.parent.tabs)) {
                     const button = i.headerButton;
-                    if (button.classMap["type"] !== "btn-secondary" && button.id === "b-" + item.id) {
+                    if (button.classMap["type"] !== "btn-secondary" && button.id === this.parent.id + "-b-" + item.id) {
                         button.setClass("type", "btn-secondary");
                     } else {
                         button.setClass("type", "btn-primary");
@@ -66,7 +66,7 @@ class MenuTab {
             }
         }, this.icon, this.title);
 
-        const c = new ui.Div({ id: "c-" + item.id, display: "display-none", height: "h-full" }, ...content);
+        const c = new ui.Div({ id: this.parent.id + "-c-" + item.id, display: "display-none", height: "h-full" }, ...content);
         return [b, c];
     }
 

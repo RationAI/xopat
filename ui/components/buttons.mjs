@@ -34,8 +34,6 @@ class Button extends BaseComponent {
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
 
-        this.additionalProperties = options["additionalProperties"] || {};
-
         if (options) {
             if (options.onClick) this.onClick = options.onClick;
             this._applyOptions(options, "size", "outline", "type");

@@ -39,7 +39,7 @@ class Join extends BaseComponent {
                 child.setClass("join", "join-item");
             }
         }
-        return div(this.commonProperties, ...this.children);
+        return div({ ...this.commonProperties, ...this.additionalProperties }, ...this.children);
     }
 }
 
