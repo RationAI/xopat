@@ -302,6 +302,7 @@ window.addEventListener("beforeunload", (e) => {
         <!--TODO dirty hardcoded path-->
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/primer_css.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
