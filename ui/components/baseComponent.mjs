@@ -19,16 +19,22 @@ class BaseComponent {
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...args) {
-
-        this.classMap = {};
+        const extraClasses = options["extraClass"];
+        this.classMap = typeof extraClasses === "object" ? extraClasses : {};
+        this.additionalProperties = options["additionalProperties"] || {};
         this._children = args;
         this._renderedChildren = null;
-        this._initializing = false;
-        this.options = options;
+        this._initializing = true;
         this.classState = van.state("");
 
         if (options) {
-            if (options.id) this.id = options.id;
+            if (options.id) {
+                this.id = options.id;
+                delete options.id;
+            }
+            this.options = options;
+        } else {
+            this.options = {};
         }
     }
 
@@ -37,9 +43,14 @@ class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
+        this._initializing = false;
         this.refreshState();
-        van.add(element,
-            this.create());
+        if (element instanceof BaseComponent) {
+            element.addChildren(this);
+        } else {
+            van.add(element,
+                this.create());
+        }
     }
 
     /**
@@ -58,6 +69,13 @@ class BaseComponent {
             property.call(this);
         }
     }
+    /**
+     *
+     * @param  {...any} children - children to add to the component
+     */
+    addChildren(...children) {
+        this._children.push(...children);
+    }
 
     /**
      * getter for children which will automatically refresh them and create them if they are BaseComponent
@@ -69,10 +87,13 @@ class BaseComponent {
                 child.refreshState();
                 return child.create();
             }
+            if (child instanceof Element) {
+                return child;
+            }
             if (typeof child === "string") {
                 return child.trimStart().startsWith("<") ? HtmlRenderer(child) : child;
             }
-            console.warn("Invalid child component provided: ", child);
+            console.warn(`Invalid child component provided - ${typeof child}:`, child);
             return undefined;
         }).filter(Boolean);
         return this._renderedChildren;
@@ -82,8 +103,14 @@ class BaseComponent {
      * getter for commonProperties which are shared against all components
      */
     get commonProperties() {
+        if (this.id) {
+            return {
+                id: this.id,
+                class: this.classState
+            };
+        };
+
         return {
-            id: this.id,
             class: this.classState
         };
     }
@@ -127,6 +154,7 @@ class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
+        const wasInitializing = this._initializing;
         this._initializing = true;
         for (let prop of names) {
             const option = options[prop];
@@ -136,7 +164,11 @@ class BaseComponent {
                 console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
             }
         }
-        this._initializing = false;
+        this._initializing = wasInitializing;
+        if (wasInitializing) {
+            this.refreshState();
+        }
+
     }
 }
 

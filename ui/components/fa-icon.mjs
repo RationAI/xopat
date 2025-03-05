@@ -28,14 +28,32 @@ class FAIcon extends BaseComponent {
      * @param {string} [options.name] - The name of the icon
     **/
     constructor(options, ...args) {
-        super(options, ...args);
 
+        if (typeof options === "string") {
+            options = { name: options };
+        }
+
+        super(options, ...args);
         this.classMap["base"] = "fa-solid";
         this.classMap["name"] = options && options["name"] || "";
     }
 
     create() {
-        return i(this.commonProperties);
+        return i({ ...this.commonProperties, ...this.additionalProperties });
+    }
+
+    static generateCode() {
+        return `
+// DISCLAIMER this is static example code, it does not change based on the actual component configuration
+// but everything what you rewrite here will be reflected on the component in the workspace
+// after using ctrl + s
+
+import { default as ui } from "/ui/index.mjs";
+
+window["workspaceItem"] = new ui.FAIcon({ name: "fa-gear" });
+
+window["workspaceItem"].attachTo(document.getElementById("workspace"));
+`
     }
 }
 

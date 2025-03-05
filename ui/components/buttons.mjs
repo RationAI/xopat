@@ -42,9 +42,32 @@ class Button extends BaseComponent {
 
     create() {
         return button(
-            { ...this.commonProperties, onclick: this.onClick },
+            { ...this.commonProperties, onclick: this.onClick, ...this.additionalProperties },
             ...this.children
         );
+    }
+
+    static generateCode() {
+        return `
+// DISCLAIMER this is static example code, it does not change based on the actual component configuration
+// but everything what you rewrite here will be reflected on the component in the workspace
+// after using ctrl + s
+
+import { default as ui } from "/ui/index.mjs";
+
+window["workspaceItem"] = new ui.Button({
+    id: "myButton",
+    size: ui.Button.SIZE.NORMAL,
+    outline: ui.Button.OUTLINE.DISABLE,
+    TYPE: ui.Button.TYPE.PRIMARY,
+    onClick: function () {
+        console.log("Button clicked");
+    }
+},"Click me");
+
+window["workspaceItem"].attachTo(document.getElementById("workspace"));
+`;
+
     }
 }
 
