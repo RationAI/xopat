@@ -17,6 +17,17 @@ function initXopatScripts() {
     });
 
     /**
+     * Replace share button in static preview mode
+     */
+    if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+        const shareBtn = document.getElementById("copy-url");
+        const staticDisclaimer = document.getElementById("static-file-disclaimer");
+
+        shareBtn.style.display = "none";
+        staticDisclaimer.style.display = "block";
+    }
+
+    /**
      * Focusing all key press events and forwarding to OSD
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
      */
@@ -295,15 +306,25 @@ function initXopatScripts() {
     window.UTILITIES.updateTheme = function(theme=undefined) {
         theme = theme || APPLICATION_CONTEXT.getOption("theme");
         if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.config.defaultParams.theme;
+
+        // also set theme for detached preview mode
+        const isStatic = APPLICATION_CONTEXT.getOption("isStaticPreview");
+
         if (theme === "dark_dimmed") {
             document.documentElement.dataset['darkTheme'] = "dark_dimmed";
             document.documentElement.dataset['colorMode'] = "dark";
-            document.body.setAttribute("data-theme", "catppuccin-mocha");
+            document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
+        } else if (theme === "auto" && isStatic) {
+            const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+            if (isLight) document.body.setAttribute("data-theme", "crimson-dawn");
+            else document.body.setAttribute("data-theme", "blood-moon");
         } else {
             document.documentElement.dataset['darkTheme'] = "dark";
             document.documentElement.dataset['colorMode'] = theme;
             if (theme === "dark") {
-                document.body.setAttribute("data-theme", "catppuccin-mocha");
+                document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
+            } else if (isStatic) {
+                document.body.setAttribute("data-theme", "crimson-dawn");
             } else {
                 document.body.removeAttribute("data-theme");
             }
@@ -328,6 +349,8 @@ function initXopatScripts() {
         const data = {...APPLICATION_CONTEXT.config};
         delete data.defaultParams;
 
+        data.params.isStaticPreview = true;
+
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(data, WebGLModule.jsonReplacer)
@@ -346,9 +369,11 @@ function initXopatScripts() {
      * @return {Promise<string>}
      */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
+        const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
+
         if (! APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
             return `
-    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
+    <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
         <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
@@ -360,7 +385,7 @@ function initXopatScripts() {
         data.visualization = app;
 
         let form = `
-    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
+    <form method="POST" id="redirect" action="${url}">
         ${customAttributes}
         <input type="submit" value="">
     </form>

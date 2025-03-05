@@ -160,7 +160,9 @@
         "preferredFormat": "zip",
         "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
-        "disablePluginsUi": false
+        "disablePluginsUi": false,
+        // Renders viewer in standalone mode, all data is static
+        "isStaticPreview": false
     },
     /**
      * The Server status. This object is here just for the reference and
