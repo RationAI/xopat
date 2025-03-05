@@ -316,8 +316,15 @@ function initXopatScripts() {
             document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
         } else if (theme === "auto" && isStatic) {
             const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-            if (isLight) document.body.setAttribute("data-theme", "crimson-dawn");
-            else document.body.setAttribute("data-theme", "blood-moon");
+            if (isLight) {
+                document.documentElement.dataset['colorMode'] = "light";
+                document.body.setAttribute("data-theme", "crimson-dawn");
+            }
+            else {
+                document.documentElement.dataset['colorMode'] = "dark";
+                document.documentElement.dataset['darkTheme'] = "dark";
+                document.body.setAttribute("data-theme", "blood-moon");
+            }
         } else {
             document.documentElement.dataset['darkTheme'] = "dark";
             document.documentElement.dataset['colorMode'] = theme;
