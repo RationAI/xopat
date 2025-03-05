@@ -63,7 +63,6 @@
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
-        "staticFile": "Viewing static file",
         "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved."
       }
     },

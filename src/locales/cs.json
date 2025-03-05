@@ -26,7 +26,6 @@
         "tutorials": "Tutoriály",
         "explainTutorials": "Zobraz seznam tutoriálů",
         "settings": "Nastavení",
-        "staticFile": "Prohlížení statického souboru",
         "staticFileExplain": "Tento prohlížeč byl otevřen ze sdíleného souboru. Změny se neukládají."
       }
     },

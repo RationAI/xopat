@@ -24,7 +24,7 @@ function initXopatScripts() {
         const staticDisclaimer = document.getElementById("static-file-disclaimer");
 
         shareBtn.style.display = "none";
-        staticDisclaimer.style.display = "block";
+        staticDisclaimer.style.display = "grid";
     }
 
     /**

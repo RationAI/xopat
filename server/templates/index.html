@@ -193,9 +193,15 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
                     </span>
                 </div>
             </span>
-            <span id="static-file-disclaimer" class="py-2 pr-1" style="flex: none; display: none;" data-i18n="[title]main.bar.staticFileExplain">
-              <span class="material-icons pr-0" style="font-size: 22px;">visibility</span>
-              <span class="pl-1" style="font-size: 12px;" data-i18n="main.bar.staticFile">Viewing static file</span>
+            <span id="static-file-disclaimer" class="hover-selectable bg-base-200" style="flex: none; display: none; width: 32px; height: 32px; margin-top: 3px; border-radius: 10px; align-items: center;">
+              <span class="material-icons pr-0 color-text-danger" style="font-size: 22px;">visibility</span>
+
+                <div class="position-absolute px-1 py-1 rounded-2 border-sm bottom-6 left-0 flex-column width-full flex-items-center" style="background: var(--color-bg-tertiary); min-width: 180px;">
+
+                    <span id="static-file-disclaimer-inner" class="btn-pointer flex-row" data-i18n="[title]main.bar.explainExportFile">
+                        <span data-i18n="main.bar.staticFileExplain">This browser was opened from a shared file. Changes are not being saved.</span>
+                    </span>
+                </div>
             </span>
             <span id="add-plugins" class="btn-pointer py-2 pr-1" style="flex: none" onclick="USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.pluginsMenuId);" data-i18n="[title]main.bar.explainPlugins">
                 <span class="material-icons pr-0" style="font-size: 22px;">extension</span>
