@@ -4,6 +4,7 @@ import { FAIcon } from "./fa-icon.mjs";
 import { Button } from "./buttons.mjs";
 import { Div } from "./div.mjs";
 
+const ui = { Button, Div, FAIcon };
 const { span } = van.tags
 
 /**
@@ -21,7 +22,6 @@ class MenuTab {
         this.parent = parent;
 
         const [headerButton, contentDiv] = this.createTab(item);
-        const ui = { Button, Div, FAIcon };
 
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;

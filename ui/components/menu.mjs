@@ -4,6 +4,7 @@ import { MenuTab } from "./menuTab.mjs";
 import { Join } from "./join.mjs";
 import { Div } from "./div.mjs";
 
+const ui = { Join, Div };
 const { div } = van.tags
 
 /**
@@ -31,8 +32,6 @@ class Menu extends BaseComponent {
         if (!this.id) {
             this.id = "menu-" + Math.random().toString(36).substring(7);
         }
-
-        const ui = { Join, Div };d
 
         this.tabs = {};
 
