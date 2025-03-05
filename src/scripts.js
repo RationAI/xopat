@@ -341,7 +341,7 @@ function initXopatScripts() {
     /**
      * Create the viewer configuration serialized
      */
-    window.UTILITIES.serializeAppConfig = function(withCookies=false) {
+    window.UTILITIES.serializeAppConfig = function(withCookies=false, staticPreview = false) {
         //TODO consider bypassCache etc...
         let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
         if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
@@ -356,7 +356,7 @@ function initXopatScripts() {
         const data = {...APPLICATION_CONTEXT.config};
         delete data.defaultParams;
 
-        data.params.isStaticPreview = true;
+        if (staticPreview) data.params.isStaticPreview = true;
 
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
@@ -380,7 +380,7 @@ function initXopatScripts() {
 
         if (! APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
             return `
-    <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
+    <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies, true))}">
         <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
@@ -388,7 +388,7 @@ function initXopatScripts() {
     <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
         }
 
-        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
+        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies, true);
         data.visualization = app;
 
         let form = `
