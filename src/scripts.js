@@ -343,29 +343,23 @@ function initXopatScripts() {
      */
     window.UTILITIES.serializeAppConfig = function(withCookies=false, staticPreview = false) {
         //TODO consider bypassCache etc...
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
-        let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
-        APPLICATION_CONTEXT.config.params.viewport = {
-            zoomLevel: VIEWER.viewport.getZoom(),
-            point: VIEWER.viewport.getCenter()
-        };
 
         //delete unnecessary data
         const data = {...APPLICATION_CONTEXT.config};
         delete data.defaultParams;
 
         if (staticPreview) data.params.isStaticPreview = true;
+        if (!withCookies) data.params.bypassCookies = true;
+        data.params.bypassCacheLoadTime = true;
+        data.params.viewport = {
+            zoomLevel: VIEWER.viewport.getZoom(),
+            point: VIEWER.viewport.getCenter()
+        };
 
-        //by default ommit underscore
-        let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+        //by default omit underscore
+        return APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(data, WebGLModule.jsonReplacer)
             : JSON.stringify(data, (key, value) => key.startsWith("_") ? undefined : value);
-        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
-        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
-        return app;
     };
 
     /**
