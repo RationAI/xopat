@@ -1,4 +1,4 @@
-async function initMenu(){
+function initMenu(){
 
     let menu = new UI.Menu({
                          id: "myMenu",
