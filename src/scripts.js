@@ -344,8 +344,9 @@ function initXopatScripts() {
     window.UTILITIES.serializeAppConfig = function(withCookies=false, staticPreview = false) {
         //TODO consider bypassCache etc...
 
-        //delete unnecessary data
+        //delete unnecessary data, copy params so that overrides do not affect current session
         const data = {...APPLICATION_CONTEXT.config};
+        data.params = {...APPLICATION_CONTEXT.config.params};
         delete data.defaultParams;
 
         if (staticPreview) data.params.isStaticPreview = true;
