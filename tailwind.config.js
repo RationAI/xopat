@@ -1,7 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./ui/**/*"],
-  darkMode: ["selector", '[data-theme="catppuccin-mocha"]'],
+  darkMode: ["selector", '[data-theme="catppuccin-mocha"]', '[data-theme="blood-moon"]'],
   theme: {
 
   },
@@ -17,6 +17,28 @@ module.exports = {
   daisyui: {
     themes: [
       {
+        "crimson-dawn": {
+          primary: "#e57373",
+          secondary: "#f06292",
+          accent: "#ffb74d",
+          neutral: "#ffafaf",
+          "base-100": "#ffadad",
+          info: "#64b5f6",
+          success: "#81c784",
+          warning: "#ffca28",
+          error: "#e53935",
+        },
+        "blood-moon": {
+          primary: "#d32f2f",
+          secondary: "#9c27b0",
+          accent: "#b71c1c",
+          neutral: "#271818",
+          "base-100": "#250c0c",
+          info: "#90caf9",
+          success: "#a5d6a7",
+          warning: "#ffcc80",
+          error: "#e57373",
+        },
         "catppuccin-latte": {
           primary: "#1e66f5", // blue
           secondary: "#ea76cb", // pink
