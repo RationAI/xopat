@@ -1,5 +1,10 @@
-function initMenu(){
-
+let UI;
+async function loadIndex() {
+    const index = await import('../ui/index.mjs');
+    UI = index.default;
+}
+async function initMenu(){
+    await loadIndex();
     let menu = new UI.Menu({
                          id: "myMenu",
                          orientation: UI.Menu.ORIENTATION.TOP
