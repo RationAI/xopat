@@ -704,10 +704,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	setCloseEdgeMouseNavigation(enable) {
+		this.edgeMouseInteractive = enable;
+
 		window.removeEventListener("mousemove", this._edgesMouseNavigation);
 		if (enable) {
 			window.addEventListener("mousemove", this._edgesMouseNavigation);
 		}
+	}
+
+	isEdgeMouseInteractive() {
+		return this.edgeMouseInteractive;
 	}
 
 	/************************ Layers *******************************/
@@ -1541,12 +1547,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			//todo better handling - either add events to the viewer or...
 
 		let annotationCanvas = this.canvas.upperCanvasEl;
-		annotationCanvas.addEventListener('mousedown', function (event) {
+
+		function handleMouseDown(event) {
 			if (_this.disabledInteraction) return;
 
 			if (event.which === 1) handleLeftClickDown(event);
 			else if (event.which === 3) handleRightClickDown(event);
-		});
+		}
+		annotationCanvas.addEventListener("mousedown", handleMouseDown);
 
 		annotationCanvas.addEventListener('mouseup', function (event) {
 			if (_this.disabledInteraction) return;
@@ -1576,6 +1584,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		});
 
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
+
+		VIEWER.addHandler("animation-start", function() {
+			if (_this.mode.getId().startsWith('fft-')) {
+				annotationCanvas.removeEventListener("mousedown", handleMouseDown);
+			}
+		});
+		
+		VIEWER.addHandler("animation-finish", function() {
+			if (_this.mode.getId().startsWith('fft-')) {
+				annotationCanvas.addEventListener("mousedown", handleMouseDown);
+			}
+		});
 
 		VIEWER.addHandler("canvas-press", function (e) {
 			if (_this.disabledInteraction) return;
@@ -2308,6 +2328,9 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
+		this.edgeMouseEnabled = this.context.isEdgeMouseInteractive();
+		this.context.setCloseEdgeMouseNavigation(false);
+
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
 		this.context.freeFormTool.recomputeRadius();
@@ -2317,7 +2340,9 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	setToAuto(temporary) {
 		this.context.freeFormTool.hideCursor();
+		if (this.edgeMouseEnabled) this.context.setCloseEdgeMouseNavigation(true);
 		if (temporary) return false;
+
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
 		return true;
