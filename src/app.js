@@ -407,7 +407,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         maxZoomPixelRatio: 2,
         blendTime: 0,
         showNavigationControl: false,
-        navigatorId: "panel-navigator",
+        // navigatorId: "panel-navigator",
+        navigatorPosition: 'TOP_RIGHT',
+        navigatorTop: 15,
         loadTilesWithAjax : true,
         drawer: "canvas",
         ajaxHeaders: headers,
@@ -718,8 +720,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             imageOpts.push(`<div class="inner-panel-content noselect" id="inner-panel-content-1">
             <div>
-                 <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                 <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
+                 <h3 class="d-inline-block btn-pointer">Images</h3>
             </div>
             <div id="image-layer-options" class="inner-panel-hidden">`);
             imageOpts = imageOpts.reverse();

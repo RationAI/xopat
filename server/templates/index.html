@@ -88,55 +88,56 @@
 </div>
 
 <!-- Main Panel -->
-<span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
+<!--<span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>-->
 
-<div id="main-panel" class="position-fixed d-flex flex-column height-full color-shadow-medium top-0" style="width: 400px;">
-    <div id="main-panel-content" class='position-relative height-full' style="padding-bottom: 80px;overflow-y: scroll;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
-        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1 flex-content-between">
-            <span id="main-panel-hide" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>
+<div id="" class="d-flex flex-row right-0 top-0 py-1 px-2" style="position: absolute;">
 
-            <div id="user-panel" class="btn-pointer" style="flex-grow: 1;text-align-last: right;">
-                <span id="user-name" data-i18n="user.anonymous"></span>
-                <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
-            </div>
-        </div>
+    <div id="tissue-title-header" class="d-flex flex-items-center mr-2" style="max-height: 255px; flex-grow: 1;">
+        <span id="global-tissue-visibility" class="d-inline-block">
+            <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+        </span>
+        <span class="tissue-title-container d-flex">
+            <span id="tissue-title-content" class="text-shadow-mild one-liner" style="flex-grow: 1">Slide<!--Inserted slide name--></span>
+            <span class="material-icons pointer" onclick="UTILITIES.copyToClipboard(this.previousElementSibling.textContent)">content_copy</span>
+        </span>
+    </div>
+    <span class="fas fa-circle-plus btn-pointer mr-2" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone"></span>
+    <div id="user-panel" class="btn-pointer" style="flex-grow: 1;text-align-last: right; align-content: center;">
+        <span id="user-name" data-i18n="user.anonymous"></span>
+        <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
+    </div>
+</div>
 
-        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; position: relative; background-color: var(--color-bg-canvas)">
-            <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
-                <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
-            </div>
-            <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
-                <div id="tissue-title-header" class="d-flex flex-items-center" style="max-height: 255px; flex-grow: 1;">
-                    <span id="global-tissue-visibility" class="d-inline-block">
-                        <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-                    </span>
-                    <span class="tissue-title-container d-flex">
-                        <span id="tissue-title-content" class="text-shadow-mild one-liner" style="flex-grow: 1">Slide<!--Inserted slide name--></span>
-                        <span class="material-icons pointer" onclick="UTILITIES.copyToClipboard(this.previousElementSibling.textContent)">content_copy</span>
-                    </span>
-                </div>
-                <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="
- let self = $(this);
- if (self.hasClass('pressed')) {
-    self.removeClass('pressed');
-    self.parent().parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
- } else {
-    self.parent().parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
-    self.addClass('pressed');
- }
-"> push_pin </span>
-            </div>
-            <span class="fas fa-clone btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()" data-i18n="[title]main.global.clone"></span>
+<div id="main-panel" class="position-fixed d-flex flex-column bottom-0" style="width: 400px">
+    <div id="main-panel-content" class='position-relative' style="padding-bottom: 50px;overflow-y: auto;scrollbar-width: thin /*mozilla*/;overflow-x: hidden;">
+<!-- TODO search removed IDs and fix the code where necessary -->
+<!--        <div id="main-panel-top" class="inner-panel inner-panel-visible d-flex py-1 flex-content-between">-->
+<!--            <span id="main-panel-hide" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.close();">chevron_right</span>-->
+<!--        </div>-->
 
-        </div>
-
-        <div id="panel-images" class="inner-panel mt-2"></div>
-
+<!--        <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1" style="width: 400px; position: relative; background-color: var(&#45;&#45;color-bg-canvas)">-->
+<!--            <div>&lt;!&ndash;the div below is re-inserted by OSD, keep it in the hierarchy at the same position&ndash;&gt;-->
+<!--                <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>-->
+<!--            </div>-->
+<!--            <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">-->
+<!--                -->
+<!--                <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="-->
+<!-- let self = $(this);-->
+<!-- if (self.hasClass('pressed')) {-->
+<!--    self.removeClass('pressed');-->
+<!--    self.parent().parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');-->
+<!-- } else {-->
+<!--    self.parent().parent().addClass('color-shadow-medium').attr('data-position', 'fixed');-->
+<!--    self.addClass('pressed');-->
+<!-- }-->
+<!--"> push_pin </span>-->
+<!--            </div>-->
+<!--        </div>-->
         <div id="panel-shaders" class="inner-panel" style="display:none;">
 
             <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
             <div class="inner-panel-content noselect" id="inner-panel-content-1">
-                <div>
+                <div><!-- TODO fix clickHeader -->
                     <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
                     APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
                     <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
@@ -168,7 +169,7 @@
         <!-- Appended controls for other plugins -->
     </div>
 
-    <div class="d-flex flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 400px;">
+    <div class="d-flex flex-1 position-fixed bottom-0 bg-opacity fixed-bg-opacity" style="width: 380px; pointer-events: auto; border-top-left-radius: 6px;">
         <div class="width-full d-flex flex-justify-between mx-4">
             <span id="copy-url" class="hover-selectable py-2 pr-1" data-i18n="[title]main.bar.explainExportUrl">
                 <span class="material-icons pr-0" style="font-size: 22px;">share</span>
