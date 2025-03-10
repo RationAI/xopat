@@ -9,7 +9,8 @@ import { FAIcon } from "./components/fa-icon.mjs";
 import { Join } from "./components/join.mjs";
 import { Menu } from "./components/menu.mjs";
 import { Div } from "./components/div.mjs";
-const UI = { Button, Collapse, FAIcon, Join, Menu, Div };
+import { MainPanel } from "./components/mainPanel.mjs";
+const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel };
 globalThis.UI = UI;
 export default UI;
 
