@@ -223,11 +223,8 @@
         "src": {
             //"env": "",
             "loader": ["store.js", "loader.js"],
-            "deps": ["ui-components.js", "shader-configurator.js"],
+            "deps": ["ui-components.js", "shader-configurator.js","van.js", "vanjs-ui-components.js"],
             "app": ["parse-input.js", "app.js", "menu.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
-        },
-        "ui": {
-            "components": ["index.mjs"]
         }
     },
     /**
