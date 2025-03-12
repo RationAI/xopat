@@ -588,16 +588,32 @@ OSDAnnotations.PolygonUtilities = {
     },
 
     approximatePolygonArea: function (points) {
-        if (points.length < 3) return { diffX: 0, diffY: 0 };
-        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-        for (let i = 1; i < points.length; i++) {
-            maxX = Math.max(maxX, points[i].x);
-            maxY = Math.max(maxY, points[i].y);
-            minX = Math.min(minX, points[i].x);
-            minY = Math.min(minY, points[i].y);
-        }
-        return { diffX: maxX - minX, diffY: maxY - minY };
+        if (!points || points.length < 3) return { diffX: 0, diffY: 0 };
+        const bbox = this.getBoundingBox(points);
+
+        return { diffX: bbox.width, diffY: bbox.height };
     },
+
+    getBoundingBox: function (points) {
+		if (!points || points.length === 0) return null;
+	
+        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
+	
+		for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+
+		return {
+			x: minX,
+			y: minY,
+			width: maxX - minX,
+			height: maxY - minY
+		};
+	},
 
     /**
      *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
