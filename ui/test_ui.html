@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" class="h-screen">
+<html lang="en" dir="ltr" class="h-screen">
+<!-- 3 buttons nahoře, vlevo výběr komponent -->
+<!-- server bude mít endpoint na filesystem -->
+
+<head>
+    <meta charset="utf-8">
+    <title>UI Component Testing</title>
+    <meta name="msapplication-TileColor" content="#da532c">
+    <!--Necessary for OSD on phone portrait mode-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="../src/assets/style.css" , id="theme">
+    <link rel="stylesheet" href="../src/assets/xopat.css">
+    <link rel="stylesheet" href="../src/libs/tailwind.min.css">
+    <link rel="stylesheet" href="../src/assets/custom.css">
+    <link rel="stylesheet" href="../src/libs/fontawesome/css/v6-all.css">
+    <link rel="stylesheet" href="../src/external/enjoyhint.css">
+    <link rel="stylesheet" href="../src/external/nouislider.css">
+    <!-- TODO hardcoded path -->
+    <link rel="apple-touch-icon" sizes="180x180" href="src/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="src/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
+    <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
+    <script type="text/javascript" src="../src/libs/monaco/loader.js"></script>
+    <script type="module">
+        require.config({ paths: { 'vs': '../src/libs/monaco' } });
+        import { default as ui } from "./index.mjs";
+        import { default as van } from "./vanjs.mjs";
+
+        const DEFAULT_EDITOR_OPTIONS = {
+            value: ``,
+            lineNumbers: "on",
+            roundedSelection: false,
+            ariaLabel: "",
+            //accessibilityHelpUrl: "Nothing yet...",
+            readOnly: false,
+            theme: "hc-black",
+            language: "javascript",
+            scrollBeyondLastLine: false,
+            automaticLayout: true
+        };
+        function editorResize(editor) {
+            editor.layout();
+        }
+
+        var editor;
+        const onCreated = (_editor) => {
+            editor = _editor; //set global ref
+            editor.layout();
+        };
+        const save = () => {
+            localStorage.setItem("monaco", editor.getValue());
+            document.getElementById("workspace").innerHTML = "";
+            if (document.getElementById("custom")) {
+                document.getElementById("custom").remove();
+            }
+            var scriptElement = document.createElement('script');
+            scriptElement.id = "custom";
+            scriptElement.type = 'module';
+            scriptElement.textContent = localStorage.getItem("monaco");
+            document.body.appendChild(scriptElement);
+        };
+
+        //Creating the editor & adding Event listeners.
+        require(["vs/editor/editor.main"], () => {
+            monaco.editor.onDidCreateEditor(onCreated);
+            monaco.editor.create(
+                document.getElementById("container"),
+                DEFAULT_EDITOR_OPTIONS
+            );
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.code === "KeyS" && e.ctrlKey) {
+                save();
+                event.preventDefault();
+            }
+        });
+        window.addEventListener("beforeunload", (e) => {
+            save();
+        }, false);
+
+        function changeTheme(theme = undefined) {
+            //["dark", "light", undefined]
+            if (theme === "dark" ||
+                (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.body.setAttribute("data-theme", "catppuccin-mocha");
+            } else {
+                document.body.removeAttribute("data-theme"); // light theme
+            }
+        }
+
+        window.changeTheme = changeTheme;
+
+        window.onload = () => {
+            window.changeTheme();
+
+            for (let cName in ui) {
+                const Component = ui[cName];
+                let buttons = [];
+                for (let prop in Component) {
+                    // Props are capital   PROP_NAME
+                    if (prop.match("[A-Z0-9_]*") && typeof (Component[prop]) === "object") {
+                        const propertyMap = Component[prop];
+                        for (let propValue in propertyMap) {
+                            buttons.push(new ui.Button({
+                                onClick: () => {
+                                    window["workspaceItem"].set(propertyMap[propValue]);
+                                },
+                                id: prop + "--" + propValue,
+                            }, `Set ${prop} to ${propValue}`));
+                        }
+                    }
+                }
+                new ui.Button({
+                    size: ui.Button.SIZE.SMALL,
+                    onClick: () => {
+                        editor.setValue(Component.generateCode ? Component.generateCode() : "// Error: component has no usage defined!");
+                        save();
+                        editorResize(editor);
+
+                        document.getElementById("workspace").innerHTML = "";
+                        document.getElementById("settings").innerHTML = "";
+                        const settings = document.getElementById("settings");
+                        buttons.forEach(x => x.attachTo(settings));
+                    },
+                    id: "component--" + cName,
+                }, "Show example " + Component.name).attachTo(document.getElementById("component-picker"));
+            }
+        }
+    </script>
+</head>
+
+<body class="latte dark:frappe h-full bg-base">
+    <div style="max-width: 1200px; margin: 0 auto; height : 50%" class="px-2 py-2">
+        <div class="flex item-center flex-col items-center">
+            <span class="text-sm">Theme settings</span>
+            <div class="flex item-center flex-row join">
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('dark')">Dark</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme('light')">Light</button>
+                <button class="btn btn-primary btn-xs join-item" onclick="changeTheme(undefined)">Auto</button>
+            </div>
+        </div>
+        <div class="flex flex-row" style="height: 90%;">
+            <div class="flex-1 p-2">
+                <div>
+                    <h3 class="text-lg font-bold">Settings</h3>
+                </div>
+                <div id="settings" style="height:30%;"></div>
+                <div>
+                    <h3 class="text-lg font-bold">Workspace</h3>
+                </div>
+                <div id="workspace" style="border: thin solid rgb(150, 150, 150); height: 60%;"></div>
+            </div>
+            <div class="flex flex-col mt-2">
+                <h3 class="text-lg font-bold">Component picker</h3>
+                <div id="component-picker" class="flex flex-col gap-1"></div>
+            </div>
+        </div>
+    </div>
+    <div id="container" style="width:100%; height:100%;"></div>
+    <script src="http://localhost:35729/livereload.js"></script>
+</body>

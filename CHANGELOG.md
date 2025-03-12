@@ -3,6 +3,16 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### 2.2.0 (unreleased)
+**NEW UI SYSTEM**. The UI now supports component system using Van.js library. A lightweight
+way of re-using defined components, supported newly by tailwind css. The ui will be further
+separated from the viewer core in the future.
+
+**Features:** new UI component system & developer UI tools. Server support for .mjs files - 
+support for native JS modules.
+
+**Bugfixes:** improved behavior for touchpad zooming.
+
 ### 2.1.1
 **Features:** standalone wsi tile source module. Edge navigation optional.
 

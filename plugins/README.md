@@ -204,7 +204,14 @@ export something like:
   "presets": [...]
 }
 ````
+When the viewer is exported as a file, it will mark the flag `isStaticPreview` to `true`.
+In this case, plugins should **not fetch** any data that is included in the export, to avoid duplicity.
 
+```js
+if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+    // skip data fetching
+}
+```
 
 ### Data Management Options  TODO: rewrite
 There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
@@ -279,6 +286,8 @@ such as pre-defined color maps, (already mentioned) webgl processing, fabricJS c
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
 
 ### Available Third-party Code and UI
+- You should use new UI components, see [this](../ui/README.md)
+
 You can use
  - [jQuery](https://jquery.com/), 
  - [Material Design icons](https://fonts.google.com/icons?selected=Material+Icons)

@@ -1,3 +1,4 @@
+const {execSync: exec} = require("child_process");
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
@@ -40,13 +41,21 @@ module.exports = function(grunt) {
             server: {
                 options: {
                     port: 9000,
-                    base: 'docs/build/'
+                    base: '.',
+                    open: {
+                        target: 'http://localhost:9000/ui/test_ui.html'
+                    }
                 }
             }
         },
         watch: {
-            files: [],
-            tasks: ["docs"]
+            options: {
+                livereload: true
+            },
+            components: {
+                files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js", "src/assets/custom.css"],
+                tasks: "css"
+            }
         },
         uglify: {
 
@@ -80,6 +89,11 @@ module.exports = function(grunt) {
     grunt.registerTask('all', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
+    grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
+        grunt.log.writeln('Tailwind');
+        //TODO change back to minify
+        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --no-minify');
+        grunt.log.writeln(result);
+    });
     // Default task(s).
-    grunt.registerTask('default', ['env']);
 };

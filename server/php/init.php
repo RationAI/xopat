@@ -85,6 +85,7 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
             require_libs();
             require_openseadragon();
             require_external();
+            require_ui();
             require_core("loader");
             require_core("deps");
             require_core("app");

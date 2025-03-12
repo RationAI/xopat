@@ -540,6 +540,10 @@ div {box-sizing: initial !important;}
 
 }
 
+.fas, .fa-solid {
+    font-weight: 900 !important; 
+  }
+
 /*TODO implement switch button
   input.switch[type=checkbox]{height: 0;width: 0;visibility: hidden;}*/
 /*input.switch + label {cursor: pointer;text-indent: -9999px;*/

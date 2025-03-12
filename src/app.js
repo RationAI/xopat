@@ -361,11 +361,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          */
         referencedId() {
             if (CONFIG.background.length < 0) {
-                return undefined;
+                return "__anonymous__";
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            if (bgConfig) return CONFIG.data[bgConfig.dataReference];
-            return undefined;
+            let config;
+            if (VIEWER.scalebar) {
+                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            } else {
+                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                    || CONFIG.background[0];
+            }
+            return config ? CONFIG.data[config.dataReference] : "__anonymous__";
         },
         _dangerouslyAccessConfig() {
             //remove in the future?
@@ -910,8 +915,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
-            if (window.innerHeight < 630) {
-                $('#navigator-pin').click();
+            if (window.innerHeight < 630 || window.innerWidth < 900) {
+                if (window.innerWidth >= 900) {
+                    $('#navigator-pin').click();
+                }
                 USER_INTERFACE.MainMenu.close();
             }
 

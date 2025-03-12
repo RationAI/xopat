@@ -109,8 +109,8 @@ OSDAnnotations.PresetManager = class {
     static commonAnnotationVisuals = {
         selectable: true,
         originalStrokeWidth: 3,
-        borderColor: '#fbb802',
-        cornerColor: '#fbb802',
+        borderColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251,184,2,0.35)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',

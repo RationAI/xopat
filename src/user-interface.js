@@ -452,6 +452,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             });
         },
 
+        hide: function() {
+            this._toggle(undefined);
+        },
+
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
         // if too close to edges
         _toggle: function(mouseEvent, optionsGetter) {

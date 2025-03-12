@@ -135,6 +135,13 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
+    }
+
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return true;
@@ -314,6 +321,13 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             top:this._origY - height,
             rx: width, ry: height
         });
+    }
+
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
     }
 
     finishDirect() {
@@ -564,8 +578,29 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             top: y,
             left: x,
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addAnnotation(this._current);
+        this._context.addHelperAnnotation(this._current);
         this._context.canvas.renderAll();
+    }
+
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
+    }
+
+    finishDirect() {
+        let obj = this.getCurrentObject();
+        if (!obj) return true;
+        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
+        this._context.deleteHelperAnnotation(obj);
+        this._context.addAnnotation(obj);
+        this._current = undefined;
+        return true;
+    }
+
+    finishIndirect() {
+        this.finishDirect();
     }
 
     isImplicit() {
@@ -972,6 +1007,10 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     isImplicit() {
+        return false;
+    }
+
+    finishDirect() {
         return false;
     }
 
