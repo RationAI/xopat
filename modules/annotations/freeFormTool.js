@@ -73,7 +73,7 @@ OSDAnnotations.FreeFormTool = class {
                     return;
                 }
             } else {
-                const factory = objectFactory.factoryID === "polygon" ? this._context.polygonFactory : this._context.objectFactories.multipolygon;
+                const factory = objectFactory.factoryID === "polygon" ? this._context.polygonFactory : this._context.multiPolygonFactory;
                 let newPolygon = created ? object : factory.copy(object, null);
                 this._setupPolygon(newPolygon, object);
 
@@ -91,26 +91,26 @@ OSDAnnotations.FreeFormTool = class {
 
     _updateCanvasSize() {
         if (this._isWindowSizeUpdated()) {
-    
+
             this._windowCanvas.width = this._windowSize.width + 4 * this.maxRadius;
             this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
             this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
-    
+
             this._annotationCanvas.width = this._windowSize.width * 3;
             this._annotationCanvas.height = this._windowSize.height * 3;
             this._ctxAnnotationFull = this._annotationCanvas.getContext('2d', { willReadFrequently: true });
             return;
-        } 
+        }
 
         this._ctxWindow.clearRect(0, 0, this._windowCanvas.width, this._windowCanvas.height);
         this._ctxAnnotationFull.clearRect(0, 0, this._annotationCanvas.width, this._annotationCanvas.height);
     }
-    
+
     _initializeDefaults() {
         this._ctxWindow.fillStyle = 'white';
         this._ctxAnnotationFull.fillStyle = 'white';
         this._hasAnnotationCanvas = false;
-    
+
         this._offset = { x: 2 * this.maxRadius, y: 2 * this.maxRadius };
         this._scale = { x: 0, y: 0, factor: 1 };
         this._convert = this._convertOSD;
@@ -119,11 +119,11 @@ OSDAnnotations.FreeFormTool = class {
 
     _isWindowSizeUpdated() {
         const { containerWidth, containerHeight } = this._context.overlay;
-        
+
         if (this._windowSize.width === containerWidth && this._windowSize.height === containerHeight) {
             return false;
         }
-    
+
         this._windowSize.width = this._context.overlay._containerWidth;
         this._windowSize.height = this._context.overlay._containerHeight;
         return true;
@@ -263,7 +263,7 @@ OSDAnnotations.FreeFormTool = class {
             const polygon = this.polygon.factoryID === "multipolygon" ? this.polygon.points[0] : this.polygon.points;
 
             if (!OSDAnnotations.checkPolygonIntersect(cursorPolygon, polygon).length) return;
-                
+
             if (this.polygon.factoryID === "multipolygon") {
                 for (let i = 1; i < this.polygon.points.length; i++) {
                     const intersections = OSDAnnotations.checkPolygonIntersect(cursorPolygon, this.polygon.points[i]);
@@ -346,7 +346,7 @@ OSDAnnotations.FreeFormTool = class {
 
         return this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
     }
-    
+
     _convertScaling = (point) => {
         return {
             x: (point.x - this._scale.x) * this._scale.factor + this._offset.x,
@@ -365,11 +365,11 @@ OSDAnnotations.FreeFormTool = class {
         const convertPoints = points => points.map(this._convert);
 
         if (needsConversion) {
-            originalPoints = isPolygon 
-                ? convertPoints(originalPoints) 
+            originalPoints = isPolygon
+                ? convertPoints(originalPoints)
                 : originalPoints.map(convertPoints);
         }
-    
+
         const points = originalPoints;
         const firstPolygon = isPolygon ? points : points[0];
 
@@ -377,7 +377,7 @@ OSDAnnotations.FreeFormTool = class {
         this._drawPolygon(ctx, firstPolygon);
 
         if (!isPolygon) {
-            for (let i = 1; i < points.length; i++) { 
+            for (let i = 1; i < points.length; i++) {
                 this._drawPolygon(ctx, points[i]);
             }
         }
@@ -453,14 +453,14 @@ OSDAnnotations.FreeFormTool = class {
 
         if (!outerContour) return innerContours;
 
-        // deleting inner contours (holes) which are found inside deleted outer contours 
+        // deleting inner contours (holes) which are found inside deleted outer contours
         if (falseOuterContours.length !== 0) {
             innerContours = innerContours.filter(inner => {
                 return falseOuterContours.some(outer => {
 
                     const innerBbox = polygonUtils.getBoundingBox(inner.points);
                     const outerBbox = polygonUtils.getBoundingBox(outer.points);
-        
+
                     if (polygonUtils.intersectAABB(innerBbox, outerBbox)) {
                         const intersections = OSDAnnotations.checkPolygonIntersect(inner.points, outer.points);
                         return intersections.length === 0 || JSON.stringify(intersections) === JSON.stringify(outer.points);
@@ -471,8 +471,8 @@ OSDAnnotations.FreeFormTool = class {
 
             ctx.fillStyle = 'white';
             ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-     
-            const newContours = [outerContour, ...innerContours].map(contour => 
+
+            const newContours = [outerContour, ...innerContours].map(contour =>
                 contour.points.map(point => ({ x: point.x + shift.x, y: point.y + shift.y }))
             );
             this._rasterizePolygons(ctx, newContours, false, false);
@@ -492,7 +492,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _isPartiallyOutside(bounds, region) {
-        const isFullyInside = 
+        const isFullyInside =
             region.top >= bounds.top &&
             region.left >= bounds.left &&
             region.right <= bounds.right &&
@@ -511,7 +511,7 @@ OSDAnnotations.FreeFormTool = class {
         );
         const bottomRight = this.ref.windowToImageCoordinates(
             new OpenSeadragon.Point(
-                this._ctxWindow.canvas.width - this._offset.x, 
+                this._ctxWindow.canvas.width - this._offset.x,
                 this._ctxWindow.canvas.height - this._offset.y
             )
         );
@@ -529,13 +529,13 @@ OSDAnnotations.FreeFormTool = class {
             this._convert = this._convertScaling;
             this._scale.x = annotationBounds.left;
             this._scale.y = annotationBounds.top;
-    
+
             const scaleWidth = this._windowSize.width / (annotationBounds.right - annotationBounds.left);
             const scaleHeight = this._windowSize.height / (annotationBounds.bottom - annotationBounds.top);
-    
+
             this._scale.factor = Math.min(scaleWidth, scaleHeight);
             this._rasterizePolygons(this._ctxAnnotationFull, this.polygon.points, this.polygon.factoryID === "polygon");
-    
+
             this._hasAnnotationCanvas = true;
             this._annotationBoundsScaled = [
                 this._convertScaling({ x: annotationBounds.left, y: annotationBounds.top }),
@@ -544,13 +544,13 @@ OSDAnnotations.FreeFormTool = class {
                 this._convertScaling({ x: annotationBounds.left, y: annotationBounds.bottom })
             ];
         }
-    
+
         const { x: left, y: top } = this._convertScaling({ x: screenBounds.left, y: screenBounds.top });
         const { x: right, y: bottom } = this._convertScaling({ x: screenBounds.right, y: screenBounds.bottom });
-    
+
         const width = right - left;
         const height = bottom - top;
-    
+
         this._canvasDims = { left, top, width, height };
         this._ctxAnnotationFull.drawImage(this._ctxWindow.canvas, left, top, width, height);
 
@@ -561,8 +561,8 @@ OSDAnnotations.FreeFormTool = class {
             {x: left, y: bottom},
             ...this._annotationBoundsScaled
         ];
-        
-        return OSDAnnotations.PolygonUtilities.getBoundingBox(points);    
+
+        return OSDAnnotations.PolygonUtilities.getBoundingBox(points);
     }
 
     _processContours(nextMousePos, fillColor) {
@@ -581,11 +581,11 @@ OSDAnnotations.FreeFormTool = class {
 
         const { screenBounds, annotationBounds, zoomed } = this._calculateBounds();
 
-        if (zoomed) { 
+        if (zoomed) {
             bbox = this._prepareFullAnnotationCanvas(screenBounds, annotationBounds);
             ctx = this._ctxAnnotationFull;
 
-            this._convert = this._convertScalingBack;          
+            this._convert = this._convertScalingBack;
         }
 
         let contours = this._getContours(ctx, bbox, zoomed);
@@ -654,10 +654,10 @@ OSDAnnotations.FreeFormTool = class {
             for (let x = 0; x < width; x++) {
                 const index = (y * width + x) * 4;
                 const r = data[index];
-    
+
                 if (r === 255) {
                     mask[y * width + x] = 1;
-    
+
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
                     if (y < minY) minY = y;

@@ -1387,25 +1387,30 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
 		/**
-		 * Polygon factory, the only factory required within the module
+		 * Polygon factory, the factory required within the module
 		 * @type {OSDAnnotations.AnnotationObjectFactory}
 		 */
-		this.polygonFactory = null;
-
-		//Polygon presence is a must
-		if (this.objectFactories.hasOwnProperty("polygon")) {
-			//create tool-shaped object
-			this.polygonFactory = this.objectFactories["polygon"];
-		} else {
-			console.warn("See list of factories available: missing polygon.", this.objectFactories);
-			throw "No polygon object factory registered. Annotations must contain at " +
-			"least a polygon implementation in order to work. Did you maybe named the polygon factory " +
-			"implementation differently other than 'polygon'?";
-		}
+		this.polygonFactory = this._requireAnnotationObjectPresence("polygon");
+		/**
+		 * Multipolygon factory, the factory required within the module
+		 * @type {OSDAnnotations.AnnotationObjectFactory}
+		 */
+		this.multiPolygonFactory = this._requireAnnotationObjectPresence("multipolygon");
 
 		this._layers = {};
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 		this.setMouseOSDInteractive(true, false);
+	}
+
+	_requireAnnotationObjectPresence(type) {
+		//When object type presence is a must
+		if (this.objectFactories.hasOwnProperty(type)) {
+			//create tool-shaped object
+			return this.objectFactories[type];
+		}
+		console.warn("See list of factories available: missing", type, this.objectFactories);
+		throw `No ${type} object factory registered. Annotations must contain at least a polygon implementation 
+in order to work. Did you maybe named the ${type} factory implementation differently other than '${type}'?`;
 	}
 
 	_debugActiveObjectBinder() {
@@ -1592,7 +1597,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				annotationCanvas.removeEventListener("mousedown", handleMouseDown);
 			}
 		});
-		
+
 		VIEWER.addHandler("animation-finish", function() {
 			if (_this.mode.getId().startsWith('fft-')) {
 				annotationCanvas.addEventListener("mousedown", handleMouseDown);
@@ -2263,8 +2268,8 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
 			if (!factory.isEditable()) return false;
-			const result = factory.isImplicit() 
-    			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) 
+			const result = factory.isImplicit()
+    			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint)
     			: o.points;
 			if (!result) return false;
 			return {object: o, asPolygon: result};

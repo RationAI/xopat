@@ -501,7 +501,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     };
     DropDown.init();
 
-    let pluginsToolsBuilder;
+    let pluginsToolsBuilder, tissueMenuBuilder;
 
     /**
      * Definition of UI Namespaces driving menus and UI-ready utilities.
@@ -641,14 +641,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @memberOf MainMenu
              */
             append: function(title, titleHtml, html, id, pluginId) {
-                let css = this._getSubmenuOpenStatus(id);
-                css = css ? "" : "transform: translate(-9999px, 0);";
-                this.content.append(`<div id="${id}" data-id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-simple" style="display: flex; flex-direction: row">
-<div style="width: 100%; pointer-events:auto; ${css}" class="color-bg-primary pb-2 pl-1 pt-1 rounded-left-2">
-<h3 class="d-inline-block h3 btn-pointer ml-1">${title}&emsp;</h3>${titleHtml}
-</div>
-<div onclick="USER_INTERFACE.MainMenu.clickHeader($(this))" class="py-2 pointer color-bg-primary menu-panel-label">${title}</div>
-</div>`);
+                this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-simple"><div><h3 class="d-inline-block h3" style="padding-left: 15px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
             },
             /**
              * Replace in the menu
@@ -673,15 +666,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param pluginId
              */
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                let css = this._getSubmenuOpenStatus(id);
-                css = css ? "" : "transform: translate(-9999px, 0);";
-                this.content.append(`<div id="${id}" data-id="${id}" class="inner-panel ${pluginId}-plugin-root" style="display: flex; flex-direction: row">
-<div style="width: 100%; pointer-events:auto; ${css}" class="color-bg-primary pb-2 pl-1 pt-1 rounded-left-2">
-<h3 class="d-inline-block h3 btn-pointer ml-1">${title}&emsp;</h3>${titleHtml}
-<div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div>
-</div>
-<div onclick="USER_INTERFACE.MainMenu.clickHeader($(this))" class="py-2 pointer color-bg-primary menu-panel-label">${title}</div>
-</div>`);
+                this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
+<span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
+<h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
+</div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
             },
             /**
              * Replace in the menu with toggle-able (hidden) content
@@ -702,56 +690,48 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             /**
              * Open/close Main Menu Item todo: make cleaner
              * @param {jQuery} jQSelf
+             * @param {jQuery} jQTargetParent
              * @private
              */
-            clickHeader: function(jQSelf) {
-                const id = jQSelf.parent().data("id");
-                const container = jQSelf.prev()[0];
-                if (!container.style.transform) {
-                    container.style.transform = 'translate(9999px, 0)';
-                    this._setSubmenuOpenStatus(id, false);
+            clickHeader: function(jQSelf, jQTargetParent) {
+                if (jQTargetParent.hasClass('force-visible')) {
+                    jQTargetParent.removeClass('force-visible');
+                    jQSelf.removeClass('opened');
                 } else {
-                    container.style.transform = null;
-                    this._setSubmenuOpenStatus(id, true);
+                    jQSelf.addClass('opened');
+                    jQTargetParent.addClass('force-visible');
                 }
             },
             /**
              * Open the menu
              */
             open() {
-                // TODO: open all
-                // if (this.opened) return;
-                // this.context.css("right", "0");
-                // this.opened = true;
-                // USER_INTERFACE.Margins.right = 400;
-                // this._sync();
+                if (this.opened) return;
+                this.context.css("right", "0");
+                this.opened = true;
+                USER_INTERFACE.Margins.right = 400;
+                this._sync();
             },
             /**
              * Close the menu
              */
             close() {
-                // TODO Close all
-                // if (!this.opened) return;
-                // this.context.css("right", "-400px");
-                // this.opened = false;
-                // USER_INTERFACE.Margins.right = 0;
-                // this._sync();
+                if (!this.opened) return;
+                this.context.css("right", "-400px");
+                this.opened = false;
+                USER_INTERFACE.Margins.right = 0;
+                this._sync();
             },
             _sync() {
                 this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
                 let width = this.opened ? `calc(100% - ${VIEWER.navigator.element.clientWidth+5}px)` : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
+                if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
 
                 let status = USER_INTERFACE.Status.context;
-                if (status) status.style.right = this.opened ? "440px" : "8px";
-            },
-            _getSubmenuOpenStatus(id) {
-                return APPLICATION_CONTEXT.AppCache.get(`menu-opened-${id}`, true);
-            },
-            _setSubmenuOpenStatus(id, value) {
-                APPLICATION_CONTEXT.AppCache.set(`menu-opened-${id}`, value);
-            }
+                if (status) status.style.right = this.opened ? "408px" : "8px";
+           },
         },
 
         /**

@@ -1588,7 +1588,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getIcon() {
-        return "view_timeline"; 
+        return "view_timeline";
     }
 
     fabricStructure() {
@@ -1651,17 +1651,13 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = [...ofObject.points];
         const props = this.copyProperties(ofObject);
-        delete props.left;
-        delete props.top;
-        delete props.width;
-        delete props.height;
         delete props.points;
-
-        if (!parameters) parameters = ofObject.points;
-        props.points = parameters;
-        
-        return new fabric.Path(this._createPathFromPoints(parameters), props);
+        const copy = new fabric.Path(this._createPathFromPoints(parameters), props);
+        // We mimic polygon style - keep points prop
+        copy.points = parameters;
+        return copy;
     }
 
     setPoints(object, points) {
@@ -1672,7 +1668,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         object.setCoords();
         return object;
     }
-    
+
     getArea(theObject) {
         let area = this._polygonFactory.getArea({points: theObject.points[0]});
 
