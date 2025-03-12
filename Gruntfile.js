@@ -31,6 +31,9 @@ module.exports = function(grunt) {
         },
         modules: {
             files: {},
+        },
+        ui: {
+            files: {},
         }
     };
 
@@ -82,6 +85,13 @@ module.exports = function(grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 return acc;
             }, uglification, true, true),
+
+            ...grunt.util.reduceUI((acc, ui, folder) => {
+                //TODO check
+                acc.ui.files[`ui/index.min.js`] =
+                    ui.includes.map(i => `ui/${i}`);
+                return acc;
+            }, uglification, true, true),
         }
     });
 
@@ -89,6 +99,7 @@ module.exports = function(grunt) {
     grunt.registerTask('all', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
+    grunt.registerTask('ui', ["uglify:ui"]);
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
         grunt.log.writeln('Tailwind');
         //TODO change back to minify
