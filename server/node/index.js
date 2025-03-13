@@ -20,6 +20,7 @@ const PROJECT_PATH = "";
 
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
+const { loadUI } = require("../templates/javascript/vanUI");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
 const { files } = require("../../docs/include");
@@ -43,6 +44,8 @@ const initViewerCoreAndPlugins = (req, res) => {
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
     core.CORE.serverStatus.name = "node";
     core.CORE.serverStatus.supportsPost = true;
+
+    loadUI(core, fs.existsSync,);
 
     //todo o18n and locale
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
@@ -153,7 +156,6 @@ async function responseViewer(req, res) {
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
-${core.requireUI()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -187,6 +189,9 @@ ${core.requireCore("app")}`;
 
             case "plugins":
                 return core.requirePlugins(core.CORE.client.production);
+
+            case "ui":
+                return core.requireUI(core.CORE.client.production);
 
             default:
                 //todo warn

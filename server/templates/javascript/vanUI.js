@@ -7,16 +7,20 @@ module.exports.loadUI = function (core, fileExists, readFile, scanDir, i18n) {
     const UI = core.UI,
         ENV = core.ENV;
 
-    UI = safeScanDir(core.ABS_UI + "/components");
+    let uiPaths = safeScanDir(core.ABS_UI + "/components");
 
     /**
      * Load all plugins
      * @param {boolean} production if true, prefer minified file over sources
      */
     core.requireUI = function (production) {
-        // TODO check
-        return UI.map(UI => {
-            return `<script src=${UI}'>` + "</script>";
-        })
-    }.join("");
+        if (production){
+            return `<script src=\"ui/index.min.js\">` + "</script>";
+        }
+        let result = [`<script src=\"ui/index.mjs\" type=module>` + "</script>"];
+        for(let p of uiPaths) {
+            result.push(`\t<script src=\"ui/components/${p}\" type=module>` + "</script>");
+        }
+        return(result.join("\n")+"\n");
+    }
 }
