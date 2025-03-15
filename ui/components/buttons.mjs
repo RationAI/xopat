@@ -53,7 +53,7 @@ class Button extends BaseComponent {
 // but everything what you rewrite here will be reflected on the component in the workspace
 // after using ctrl + s
 
-import { default as ui } from "/ui/index.mjs";
+ui = globalThis.UI;
 
 window["workspaceItem"] = new ui.Button({
     id: "myButton",
