@@ -74,11 +74,12 @@ module.exports = function(grunt) {
         return initialValue;
     }
 
-    grunt.util.reduceUI((acc, ui, folder) => {
-        const itemDirectory = grunt.file.expand({filter: "isFile", cwd: `ui/components`}, ["*"]);
-        for(let item of itemDirectory) {
-            const content = grunt.file.read(`ui/components/${item}`).toString().trim();
-            
-        }
-    });
+    grunt.util.reduceUI = function (accumulator, initialValue, parseMeta=true, log=false) {
+        item = "ui/index.js"
+        if (log) grunt.log.write(`UI found: ${item}`);
+        initialValue=accumulator(initialValue, item, item);
+        if (log) grunt.log.write("\n");  
+        
+        return initialValue;
+    };
 };

@@ -68,7 +68,7 @@
             "js_cookie_domain": null, //by default the viewer domain
             "secureMode": false,
             /* Production mode (serve minified files if available) */
-            "production": true, // TODO PUT BACK TO FALSE
+            "production": false,
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
             "redirectUrl": "redirect.php"
         },

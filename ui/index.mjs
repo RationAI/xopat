@@ -12,7 +12,6 @@ import { Div } from "./components/div.mjs";
 import { MainPanel } from "./components/mainPanel.mjs";
 const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel };
 globalThis.UI = UI;
-export default UI;
 
 globalThis.vanRegister = function (id, component) {
     globalThis.VANCOMPONENTS[id] = component;

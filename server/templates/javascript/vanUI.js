@@ -15,9 +15,10 @@ module.exports.loadUI = function (core, fileExists, readFile, scanDir, i18n) {
      */
     core.requireUI = function (production) {
         if (production){
-            return `<script src=\"ui/index.min.js\">` + "</script>";
+            return `<script src=\"ui/index.min.js\"` + "</script>";
         }
-        let result = [`<script src=\"ui/index.mjs\" type=module>` + "</script>"];
+        let result = [`<script src=\"ui/index.mjs\" type=module>` + "</script>",
+                      `<script src=\"ui/vanjs.mjs\" type=module>` + "</script>"];
         for(let p of uiPaths) {
             result.push(`\t<script src=\"ui/components/${p}\" type=module>` + "</script>");
         }

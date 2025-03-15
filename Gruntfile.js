@@ -87,9 +87,8 @@ module.exports = function(grunt) {
             }, uglification, true, true),
 
             ...grunt.util.reduceUI((acc, ui, folder) => {
-                //TODO check
-                acc.ui.files[`ui/index.min.js`] =
-                    ui.includes.map(i => `ui/${i}`);
+                exec("npx esbuild --bundle --format=esm --outfile=./ui/index.js ./ui/index.mjs")
+                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"]
                 return acc;
             }, uglification, true, true),
         }

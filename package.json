@@ -52,6 +52,7 @@
     "cypress-real-events": "^1.7.1",
     "cypress-wait-until": "^1.7.2",
     "daisyui": "^4.10.2",
+    "esbuild": "^0.25.1",
     "grunt": "^1.6.1",
     "grunt-contrib-connect": "^3.0.0",
     "grunt-contrib-uglify": "^5.2.2",

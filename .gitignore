@@ -69,3 +69,6 @@ cypress.env.*
 
 # hidden docs file
 !.readthedocs.yaml
+
+#ui
+ui/index.js
