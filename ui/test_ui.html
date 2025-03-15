@@ -23,9 +23,10 @@
     <link rel="icon" type="image/png" sizes="16x16" href="src/assets/favicon-16x16.png">
     <link rel="mask-icon" href="src/assets/safari-pinned-tab.svg" color="#5bbad5">
     <script type="text/javascript" src="../src/libs/monaco/loader.js"></script>
+    <script type="text/javascript" src="./index.js"></script>
     <script type="module">
+        const ui = UI; // instead of import from mjs
         require.config({ paths: { 'vs': '../src/libs/monaco' } });
-        import { default as ui } from "./index.mjs";
         import { default as van } from "./vanjs.mjs";
 
         const DEFAULT_EDITOR_OPTIONS = {
@@ -117,11 +118,12 @@
                     size: ui.Button.SIZE.SMALL,
                     onClick: () => {
                         editor.setValue(Component.generateCode ? Component.generateCode() : "// Error: component has no usage defined!");
-                        save();
                         editorResize(editor);
 
                         document.getElementById("workspace").innerHTML = "";
                         document.getElementById("settings").innerHTML = "";
+
+                        save();
                         const settings = document.getElementById("settings");
                         buttons.forEach(x => x.attachTo(settings));
                     },

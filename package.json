@@ -9,6 +9,7 @@
     "s-static": "grunt html",
     "s-node": "node index.js",
     "dev-ui": "grunt connect watch",
+    "predev": "npx esbuild --bundle --format=esm --outfile=ui/index.js ui/index.mjs",
     "dev": "node index.js",
     "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js",
     "env": "grunt env",

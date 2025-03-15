@@ -58,6 +58,10 @@ module.exports = function(grunt) {
             components: {
                 files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js", "src/assets/custom.css"],
                 tasks: "css"
+            },
+            components:{
+                files: ["ui/*.mjs", "ui/components/*.mjs"],
+                task: "buildUI"
             }
         },
         uglify: {
@@ -87,7 +91,7 @@ module.exports = function(grunt) {
             }, uglification, true, true),
 
             ...grunt.util.reduceUI((acc, ui, folder) => {
-                exec("npx esbuild --bundle --format=esm --outfile=./ui/index.js ./ui/index.mjs")
+                exec("npx esbuild --bundle --format=esm --outfile=ui/index.js ui/index.mjs")
                 acc.ui.files[`ui/index.min.js`] = ["ui/index.js"]
                 return acc;
             }, uglification, true, true),
@@ -99,6 +103,11 @@ module.exports = function(grunt) {
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('ui', ["uglify:ui"]);
+    grunt.registerTask('buildUI', function (){
+        grunt.log.writeln('esbuild');
+        const result = exec("npx esbuild --bundle --format=esm --outfile=ui/index.js ui/index.mjs");
+        grunt.log.writeln(result);
+    })
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
         grunt.log.writeln('Tailwind');
         //TODO change back to minify
