@@ -99,7 +99,7 @@ function initXopatUI() {
                 if (this._timer) clearTimeout(this._timer);
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
                 this._opts = opts;
-                this._opts.onShow && this._opts.onShow();
+                this._opts && this._opts.onShow && this._opts.onShow();
             }
         },
 
@@ -549,6 +549,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         focusMenu(menuName, menuId) {
             switch (menuName) {
                 case "MainMenu":
+                    // tODO
                     this.MainMenu.open();
                     $("#main-panel-content").scrollTo("#" + menuId);
                     break;
@@ -727,14 +728,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             _sync() {
                 this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
-                let width = this.opened ? "calc(100% - 400px)" : "100%";
+                let width = this.opened ? `calc(100% - ${VIEWER.navigator.element.clientWidth+5}px)` : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
                 if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
 
                 let status = USER_INTERFACE.Status.context;
                 if (status) status.style.right = this.opened ? "408px" : "8px";
-            }
+           },
         },
 
         /**

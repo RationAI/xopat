@@ -143,7 +143,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 
             <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
             <div class="inner-panel-content noselect" id="inner-panel-content-1">
-                <div>
+                <div><!-- TODO fix clickHeader -->
                     <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
                     APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
                     <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
