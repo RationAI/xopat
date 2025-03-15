@@ -473,7 +473,7 @@ OSDAnnotations.FreeFormTool = class {
             ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
             const newContours = [outerContour, ...innerContours].map(contour =>
-                contour.points.map(point => ({ x: point.x + shift.x, y: point.y + shift.y }))
+                contour.points.map(point => ({ x: point.x + shift.x + 0.5, y: point.y + shift.y + 0.5}))
             );
             this._rasterizePolygons(ctx, newContours, false, false);
 
@@ -637,8 +637,8 @@ OSDAnnotations.FreeFormTool = class {
         const imageContours = contours.map(contour => ({
             ...contour,
             points: contour.points.map(point => {
-                point.x += bbox.x;
-                point.y += bbox.y;
+                point.x += bbox.x + 0.5;
+                point.y += bbox.y + 0.5;
                 return this._convert(point);
             })
         }));

@@ -714,6 +714,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	setCloseEdgeMouseNavigation(enable) {
+		this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
+
 		if (enable !== this.edgeMouseInteractive && (!enable || this.mode.supportsEdgeNavigation())) {
 			this.edgeMouseInteractive = enable;
 
@@ -1565,13 +1567,12 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 		let annotationCanvas = this.canvas.upperCanvasEl;
 
-		function handleMouseDown(event) {
-			if (_this.disabledInteraction) return;
+		annotationCanvas.addEventListener("mousedown", function (event) {
+			if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
 
 			if (event.which === 1) handleLeftClickDown(event);
 			else if (event.which === 3) handleRightClickDown(event);
-		}
-		annotationCanvas.addEventListener("mousedown", handleMouseDown);
+		});
 
 		annotationCanvas.addEventListener('mouseup', function (event) {
 			if (_this.disabledInteraction) return;
@@ -1595,6 +1596,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			if (_this.isModeAuto() || _this._wasModeFiredByKey || o.e.shiftKey) {
 				_this.mode.scroll(o.e, o.e.deltaY);
 			} else {
+				if (!_this.mode.supportsZoomAnimation() && _this.cursor.isDown) handleLeftClickUp(o.e);
+
 				_this._fireMouseWheelNavigation(o.e);
 				_this.mode.scrollZooming(o.e, o.e.deltaY);
 			}
@@ -1603,15 +1606,11 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
 		VIEWER.addHandler("animation-start", function() {
-			if (_this.mode.getId().startsWith('fft-')) {
-				annotationCanvas.removeEventListener("mousedown", handleMouseDown);
-			}
+			Object.values(_this.Modes).forEach(mode => mode.onZoomStart());
 		});
 
 		VIEWER.addHandler("animation-finish", function() {
-			if (_this.mode.getId().startsWith('fft-')) {
-				annotationCanvas.addEventListener("mousedown", handleMouseDown);
-			}
+			Object.values(_this.Modes).forEach(mode => mode.onZoomEnd());	
 		});
 
 		VIEWER.addHandler("canvas-press", function (e) {
@@ -1654,13 +1653,15 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	_setModeFromAuto(mode) {
 		UTILITIES.setIsCanvasFocused(true);
 		if (mode.setFromAuto()) {
-			this.raiseEvent('mode-changed', {mode: mode});
+			this.mode = mode;
+			this.raiseEvent('mode-changed', {mode: this.mode});
 
-			if (!mode.supportsEdgeNavigation()) {
+			if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
+
+			if (!this.mode.supportsEdgeNavigation()) {
 				this.setCloseEdgeMouseNavigation(false);
 				this.edgeNavDisabledByMode = true;
 			}
-			this.mode = mode;
 		}
 	}
 
@@ -1675,7 +1676,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			this.mode = this.Modes.AUTO;
 			this.canvas.hoverCursor = "pointer";
 			this.canvas.defaultCursor = "grab";
-			if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.mode.supportsEdgeNavigation());
 		}
 	}
 
@@ -1948,6 +1948,11 @@ OSDAnnotations.AnnotationState = class {
 		 * @type {string}
 		 */
 		this.description = description;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {boolean}
+		 */
+		this.isZooming = false;
 	}
 
 	/**
@@ -2192,6 +2197,30 @@ OSDAnnotations.AnnotationState = class {
 	supportsEdgeNavigation() {
 		return true;
 	}
+
+	/**
+	* Determines whether zoom animation is supported
+	* @returns {boolean} true if zoom animation is supported
+	*/
+	supportsZoomAnimation() {
+		return true;
+	}
+
+	/**
+	* Handles the start of a zoom event
+	* and sets the `isZooming` flag to true
+	*/
+	onZoomStart() {
+        this.isZooming = true;
+    }
+
+	/**
+ 	* Handles the end of a zoom event
+ 	* and resets the `isZooming` flag to false
+ 	*/
+    onZoomEnd() {
+        this.isZooming = false;
+    }
 };
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
@@ -2375,6 +2404,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	supportsEdgeNavigation() {
+		return false;
+	}
+
+	supportsZoomAnimation() {
 		return false;
 	}
 };
