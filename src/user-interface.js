@@ -626,6 +626,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
+    // TODO make new component for main-panel -> add methods from user-interface MainMenu
+    // `<div id="${id}" -> id MENU, on components we will access through API
+    // class="inner-panel ${pluginId}-plugin-root -> must be for every top level component of some plugin
+    // firstly we add plugin div and in it there will be our UI component hiearchy
+    // advanced menu shoudl be equiallent to our Menu, submenu -> creates menu in menu
+    // we can have always submenu and only hide header
+    // create one component for main menu and advanced menu
+
+    //appCache -> remember settings for each user, remember open/close etc
+
+    //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
+
         /**
          * Application Main Menu (right side)
          * @namespace USER_INTERFACE.MainMenu
@@ -635,6 +647,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             content: $("#main-panel-content"),
             navigator: $("#navigator-container"),
             opened: true,
+            menu: new UI.MainPanel(),
+
+            init: function() {
+                this.menu.attachTo(this.context);
+            },
             /**
              * Append to the menu
              * @param title
@@ -645,7 +662,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @memberOf MainMenu
              */
             append: function(title, titleHtml, html, id, pluginId) {
-                this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-simple"><div><h3 class="d-inline-block h3" style="padding-left: 15px;">${title}&emsp;</h3>${titleHtml}</div><div>${html}</div></div>`);
+                this.menu.append(title, titleHtml, html, id, pluginId);
             },
             /**
              * Replace in the menu
@@ -657,8 +674,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @memberOf MainMenu
              */
             replace: function(title, titleHtml, html, id, pluginId) {
-                $(`.${pluginId}-plugin-root`).remove();
-                this.append(title, titleHtml, html, id, pluginId);
+                this.menu.remove(`${pluginId}-plugin-root`);
+                this.menu.append(title, titleHtml, html, id, pluginId);
             },
             /**
              * Append to the menu with toggle-able (hidden) content
@@ -670,10 +687,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param pluginId
              */
             appendExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root"><div>
-<span class="material-icons inline-arrow plugins-pin btn-pointer" id="${id}-pin" onclick="USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));" style="padding: 0;">navigate_next</span>
-<h3 class="d-inline-block h3 btn-pointer" onclick="USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));">${title}&emsp;</h3>${titleHtml}
-</div><div class="inner-panel-visible">${html}</div><div class="inner-panel-hidden">${hiddenHtml}</div></div>`);
+                this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
             /**
              * Replace in the menu with toggle-able (hidden) content
@@ -684,12 +698,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param id
              * @param pluginId
              */
-            replaceExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                $(`.${pluginId}-plugin-root`).remove();
-                this.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
+            replaceExtended: function(title, titleHtml, html, hiddenHtml, id, pluginId) {  
+                this.menu.remove(`${pluginId}-plugin-root`);
+                this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
+
             appendRaw: function(html, id, pluginId) {
-                this.content.append(`<div id="${id}" class="inner-panel ${pluginId}-plugin-root inner-panel-visible">${html}</div>`);
+                this.menu.appendRaw(html, id, pluginId);
             },
             /**
              * Open/close Main Menu Item todo: make cleaner

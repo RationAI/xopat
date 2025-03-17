@@ -1,12 +1,12 @@
 import { Menu } from './menu.mjs';
 import van from "../vanjs.mjs";
-const { div, h3 } = van.tags
+const { div, h3, span } = van.tags
 
 
 class MainPanel extends Menu {
     constructor() {
         super({ id: "myMenu", orientation: Menu.ORIENTATION.TOP },
-            { id: "base", icon: settingsIcon, title: "base", body: "" });
+            { id: "base", icon: "fa-gear", title: "base", body: "body" });
     }
     // MainMenu
     append(title, titleHtml, html, id, pluginId) {

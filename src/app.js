@@ -62,8 +62,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         I18NCONFIG = savedState.I18NCONFIG;
     }
 
-    initMenu();
     initXopatUI();
+    USER_INTERFACE.MainMenu.init();
 
     //Setup language and parse config if function provided
     function localizeDom() {
