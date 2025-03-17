@@ -993,7 +993,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             for (let pid in PLUGINS) {
                 const hasParams = CONFIG.plugins[pid];
                 const plugin = PLUGINS[pid];
-                if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
+                if (
+                    (plugin.loaded && !plugin.instance) ||  // load plugin if loaded=true but instance not set
+                    (!plugin.loaded && (hasParams || pluginKeys.includes(pid)))
+                ) {
                     if (plugin.error) {
                         console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
                     } else {
@@ -1249,13 +1252,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // Clean up instance references before serialization
             const plugins = {...PLUGINS};
             const modules = {...MODULES};
-            for (let id in plugins) delete plugins[id].instance;
-            for (let id in modules) delete modules[id].instance;
+            for (let id in plugins) {
+                delete plugins[id].instance;
+                delete modules[id].loaded;
+            }
+            for (let id in modules) {
+                delete modules[id].instance;
+                delete modules[id].loaded;
+            }
             sessionStorage.setItem('__xopat_session__', JSON.stringify({
                 PLUGINS: plugins, MODULES: modules,
                 ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
-            }));
-
+            }, WebGLModule.jsonReplacer));
         } catch (e) {
             console.error("Failed to store application state!", e);
         }
