@@ -91,7 +91,7 @@ module.exports = function(grunt) {
             }, uglification, true, true),
 
             ...grunt.util.reduceUI((acc, ui, folder) => {
-                exec("npx esbuild --bundle --format=esm --outfile=ui/index.js ui/index.mjs")
+                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs")
                 acc.ui.files[`ui/index.min.js`] = ["ui/index.js"]
                 return acc;
             }, uglification, true, true),

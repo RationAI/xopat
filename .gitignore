@@ -72,3 +72,4 @@ cypress.env.*
 
 #ui
 ui/index.js
+ui/index.js.map
