@@ -649,7 +649,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: new UI.MainPanel({
                 id: "main-menu",
                 orientation: UI.Menu.ORIENTATION.BOTTOM,
-                extraClass: {bg:"bg-transparent"}
+                extraClasses: {bg:"bg-transparent"}
             },
             { id: "copy-url", icon: "fa-link", title: "URL", body: "" },
             { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "" },
@@ -660,6 +660,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function() {
                 this.menu.attachTo(this.context);
                 this.menu.getBodyDomNode().display = "none";
+                this.menu.getHeaderDomNode().style.pointerEvents = "auto";
+                this.menu.getHeaderDomNode().classList.add("bg-transparent");
             },
             /**
              * Append to the menu
