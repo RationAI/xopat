@@ -644,13 +644,22 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          */
         MainMenu: {
             context: $("#main-panel"),
-            content: $("#main-panel-content"),
             navigator: $("#navigator-container"),
             opened: true,
-            menu: new UI.MainPanel(),
+            menu: new UI.MainPanel({
+                id: "main-menu",
+                orientation: UI.Menu.ORIENTATION.BOTTOM,
+                extraClass: {bg:"bg-transparent"}
+            },
+            { id: "copy-url", icon: "fa-link", title: "URL", body: "" },
+            { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "" },
+            { id: "global-help", icon: "fa-question-circle", title: "Help", body: "" },
+            { id: "settings", icon: "fa-gear", title: "Setting", body: "" }
+        ),
 
             init: function() {
                 this.menu.attachTo(this.context);
+                this.menu.getBodyDomNode().display = "none";
             },
             /**
              * Append to the menu

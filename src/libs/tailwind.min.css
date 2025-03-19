@@ -2589,6 +2589,10 @@ details.collapse summary::-webkit-details-marker {
   background-color: var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity, 1)));
 }
 
+.bg-transparent {
+  background-color: transparent;
+}
+
 .p-2 {
   padding: 0.5rem;
 }
