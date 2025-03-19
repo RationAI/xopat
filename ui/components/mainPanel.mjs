@@ -4,9 +4,8 @@ const { div, h3, span } = van.tags
 
 
 class MainPanel extends Menu {
-    constructor() {
-        super({ id: "myMenu", orientation: Menu.ORIENTATION.TOP },
-            { id: "base", icon: "fa-gear", title: "base", body: "body" });
+    constructor(options, ...args) {
+        super(options, ...args);
     }
     // MainMenu
     append(title, titleHtml, html, id, pluginId) {

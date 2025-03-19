@@ -39,14 +39,7 @@ class Menu extends BaseComponent {
         this.body = new ui.Div({ id: this.id + "-body", height: "h-full" });
 
         for (let i of args) {
-            if (!(i.id && i.icon && i.title && i.body)) {
-                throw new Error("Item for menu needs every property set.");
-            }
-
-            const tab = new MenuTab(i, this);
-            this.tabs[i.id] = tab;
-            tab.headerButton.attachTo(this.header);
-            tab.contentDiv.attachTo(this.body);
+            this.addTab(i);
         }
 
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
@@ -65,7 +58,6 @@ class Menu extends BaseComponent {
     create() {
         this.header.attachTo(this);
         this.body.attachTo(this);
-
         return div(
             { ...this.commonProperties, ...this.additionalProperties },
             ...this.children
@@ -87,7 +79,7 @@ class Menu extends BaseComponent {
      * @param {*} item dictionary with id, icon, title, body which will be added to the menu
      */
     addTab(item) {
-        if (!(item.id && item.icon && item.title && item.body)) {
+        if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
         const tab = new MenuTab(item, this);
@@ -95,8 +87,13 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
-        tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
-        tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
+        if(this._initializing){
+            tab.headerButton.attachTo(this.header);
+            tab.contentDiv.attachTo(this.body);
+        } else{
+            tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
+            tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
+        }
     }
 
     /**
