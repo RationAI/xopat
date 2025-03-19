@@ -19,7 +19,7 @@ class BaseComponent {
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...args) {
-        const extraClasses = options["extraClass"];
+        const extraClasses = options["extraClasses"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
         this.additionalProperties = options["additionalProperties"] || {};
         this._children = args;

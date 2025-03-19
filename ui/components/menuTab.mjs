@@ -48,7 +48,7 @@ class MenuTab {
             id: this.parent.id + "-b-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
-            extraClass: { item: "menu-item-horizontal", "padding-left": "pl-0" },
+            extraClasses: { item: "menu-item-horizontal", "padding-left": "pl-0" },
             onClick: () => {
                 this.focus();
             }
