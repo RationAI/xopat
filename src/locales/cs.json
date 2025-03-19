@@ -25,7 +25,8 @@
         "explainPlugins": "Přidat nebo odebrat komponenty a aplikace",
         "tutorials": "Tutoriály",
         "explainTutorials": "Zobraz seznam tutoriálů",
-        "settings": "Nastavení"
+        "settings": "Nastavení",
+        "staticFileExplain": "Tento prohlížeč byl otevřen ze sdíleného souboru. Změny se neukládají."
       }
     },
     "common": {

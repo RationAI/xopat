@@ -787,7 +787,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             }
             staticContext.__self = this;
 
-            MODULES.instance = this;
+            MODULES[id].instance = this;
 
             // Await event necessary to fire after instantiation, do in async context
             setTimeout(() => VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
@@ -1148,9 +1148,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Serialize the Viewer
          * @param includedPluginsList
          * @param withCookies
+         * @param staticPreview Whether to mark the serialized app as static or not
          * @return {Promise<{app: string, data: {}}>}
          */
-        serializeApp: async function(includedPluginsList=undefined, withCookies=false) {
+        serializeApp: async function(includedPluginsList=undefined, withCookies=false, staticPreview=false) {
             //reconstruct active plugins
             let pluginsData = APPLICATION_CONTEXT.config.plugins;
             let includeEvaluator = includedPluginsList ?
@@ -1178,7 +1179,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @event export-data
              */
             await VIEWER.tools.raiseAwaitEvent(VIEWER, 'export-data');
-            return {app: UTILITIES.serializeAppConfig(withCookies), data: POST_DATA};
+            return {app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA};
         }
     };
 

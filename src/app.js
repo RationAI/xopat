@@ -364,9 +364,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (CONFIG.background.length < 0) {
                 return "__anonymous__";
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            if (bgConfig) return CONFIG.data[bgConfig.dataReference];
-            return "__anonymous__";
+            let config;
+            if (VIEWER.scalebar) {
+                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            } else {
+                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                    || CONFIG.background[0];
+            }
+            return config ? CONFIG.data[config.dataReference] : "__anonymous__";
         },
         _dangerouslyAccessConfig() {
             //remove in the future?

@@ -204,7 +204,14 @@ export something like:
   "presets": [...]
 }
 ````
+When the viewer is exported as a file, it will mark the flag `isStaticPreview` to `true`.
+In this case, plugins should **not fetch** any data that is included in the export, to avoid duplicity.
 
+```js
+if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+    // skip data fetching
+}
+```
 
 ### Data Management Options  TODO: rewrite
 There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
