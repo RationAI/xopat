@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./ui/**/*"],
+  content: ["./ui/**/*", "./src/user-interface.js", "./server/templates/index.html"],
   darkMode: ["selector", '[data-theme="catppuccin-mocha"]', '[data-theme="blood-moon"]'],
   theme: {
 
