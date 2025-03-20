@@ -246,7 +246,7 @@
             "nouislider": "nouislider.css"
         },
         "src": {
-            "env": ["assets/style.css", "assets/xopat.css"]
+            "env": ["assets/style.css", "assets/xopat.css", "assets/custom.css"]
         }
     }
 }
