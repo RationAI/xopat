@@ -763,6 +763,37 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (status) status.style.right = this.opened ? "408px" : "8px";
             }
         },
+        /**
+         * Application Vertical Menu (right side)
+         * @namespace USER_INTERFACE.VerticalMenu
+         */
+        VerticalMenu: {
+            context: $("#left-side-buttons"),
+            menu: "",
+
+            init: function() {
+                b1 = new UI.Button({
+                    id: "myButton",
+                    size: UI.Button.SIZE.NORMAL,
+                    outline: UI.Button.OUTLINE.DISABLE,
+                    TYPE: UI.Button.TYPE.PRIMARY,
+                    onClick: function () {
+                        console.log("Button clicked");
+                    }
+                },"Click me!");
+
+                this.menu = new UI.Join({id: "myJoin", rotation: UI.Join.ROTATION.ENABLE, style: UI.Join.STYLE.HORIZONTAL}, b1, b1);
+                this.menu.attachTo(this.context);
+                // TODO switch height and width
+                const joinNode = document.getElementById("myJoin");
+                const width = joinNode.style.width;
+                const height = joinNode.style.height;
+                joinNode.style.width = width;
+                joinNode.style.height = height;
+                console.log(joinNode.style.offsetWidth);
+                console.log(width);
+            },
+        },
 
         /**
          * Tools menu by default invisible (top)

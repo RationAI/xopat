@@ -64,6 +64,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     initXopatUI();
     USER_INTERFACE.MainMenu.init();
+    USER_INTERFACE.VerticalMenu.init();
 
     //Setup language and parse config if function provided
     function localizeDom() {

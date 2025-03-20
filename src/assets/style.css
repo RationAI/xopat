@@ -440,7 +440,8 @@ div {box-sizing: initial !important;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .material-icons {color: var(--color-border-inverse);}
-#main-panel {z-index: 90;right: 0;transition: right 0.3s;user-select: none; pointer-events: none; }
+#left-side-buttons {z-index: 90;right: 0;}
+#main-panel {z-index: 80;right: 0;transition: right 0.3s;user-select: none; pointer-events: none; }
 #main-panel-hide {cursor: pointer;margin-left: -12px;}
 #main-panel-show {position: fixed;z-index: 89;top: 0px;right: 0px; padding: 5px; border-top-left-radius: 20%;
     border-bottom-left-radius: 20%; cursor: pointer; color: var(--color-bg-primary); background: var(--color-text-primary);}
