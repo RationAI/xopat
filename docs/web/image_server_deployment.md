@@ -92,6 +92,7 @@ must be compatible with the image server used. Test data can be found for exampl
             - WS_ENABLE_VIEWER_ROUTES=${WS_ENABLE_VIEWER_ROUTES}
             - WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=${WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS}
             - WS_MAX_RETURNED_REGION_SIZE=${WS_MAX_RETURNED_REGION_SIZE}
+            - WS_API_V3_INTEGRATION=${WS_API_V3_INTEGRATION}
             volumes:
             - ${COMPOSE_DATA_DIR}:/data
             ports:
