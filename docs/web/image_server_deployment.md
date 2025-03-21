@@ -29,36 +29,39 @@ must be compatible with the image server used. Test data can be found for exampl
     git clone --recursive https://github.com/RationAI/WSI-Service.git
     ``` 
 
-3. Create .env file in the root folder of repository. Make sure ``COMPOSE_DATA_DIR`` points to the
-folder with downloaded slides, ``root-folder``.
+   3. Create .env file in the root folder of repository. Make sure ``COMPOSE_DATA_DIR`` points to the
+   folder with downloaded slides, ``root-folder``.
 
-    ``` bash title=".env"
-        # if true, it will allow logging functionality
-        WS_DEBUG=False
-        # if true, it will make OpenAPI sites available
-        WS_DISABLE_OPENAPI=True
-        # url of service which maps slide ids to path. We use build in service
-        WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
-        # How the mapper resolves slide paths
-        WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
+       ``` bash title=".env"
+           # if true, it will allow logging functionality
+           WS_DEBUG=False
+           # if true, it will make OpenAPI sites available
+           WS_DISABLE_OPENAPI=True
+           # url of service which maps slide ids to path. We use build in service
+           WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
+           # How the mapper resolves slide paths
+           WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
+            
+           # Auth of a choice, here we request no auth
+           WS_API_V3_INTEGRATION=wsi_service.api.v3.integrations.disable_auth:DisableAuth
 
-        # this variables are configuring docker compose file
-        COMPOSE_RESTART=no
-        COMPOSE_NETWORK=default
-        COMPOSE_WS_PORT=8080
-        # directory where the test slides are saved
-        COMPOSE_DATA_DIR=path/to/slides
+           # this variables are configuring docker compose file
+           COMPOSE_RESTART=no
+           COMPOSE_NETWORK=default
+           COMPOSE_WS_PORT=8080
+           # directory where the test slides are saved
+           COMPOSE_DATA_DIR=path/to/slides
 
-        # server API configuration
-        WS_CORS_ALLOW_CREDENTIALS=False
-        WS_CORS_ALLOW_ORIGINS=["*"]
+           # server API configuration
+           WS_CORS_ALLOW_CREDENTIALS=False
+           WS_CORS_ALLOW_ORIGINS=["*"]
 
-        # Timeouts and size settings
-        WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
-        WS_MAX_RETURNED_REGION_SIZE=25000000
-        WS_MAX_THUMBNAIL_SIZE=500
-        WS_ENABLE_VIEWER_ROUTES=False
-    ```
+           # Timeouts and size settings
+           WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
+           WS_MAX_RETURNED_REGION_SIZE=25000000
+           WS_MAX_THUMBNAIL_SIZE=500
+           WS_ENABLE_VIEWER_ROUTES=False
+       ```
 
 4. Make sure that [Docker](https://docs.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/) is installed on your machine. 
    
