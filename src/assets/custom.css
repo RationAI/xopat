@@ -67,6 +67,7 @@
 }
 
 .rotate-90-permanent {
-    transform: rotate(-90deg) !important;
-    transform-origin: bottom right !important;
-  }
+    transform: rotate(-90deg) translate(100%);
+    transform-box: fill-box;
+    transform-origin: bottom right;
+}
