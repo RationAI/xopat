@@ -772,17 +772,27 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                b1 = new UI.Button({
-                    id: "myButton",
+                bPlugins = new UI.Button({
+                    id: "plugins",
                     size: UI.Button.SIZE.SMALL,
                     outline: UI.Button.OUTLINE.DISABLE,
                     TYPE: UI.Button.TYPE.PRIMARY,
                     onClick: function () {
-                        console.log("Button clicked");
+                        console.log("Plugins clicked");
                     }
-                }, "Click me!");
+                }, "Plugins");
 
-                this.menu = new UI.Join({ id: "myJoin", rotation: UI.Join.ROTATION.ENABLE, style: UI.Join.STYLE.HORIZONTAL }, b1, b1);
+                bSettings = new UI.Button({
+                    id: "settings",
+                    size: UI.Button.SIZE.SMALL,
+                    outline: UI.Button.OUTLINE.DISABLE,
+                    TYPE: UI.Button.TYPE.PRIMARY,
+                    onClick: function () {
+                        console.log("Settings clicked");
+                    }
+                }, "Settings");
+
+                this.menu = new UI.Join({ id: "myJoin", rotation: UI.Join.ROTATION.ENABLE, style: UI.Join.STYLE.HORIZONTAL }, bPlugins, bSettings);
                 this.menu.attachTo(this.context);
 
                 // setting up parent width to match buttons width
