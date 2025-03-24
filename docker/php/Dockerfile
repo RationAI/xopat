@@ -82,7 +82,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
-    && rm /etc/apache2/ports.conf /etc/apache2/sites-available/000-default.conf
+    && rm /etc/apache2/sites-available/000-default.conf \
+    && echo > /etc/apache2/ports.conf
 
 COPY --chown=www-data:www-data docker/php/apache-dev.conf /etc/apache2/sites-available/000-default.conf
 
@@ -140,7 +141,8 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
-    && rm /etc/apache2/ports.conf /etc/apache2/sites-available/000-default.conf
+    && rm /etc/apache2/sites-available/000-default.conf \
+    && echo > /etc/apache2/ports.conf
 
 COPY --chown=www-data:www-data docker/php/apache.conf /etc/apache2/sites-available/000-default.conf
 
