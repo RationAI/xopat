@@ -792,7 +792,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                 }, "Settings");
 
-                this.menu = new UI.Join({ id: "myJoin", rotation: UI.Join.ROTATION.ENABLE, style: UI.Join.STYLE.HORIZONTAL }, bPlugins, bSettings);
+                this.menu = new UI.Join({ 
+                        id: "myJoin", 
+                        rotation: UI.Join.ROTATION.ENABLE, 
+                        style: UI.Join.STYLE.HORIZONTAL, 
+                        rounded: UI.Join.ROUNDED.DISABLE }, 
+                    bPlugins, bSettings);
                 this.menu.attachTo(this.context);
 
                 // setting up parent width to match buttons width

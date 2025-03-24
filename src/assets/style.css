@@ -440,9 +440,11 @@ div {box-sizing: initial !important;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .material-icons {color: var(--color-border-inverse);}
-#openseadragon-view {z-index: 90; background: var(--color-text-primary)}
-#left-side-buttons {z-index: 90; background: var(--color-text-primary)}
+#openseadragon-view {background: var(--color-text-primary)}
+#left-side-buttons {background: var(--color-text-primary)}
+#left-side-top {z-index: 89; background: var(--color-bg-primary)}
 #left-side {z-index: 90;right: 0;}
+#left-side-full {z-index: 90;right: 0; pointer-events: none; user-select: none;}
 #main-panel {z-index: 80;right: 0;transition: right 0.3s;user-select: none; pointer-events: none; }
 #main-panel-hide {cursor: pointer;margin-left: -12px;}
 #main-panel-show {position: fixed;z-index: 89;top: 0px;right: 0px; padding: 5px; border-top-left-radius: 20%;
