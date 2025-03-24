@@ -101,7 +101,13 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 <!-- Main Panel -->
 <span id="main-panel-show" class="material-icons btn-pointer" onclick="USER_INTERFACE.MainMenu.open();">chevron_left</span>
 
-<div id="left-side-buttons" class="position-fixed d-flex flex-column flex-end height-full"></div>
+<div id="left-side" class="position-fixed d-flex flex-row height-full flex-justify-between">
+    <div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
+        <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
+    </div>
+        
+    <div id="left-side-buttons" class="d-flex flex-column flex-end height-full"></div>
+</div>
 
 <div id="main-panel" class="position-fixed d-flex flex-column height-full top-0"
     style="width: 400px; max-width: 100vw;">
@@ -123,30 +129,8 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
         <span id="user-name" data-i18n="user.anonymous"></span>
         <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
     </div>
-
-
-    <div id="navigator-container" data-position="relative" class="inner-panel right-0 mb-1"
-        style="width: 400px; max-width: 100vw; position: relative; background-color: var(--color-bg-canvas)">
-        <div><!--the div below is re-inserted by OSD, keep it in the hierarchy at the same position-->
-            <div id="panel-navigator" style=" height: 300px; width: 100%;"></div>
-        </div>
-        <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
-            <span id="navigator-pin" class="material-icons btn-pointer inline-pin" onclick="
-let self = $(this);
-if (self.hasClass('pressed')) {
-self.removeClass('pressed');
-self.parent().parent().removeClass('color-shadow-medium').attr('data-position', 'relative').css('position', 'relative');
-} else {
-self.parent().parent().addClass('color-shadow-medium').attr('data-position', 'fixed');
-self.addClass('pressed');
-}
-"> push_pin </span>
-        </div>
-        <span class="fas fa-clone btn-pointer right-2 bottom-2 position-absolute" onclick="UTILITIES.clone()"
-            data-i18n="[title]main.global.clone"></span>
-
-    </div>
 </div>
+
 
     <!-- Appended controls for other plugins -->
 
