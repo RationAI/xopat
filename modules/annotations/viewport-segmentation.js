@@ -44,6 +44,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 	handleClickDown(o, point, isLeftClick, objectFactory) {
         if (!objectFactory || this.disabled) {
             this.abortClick(isLeftClick);
+            Dialogs.show(this.disabled ? 'There are no overlays to segment!' : 'Select a preset to annotate!');
             return;
         }
 

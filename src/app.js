@@ -301,7 +301,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
-         * @param name
+         * @param name;
          * @param value
          * @param cache
          */
@@ -411,6 +411,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         showNavigator: true,
         maxZoomPixelRatio: 2,
         blendTime: 0,
+        // This is due to annotations (multipolygon brush) that are disabled during animations
+        // ease out behavior makes user think they can already start drawing and slows them down
+        animationTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
@@ -1254,20 +1257,36 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             const modules = {...MODULES};
             for (let id in plugins) {
                 delete plugins[id].instance;
-                delete modules[id].loaded;
             }
             for (let id in modules) {
-                delete modules[id].instance;
                 delete modules[id].loaded;
             }
-            sessionStorage.setItem('__xopat_session__', JSON.stringify({
+            sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
                 ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
-            }, WebGLModule.jsonReplacer));
+            }));
+            return true;
         } catch (e) {
             console.error("Failed to store application state!", e);
         }
         return false;
+    }
+
+    function safeStringify(obj) {
+        const seenData = new WeakMap();
+
+        return JSON.stringify(obj, function(key, value) {
+            if (key.startsWith("_") || ["eventSource"].includes(key)) {
+                return undefined;
+            }
+            if (value && typeof value === 'object') {
+                if (seenData.has(value)) {
+                    return undefined;
+                }
+                seenData.set(value, true);
+            }
+            return value;
+        });
     }
 
     if (CONFIG.error) {

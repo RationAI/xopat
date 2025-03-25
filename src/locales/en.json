@@ -87,6 +87,7 @@
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "valueCopied": "The value was copied to your clipboard.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
+      "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",

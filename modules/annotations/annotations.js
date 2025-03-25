@@ -1610,7 +1610,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		});
 
 		VIEWER.addHandler("animation-finish", function() {
-			Object.values(_this.Modes).forEach(mode => mode.onZoomEnd());	
+			Object.values(_this.Modes).forEach(mode => mode.onZoomEnd());
 		});
 
 		VIEWER.addHandler("canvas-press", function (e) {
@@ -1779,6 +1779,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		const multipolygonFactory = this.multiPolygonFactory;
 
 		return new Promise((resolve, reject) => {
+			// TODO Dirty patch, detect factory and forward before-import hook via its API
 			input.objects.forEach(obj => {
 				if (obj.type === 'path' && obj.points && !obj.path) {
 					obj.path = multipolygonFactory._createPathFromPoints(obj.points);

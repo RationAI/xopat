@@ -218,9 +218,17 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
 
         console.debug('OIDC: Try to sign in via redirect.');
-        UTILITIES.storePageState();
-        await this.userManager.signinRedirect(this.extraSigninRequestArgs);
-        await new Promise(() => {});  // never resolve, we are being redirected
+        if (!UTILITIES.storePageState()) {
+            await this.userManager.signinRedirect(this.extraSigninRequestArgs);
+            await new Promise(() => {});  // never resolve, we are being redirected
+        } else {
+            Dialogs.show("Failed to login using redirection! Please, notify the administrator.", 5000, Dialogs.MSG_ERR);
+            await UTILITIES.sleep(5000);
+            Dialogs.show("Attempting to login...", 2000, Dialogs.MSG_INFO);
+            await UTILITIES.sleep(2000);
+            await this.userManager.signinRedirect(this.extraSigninRequestArgs);
+            await new Promise(() => {});  // never resolve, we are being redirected
+        }
     }
 
     getSessionData() {
