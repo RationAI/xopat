@@ -1776,7 +1776,15 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	_loadObjects(input, clear, reviver, inheritSession) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
+		const multipolygonFactory = this.multiPolygonFactory;
+
 		return new Promise((resolve, reject) => {
+			input.objects.forEach(obj => {
+				if (obj.type === 'path' && obj.points && !obj.path) {
+					obj.path = multipolygonFactory._createPathFromPoints(obj.points);
+				}
+			});
+
 			//todo try re-implement with fabric.util.enlivenObjects(...)? not private api
 			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
 				if (input.objects.length > 0 && enlivenedObjects.length < 1) {

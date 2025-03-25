@@ -13,7 +13,14 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS)
         if (poly?.length > 0) {
-            if (asLinearRing) poly.push(poly[0]); //linear ring
+            if (asLinearRing) { //linear ring
+
+                if (object.factoryID === "multipolygon") {
+                    poly.forEach(ring => ring.push(ring[0]));
+                } else {
+                    poly.push(poly[0]);
+                }
+            }
             const props = factory.copyNecessaryProperties(object);
             for (let p of deleteProps) delete props[p];
             return {
@@ -64,6 +71,10 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
+        "multipolygon": (object) => {
+            const res = this._asGEOJsonFeature(object, "Polygon", ["points"], true);
+            return res;
+        },
         "polyline": (object) => this._asGEOJsonFeature(object, "LineString", ["points"], false),
         "point": (object) => {
             object = this._asGEOJsonFeature(object, "Point");
@@ -94,7 +105,9 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         "rect": (object) => this._getAsNativeObject(object),
         "ellipse": (object) => this._getAsNativeObject(object),
         "polygon": (object) => this._getAsNativeObject(object,
-            (object, geometry) => object.points = this._toNativeRing(geometry[0] || [])), //for now we support only outer ring
+            (object, geometry) => object.points = this._toNativeRing(geometry[0] || [])),
+        "multipolygon": (object) => this._getAsNativeObject(object,
+            (object, geometry) => object.points = geometry.map(ring => this._toNativeRing(ring))),
         "polyline": (object) => this._getAsNativeObject(object,
             (object, geometry) => object.points = this._toNativeRing(geometry, false)),
         "point": (object) => this._getAsNativeObject(object, (object, geometry) => {
@@ -142,12 +155,21 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         MultiLineString: (object) => this._decodeMulti(object, "LineString"),
         Polygon: (object) => {
             let props = {};
-            props.factoryID = "polygon";
-            props.type = "polygon";
-            props.points = this._toNativeRing(object.coordinates[0] || []); //for now we support only outer ring
+            const rings = object.coordinates.map(ring => this._toNativeRing(ring));
+
+            if (rings.length > 1) {
+                //polygon with holes
+                props.factoryID = "multipolygon";
+                props.type = "path";
+                props.points = rings;
+            } else {
+                props.factoryID = "polygon";
+                props.type = "polygon";
+                props.points = rings[0];
+            }
             return props;
         },
-        MultiPolygon: (object) => this._decodeMulti(object, "Polygon"),
+        MultiPolygon: (object) => this._decodeMulti(object, "Polygon"), //multiple polygons
         GeometryCollection: (object) => {
             let result = {};
             //for now we do not make use of Multi* so this has to be external GeoJSON

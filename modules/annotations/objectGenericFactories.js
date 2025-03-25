@@ -1643,11 +1643,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     exportsGeometry() {
-        return ["path"];
+        return ["points"];
     }
 
     exports() {
-        return ["points"];
+        return [];
     }
 
     isImplicit() {
@@ -1715,5 +1715,18 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
             area -= this._polygonFactory.getArea({points: theObject.points[i]});
         }
         return area;
+    }
+
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        let polygon;
+        let result = [];
+
+        for (let i = 0; i < obj.points.length; i++) {
+            polygon = {"points": obj.points[i]};
+            let newPoints = this._polygonFactory.toPointArray(polygon, converter, digits, quality);
+            result.push(newPoints);
+        }
+
+        return result;
     }
 };

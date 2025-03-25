@@ -25,6 +25,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
+		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
 		await this.setupFromParams();
 
@@ -200,6 +201,9 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
+		modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
+		modeOptions.push(vertSeparator);
+
 		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
 		modeOptions.push(this.context.mode.customHtml());
 		modeOptions.push('</div>');
