@@ -6,7 +6,7 @@
     "description": "A plugin for annotations creation, management and sharing.",
     "icon": null,
     "includes": ["annotationsGUI.js", "preview.js"],
-    "modules": ["annotations", "human-readable-ids"],
+    "modules": ["annotations", "human-readable-ids", "sam"],
     "permaLoad": false,
     //Available annotation object types
     "factories": ["polygon", "rect", "ellipse", "ruler", "text"],

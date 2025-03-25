@@ -16,6 +16,10 @@
 !/modules/vega
 !/modules/vega-secure
 !/modules/webgl
+!/modules/sam
+!/modules/sam/**
+!/modules/segmentation
+!/modules/segmentation/**
 
 /plugins/**
 !/plugins/annotations
@@ -29,6 +33,8 @@
 !/plugins/simple-integration
 !/plugins/user-session
 !/plugins/youtrack-feedback-form
+!/plugins/sam-segmentation
+!/plugins/sam-segmentation/**
 
 #rubbish
 *.txt

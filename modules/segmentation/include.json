@@ -1,0 +1,10 @@
+{
+  "id": "segmentation",
+  "name": "Segmentation",
+  "author": "Mia",
+  "version": "0.1.0",
+  "includes": [
+    "segmentation.js"
+  ],
+  "requires": ["annotations"]
+}

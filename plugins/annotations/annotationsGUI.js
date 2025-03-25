@@ -110,6 +110,24 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setAnnotationCommonVisualProperty('modeOutline', enable);
 	}
 
+	registerCustomMode(id, classObj) {
+		this.context.setCustomModeUsed(id, classObj);
+	}
+
+	registerToolControls(mode) {
+		const defaultModeControl = (mode) => {
+			let selected = mode.default() ? "checked" : "";
+			return(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
+<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+ oncontextmenu="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+ title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
+		}
+		
+		const control = defaultModeControl(mode);
+		$("#annotations-tool-bar-content").append(control);
+		this.updatePresetsHTML();
+	}
+
 	setEdgeCursorNavigate(enable) {
 		enable = this.context.setCloseEdgeMouseNavigation(enable);
 		this.setOption("edgeCursorNavigate", enable);
@@ -241,6 +259,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		//trigger UI refreshes
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
+		this.context.raiseEvent("annotations-gui-ready");
 	}
 
 	getIOFormatRadioButton(format) {
@@ -484,6 +503,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('free-form-tool-radius', function (e) {
 			$("#fft-size").val(e.radius);
 		});
+
+		this.context.addHandler('register-custom-mode', e => this.registerCustomMode(e.id, e.classObj));
+		this.context.addHandler('register-tool-controls', e => this.registerToolControls(e.mode));
 	}
 
 	setupTutorials() {

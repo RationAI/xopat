@@ -45,6 +45,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					this.Modes.FREE_FORM_TOOL_REMOVE = new OSDAnnotations.StateFreeFormToolRemove(this);
 				}
 				break;
+			case "SAM_SEGMENTATION":  
+				if (!this.Modes.hasOwnProperty("SAM_SEGMENTATION")) {
+					this.Modes.SAM_SEGMENTATION = new OSDAnnotations.SegmentAnythingState(this);
+				}
+				break;
 			default:
 				console.error("Invalid mode ", id);
 		}
