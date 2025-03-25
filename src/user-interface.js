@@ -792,7 +792,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                 }, "Settings");
 
-                this.menu = new UI.Join({ 
+                this.menu = new UI.Join({ // TODO předělat na MENU, a upravit MENU tak aby se buttons otáčeli
                         id: "myJoin", 
                         rotation: UI.Join.ROTATION.ENABLE, 
                         style: UI.Join.STYLE.HORIZONTAL, 

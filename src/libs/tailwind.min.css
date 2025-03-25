@@ -3022,10 +3022,6 @@ details.collapse summary::-webkit-details-marker {
   position: static;
 }
 
-.fixed {
-  position: fixed;
-}
-
 .absolute {
   position: absolute;
 }
@@ -3042,10 +3038,6 @@ details.collapse summary::-webkit-details-marker {
   bottom: 0.25rem;
 }
 
-.bottom-2 {
-  bottom: 0.5rem;
-}
-
 .bottom-6 {
   bottom: 1.5rem;
 }
@@ -3058,20 +3050,12 @@ details.collapse summary::-webkit-details-marker {
   left: 0.25rem;
 }
 
-.left-3 {
-  left: 0.75rem;
-}
-
 .right-0 {
   right: 0px;
 }
 
 .right-1 {
   right: 0.25rem;
-}
-
-.right-2 {
-  right: 0.5rem;
 }
 
 .top-0 {
@@ -3108,10 +3092,6 @@ details.collapse summary::-webkit-details-marker {
 
 .mb-0 {
   margin-bottom: 0px;
-}
-
-.mb-1 {
-  margin-bottom: 0.25rem;
 }
 
 .mb-2 {
