@@ -14,6 +14,7 @@
         "convert/geoJSON.js",
         "convert/qupath.js",
         "magic-wand.js",
+        "viewport-segmentation.js",
         "presets.js",
         "objects.js",
         "objectGenericFactories.js",

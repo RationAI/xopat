@@ -229,7 +229,8 @@
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         },
         "ui": {
-            "components": ["index.mjs"]
+            // Todo: temporarily disabled due to import errors
+            // "components": ["index.mjs"]
         }
     },
     /**

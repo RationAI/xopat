@@ -535,7 +535,11 @@ ${await UTILITIES.getForm()}
             return;
         }
 
-        UTILITIES.storePageState(includedPluginsList);
+        if (!UTILITIES.storePageState(includedPluginsList)) {
+            Dialogs.show($.t('messages.warnPageReloadFailed'), 4000, Dialogs.MSG_WARN);
+            USER_INTERFACE.Loading.show(true);
+            await UTILITIES.sleep(3800);
+        }
         window.location.replace(APPLICATION_CONTEXT.url);
     };
 
@@ -683,5 +687,4 @@ ${await UTILITIES.getForm()}
             return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
         }
     });
-
 }

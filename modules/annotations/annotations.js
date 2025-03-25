@@ -714,10 +714,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	setCloseEdgeMouseNavigation(enable) {
-		window.removeEventListener("mousemove", this._edgesMouseNavigation);
-		if (enable) {
-			window.addEventListener("mousemove", this._edgesMouseNavigation);
+		this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
+
+		if (enable !== this.edgeMouseInteractive && (!enable || this.mode.supportsEdgeNavigation())) {
+			this.edgeMouseInteractive = enable;
+
+			window.removeEventListener("mousemove", this._edgesMouseNavigation);
+			if (enable) {
+				window.addEventListener("mousemove", this._edgesMouseNavigation);
+			}
+
+			this.edgeNavDisabledByMode = false;
 		}
+
+		return this.edgeMouseInteractive;
 	}
 
 	/************************ Layers *******************************/
@@ -1386,27 +1396,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
 		/**
-		 * Polygon factory, the only factory required within the module
+		 * Polygon factory, the factory required within the module
 		 * @type {OSDAnnotations.AnnotationObjectFactory}
 		 */
-		this.polygonFactory = null;
-
-		//Polygon presence is a must
-		if (this.objectFactories.hasOwnProperty("polygon")) {
-			//create tool-shaped object
-			this.polygonFactory = this.objectFactories["polygon"];
-		} else {
-			console.warn("See list of factories available: missing polygon.", this.objectFactories);
-			throw "No polygon object factory registered. Annotations must contain at " +
-			"least a polygon implementation in order to work. Did you maybe named the polygon factory " +
-			"implementation differently other than 'polygon'?";
-		}
+		this.polygonFactory = this._requireAnnotationObjectPresence("polygon");
+		/**
+		 * Multipolygon factory, the factory required within the module
+		 * @type {OSDAnnotations.AnnotationObjectFactory}
+		 */
+		this.multiPolygonFactory = this._requireAnnotationObjectPresence("multipolygon");
 
 		this._layers = {};
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 		this.setMouseOSDInteractive(true, false);
+	}
+
+	_requireAnnotationObjectPresence(type) {
+		//When object type presence is a must
+		if (this.objectFactories.hasOwnProperty(type)) {
+			//create tool-shaped object
+			return this.objectFactories[type];
+		}
+		console.warn("See list of factories available: missing", type, this.objectFactories);
+		throw `No ${type} object factory registered. Annotations must contain at least a polygon implementation 
+in order to work. Did you maybe named the ${type} factory implementation differently other than '${type}'?`;
 	}
 
 	_debugActiveObjectBinder() {
@@ -1550,8 +1566,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			//todo better handling - either add events to the viewer or...
 
 		let annotationCanvas = this.canvas.upperCanvasEl;
-		annotationCanvas.addEventListener('mousedown', function (event) {
-			if (_this.disabledInteraction) return;
+
+		annotationCanvas.addEventListener("mousedown", function (event) {
+			if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
 
 			if (event.which === 1) handleLeftClickDown(event);
 			else if (event.which === 3) handleRightClickDown(event);
@@ -1579,12 +1596,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (_this.isModeAuto() || _this._wasModeFiredByKey || o.e.shiftKey) {
 				_this.mode.scroll(o.e, o.e.deltaY);
 			} else {
+				if (!_this.mode.supportsZoomAnimation() && _this.cursor.isDown) handleLeftClickUp(o.e);
+
 				_this._fireMouseWheelNavigation(o.e);
 				_this.mode.scrollZooming(o.e, o.e.deltaY);
 			}
 		});
 
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
+
+		VIEWER.addHandler("animation-start", function() {
+			Object.values(_this.Modes).forEach(mode => mode.onZoomStart());
+		});
+
+		VIEWER.addHandler("animation-finish", function() {
+			Object.values(_this.Modes).forEach(mode => mode.onZoomEnd());
+		});
 
 		VIEWER.addHandler("canvas-press", function (e) {
 			if (_this.disabledInteraction) return;
@@ -1626,9 +1653,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_setModeFromAuto(mode) {
 		UTILITIES.setIsCanvasFocused(true);
 		if (mode.setFromAuto()) {
-			this.raiseEvent('mode-changed', {mode: mode});
-
 			this.mode = mode;
+			this.raiseEvent('mode-changed', {mode: this.mode});
+
+			if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
+
+			if (!this.mode.supportsEdgeNavigation()) {
+				this.setCloseEdgeMouseNavigation(false);
+				this.edgeNavDisabledByMode = true;
+			}
 		}
 	}
 
@@ -1743,7 +1776,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_loadObjects(input, clear, reviver, inheritSession) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
+		const multipolygonFactory = this.multiPolygonFactory;
+
 		return new Promise((resolve, reject) => {
+			// TODO Dirty patch, detect factory and forward before-import hook via its API
+			input.objects.forEach(obj => {
+				if (obj.type === 'path' && obj.points && !obj.path) {
+					obj.path = multipolygonFactory._createPathFromPoints(obj.points);
+				}
+			});
+
 			//todo try re-implement with fabric.util.enlivenObjects(...)? not private api
 			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
 				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
@@ -1915,6 +1957,11 @@ OSDAnnotations.AnnotationState = class {
 		 * @type {string}
 		 */
 		this.description = description;
+		/**
+		 * @memberOf OSDAnnotations.AnnotationState
+		 * @type {boolean}
+		 */
+		this.isZooming = false;
 	}
 
 	/**
@@ -2151,6 +2198,38 @@ OSDAnnotations.AnnotationState = class {
 	rejects(e) {
 		return false;
 	}
+
+	/**
+ 	* Determines if edge mouse navigation is supported
+ 	* @returns {boolean} true if edge navigation is supported
+ 	*/
+	supportsEdgeNavigation() {
+		return true;
+	}
+
+	/**
+	* Determines whether zoom animation is supported
+	* @returns {boolean} true if zoom animation is supported
+	*/
+	supportsZoomAnimation() {
+		return true;
+	}
+
+	/**
+	* Handles the start of a zoom event
+	* and sets the `isZooming` flag to true
+	*/
+	onZoomStart() {
+        this.isZooming = true;
+    }
+
+	/**
+ 	* Handles the end of a zoom event
+ 	* and resets the `isZooming` flag to false
+ 	*/
+    onZoomEnd() {
+        this.isZooming = false;
+    }
 };
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
@@ -2237,8 +2316,9 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
 			if (!factory.isEditable()) return false;
-			const result = factory.isImplicit() ?
-				factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint) : o.points;
+			const result = factory.isImplicit()
+    			? factory.toPointArray(o, OSDAnnotations.AnnotationObjectFactory.withObjectPoint)
+    			: o.points;
 			if (!result) return false;
 			return {object: o, asPolygon: result};
 		}
@@ -2258,19 +2338,47 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			height: ffTool.radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
 
+		const polygonUtils = OSDAnnotations.PolygonUtilities;
 		const active = this.context.canvas.getActiveObject();
-		let max = 0,
-			result = candidates; // by default return the whole list if intersections are <= 0
-		for (let i = 0; i < candidates.length; i++) {
-			let candidate = candidates[i];
-			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, candidate.asPolygon);
-			if (intersection.length) {
-				if (active) {  // prefer first encountered object if it is also the selection
-					return candidate;
+		let max = 0, result = candidates; // by default return the whole list if intersections are <= 0
+
+		for (let candidate of candidates) {
+			let outerPolygon;
+			let holes = null;
+			let notFullyInHoles = false;
+			let isMultipolygon = candidate.object.factoryID === "multipolygon";
+
+			if (isMultipolygon) {
+				outerPolygon = candidate.asPolygon[0];
+				holes = candidate.asPolygon.slice(1);
+			} else {
+				outerPolygon = candidate.asPolygon;
+			}
+
+			const intersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, outerPolygon);
+			if (!intersection.length) continue;
+
+			if (holes) {
+				notFullyInHoles = holes.every(hole => {
+
+					const bboxBrush = polygonUtils.getBoundingBox(brushPolygon);
+					const bboxHole = polygonUtils.getBoundingBox(hole);
+
+					if (polygonUtils.intersectAABB(bboxBrush, bboxHole)) {
+						const preciseIntersection = OSDAnnotations.checkPolygonIntersect(brushPolygon, hole);
+						return !(JSON.stringify(preciseIntersection) === JSON.stringify(brushPolygon));
+					}
+					return true;
+				});
+			}
+
+			if (!isMultipolygon || notFullyInHoles) {
+				if (active) {  // prefer first encounhtered object if it is also the selection
+					return candidate.object;
 				}
 				if (intersection.length > max) {
 					max = intersection.length;
-					result = candidate;
+					result = candidate.object;
 				}
 			}
 		}
@@ -2298,9 +2406,18 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	setToAuto(temporary) {
 		this.context.freeFormTool.hideCursor();
 		if (temporary) return false;
+
 		this.context.setOSDTracking(true);
 		this.context.canvas.renderAll();
 		return true;
+	}
+
+	supportsEdgeNavigation() {
+		return false;
+	}
+
+	supportsZoomAnimation() {
+		return false;
 	}
 };
 
@@ -2331,6 +2448,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 		}
 		let created = false;
 		const ffTool = this.context.freeFormTool;
+		ffTool.zoom = this.context.canvas.getZoom();
 		ffTool.recomputeRadius();
 		const newPolygonPoints = ffTool.getCircleShape(point);
 		let targetIntersection = this.fftFindTarget(point, ffTool, newPolygonPoints, 0);
@@ -2398,6 +2516,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		}
 
 		const ffTool = this.context.freeFormTool;
+		ffTool.zoom = this.context.canvas.getZoom();
 		ffTool.recomputeRadius();
 		const newPolygonPoints = ffTool.getCircleShape(point);
 		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
@@ -2581,6 +2700,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 
 		const ffTool = this.context.freeFormTool,
 			newPolygonPoints = ffTool.getCircleShape(point);
+		ffTool.zoom = this.context.canvas.getZoom();
 		let candidates = this.fftFindTarget(point, ffTool, newPolygonPoints, 50);
 
 		if (this.fftFoundIntersection(candidates)) {

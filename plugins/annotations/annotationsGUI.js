@@ -25,6 +25,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
+		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
 		await this.setupFromParams();
 
@@ -110,8 +111,10 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	setEdgeCursorNavigate(enable) {
+		enable = this.context.setCloseEdgeMouseNavigation(enable);
 		this.setOption("edgeCursorNavigate", enable);
-		this.context.setCloseEdgeMouseNavigation(enable);
+
+		return enable;
 	}
 
 	initHTML() {
@@ -141,7 +144,7 @@ ${UIComponents.Elements.checkBox({
 ${UIComponents.Elements.checkBox({
 				label: 'Enable edge navigation',
 				classes: "pl-2",
-				onchange: `${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
+				onchange: `this.checked = ${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
 				default: this.getOption("edgeCursorNavigate", true)})}
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
@@ -198,6 +201,9 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
+		modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
+		modeOptions.push(vertSeparator);
+
 		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
 		modeOptions.push(this.context.mode.customHtml());
 		modeOptions.push('</div>');

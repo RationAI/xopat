@@ -1618,3 +1618,115 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         return "Complex Annotation";
     }
 };
+
+OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "multipolygon", "path");
+        this._polygonFactory = new OSDAnnotations.Polygon(context, autoCreationStrategy, presetManager);
+    }
+
+    getIcon() {
+        return "view_timeline";
+    }
+
+    fabricStructure() {
+        return "path";
+    }
+
+    getDescription(ofObject) {
+        return `Multipolygon [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
+    }
+
+    title() {
+        return "Multipolygon";
+    }
+
+    exportsGeometry() {
+        return ["points"];
+    }
+
+    exports() {
+        return [];
+    }
+
+    isImplicit() {
+        return false;
+    }
+
+    create(parameters, options) {
+        const path = this._createPathFromPoints(parameters);
+        let multipolygon = new fabric.Path(path);
+
+        this.configure(multipolygon, options);
+        multipolygon.points = parameters;
+        return multipolygon;
+    }
+
+    configure(object, options) {
+        super.configure(object, options);
+        object.fillRule = "evenodd";
+    }
+
+    _createPathFromPoints(multiPoints) {
+        if (multiPoints.length === 0) return;
+        let pathString = '';
+
+        for (let i = 0; i < multiPoints.length; i++) {
+            const points = multiPoints[i];
+
+            if (i !== 0) pathString += ' ';
+            pathString += `M ${points[0].x} ${points[0].y}`;
+
+            points.forEach(point => {
+                pathString += ` L ${point.x} ${point.y}`;
+            });
+
+            pathString += ' z';
+            if (i !== multiPoints.length) pathString += ' ';
+        }
+
+        return pathString;
+    }
+
+    copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = [...ofObject.points];
+        const props = this.copyProperties(ofObject);
+        delete props.points;
+        const copy = new fabric.Path(this._createPathFromPoints(parameters), props);
+        // We mimic polygon style - keep points prop
+        copy.points = parameters;
+        return copy;
+    }
+
+    setPoints(object, points) {
+        object.points = points;
+        const newPathString = this._createPathFromPoints(points);
+
+        object._setPath(fabric.util.parsePath(newPathString));
+        object.setCoords();
+        return object;
+    }
+
+    getArea(theObject) {
+        let area = this._polygonFactory.getArea({points: theObject.points[0]});
+
+        for (let i = 1; i < theObject.points.length; i++) {
+            area -= this._polygonFactory.getArea({points: theObject.points[i]});
+        }
+        return area;
+    }
+
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        let polygon;
+        let result = [];
+
+        for (let i = 0; i < obj.points.length; i++) {
+            polygon = {"points": obj.points[i]};
+            let newPoints = this._polygonFactory.toPointArray(polygon, converter, digits, quality);
+            result.push(newPoints);
+        }
+
+        return result;
+    }
+};

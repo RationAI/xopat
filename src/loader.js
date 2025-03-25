@@ -53,9 +53,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     }
 
     function cleanUpPlugin(id, e=$.t('error.unknown')) {
-        delete PLUGINS[id].instance;
-        PLUGINS[id].loaded = false;
-        PLUGINS[id].error = e;
+        if (PLUGINS[id]) {
+            delete PLUGINS[id].instance;
+            PLUGINS[id].loaded = false;
+            PLUGINS[id].error = e;
+        }
 
         showPluginError(id, e);
         $(`.${id}-plugin-root`).remove();
@@ -1058,7 +1060,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          */
         loadPlugin: function(id, onload=_=>{}, force) {
             let meta = PLUGINS[id];
-            if (!meta || meta.loaded || meta.instance) return;
+            if (!meta || (meta.loaded && meta.instance)) return;
             if (!Array.isArray(meta.includes)) {
                 meta.includes = [];
             }

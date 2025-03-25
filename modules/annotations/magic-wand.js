@@ -18,6 +18,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
         APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
+        this.disabled = !!(APPLICATION_CONTEXT.config.background.length +
+            APPLICATION_CONTEXT.config.visualizations.length);
 
         // TODO works with OSD 5.0+
         // const drawerType = "canvas"; //VIEWER.drawer.getType();
@@ -58,7 +60,11 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     handleClickDown(o, point, isLeftClick, objectFactory) {
-        if (!objectFactory) return; // no preset - no op
+        if (!objectFactory || this.disabled) {
+            this.abortClick(isLeftClick);
+            Dialogs.show(this.disabled ? 'There is no data to annotate!' : 'Select a preset to annotate!');
+            return;
+        }
 
         this._allowCreation = true;
         this.context.canvas.discardActiveObject();
