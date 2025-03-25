@@ -6,10 +6,12 @@ to the versions 1.x.x.
 ### 2.2.0 (unreleased)
 **NEW UI SYSTEM**. The UI now supports component system using Van.js library. A lightweight
 way of re-using defined components, supported newly by tailwind css. The ui will be further
-separated from the viewer core in the future.
+separated from the viewer core in the future. UI Components are not yet integrated, but the CSS Styles are.
+There might be slight disturbances on collision of button / theme styling.
 
 **Features:** new UI component system & developer UI tools. Server support for .mjs files - 
-support for native JS modules.
+support for native JS modules. New annotation tool for multipolygons, new viewport segmentation
+annotation tool.
 
 **Bugfixes:** improved behavior for touchpad zooming.
 
