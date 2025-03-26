@@ -772,41 +772,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                bPlugins = new UI.Button({
-                    id: "plugins",
-                    size: UI.Button.SIZE.SMALL,
-                    outline: UI.Button.OUTLINE.DISABLE,
-                    TYPE: UI.Button.TYPE.PRIMARY,
-                    onClick: function () {
-                        console.log("Plugins clicked");
-                    }
-                }, "Plugins");
+                this.menu = new UI.Menu({
+                    id: "left-side-buttons-menu",
+                    orientation: UI.Menu.ORIENTATION.RIGHT,
+                    extraClasses: { bg: "bg-transparent" }
+                }, { id: "copy-url", icon: "fa-link", title: "URL", body: "" },
+                    { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "" },
+                    { id: "global-help", icon: "fa-question-circle", title: "Help", body: "" },
+                    { id: "settings", icon: "fa-gear", title: "Setting", body: "" }
+                );
 
-                bSettings = new UI.Button({
-                    id: "settings",
-                    size: UI.Button.SIZE.SMALL,
-                    outline: UI.Button.OUTLINE.DISABLE,
-                    TYPE: UI.Button.TYPE.PRIMARY,
-                    onClick: function () {
-                        console.log("Settings clicked");
-                    }
-                }, "Settings");
-
-                this.menu = new UI.Join({ 
-                    // TODO předělat na MENU, a upravit MENU tak aby se buttons otáčeli
-                    // zabalit do divu a nastavit width a height naopak
-                    // spíš to udělat v UI.MENU
-                        id: "myJoin", 
-                        rotation: UI.Join.ROTATION.ENABLE, 
-                        style: UI.Join.STYLE.HORIZONTAL, 
-                        rounded: UI.Join.ROUNDED.DISABLE }, 
-                    bPlugins, bSettings);
                 this.menu.attachTo(this.context);
-
-                // setting up parent width to match buttons width
-                var join = document.getElementById("myJoin");
-                var buttons = document.getElementById("left-side-buttons");
-                buttons.style.width = join.scrollHeight + "px";
             }
         },
 
