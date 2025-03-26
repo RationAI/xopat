@@ -7,27 +7,6 @@
     justify-content: flex-end;
 }
 
-.menu-item-vertical {
-    max-width: 150px;
-}
-
-.menu-item-horizontal {
-    max-width: 250px;
-}
-
-.menu-item-horizontal,
-.menu-item-vertical {
-    display: inline-block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.menu-item-horizontal:hover,
-.menu-item-vertical:hover {
-    max-width: none;
-}
-
 .btn {
     min-height: 4.5rem;
     min-height: 2.5rem;
@@ -70,4 +49,54 @@
     transform: rotate(-90deg) translate(100%);
     transform-box: fill-box;
     transform-origin: bottom right;
+}
+
+.b-vertical-right,
+.b-vertical-left {
+    height: auto;
+    padding-top: 1rem;
+    padding-bottom: 0.75rem;
+    padding-left: 0rem;
+    padding-right: 0.5rem;
+    width: 2.2rem;
+}
+
+.b-vertical-right {
+    writing-mode: sideways-lr;
+}
+
+.b-vertical-left {
+    writing-mode: sideways-rl;
+}
+
+.join.join-vertical .join-item:first-child:not(:last-child),
+.join.join-vertical *:first-child:not(:last-child) .join-item {
+    border-start-start-radius: inherit;
+    border-start-end-radius: 0;
+    border-end-start-radius: inherit;
+    border-end-end-radius: 0;
+}
+
+.join.join-vertical .join-item:last-child:not(:first-child),
+.join.join-vertical *:last-child:not(:first-child) .join-item {
+    border-end-start-radius: 0;
+    border-end-end-radius: inherit;
+    border-start-start-radius: 0;
+    border-start-end-radius: inherit;
+}
+
+.join.join-vertical .join-item:first-child:not(:last-child):not(.b-vertical-left),
+.join.join-vertical *:first-child:not(:last-child) .join-item:not(.b-vertical-left) {
+    border-start-start-radius: 0;
+    border-start-end-radius: inherit;
+    border-end-start-radius: 0;
+    border-end-end-radius: inherit;
+}
+
+.join.join-vertical .join-item:last-child:not(:first-child):not(.b-vertical-left),
+.join.join-vertical *:last-child:not(:first-child) .join-item:not(.b-vertical-left) {
+    border-end-start-radius: inherit;
+    border-end-end-radius: 0;
+    border-start-start-radius: inherit;
+    border-start-end-radius: 0;
 }

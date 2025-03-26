@@ -28,7 +28,7 @@ class Button extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-        
+
         this.classMap["base"] = "btn";
         this.classMap["type"] = "btn-primary";
         this.classMap["size"] = "";
@@ -87,6 +87,18 @@ Button.TYPE = {
     PRIMARY: function () { this.setClass("type", "btn-primary") },
     SECONDARY: function () { this.setClass("type", "btn-secondary") },
     TERNARY: function () { this.setClass("type", "btn-accent") }
+};
+
+Button.ORIENTATION = {
+    HORIZONTAL: function () {
+        this.setClass("orientation", "");
+    },
+    VERTICAL_LEFT: function () {
+        this.setClass("orientation", "b-vertical-left");
+    },
+    VERTICAL_RIGHT: function () {
+        this.setClass("orientation", "b-vertical-right");
+    }
 };
 
 export { Button };

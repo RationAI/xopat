@@ -54,9 +54,4 @@ Join.ROUNDED = {
     DISABLE: function () { this.setClass("rounded", "join-unrounded"); },
 };
 
-Join.ROTATION = {
-    ENABLE: function () { this.setClass("rotation", "rotate-90-permanent"); },
-    DISABLE: function () { this.setClass("rotation", ""); }
-};
-
 export { Join };

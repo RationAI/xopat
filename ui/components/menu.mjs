@@ -3,8 +3,9 @@ import { BaseComponent } from "./baseComponent.mjs";
 import { MenuTab } from "./menuTab.mjs";
 import { Join } from "./join.mjs";
 import { Div } from "./div.mjs";
+import { Button } from "./buttons.mjs";
 
-const ui = { Join, Div };
+const ui = { Join, Div, Button };
 const { div } = van.tags
 
 /**
@@ -87,10 +88,10 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
-        if(this._initializing){
+        if (this._initializing) {
             tab.headerButton.attachTo(this.header);
             tab.contentDiv.attachTo(this.body);
-        } else{
+        } else {
             tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
             tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
         }
@@ -169,22 +170,22 @@ Menu.ORIENTATION = {
     TOP: function () {
         this.setClass("flex", "flex-col");
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let b in Object.values.tabs) { b.headerButton.setClass("item", "menu-item-horizontal"); }
+        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let b in Object.values.tabs) { b.headerButton.setClass("item", "menu-item-horizontal"); }
+        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let b in Object.values.tabs) { b.headerButton.setClass("item", "menu-item-vertical"); }
+        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let b in Object.values.tabs) { b.headerButton.setClass("item", "menu-item-vertical"); }
+        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); }
     }
 }
 
