@@ -54,11 +54,12 @@
 .b-vertical-right,
 .b-vertical-left {
     height: auto;
-    padding-top: 1rem;
-    padding-bottom: 0.75rem;
-    padding-left: 0rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    padding-left: 0.5rem;
     padding-right: 0.5rem;
     width: 2.2rem;
+    text-align: center;
 }
 
 .b-vertical-right {

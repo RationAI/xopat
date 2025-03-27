@@ -20,6 +20,7 @@ class MenuTab {
      */
     constructor(item, parent) {
         this.parent = parent;
+        this.style = "ICONTITLE";
 
         const [headerButton, contentDiv] = this.createTab(item);
 
@@ -41,14 +42,12 @@ class MenuTab {
         }
 
         this.icon = inIcon;
-        this.icon.setClass("padding", "pl-3");
-        this.title = span({ class: "pl-2" }, inText);
+        this.title = span(inText);
 
         const b = new ui.Button({
             id: this.parent.id + "-b-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
-            extraClasses: { "padding-left": "pl-0" },
             onClick: () => {
                 this.focus();
             }
@@ -85,23 +84,42 @@ class MenuTab {
         document.getElementById(this.contentDiv.id).style.display = "none";
     }
 
+    // TODO make work even withouth inicialization
     titleOnly() {
-        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        this.style = "TITLE";
+        const nodes = this.headerButton.children;
         nodes[0].classList.add("hidden");
         nodes[1].classList.remove("hidden");
-
     }
 
     titleIcon() {
-        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        this.style = "ICONTITLE";
+        //const nodes = document.getElementById(this.headerButton.id).childNodes;
+        const nodes = this.headerButton.children;
         nodes[0].classList.remove("hidden");
         nodes[1].classList.remove("hidden");
     }
 
     iconOnly() {
-        const nodes = document.getElementById(this.headerButton.id).childNodes;
+        this.style = "ICON";
+        const nodes = this.headerButton.children;
         nodes[0].classList.remove("hidden");
         nodes[1].classList.add("hidden");
+    }
+
+    iconRotate(){
+        const nodes = this.headerButton.children;
+        nodes[0].classList.remove("rotate-90");
+        nodes[0].classList.remove("-rotate-90");
+        if(!(this.style==="ICON")){
+            return;
+        }
+        if(this.parent.orientation==="RIGHT"){
+            nodes[0].classList.add("rotate-90");
+        
+        } else if(this.parent.orientation==="LEFT"){
+            nodes[0].classList.add("-rotate-90");
+        }
     }
 }
 export { MenuTab };

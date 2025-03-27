@@ -5,7 +5,7 @@ import { Join } from "./join.mjs";
 import { Div } from "./div.mjs";
 import { Button } from "./buttons.mjs";
 
-const ui = { Join, Div, Button };
+const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags
 
 /**
@@ -35,6 +35,7 @@ class Menu extends BaseComponent {
         }
 
         this.tabs = {};
+        this.orientation = "TOP";
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
         this.body = new ui.Div({ id: this.id + "-body", height: "h-full", width: "w-full" });
@@ -169,23 +170,27 @@ window["workspaceItem"].deleteTab("s3");
 Menu.ORIENTATION = {
     TOP: function () {
         this.setClass("flex", "flex-col");
+        this.orientation = "TOP";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); }
+        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
+        this.orientation = "BOTTOM";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); }
+        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
+        this.orientation = "LEFT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); }
+        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
+        this.orientation = "RIGHT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let b of Object.values(this.tabs)) { b.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); }
+        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
     }
 }
 
@@ -196,13 +201,13 @@ Menu.BUTTONSIDE = {
 
 Menu.DESIGN = {
     ICONONLY: function () {
-        for (let t of Object.values(this.tabs)) { t.iconOnly(); }
+        for (let t of Object.values(this.tabs)) { t.iconOnly(); t.iconRotate(); }
     },
     TITLEONLY: function () {
-        for (let t of Object.values(this.tabs)) { t.titleOnly(); }
+        for (let t of Object.values(this.tabs)) { t.titleOnly(); t.iconRotate(); }
     },
     TITLEICON: function () {
-        for (let t of Object.values(this.tabs)) { t.titleIcon(); }
+        for (let t of Object.values(this.tabs)) { t.titleIcon(); t.iconRotate(); }
     }
 }
 

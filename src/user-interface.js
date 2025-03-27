@@ -772,18 +772,31 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                this.menu = new UI.Menu({
+                this.menu = new UI.MainPanel({
                     id: "left-side-buttons-menu",
                     orientation: UI.Menu.ORIENTATION.RIGHT,
                     buttonSide: UI.Menu.BUTTONSIDE.RIGHT,
+                    rounded: UI.Menu.ROUNDED.DISABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "copy-url", icon: "fa-link", title: "URL", body: "Hello" },
+                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: "" },
                     { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "World" },
                     { id: "global-help", icon: "fa-question-circle", title: "Help", body: "" },
                     { id: "settings", icon: "fa-gear", title: "Setting", body: "" }
                 );
                 
+                this.menuUrl = new UI.MainPanel({
+                    id: "url-menu",
+                    orientation: UI.Menu.ORIENTATION.TOP,
+                    buttonSide: UI.Menu.BUTTONSIDE.RIGHT,
+                    extraClasses: { bg: "bg-transparent" }
+                }, 
+                { id: "copy-url", icon: "fa-link", title: "URL", body: "" },
+                { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "World" },
+                );
+
                 this.menu.attachTo(this.context);
+                this.menuUrl.attachTo(this.menu.getBodyDomNode().childNodes[0]);
+                this.menu.set(UI.Menu.DESIGN.ICONONLY);
             }
         },
 
