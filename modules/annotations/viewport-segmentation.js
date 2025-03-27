@@ -8,7 +8,13 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._lastAlpha = null;
         this.ratio = OpenSeadragon.pixelDensityRatio;
 
-        VIEWER.addHandler('visualization-used', this._invalidData = Date.now());
+        VIEWER.addHandler('visualization-used', () => {
+            this._invalidData = Date.now();
+        });
+
+        VIEWER.addHandler('visualization-redrawn', () => {
+            this._invalidData = Date.now();
+        });
 
         this.drawer = new OpenSeadragon.Drawer({
             viewer:             VIEWER,
