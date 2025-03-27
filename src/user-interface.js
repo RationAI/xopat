@@ -775,13 +775,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.Menu({
                     id: "left-side-buttons-menu",
                     orientation: UI.Menu.ORIENTATION.RIGHT,
+                    buttonSide: UI.Menu.BUTTONSIDE.RIGHT,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "copy-url", icon: "fa-link", title: "URL", body: "" },
-                    { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "" },
+                }, { id: "copy-url", icon: "fa-link", title: "URL", body: "Hello" },
+                    { id: "add-plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "World" },
                     { id: "global-help", icon: "fa-question-circle", title: "Help", body: "" },
                     { id: "settings", icon: "fa-gear", title: "Setting", body: "" }
                 );
-
+                
                 this.menu.attachTo(this.context);
             }
         },

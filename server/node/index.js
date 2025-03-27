@@ -153,13 +153,13 @@ async function responseViewer(req, res) {
             switch (p1) {
             case "head":
                 return `
-${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
-${core.requireCore("app")}`;
+${core.requireCore("app")}
+${core.requireCore("env")}`;
 
             case "app":
                 return `

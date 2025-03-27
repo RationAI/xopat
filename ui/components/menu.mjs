@@ -37,7 +37,7 @@ class Menu extends BaseComponent {
         this.tabs = {};
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
-        this.body = new ui.Div({ id: this.id + "-body", height: "h-full" });
+        this.body = new ui.Div({ id: this.id + "-body", height: "h-full", width: "w-full" });
 
         for (let i of args) {
             this.addTab(i);

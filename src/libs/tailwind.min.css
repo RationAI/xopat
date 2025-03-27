@@ -3142,6 +3142,10 @@ details.collapse summary::-webkit-details-marker {
   height: 100vh;
 }
 
+.w-full {
+  width: 100%;
+}
+
 .flex-1 {
   flex: 1 1 0%;
 }
