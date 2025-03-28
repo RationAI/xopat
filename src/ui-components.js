@@ -681,6 +681,7 @@ ${contentAction}
 
                 entityId = entityId ? entityId + "-plugin-root" : "";
                 icon = icon ? span({ class: "material-icons", style: "font-size: 14px; padding-bottom: 3px;" }, icon) : "";
+                const uid = this.uid;
                 return span({
                     id: `${id}-menu-header`,
                     class: "width-full",
@@ -691,13 +692,14 @@ ${contentAction}
                         name: `${this.uid}-header`,
                         checked: isFirst ? "checked" : "",
                         id: `${id}-input-header`,
-                        class: "panel-menu-input ${entityId}",
+                        class: `panel-menu-input ${entityId}`,
                         onclick: function () {
-                            for (let ch of document.getElementById(`${this.uid}-body`).children) {
+                            for (let ch of document.getElementById(uid + "-body").children) {
                                 ch.style.display = 'none'
                             }
-                            document.getElementById('${bodyId}').style.display = 'block';
-                            let head = this.nextSibling; head.classList.remove('notification');
+                            document.getElementById(bodyId).style.display = 'block';
+                            let head = this.nextSibling;
+                            head.classList.remove('notification');
                             head.dataset.notification = '0'
                         }
                     }),
