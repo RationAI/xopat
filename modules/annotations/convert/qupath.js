@@ -53,10 +53,23 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
+        let coordinates;
+
         if (poly?.length > 0) {
             const offset = this.offset;
-            if (offset) poly = poly.map(o => ([o[0]-offset.x, o[1]-offset.y]));
-            if (asLinearRing) poly.push(poly[0]); //linear ring
+
+            if (object.factoryID === "multipolygon") {
+                coordinates = poly.map(ring => {
+                    if (offset) ring = ring.map(o => ([o[0] - offset.x, o[1] - offset.y]));
+                    if (asLinearRing) ring.push(ring[0]);
+                    return ring;
+                });
+            } else {
+                if (offset) poly = poly.map(o => ([o[0] - offset.x, o[1] - offset.y]));
+                if (asLinearRing) poly.push(poly[0]);
+                coordinates = poly;
+            }
+
             const props = {
                 "objectType": "annotation",
                 "classification": {
@@ -75,7 +88,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return {
                 geometry: {
                     type: type,
-                    coordinates: poly
+                    coordinates: coordinates
                 },
                 properties: props
             }
@@ -117,6 +130,10 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
+        "multipolygon": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", ["points"], true);
+            return res;
+        },
         "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], false),
         "point": (object, preset) => {
             object = this._asGEOJsonFeature(object, preset, "Point");
@@ -151,6 +168,12 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         },
         MultiLineString: (object) => this._decodeMulti(object, "LineString"),
         Polygon: (object) => {
+            if (object.coordinates.length > 1) {
+                let factory = OSDAnnotations.instance().getAnnotationObjectFactory("multipolygon");
+                const rings = object.coordinates.map(ring => this._toNativeRing(ring));
+                return factory.create(rings, {});
+            }
+
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polygon");
             return factory.create(this._toNativeRing(object.coordinates[0] || []), {});
         },

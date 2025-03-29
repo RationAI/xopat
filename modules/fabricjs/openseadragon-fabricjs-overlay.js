@@ -48,6 +48,15 @@
         }));
         return data;
     };
+
+    fabric.Path.prototype.toObject = function(propertiesToInclude) {
+        propertiesToInclude = propertiesToInclude || [];
+        if (!propertiesToInclude.includes('points')) propertiesToInclude.push('points');
+
+        const data = this.callSuper('toObject', propertiesToInclude);
+        return data;
+    };
+
     /**
      * Find object under mouse by iterating
      * @param e mouse event

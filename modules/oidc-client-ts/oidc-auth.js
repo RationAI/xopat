@@ -9,16 +9,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this._connectionRetries = 0;
         this.maxRetryCount = this.getStaticMeta('errorLoginRetry', 2);
         this.extraSigninRequestArgs = this.getStaticMeta('extraSigninRequestArgs', undefined);
-        this.useCookiesStore = this.getStaticMeta('useCookiesStore', true);
+        this.usesStore = this.getStaticMeta('usesStore', true);
         this.retryTimeout = this.getStaticMeta('retryTimeout', 20) * 1000;
         this.authMethod = this.getStaticMeta('method', 'redirect');
-        this.cookieRefreshTokenName = this.getStaticMeta('cookieRefreshTokenName');
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             console.warn("OIDC Module not properly configured. Auth disabled.");
             return;
         }
 
+        // Overwrite some properties we don't want to allow for modification
         this.configuration.redirect_uri = this.configuration.redirect_uri
             || window.location.href.split('#')[0].split('?')[0];
 
@@ -26,6 +26,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             || APPLICATION_CONTEXT.env.gateway || this.configuration.redirect_uri;
 
         this.configuration.automaticSilentRenew = false;
+        this.configuration.storeState = this.configuration.userStore = undefined;
 
         VIEWER.addHandler('before-first-open', this.init.bind(this),
             null, this.getStaticMeta('eventBeforeOpenPriority', 0));
@@ -40,18 +41,29 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return;
         }
 
-        // Make sure these are not set by the config - it could mess up
-        this.configuration.userStore = this.configuration.stateStore = undefined;
-        if (this.useCookiesStore) {
-            this.configuration.userStore = new oidc.WebStorageStateStore({
-                store: APPLICATION_CONTEXT.AppCookies.getStore()
-            });
+        // NOTE! Cookies storage limits size to 4096B, which is easily exceeded here!
+        let store = false;
+        switch (this.usesStore) {
+            case "cookie":
+                store = APPLICATION_CONTEXT.AppCookies.getStore();
+                break;
+            case "cache":
+                store = APPLICATION_CONTEXT.AppCache.getStore();
+                break;
+            case "default":
+            default:
+                //default == "session", undefined
+                break;
+        }
+        if (store) {
+            this.configuration.userStore = new oidc.WebStorageStateStore({store: store});
+            this.configuration.stateStore = new oidc.WebStorageStateStore({store: store});
         }
 
         //Create OIDC User Manager
         this.userManager = new oidc.UserManager(this.configuration);
         this.userManager.events.addUserLoaded((user) => {
-            return this.handleUserDataChanged(); // TODO USE USER REF
+            return this.handleUserDataChanged(false, user);
         });
 
         //Resolve once we know if we handle login
@@ -131,8 +143,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             this._signinProgress = false;
             return;
         } catch (error) {
-            debugger;
-
             this._signinProgress = false;
             USER_INTERFACE.Loading.text("Login not successful! Waiting...");
             if (typeof error === "string") error = {message: error};
@@ -178,12 +188,15 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         Dialogs.show(`${message} <a onclick="oidc.xOpatUser.instance().signIn(); Dialogs.hide();">${retryMessage}</a>`,
             this.retryTimeout, Dialogs.MSG_WARN, {onHide: resolved});
         await dialogWait;
-        if (this._manualCoroutine) await this._manualCoroutine;
-        if (!preventRecurse) {
-            return await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
+
+        if (!this._manualCoroutine) {
+            if (!preventRecurse) {
+                return await this._trySignIn(false, this._connectionRetries >= this.maxRetryCount);
+            }
+            console.error("OIDC: No longer attempting to log in: user action needed.");
+        } else {
+            return this._manualCoroutine;
         }
-        console.error("OIDC: MAX retry exceeded");
-        return false;
     }
 
     async _promptLogin() {
@@ -205,9 +218,17 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
 
         console.debug('OIDC: Try to sign in via redirect.');
-        UTILITIES.storePageState();
-        await this.userManager.signinRedirect(this.extraSigninRequestArgs);
-        await new Promise(() => {});  // never resolve, we are being redirected
+        if (!UTILITIES.storePageState()) {
+            await this.userManager.signinRedirect(this.extraSigninRequestArgs);
+            await new Promise(() => {});  // never resolve, we are being redirected
+        } else {
+            Dialogs.show("Failed to login using redirection! Please, notify the administrator.", 5000, Dialogs.MSG_ERR);
+            await UTILITIES.sleep(5000);
+            Dialogs.show("Attempting to login...", 2000, Dialogs.MSG_INFO);
+            await UTILITIES.sleep(2000);
+            await this.userManager.signinRedirect(this.extraSigninRequestArgs);
+            await new Promise(() => {});  // never resolve, we are being redirected
+        }
     }
 
     getSessionData() {
@@ -246,9 +267,12 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
 
     /**
      * @param withLogout set false when just logged in
+     * @param oidcUser userManager.getUser() instance (fetched dynamically if not provided),
+     *    sometimes userManager.getUser() can be null if this method reacts on an event that logs in new user,
+     *    in that case it is safer to send the reference directly from the event
      * @return {Promise<boolean>}
      */
-    async handleUserDataChanged(withLogout = false) {
+    async handleUserDataChanged(withLogout = false, oidcUser = null) {
         const user = XOpatUser.instance();
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
@@ -258,7 +282,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
             return false;
         };
 
-        const oidcUser = await this.userManager.getUser();
+        oidcUser = oidcUser || await this.userManager.getUser();
         if (oidcUser && oidcUser.access_token) {
 
             if (withLogout) {
@@ -319,6 +343,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
         this.userManager.stopSilentRenew();
     }
+
     enableEvents() {
         // Preventive removal & set
         this.disableEvents();
@@ -336,7 +361,6 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {
         }
         console.debug('Silent renew failed. Retrying with signin.');
         // Note: we must set popup in order to not to lose the current workspace
-        debugger;
         this.authMethod = 'popup';
         this._connectionRetries++;
         await this._trySignIn(true);

@@ -36,6 +36,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         PROJECT_ROOT: projectRoot,
         PROJECT_SOURCES: projectRoot + 'src/',
         EXTERNAL_SOURCES: projectRoot + 'src/external/',
+        UI_SOURCES: projectRoot + 'ui/',
         LIBS_ROOT: projectRoot + 'src/libs/',
         ASSETS_ROOT: projectRoot + 'src/assets/',
         LOCALES_ROOT: projectRoot + 'src/locales/',
@@ -92,9 +93,14 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             const version = this.VERSION;
 
             if (Array.isArray(files)) {
-                return files.map(file => `    <script src="${path}${file}?v=${version}"></script>\n`).join("");
+                return files.map(file => file.endsWith(".mjs") ?
+                    `    <script type="module" src="${path}${file}?v=${version}"></script>\n` :
+                    `    <script src="${path}${file}?v=${version}"></script>\n`)
+                    .join("");
             }
-            return `    <script src="${path}${files}?v=${version}"></script>\n`;
+            return files.endsWith(".mjs") ?
+                `    <script type="module" src="${path}${files}?v=${version}"></script>\n` :
+                `    <script src="${path}${files}?v=${version}"></script>\n`;
         },
 
         printCss: function(conf, path) {
@@ -133,7 +139,11 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return this._requireNested("src", type, this.PROJECT_SOURCES);
         },
 
-        _require: function(namespace, path) {
+        requireUI: function () {
+            return this._require("ui", this.UI_SOURCES);
+        },
+
+        _require: function (namespace, path) {
             let result = "";
             if (this.CORE["css"][namespace] !== undefined) {
                 result += this.printCss(this.CORE["css"][namespace], path);

@@ -3,8 +3,25 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### Unreleased 2.1.1
-**Features:** standalone wsi tile source module.
+### 2.2.0
+**NEW UI SYSTEM**. The UI now supports component system using Van.js library. A lightweight
+way of re-using defined components, supported newly by tailwind css. The ui will be further
+separated from the viewer core in the future. UI Components are not yet integrated, but the CSS Styles are.
+There might be slight disturbances on collision of button / theme styling.
+
+**Features:** new UI component system & developer UI tools. Server support for .mjs files - 
+support for native JS modules. New annotation tool for multipolygons, new viewport segmentation
+annotation tool. New event reacting on visualization rendering setting change.
+
+**Bugfixes:** improved behavior for touchpad zooming.
+
+### 2.1.1
+**Features:** standalone wsi tile source module. Edge navigation optional.
+
+**Bugfixes:** OIDC module popup method - await login.
+Use session storage to store xOpat sessions as well.
+Fixed scalebar magnification estimates. Annotations IO bugfixes.
+Extend await event support.
 
 ### 2.1.0
 **Features:** new system for module/plugin building, improvements of annotation listing features,

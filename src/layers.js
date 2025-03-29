@@ -176,6 +176,14 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                         });
                     }
                 },
+                resetCallback: function () {
+                    /**
+                     * Fired when visualization is updated (re-rendered), which might happen quite often.
+                     * @memberOf VIEWER
+                     * @event visualization-redrawn
+                     */
+                    VIEWER.raiseEvent('visualization-redrawn');
+                },
                 //called when this module is unable to run
                 onFatalError: function(error) {
                     USER_INTERFACE.Errors.show(error.error, error.desc);

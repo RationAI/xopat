@@ -25,13 +25,11 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      */
     supports( data, url ) {
         if (url && Array.isArray(data)) {
-            //multi-tile or single tile access
-
-            //support for old server syntax
+            //multi-tile or single tile access, batch is old name on the api
             let match = url.match(/^(\/?[^\/].*\/v3\/)(files|batch)\/info/i);
             if (match) {
                 data = data || [{}];
-                data[0].tilesUrl = match[1] + "batch";
+                data[0].tilesUrl = match[1] + match[2];
                 return true;
             }
         } else if (url && typeof data === "object") {
@@ -213,10 +211,12 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?slides=${this.fileId}`
+            const query_name = tiles.endsWith("batch") ? "slides" : "paths";
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
         }
         //endpoint slides/[SLIDE]/tile/level/[L]/tile/[X]/[Y]/
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide=${this.fileId}`
+        const query_name = tiles.endsWith("batch") ? "slides" : "slide_id";
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
     }
 
     _setDownloadHandler(isMultiplex) {

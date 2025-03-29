@@ -15,7 +15,7 @@ workplace for a given user.
 
 We've seen <http://localhost:9000/?slides=*SLIDE_ID*> way of opening the viewer. In fact,
 this only creates default _dynamic configuration_ for the viewer. If you want to have more control,
-you can provide such fonfiguration:
+you can provide such configuration:
 
  - manually at <http://viewer.url/dev_setup> page
  - programatically **[GET]** <http://viewer.url#visualization=*HTML_ENDODED_CONF*>

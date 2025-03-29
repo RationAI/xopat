@@ -9,8 +9,8 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this._idx = 0;
         this._steps = [];
         this._currentStep = null;
-        this._deprecated_IO_API();
         this.initPostIO(); //todo consider delegation to plugins that use snapshots
+        this._deprecated_IO_API();
         this._utils = VIEWER.tools;
 
         this._captureVisualization = false;
@@ -341,8 +341,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     }
 
     _deprecated_IO_API() {
-        const _this = this;
-        let importedJson = APPLICATION_CONTEXT.getData("snapshot-keyframes");
+        let importedJson = this.POSTStore.get("snapshot-keyframes");
         if (importedJson) {
             try {
                 this.importJSON(JSON.parse(importedJson));

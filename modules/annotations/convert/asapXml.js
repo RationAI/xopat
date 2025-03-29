@@ -51,6 +51,8 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         const presets = presetsGetter();
         const result = {};
 
+        let wasError = '';
+
         let doc = document.implementation.createDocument("", "", null);
         const presetsIdSet = new Set();
 
@@ -68,9 +70,17 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
 
                 let factory = this.context.getAnnotationObjectFactory(obj.factoryID);
                 if (factory) {
-                    coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+                    // Todo some better reporting mechanism
+                    if (factory.factoryID === "multipolygon") {
+                        wasError = 'ASAP XML Does not support multipolygons - saved as polygon.';
+                        coordinates = this.context.polygonFactory.toPointArray({points: obj.points[0]},
+                            OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+                    } else {
+                        coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
+                    }
+
                     if (!Array.isArray(coordinates)) {
-                        //todo some warn
+                        wasError = 'Failed to export annotation ' + factory.getDescription(obj);
                         continue;
                     }
                 }
@@ -139,6 +149,12 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             }
             //todo check for consitency presetsIdSet?
         }
+
+        // Todo - create some unified checking mechanism that reports on export issues
+        if (wasError) {
+            Dialogs.show(wasError, 15000, Dialogs.MSG_ERR);
+        }
+
         return result;
     }
 

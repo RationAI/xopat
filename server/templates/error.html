@@ -9,8 +9,14 @@
     <template id="template-head"></template>
 </head>
 
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed" >
-
+<body>
+<script>
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.setAttribute("data-theme", "catppuccin-mocha");
+    } else {
+        document.body.removeAttribute("data-theme");
+    }
+</script>
 
 <!-- System messaging -->
 <div id="system-message" class="d-none system-container">

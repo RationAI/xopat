@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.1.0",
+    "version": "2.1.1",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -160,7 +160,9 @@
         "preferredFormat": "zip",
         "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
-        "disablePluginsUi": false
+        "disablePluginsUi": false,
+        // Renders viewer in standalone mode, all data is static (leave as false if unsure)
+        "isStaticPreview": false
     },
     /**
      * The Server status. This object is here just for the reference and
@@ -204,7 +206,7 @@
             ],
             "common": [
                 "enjoyhint.js",
-                //"cookie-storage.js",
+//                "cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
@@ -225,16 +227,20 @@
             "loader": ["store.js", "loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
+        },
+        "ui": {
+            // Todo: temporarily disabled due to import errors
+            // "components": ["index.mjs"]
         }
     },
-
     /**
      * Css files shadow the JS structure, with custom keys except for "src"
      */
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css"
+            "fontawesome": "fontawesome/css/v6-all.css",
+            "tailwind": "tailwind.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

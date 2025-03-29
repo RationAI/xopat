@@ -17,6 +17,17 @@ function initXopatScripts() {
     });
 
     /**
+     * Replace share button in static preview mode
+     */
+    if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+        const shareBtn = document.getElementById("copy-url");
+        const staticDisclaimer = document.getElementById("static-file-disclaimer");
+
+        shareBtn.style.display = "none";
+        staticDisclaimer.style.display = "grid";
+    }
+
+    /**
      * Focusing all key press events and forwarding to OSD
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
      */
@@ -106,33 +117,31 @@ function initXopatScripts() {
         e.tiledImage._failedDate = e.time;
     });
 
+    let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
     /**
      * From https://github.com/openseadragon/openseadragon/issues/1690
      * brings better zooming behaviour
      */
-    window.VIEWER.addHandler("canvas-scroll", function() {
-        if (typeof this.scrollNum == 'undefined') {
-            this.scrollNum = 0;
+    window.VIEWER.addHandler("canvas-scroll", function(e) {
+        if (Math.abs(e.originalEvent.deltaY) < 100) {
+            // touchpad has lesser values, do not change scroll behavior for touchpads
+            VIEWER.zoomPerScroll = 0.5;
+            _scrollCount = 0;
+            return;
         }
 
-        if (typeof this.lastScroll == 'undefined') {
-            this.lastScroll = new Date();
-        }
-
-        this.currentScroll = new Date(); //Time that this scroll occurred at
-
-        if (this.currentScroll - this.lastScroll < 400) {
-            this.scrollNum++;
+        _currentScroll = Date.now();
+        if (_currentScroll - _lastScroll < 400) {
+            _scrollCount++;
         } else {
-            this.scrollNum = 0;
+            _scrollCount = 0;
             VIEWER.zoomPerScroll = 1.2;
         }
 
-        if (this.scrollNum > 2 && VIEWER.zoomPerScroll <= 2.5) {
+        if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
             VIEWER.zoomPerScroll += 0.2;
         }
-
-        this.lastScroll = this.currentScroll; //Set last scroll to now
+        _lastScroll = _currentScroll;
     });
 
     window.VIEWER.addHandler('navigator-scroll', function(e) {
@@ -184,6 +193,7 @@ function initXopatScripts() {
             if (e.key === 'Escape') {
                 USER_INTERFACE.AdvancedMenu.close();
                 USER_INTERFACE.Tutorials.hide();
+                USER_INTERFACE.DropDown.hide();
             }
         });
     }
@@ -281,47 +291,76 @@ function initXopatScripts() {
     }
 
     /**
+     * Sleep in miliseconds
+     * @param {number} ms
+     * @return {Promise<void>}
+     */
+    window.UTILITIES.sleep = async function(ms=undefined) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
      * Set the App theme
      * @param {?string} theme primer_css theme
      */
     window.UTILITIES.updateTheme = function(theme=undefined) {
         theme = theme || APPLICATION_CONTEXT.getOption("theme");
         if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.config.defaultParams.theme;
+
+        // also set theme for detached preview mode
+        const isStatic = APPLICATION_CONTEXT.getOption("isStaticPreview");
+
         if (theme === "dark_dimmed") {
             document.documentElement.dataset['darkTheme'] = "dark_dimmed";
             document.documentElement.dataset['colorMode'] = "dark";
+            document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
+        } else if (theme === "auto" && isStatic) {
+            const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+            if (isLight) {
+                document.documentElement.dataset['colorMode'] = "light";
+                document.body.setAttribute("data-theme", "crimson-dawn");
+            }
+            else {
+                document.documentElement.dataset['colorMode'] = "dark";
+                document.documentElement.dataset['darkTheme'] = "dark";
+                document.body.setAttribute("data-theme", "blood-moon");
+            }
         } else {
             document.documentElement.dataset['darkTheme'] = "dark";
             document.documentElement.dataset['colorMode'] = theme;
+            if (theme === "dark") {
+                document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
+            } else if (isStatic) {
+                document.body.setAttribute("data-theme", "crimson-dawn");
+            } else {
+                document.body.removeAttribute("data-theme");
+            }
         }
     };
 
     /**
      * Create the viewer configuration serialized
      */
-    window.UTILITIES.serializeAppConfig = function(withCookies=false) {
+    window.UTILITIES.serializeAppConfig = function(withCookies=false, staticPreview = false) {
         //TODO consider bypassCache etc...
-        let bypass = APPLICATION_CONTEXT.config.params.bypassCookies;
-        if (!withCookies) APPLICATION_CONTEXT.config.params.bypassCookies = true;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = true;
-        let oldViewport = APPLICATION_CONTEXT.config.params.viewport;
-        APPLICATION_CONTEXT.config.params.viewport = {
+
+        //delete unnecessary data, copy params so that overrides do not affect current session
+        const data = {...APPLICATION_CONTEXT.config};
+        data.params = {...APPLICATION_CONTEXT.config.params};
+        delete data.defaultParams;
+
+        if (staticPreview) data.params.isStaticPreview = true;
+        if (!withCookies) data.params.bypassCookies = true;
+        data.params.bypassCacheLoadTime = true;
+        data.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
             point: VIEWER.viewport.getCenter()
         };
 
-        //delete unnecessary data
-        const data = {...APPLICATION_CONTEXT.config};
-        delete data.defaultParams;
-
-        //by default ommit underscore
-        let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
+        //by default omit underscore
+        return APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
             ? JSON.stringify(data, WebGLModule.jsonReplacer)
             : JSON.stringify(data, (key, value) => key.startsWith("_") ? undefined : value);
-        APPLICATION_CONTEXT.config.params.viewport = oldViewport;
-        APPLICATION_CONTEXT.config.params.bypassCookies = bypass;
-        APPLICATION_CONTEXT.config.params.bypassCacheLoadTime = false;
-        return app;
     };
 
     /**
@@ -332,9 +371,11 @@ function initXopatScripts() {
      * @return {Promise<string>}
      */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
+        const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
+
         if (! APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
             return `
-    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies))}">
+    <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies, true))}">
         <input type="hidden" id="visualization" name="visualization">
         ${customAttributes}
         <input type="submit" value="">
@@ -342,11 +383,11 @@ function initXopatScripts() {
     <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
         }
 
-        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies);
+        const {app, data} = await window.UTILITIES.serializeApp(includedPluginsList, withCookies, true);
         data.visualization = app;
 
         let form = `
-    <form method="POST" id="redirect" action="${APPLICATION_CONTEXT.url}">
+    <form method="POST" id="redirect" action="${url}">
         ${customAttributes}
         <input type="submit" value="">
     </form>
@@ -494,7 +535,11 @@ ${await UTILITIES.getForm()}
             return;
         }
 
-        UTILITIES.storePageState(includedPluginsList);
+        if (!UTILITIES.storePageState(includedPluginsList)) {
+            Dialogs.show($.t('messages.warnPageReloadFailed'), 4000, Dialogs.MSG_WARN);
+            USER_INTERFACE.Loading.show(true);
+            await UTILITIES.sleep(3800);
+        }
         window.location.replace(APPLICATION_CONTEXT.url);
     };
 
@@ -642,5 +687,4 @@ ${await UTILITIES.getForm()}
             return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
         }
     });
-
 }

@@ -1,10 +1,12 @@
 # Plugins
 
 It is easy to create and plug-in a plugin. Each plugin must be in its own folder placed here (`./plugins/`). 
-Inside, one file must exist (otherwise the plugin won't load):
+Recommeded way of creating a new plugin is a command ``grunt generate:plugin``.
+
+## Plugin Directory Structure
  
 #### `include.json`
-A `JSON` file is required that defines the plugin and it's inclusion:
+Inside a plugin, at least this file must exist (otherwise the directory is not treated as a plugin directory):
 
 ````json
 {
@@ -20,31 +22,41 @@ A `JSON` file is required that defines the plugin and it's inclusion:
 }
 ````
 
-Note that this is meant mainly for a viewer maintainer to set-up the plugin default, static configuration.
-Moreover, it is advised to use ENV setup (see `/env/README.md`) to override necessary configurations.
-- `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
-- `name` is the plugin name 
-- `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
-- `author` is the plugin author
-- `icon` is the plugin icon
-- `version` is the plugin version
-- `includes` is a list of JavaScript files relative to the plugin folder to include 
-- `modules` array of id's of required modules (libraries)
-    - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
-    instead of creating a module for it
-- `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
-- `enabled` is an option to allow or disallow the plugin in the system, default `true`
-- `hidden` is an option to hide plugin from the user-available selection
+##### Built-in keys
 
-### Must do's
+  - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
+  - `name` is the plugin name 
+  - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
+  - `author` is the plugin author
+  - `icon` is the plugin icon
+  - `version` is the plugin version
+  - `includes` is a list of JavaScript files relative to the plugin folder to include 
+  - `modules` array of id's of required modules (libraries)
+      - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
+      instead of creating a module for it
+  - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
+  - `enabled` is an option to allow or disallow the plugin in the system, default `true`
+  - `hidden` is an option to hide plugin from the user-available selection
+
+##### Custom keys
+A developer can provide custom parameters to `include.json` and retrieve them later in the code.
+A deployment maintainer then uses ENV setup (see `/env/README.md`) to override necessary values.
+These are called **Static Configurations**.
+
+
+## Must do's
 - A plugin must register itself using the name of its parent class. For more information see below.
     - if the plugin is based on `MyAwesomePlugin` object/class, then call `addPlugin('myPluginId', MyAwesomePlugin);` on a global level
     - `'myPluginId'` must be the same as `id` from `includes.json`
 - Any attached HTML to the DOM must be attached by the provided API (see `USER_INTERFACE` global variable)
 - A plugin must inherit from ``XOpatPlugin`` class
-    - the constructor is given ``id`` and ``params`` arguments, call `super(id)` and use params at your will
+    - your plugin constructor is given ``id`` and ``params`` arguments, call `super(id)` and use params (from the **Dynamic session**) at your will
 - Get familiar with both global and ``XOpatPlugin`` API - use it where possible
     - especially, do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
+    - cache meaningful values
+    - interact with static & dynamic configuration values
+    - provide built-in IO logics
+    - ...
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
 > respect the ``APPLICATION_CONTEXT.secure`` parameter
@@ -192,7 +204,14 @@ export something like:
   "presets": [...]
 }
 ````
+When the viewer is exported as a file, it will mark the flag `isStaticPreview` to `true`.
+In this case, plugins should **not fetch** any data that is included in the export, to avoid duplicity.
 
+```js
+if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+    // skip data fetching
+}
+```
 
 ### Data Management Options  TODO: rewrite
 There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
@@ -267,6 +286,8 @@ such as pre-defined color maps, (already mentioned) webgl processing, fabricJS c
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
 
 ### Available Third-party Code and UI
+- You should use new UI components, see [this](../ui/README.md)
+
 You can use
  - [jQuery](https://jquery.com/), 
  - [Material Design icons](https://fonts.google.com/icons?selected=Material+Icons)

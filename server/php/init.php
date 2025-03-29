@@ -37,7 +37,10 @@ require_once PHP_INCLUDES . "plugins.php";
 function safeReadPostValue($val) {
     if (!is_string($val)) return $val;
     try {
-        return json_decode($val);
+        $parsed = json_decode($val);
+        if ((bool)$val && $parsed != null) {
+            return $parsed;
+        }
     } catch (Exception $e) {
         return $val;
     }
@@ -82,6 +85,7 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
             require_libs();
             require_openseadragon();
             require_external();
+            require_ui();
             require_core("loader");
             require_core("deps");
             require_core("app");

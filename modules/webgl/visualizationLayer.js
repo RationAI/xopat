@@ -1146,6 +1146,9 @@ WebGLModule.UIControls.IControl = class {
     /**
      * Sample the parameter using ratio as interpolation, must be one-liner expression so that GLSL code can write
      *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
+     * TODO: if a control throws with the usage (type of the value does not fit), it is not properly reflected in the
+     *   documentation!
+     *
      * NOTE: you can define your own global-scope functions to keep one-lined sampling,
      * see this.context.includeGlobalCode(...)
      * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active

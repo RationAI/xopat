@@ -25,10 +25,11 @@ To deploy xOpat, we need to configure it statically,
                 "path": "/",
                 // The default image server used. Configures an OpenSeadragon protocol using here URL of the service
                 "image_group_server": "http://localhost:8080",
-                "image_group_protocol": "`${path}/v3/batch/info?slides=${data}`",
-                "image_group_preview": "`${path}/v3/batch/thumbnail/max_size/250/250?slides=${data}`",
+                "image_group_protocol": "`${path}/v3/slides/info?slide_id=${data}`",
+                "image_group_preview": "`${path}/v3/slides/thumbnail/max_size/250/250?slide_id=${data}`",
                 "data_group_server": "http://localhost:8080",
-                "data_group_protocol": "`${path}/v3/batch/info?slides=${data.join(\",\")}`",
+                // This endpoint needs to ask for array of data items (get me tile level 5 x3 y0 for this slide list)
+                "data_group_protocol": "`${path}/v3/files/info?paths=${data.join(\",\")}`",
                 "headers": {},
                 "js_cookie_expire": 365,
                 "js_cookie_path": "/",
@@ -66,7 +67,9 @@ is to be viewed in a what way, and possibly also other things (active plugins an
 
 ## Accessing WSIs
 The simples way of opening a slide is through URL parameters.
-1. Go to image server deployment and add "/cases" to the url: <http://localhost:8080/cases>
-2. Find slide id and add it to the xOpat deployment url: <http://localhost:9000/?slides=*SLIDE_ID*>
+
+1. Go to image server deployment and inspect "cases" to the url: <http://localhost:8080/v3/cases>
+2. Fetch desired case ID and use it to get its slides: <http://localhost:8080/v3/cases/slides?case_id=*CASE_ID>
+3. Find desired slide ID and add it to the xOpat deployment url: <http://localhost:9000/?slides=*SLIDE_ID*>
 
 Now you should have working xOpat instance. 

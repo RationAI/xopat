@@ -249,7 +249,8 @@ These are in their own, explicit folders since this is the core functionality of
 The viewer comes with many available features. Here will be described only where to look for them, most functions are
 either documented or self-explanatory named. Some selected API is described in plugins root ``README``.
 Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
-Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their
+Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their (**You should use new UI components, see [this](../ui/README.md)
+**)
 enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
 the engine setup. ``scripts.js`` contain various utility functions - we encourange browsing
 the documentation API page.
@@ -260,6 +261,7 @@ handling, plugin and module loading and the viewport and events management.
 Many features are available through ``modules`` that implement additional important functionality.
 
 ### UI
+**You should use new UI components, see [this](../ui/README.md)**
 For easier UI renderings, ``ui_components.js`` define simple basic building blocks for
 basic elements, actions and containers (e.g. menus). ``user_interface.js`` creates
 a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
