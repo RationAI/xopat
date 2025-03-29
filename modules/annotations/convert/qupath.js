@@ -261,7 +261,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                         presetID: p.name,
                         meta: {
                             category: {
-                                name: 'Category',
+                                name: 'Name',
                                 value: p.name
                             }
                         }

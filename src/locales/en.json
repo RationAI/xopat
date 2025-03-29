@@ -54,6 +54,7 @@
         }
       },
       "bar": {
+        "share": "Share",
         "exportUrl": "URL",
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",

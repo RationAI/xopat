@@ -249,12 +249,11 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
-     * Describe what filename has the exported file
-     * @param {OSDAnnotations} context
-     * @return {string}
+     * File suffix to allow
+     * @returns {string}
      */
-    static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO("_") + '.txt';
+    static getSuffix() {
+        return '.txt';
     }
 
     /**

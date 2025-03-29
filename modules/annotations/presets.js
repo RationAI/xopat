@@ -11,6 +11,7 @@ OSDAnnotations.Preset = class {
     constructor(id, objectFactory = null, category = "", color = "") {
         if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
         this.color = color;
+        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
         this.objectFactory = objectFactory;
         this.presetID = id;
         this.meta = {};
