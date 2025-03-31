@@ -775,7 +775,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MainPanel({
                     id: "left-side-buttons-menu",
                     orientation: UI.Menu.ORIENTATION.RIGHT,
-                    buttonSide: UI.Menu.BUTTONSIDE.RIGHT,
+                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.DISABLE,
                     extraClasses: { bg: "bg-transparent" }
                 }, { id: "share", icon: "fa-share-nodes", title: "Share", body: "" },
@@ -788,9 +788,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
             getSettingsBody: function () {
-                const { div, span, a, input, label,option, select } = van.tags;
+                const { div, span, a, input, label,option, select, b } = van.tags;
                 const { path, svg } = van.tags("http://www.w3.org/2000/svg");
-                const logo = div(svg({width: "199", height: "245", style: "transform: scale(0.4);position: absolute; bottom: -70px; right: 55px;"},
+                const logo = div(svg({width: "199", height: "245", style: "transform: scale(0.4);position: absolute; bottom: -70px; right: 200px;"},
                                         path({ class: "svg-bg", style: "stroke:none;", "d": "M0 0L0 245L199 245L199 0L0 0z" }),
                                         path({ class: "svg-fg", style: "stroke:none;", "d": "M89 111C73.9124 102.634 59.1429 97.6265 42 103.699C10.6243 114.813 2.69417 155.943 24.3002 179.96C34.203 190.968 50.5908 195.588 65 193.711C70.1356 193.042 75.9957 189.366 81 189.558C85.6821 189.737 88.2317 195.201 93 196C93.6192 189.998 96.2022 186.738 102 185C101.099 181.757 97.6293 178.671 97.4406 175.424C97.0265 168.299 104.601 159.133 104.961 151C105.566 137.299 101.021 127.388 94 116C103.473 126.386 108.99 140.925 106.192 155C105.004 160.979 97.5869 171.328 100.07 177C104.64 187.436 131.355 202.006 122.296 214.956C118.441 220.467 108.201 223.195 105.353 214.981C103.302 209.066 108.098 199.867 106.772 193.044C105.706 187.562 98.7536 186.737 96.6034 192.059C95.3591 195.138 96.3032 198.787 95.6096 202C93.7875 210.441 87.5887 218.272 93.1481 226.96C100.503 238.454 121.175 235.504 129.532 226.699C134.728 221.225 136.419 213.299 137 206C148.187 205.48 157.471 186.148 144 184C149.507 175.759 148.085 167.119 146 158C165.247 156.32 202.562 125.778 177.895 106.649C169.278 99.9665 160.337 105.127 151 105C150.495 106.972 149.914 108.958 149.8 111.005C148.665 131.435 167.128 107.828 171.492 118.769C173.408 123.575 166.473 129.073 162.996 131.031C153.73 136.249 134.573 138.898 129.935 126.999C126.675 118.636 137.585 104.308 140.586 96C151.593 65.5361 152.007 31.5748 117 17.3125C83.7906 3.78271 48.8156 25.7805 54.3009 63C56.0017 74.5404 65.351 92.3288 73.5285 100.61C77.7937 104.929 84.2977 107.003 89 111z" }),
                                         path({ class: "svg-bg", style: "stroke:none;", "d": "M87 81C82.7429 86.9183 82.9719 101.042 92.9992 101.573C102.597 102.082 97.7793 90.6547 93.9707 87.3356C91.5984 85.2683 89.3865 83.0401 87 81z" }),
@@ -800,19 +800,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                         path({ class: "svg-bg", style: "stroke:none;", "d": "M138 189L135 195C137.756 193.487 139.001 192.137 138 189z" }),
                                         path({ class: "svg-fg", style: "stroke:none;", "d": "M111 196C110.984 201.944 107.113 208.424 107.581 213.867C108.017 218.936 115.737 218.201 118.606 215.991C126.648 209.793 118.205 198.065 111 196z" }),
                                     ),
-                                span({ class: "f3-light text-shadow", style: "position: absolute; bottom: 55px; right: 84px;" }, "xOpat"),
-                                span({ class: "f3-light text-shadow", style: "position: absolute; bottom: 38px;right: 71px;" }, "Viewer"),
-                                span({ class: "f6", style: "color: var(--color-text-tertiary);position: absolute; bottom: 73px;right: 70px;" }, "v2.1.1"),
+                                span({ class: "f3-light text-shadow", style: "position: absolute; bottom: 55px; right: 234px;" }, "xOpat"),
+                                span({ class: "f3-light text-shadow", style: "position: absolute; bottom: 38px;right: 221px;" }, "Viewer"),
+                                span({ class: "f6", style: "color: var(--color-text-tertiary);position: absolute; bottom: 73px;right: 220px;" }, "v2.1.1"),
                                 );
                                 
-                const notification = div({ class: "position-absolute top-1 left-1 right-1", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
+                const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
                     div({ class: "py-1 px-2 rounded-2", style: "background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;" },
                       span({ class: "material-icons", style: "font-size: initial; color: var( --color-icon-warning)" },
                         "warning",
                       ),
                       "To apply changes, please ",
                       a({ onclick: () => {UTILITIES.refreshPage()}, class: "pointer" },
-                        "reload the page",
+                        b("reload the page"),
                       ),
                       ".",
                     ),
@@ -854,9 +854,38 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     "\u00A0Debug Rendering",
                   ),
                 );      
-                result = div({ class: "" }, settings, notification, logo);
+                result = div({ class: "", style: "min-width: 300px; margin-left: 10px" }, settings, notification, logo);
                 return result;
             },
+
+            getPluginsBody: function () {
+                `<section id="app-plugins-parent-container" class="app-plugins-plugin-root position-relative height-full" style="display: block;"><div><div id="app-plugins" class="height-full position-relative" style="padding: 30px 45px 12px 25px; width: 650px;"><div class="d-flex flex-column-reverse">
+                <button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">Load with selected</button>
+                </div><hr>
+                <div id="plug-list-content-inner"><div id="plug-list-content-inner-content"><div id="plug-list-content-inner-row-0" class="selectable-image-row-container">
+                <input type="checkbox" name="plug-list-content" checked="" class="d-none selectable-image-row-context" value="gui_annotations">
+                <div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
+                <img src="http://localhost:9000//src/assets/image.png" class="d-block m-2 rounded-2" style="height: 40px;">
+                <div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">Annotations</div><div class="text-small color-text-secondary">A plugin for annotations creation, management and sharing.</div></div>
+
+                </div><div id="error-plugin-gui_annotations" class="mx-2 mb-3 text-small"><div class="p-1 rounded-2 error-container">This plugin has been automatically
+                removed: there was an error.<br><code>[TypeError: EventTarget.addEventListener: Argument 2 is not an object.]</code></div></div></div><div id="plug-list-content-inner-row-1" class="selectable-image-row-container">
+                <input type="checkbox" name="plug-list-content" class="d-none selectable-image-row-context" value="hotkeys">
+                <div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
+                <img src="http://localhost:9000//src/assets/image.png" class="d-block m-2 rounded-2" style="height: 40px;">
+                <div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">Hotkeys &amp; Shortcuts</div><div class="text-small color-text-secondary">Custom &amp; Buildin Hotkeys extension</div></div>
+                <div><div id="load-plugin-hotkeys">
+                <button onclick="UTILITIES.loadPlugin('hotkeys');return false;" class="btn">Load</button></div></div>
+                </div><div id="error-plugin-hotkeys" class="mx-2 mb-3 text-small"></div></div><div id="plug-list-content-inner-row-2" class="selectable-image-row-container">
+                <input type="checkbox" name="plug-list-content" class="d-none selectable-image-row-context" value="recorder">
+                <div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
+                <img src="http://localhost:9000//src/assets/image.png" class="d-block m-2 rounded-2" style="height: 40px;">
+                <div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">Recording and playback of presentation</div><div class="text-small color-text-secondary">Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.</div></div>
+                <div><div id="load-plugin-recorder">
+                <button onclick="UTILITIES.loadPlugin('recorder');return false;" class="btn">Load</button></div></div>
+                </div><div id="error-plugin-recorder" class="mx-2 mb-3 text-small"></div></div></div></div>
+                </div></div></section>`
+            },                           
         },
 
         /**
