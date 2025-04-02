@@ -836,7 +836,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             getPluginsBody: function () {
-                const { button, div, hr} = van.tags;
+                const { button, div, span} = van.tags;
 
                 let pluginCount = 0;
                 let pluginDivs = [];
@@ -874,7 +874,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     div({ class: "d-flex flex-column-reverse" },
                         button({ onclick: function () {USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
                     ),
-                    hr(),
+                    span({ class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
                     div({ id: "plug-list-content-inner" },
                             div({ id: "plug-list-content-inner-content" }, ...pluginDivs),
                         ),
