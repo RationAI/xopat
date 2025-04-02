@@ -63,8 +63,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     initXopatUI();
-    USER_INTERFACE.MainMenu.init();
-    USER_INTERFACE.VerticalMenu.init();
 
     //Setup language and parse config if function provided
     function localizeDom() {
@@ -1008,8 +1006,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             /*------------ Initialization of UI -----------------------*/
             /*---------------------------------------------------------*/
 
-            USER_INTERFACE.AdvancedMenu._build();
-            USER_INTERFACE.MainMenu._sync();
+            USER_INTERFACE.VerticalMenu.init();
+            USER_INTERFACE.MainMenu.init();
+
 
             /**
              * First loading of the viewer from a clean state.
