@@ -813,35 +813,26 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     option({ value: "dark_dimmed" }, "Dimmed Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex" },
-                    input({ type: "checkbox", class: " form-control v-align-middle", checked: "", onchange: () => {$('#plugin-tools-menu').toggleClass('d-none')}}),
-                    "\u00A0Show ToolBar", // \u00A0 unicode for space
-                  ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex" },
-                    input({ type: "checkbox", class: " form-control v-align-middle", checked: "", onchange: () => {APPLICATION_CONTEXT.setOption('scaleBar', this.checked, false);$('#settings-notification').css('visibility', 'visible');} }),
-                    "\u00A0Show Scale Bar",
-                  ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex" },
-                    input({ type: "checkbox", class: " form-control v-align-middle", checked: "", onchange: () => {APPLICATION_CONTEXT.setOption('statusBar', this.checked, false);USER_INTERFACE.Status.setClosed(!this.checked);} }),
-                    "\u00A0Show Status Bar",
-                  ),
+                  this.createCheckbox("Show ToolBar", () => {$('#plugin-tools-menu').toggleClass('d-none')}),
+                  this.createCheckbox("Show Scale Bar", () => {APPLICATION_CONTEXT.setOption('scaleBar', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox("Show Status Bar", () => {APPLICATION_CONTEXT.setOption('statusBar', this.checked, false);USER_INTERFACE.Status.setClosed(!this.checked);}),
+                  
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex" },
-                    input({ type: "checkbox", class: " form-control v-align-middle", onchange: () => {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}  }),
-                    "\u00A0Disable Cookies",
-                  ),
+                  this.createCheckbox("Disable Cookies", () => {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+        
                   span({ class: "f3-light header-sep" }, "Other", ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex"},
-                    input({ type: "checkbox", class: " form-control v-align-middle", onchange: () => {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}  }),
-                    "\u00A0Debug Mode",
-                  ),
-                  label({ style: "font-weight: initial;", class: "btn-pointer d-flex" },
-                    input({ type: "checkbox", class: " form-control v-align-middle", onchange: () => {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}  }),
-                    "\u00A0Debug Rendering",
-                  ),
+                  this.createCheckbox("Debug Mode", () => {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox("Debug Rendering", () => {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                 );      
                 result = div({ class: "", style: "min-width: 300px; margin-left: 10px" }, settings, notification, logo);
                 return result;
+            },
+            createCheckbox: function (text, onchangeFunction) {
+                const {input, label } = van.tags;
+                return label({ style: "font-weight: initial;", class: "btn-pointer d-flex"},
+                        input({ type: "checkbox", class: " form-control v-align-middle", onchange: onchangeFunction }),
+                        "\u00A0" + text,
+                );
             },
 
             getPluginsBody: function () {
