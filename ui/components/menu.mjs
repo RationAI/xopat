@@ -91,10 +91,14 @@ class Menu extends BaseComponent {
         tab.headerButton.setClass("join", "join-item");
         if (this._initializing) {
             tab.headerButton.attachTo(this.header);
-            tab.contentDiv.attachTo(this.body);
+            if (tab.contentDiv) {
+                tab.contentDiv.attachTo(this.body);
+            }
         } else {
             tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
-            tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
+            if (tab.contentDiv) {
+                tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
+            }
         }
     }
 

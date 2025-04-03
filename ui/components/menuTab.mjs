@@ -35,39 +35,44 @@ class MenuTab {
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = item["icon"];
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });        
 
-        if (!(inIcon instanceof BaseComponent)) {
-            inIcon = new ui.FAIcon({ name: inIcon });
-        }
+        let action = (item["onClick"]) ? item["onClick"] : () => {};
 
-        this.icon = inIcon;
-        this.title = span(inText);
 
         const b = new ui.Button({
             id: this.parent.id + "-b-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
             onClick: () => {
+                action();
                 this.focus();
-            }
-        }, this.icon, this.title);
+            },
+        }, inIcon, span(inText));
 
-        const c = new ui.Div({ id: this.parent.id + "-c-" + item.id, display: "display-none", height: "h-full" }, ...content);
+        let c = undefined;
+        if (content){
+            c = new ui.Div({ id: this.parent.id + "-c-" + item.id, display: "display-none", height: "h-full" }, ...content);
+        };
         return [b, c];
     }
 
     removeTab() {
         document.getElementById(this.headerButton.id).remove();
-        document.getElementById(this.contentDiv.id).remove();
+        if (this.contentDiv){
+            document.getElementById(this.contentDiv.id).remove();
+        };
     }
 
     focus() {
         for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
-            div.style.display = "none";
-            if (div.id === this.contentDiv.id) {
-                div.style.display = "block";
+            if (!div){
+                continue;
             }
+            div.style.display = "none";
+            if (this.contentDiv && div.id === this.contentDiv.id) {
+                div.style.display = "block";
+            };
         }
 
         for (let i of Object.values(this.parent.tabs)) {
@@ -75,13 +80,15 @@ class MenuTab {
             button.setClass("type", "btn-primary");
             if (button.id === this.headerButton.id) {
                 button.setClass("type", "btn-secondary");
-            }
+            };
         }
     }
 
     close() {
         this.headerButton.setClass("type", "btn-primary");
-        document.getElementById(this.contentDiv.id).style.display = "none";
+        if (this.contentDiv){
+            document.getElementById(this.contentDiv.id).style.display = "none";
+        };
     }
 
     // TODO make work even withouth inicialization
