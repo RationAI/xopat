@@ -84,7 +84,7 @@ class Menu extends BaseComponent {
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-        const tab = new MenuTab(item, this);
+        const tab = item.class ? new item.class(item,this) : new MenuTab(item, this);
 
         this.tabs[item.id] = tab;
 

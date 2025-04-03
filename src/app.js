@@ -1007,8 +1007,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             /*---------------------------------------------------------*/
 
             USER_INTERFACE.VerticalMenu.init();
-            USER_INTERFACE.MainMenu.init();
-
 
             /**
              * First loading of the viewer from a clean state.

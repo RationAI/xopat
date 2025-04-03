@@ -10,7 +10,9 @@ import { Join } from "./components/join.mjs";
 import { Menu } from "./components/menu.mjs";
 import { Div } from "./components/div.mjs";
 import { MainPanel } from "./components/mainPanel.mjs";
-const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel };
+import { menuDropdown } from "./components/menuDropdown.mjs";
+
+const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel, menuDropdown };
 globalThis.UI = UI;
 
 globalThis.vanRegister = function (id, component) {

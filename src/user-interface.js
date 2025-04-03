@@ -778,9 +778,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.DISABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: undefined, onClick: function () {console.log("share Clicked");} },
+                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: undefined, class: UI.menuDropdown },
                     { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: [this.getPluginsBody()] },
-                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: "" },
+                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
                     { id: "settings", icon: "fa-gear", title: "Setting", body: [this.getSettingsBody()] }
                 );
 
