@@ -101,3 +101,14 @@
     border-start-start-radius: inherit;
     border-start-end-radius: 0;
 }
+
+button div {
+    display: none;
+    position: absolute;
+    top: 0;
+    right: 110%;
+    background-color: #f9f9f9;
+    border: 1px solid #ccc;
+    padding: 10px;
+    writing-mode: horizontal-tb;
+}

@@ -10,17 +10,40 @@ const {div, ul, li, a, span, button} = van.tags;
 class menuDropdown extends MenuTab{
     constructor(item, parent) {
         super(item, parent);
+        this.list;
     }
 
     createTab(item) {
-        const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
-        const dropdown = new Div({class: "dropdown dropdown-end"},
-            div({ tabindex: "0", role:"button", class:"btn m-1"}, "click me"),
-            div({tabindex: "0", class:"dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm"}, "you really clicked")
-        );
-        return [dropdown, undefined];
+
+        let action = (item["onClick"]) ? item["onClick"] : () => {};
+
+        const b1 = new Button({
+            size: Button.SIZE.SMALL,
+            onClick: () => {
+                console.log("Submenu 1 clicked");
+            },
+        }, "Submenu 1");
+
+        this.list = new Div({
+            id: this.parent.id + "-c-" + item.id, 
+            extraClasses: {display: "display-none"},
+            additionalProperties: {style: "position: absolute; right: 15%;"},
+            }, b1);
+
+        const b = new Button({
+            id: this.parent.id + "-b-" + item.id,
+            size: Button.SIZE.SMALL,
+            additionalProperties: { title: inText},
+            onClick: () => {
+                action();
+                this.focus();
+                console.log("tlačítko zmáčknuto")
+            },
+        }, inIcon, span(inText));
+        this.contentDiv = this.list;
+        return [b, this.list];
     }
 }
 export { menuDropdown };
