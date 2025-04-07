@@ -52,7 +52,7 @@ class MenuTab {
 
         let c = undefined;
         if (content){
-            c = new ui.Div({ id: this.parent.id + "-c-" + item.id, display: "display-none", height: "h-full" }, ...content);
+            c = new ui.Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
         };
         return [b, c];
     }
