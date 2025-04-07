@@ -65,22 +65,23 @@ class MenuTab {
     }
 
     focus() {
-        for (let div of document.getElementById(this.parent.id + "-body").childNodes) {
-            if (!div){
-                continue;
-            }
-            div.style.display = "none";
-            if (this.contentDiv && div.id === this.contentDiv.id) {
-                div.style.display = "block";
-            };
-        }
+        for (let tab of Object.values(this.parent.tabs)) {
+            tab._removeFocus();
+        };
+        this._setFocus();
+    }
 
-        for (let i of Object.values(this.parent.tabs)) {
-            const button = i.headerButton;
-            button.setClass("type", "btn-primary");
-            if (button.id === this.headerButton.id) {
-                button.setClass("type", "btn-secondary");
-            };
+    _setFocus() {
+        this.headerButton.setClass("type", "btn-secondary");
+        if (this.contentDiv){
+            this.contentDiv.setClass("display", "");
+        };
+    }
+
+    _removeFocus() {
+        this.headerButton.setClass("type", "btn-primary");
+        if (this.contentDiv){
+            this.contentDiv.setClass("display", "hidden");
         }
     }
 
@@ -110,6 +111,7 @@ class MenuTab {
     iconOnly() {
         this.style = "ICON";
         const nodes = this.headerButton.children;
+        console.log(this.headerButton);
         nodes[0].classList.remove("hidden");
         nodes[1].classList.add("hidden");
     }
