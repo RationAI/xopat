@@ -24,7 +24,6 @@ class Div extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-        this.classMap = this.options;
     }
 
     create() {
