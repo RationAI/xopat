@@ -758,9 +758,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
                 if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
-
-                let status = USER_INTERFACE.Status.context;
-                if (status) status.style.right = this.opened ? "408px" : "8px";
             }
         },
         /**
@@ -1060,6 +1057,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 node.style.pointerEvents = 'none';
                 node.style.maxWidth = 'calc(100vw - 750px)';
                 node.style.bottom = '10px';
+                node.style.right = '45px';
                 let content = document.createElement("span");
                 content.setAttribute("class", "one-liner");
                 node.appendChild(content);

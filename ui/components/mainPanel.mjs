@@ -104,9 +104,6 @@ class MainPanel extends Menu {
         USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
         if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
         if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
-
-        let status = USER_INTERFACE.Status.context;
-        if (status) status.style.right = this.opened ? "408px" : "8px";
     }
 
     // AdvancedMenu
