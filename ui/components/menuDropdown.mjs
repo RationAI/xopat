@@ -5,7 +5,7 @@ import van from "../vanjs.mjs";
 import { Button } from "./buttons.mjs";
 import { Div } from "./div.mjs";
 
-const {div, ul, li, a, span, button} = van.tags;
+const { span } = van.tags;
 
 class menuDropdown extends MenuTab{
     constructor(item, parent) {
@@ -14,23 +14,17 @@ class menuDropdown extends MenuTab{
     }
 
     createTab(item) {
+        const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
-        const b1 = new Button({
-            size: Button.SIZE.SMALL,
-            onClick: () => {
-                console.log("Submenu 1 clicked");
-            },
-        }, "Submenu 1");
-
         this.list = new Div({
             id: this.parent.id + "-c-" + item.id, 
-            extraClasses: {display: "display-none"},
-            additionalProperties: {style: "position: absolute; right: 15%;"},
-            }, b1);
+            extraClasses: {display: "display-none", component:  "dropdown-content menu bg-base-100 rounded-box z-1 p-2 shadow-sm"},
+            additionalProperties: {style: "position: absolute; right: 12%; row-gap: 5px;"}, // TODO make for all orientations
+            }, ...content);
 
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,

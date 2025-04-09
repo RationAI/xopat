@@ -778,7 +778,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.DISABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: "", class: UI.menuDropdown },
+                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: [...this.getShareDropdown()], class: UI.menuDropdown },
                     { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: [this.getPluginsBody()] },
                     { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
                     { id: "settings", icon: "fa-gear", title: "Setting", body: [this.getSettingsBody()] }
@@ -786,6 +786,21 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
+            },
+            getShareDropdown: function () {
+                const b1 = new UI.Button({
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        console.log("Submenu 1 clicked");
+                    },
+                }, "Submenu 1");
+                const b2 = new UI.Button({
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        console.log("Submenu 2 clicked");
+                    },
+                }, "Submenu 2");
+                return [b1, b2];
             },
             getSettingsBody: function () {
                 const { div, span, a, input, label,option, select, b } = van.tags;
