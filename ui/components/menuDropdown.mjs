@@ -33,7 +33,6 @@ class menuDropdown extends MenuTab{
             onClick: () => {
                 action();
                 this.focus();
-                console.log("tlačítko zmáčknuto")
             },
         }, inIcon, span(inText));
         this.contentDiv = this.list;

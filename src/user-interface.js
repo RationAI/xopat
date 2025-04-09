@@ -787,21 +787,28 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
+
             getShareDropdown: function () {
                 const b1 = new UI.Button({
+                    id: "global-export",
+                    extraProperties: { "data-i18n": "[title]main.bar.explainExportFile" },
                     size: UI.Button.SIZE.SMALL,
                     onClick: () => {
-                        console.log("Submenu 1 clicked");
+                        UTILITIES.export();
                     },
-                }, "Submenu 1");
+                }, new UI.FAIcon({ name: "fa-download" }), "Export");
+
                 const b2 = new UI.Button({
+                    id: "copy-url-inner",
+                    extraProperties: { "data-i18n": "[title]main.bar.explainExportUrl" },
                     size: UI.Button.SIZE.SMALL,
                     onClick: () => {
-                        console.log("Submenu 2 clicked");
+                        UTILITIES.copyUrlToClipboard();
                     },
-                }, "Submenu 2");
+                }, new UI.FAIcon({ name: "fa-link" }), "URL");
                 return [b1, b2];
             },
+
             getSettingsBody: function () {
                 const { div, span, a, input, label,option, select, b } = van.tags;
                 const logo = this.getLogo(-70,200);
