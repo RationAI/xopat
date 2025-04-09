@@ -125,6 +125,67 @@
         height: best_channel_image.height
       };
     }
+
+    /**
+     * Run inference on the server.
+     * @param {*} viewportBlob 
+     * @param {*} clickCoords 
+     * @returns {Promise<{binaryMask: Uint8Array, width: number, height: number}>} The segmentation mask.
+     */
+    async runInferenceServer(viewportBlob, clickCoords) {
+      // convert the blob to a base64 string
+      const reader = new FileReader();
+      reader.readAsDataURL(viewportBlob);
+
+      return new Promise((resolve, reject) => {
+        reader.onload = async () => {
+          const base64String = reader.result.split(",")[1];
+          const requestBody = {
+            image: base64String,
+            x: clickCoords.x,
+            y: clickCoords.y
+          };
+
+          // send the request to the localhost 8000 /segment endpoint
+          try {
+            const response = await fetch("http://localhost:8000/segment", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+              console.error("Server error:", response.statusText);
+              return reject(new Error("Server error"));
+            }
+
+            const data = await response.json();
+
+            // convert the binary mask from base64 to Uint8Array
+            const binaryStr = atob(data.binary_mask);
+            const binaryMask = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              binaryMask[i] = binaryStr.charCodeAt(i);
+            }
+
+            // get the height from the server response
+            const height = data.height;
+            const width = data.width;
+
+            resolve({
+              binaryMask,
+              width,
+              height
+            });
+          } catch (error) {
+            console.error("Error during server inference:", error);
+            reject(error);
+          }
+        };
+      });
+    }
   }
 
   const sam = new SAMInference();

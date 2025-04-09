@@ -18,6 +18,12 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
     context.raiseEvent("model-loaded");
   }
 
+  static raiseServerAvailable(context, gpuName) {
+    context.raiseEvent("server-available", {
+      gpuName
+    });
+  }
+
   /**
      * Creates a drawer for capturing the viewport image.
      * @returns {OpenSeadragon.Drawer} The drawer instance.
@@ -37,10 +43,9 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
 
   /**
      * Captures the viewport image at the specified point.
-     * @param {OpenSeadragon.Point} clickPoint - The point where the user clicked.
-     * @returns {Promise<{ blob: Blob, viewportTopLeft: { x: number, y: number }, scale: number }>} The captured image and metadata.
+     * @returns {Promise<{ blob: Blob}>} The captured image.
      */
-  static async captureViewportImage(clickPoint) {
+  static async captureViewportImage() {
     return new Promise(resolve => {
       const drawer = SegmentationUtils.createDrawer();
       drawer.clear();
@@ -53,12 +58,6 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
 
       const viewerWidth = VIEWER.container.clientWidth;
       const viewerHeight = VIEWER.container.clientHeight;
-      const imagePixelSizeOnScreen = VIEWER.scalebar.imagePixelSizeOnScreen();
-
-      // get viewport (0,0) in image coordinates
-      const viewportTopLeft = VIEWER.scalebar
-        .getReferencedTiledImage()
-        .windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
 
       // create a temporary canvas to resize the captured image
       const tempCanvas = document.createElement("canvas");
@@ -89,9 +88,7 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
         }
 
         resolve({
-          blob,
-          viewportTopLeft: { x: viewportTopLeft.x, y: viewportTopLeft.y },
-          scale: imagePixelSizeOnScreen
+          blob
         });
       }, "image/png");
     });
