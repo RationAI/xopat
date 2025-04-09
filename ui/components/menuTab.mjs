@@ -102,7 +102,6 @@ class MenuTab {
 
     titleIcon() {
         this.style = "ICONTITLE";
-        //const nodes = document.getElementById(this.headerButton.id).childNodes;
         const nodes = this.headerButton.children;
         nodes[0].classList.remove("hidden");
         nodes[1].classList.remove("hidden");
@@ -111,7 +110,6 @@ class MenuTab {
     iconOnly() {
         this.style = "ICON";
         const nodes = this.headerButton.children;
-        console.log(this.headerButton);
         nodes[0].classList.remove("hidden");
         nodes[1].classList.add("hidden");
     }
