@@ -102,19 +102,20 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 
 <div id="left-side-full" class="position-fixed d-flex flex-column height-full">
     <div id="left-side-top" class="d-flex flex-row flex-end" style="pointer-events: all;">
-        <div id="user-panel" class="btn-pointer" style="text-align-last: right;"></div>
-            <div id="tissue-title-header" class="d-flex flex-items-center"
-                style="max-height: 255px; max-width: 90%; flex-grow: 1;"></div>
-            <span id="global-tissue-visibility" class="d-inline-block">
-                <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked
-                    class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
-            </span>
-            <span class="tissue-title-container d-flex">
+        <div id="viewer-header" class="" style="display: flex; flex-direction: row; justify-content: space-between; flex-grow: 1; overflow: hidden;">
+            <div style="display: flex; flex-direction: row; max-width: 300px; min-width: 300px;">
+                <div id="tissue-title-header" class="d-flex flex-items-center flex-column"
+                    style="max-height: 255px; max-width: 90%; flex-grow: 1;"></div>
+                <span id="global-tissue-visibility" class="" style="display: flex; align-items: center;">
+                    <input type="checkbox" style="vertical-align: middle;" checked
+                        class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                </span>
                 <span id="tissue-title-content" class="text-shadow-mild one-liner"
-                    style="flex-grow: 1">Slide<!--Inserted slide name--></span>
+                    style="flex-grow: 1; align-items: center; display: flex;">Slide<!--Inserted slide name--></span>
                 <span class="material-icons pointer"
                     onclick="UTILITIES.copyToClipboard(this.previousElementSibling.textContent)">content_copy</span>
-            </span>
+            </div>
+        </div>
         <span id="user-name" data-i18n="user.anonymous"></span>
         <span id="user-icon"><span class="material-icons btn-pointer">account_circle</span></span>
     </div>
@@ -217,5 +218,26 @@ window.onerror = function (message, file, line, col, error) {
         APPLICATION_CONTEXT.config.visualizations
     );
 </script>
+
+<script>
+    // hiding the user name if left-side-buttons are too small
+    window.addEventListener('DOMContentLoaded', () => {
+      const leftSideButtons = document.getElementById('left-side-buttons');
+      const userName = document.getElementById('user-name');
+  
+      const observer = new ResizeObserver(entries => {
+        for (let entry of entries) {
+            const width = entry.contentRect.width;
+            if (width < 100) {
+                userName.style.display = 'none';
+            } else {
+                userName.style.display = '';
+            }
+        }
+      });
+  
+      observer.observe(document.getElementById('left-side-buttons'));
+    });
+  </script>
 </body>
 </html>
