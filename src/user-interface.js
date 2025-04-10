@@ -783,6 +783,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
+                console.log(this.menu);
+                this.createFocusListener();
+            },
+
+            createFocusListener: function () {
+                window.onload =  () => {
+                
+                    document.addEventListener('click', (event) => {
+                        const menu = document.getElementById('left-side-buttons-menu');
+                        if (!menu.contains(event.target)) {
+                            this.menu.unfocusAll();
+                        }
+                    });
+                };
             },
 
             getShareDropdown: function () {

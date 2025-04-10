@@ -21,6 +21,7 @@ class MenuTab {
     constructor(item, parent) {
         this.parent = parent;
         this.style = "ICONTITLE";
+        this.focused = false;
 
         const [headerButton, contentDiv] = this.createTab(item);
 
@@ -66,12 +67,20 @@ class MenuTab {
 
     focus() {
         for (let tab of Object.values(this.parent.tabs)) {
-            tab._removeFocus();
+            if (tab.id != this.id) {
+                tab._removeFocus();
+            }
         };
-        this._setFocus();
+
+        if (this.focused) {
+            this._removeFocus();
+        } else {
+            this._setFocus();
+        };
     }
 
     _setFocus() {
+        this.focused = true;
         this.headerButton.setClass("type", "btn-secondary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "");
@@ -79,6 +88,7 @@ class MenuTab {
     }
 
     _removeFocus() {
+        this.focused = false;
         this.headerButton.setClass("type", "btn-primary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");

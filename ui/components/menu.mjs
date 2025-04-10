@@ -112,6 +112,11 @@ class Menu extends BaseComponent {
         }
         return false;
     }
+    unfocusAll() {
+        for (let tab of Object.values(this.tabs)) {
+            tab._removeFocus();
+        }
+    }
 
     /**
      * @param {*} id of the item we want to close
