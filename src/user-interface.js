@@ -822,7 +822,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             getSettingsBody: function () {
                 const { div, span, a, option, select, b } = van.tags;
-                const logo = this.getLogo(-70,200);
+                const logo = this.getLogo(-70, 20);
                                 
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
                     div({ class: "py-1 px-2 rounded-2", style: "background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;" },
@@ -857,7 +857,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox("Debug Mode", () => {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                   this.createCheckbox("Debug Rendering", () => {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                 );      
-                result = div({ class: "", style: "min-width: 300px; margin-left: 10px" }, settings, notification, logo);
+                result = div({ class: "", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" }, settings, notification, logo);
                 return result;
             },
             createCheckbox: function (text, onchangeFunction) {
@@ -902,8 +902,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                                 
-                const logo = this.getLogo(-28, 560);
-                const body = div({ id: "app-plugins", class: "height-full position-relative", style: "padding: 30px 45px 12px 25px; width: 650px;" },
+                const logo = this.getLogo(-70, -39);
+                const body = div({ id: "app-plugins", class: "height-full position-relative", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" },
                     div({ class: "d-flex flex-column-reverse" },
                         button({ onclick: function () {USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
                     ),
@@ -973,7 +973,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     path({ class: "svg-fg", style: "stroke:none;", "d": "M111 196C110.984 201.944 107.113 208.424 107.581 213.867C108.017 218.936 115.737 218.201 118.606 215.991C126.648 209.793 118.205 198.065 111 196z" }),
                 ),
             span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+125}px; right: ${positionRight+34}px;` }, "xOpat"),
-            span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+108}px;right: ${positionRight+21}px;` }, "Viewer"),
+            span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+108}px; right: ${positionRight+21}px;` }, "Viewer"),
             span({ class: "f6", style: `color: var(--color-text-tertiary);position: absolute; bottom: ${positionBottom+143}px;right: ${positionRight+20}px;` }, "v2.1.1"),
             );
             return logo;
