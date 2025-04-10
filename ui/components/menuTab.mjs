@@ -67,7 +67,7 @@ class MenuTab {
 
     focus() {
         for (let tab of Object.values(this.parent.tabs)) {
-            if (tab.id != this.id) {
+            if (tab.headerButton.id != this.headerButton.id) {
                 tab._removeFocus();
             }
         };

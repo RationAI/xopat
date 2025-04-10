@@ -821,7 +821,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             getSettingsBody: function () {
-                const { div, span, a, input, label,option, select, b } = van.tags;
+                const { div, span, a, option, select, b } = van.tags;
                 const logo = this.getLogo(-70,200);
                                 
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
