@@ -410,6 +410,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
         maxZoomPixelRatio: 2,
+        zoomPerClick: 2,
+        zoomPerScroll: 1.7,
         blendTime: 0,
         // This is due to annotations (multipolygon brush) that are disabled during animations
         // ease out behavior makes user think they can already start drawing and slows them down
