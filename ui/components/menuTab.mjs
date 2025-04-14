@@ -21,6 +21,7 @@ class MenuTab {
     constructor(item, parent) {
         this.parent = parent;
         this.style = "ICONTITLE";
+        this.styleOverride = item["styleOverride"] || false;
         this.focused = false;
 
         const [headerButton, contentDiv] = this.createTab(item);
@@ -102,8 +103,15 @@ class MenuTab {
         };
     }
 
+    setStyleOverride(styleOverride) {
+        this.styleOverride = styleOverride;
+    }
+
     // TODO make work even withouth inicialization
     titleOnly() {
+        if (this.styleOverride) {
+            return;
+        }
         this.style = "TITLE";
         const nodes = this.headerButton.children;
         nodes[0].classList.add("hidden");
@@ -111,6 +119,9 @@ class MenuTab {
     }
 
     titleIcon() {
+        if (this.styleOverride) {
+            return;
+        }
         this.style = "ICONTITLE";
         const nodes = this.headerButton.children;
         nodes[0].classList.remove("hidden");
@@ -118,6 +129,9 @@ class MenuTab {
     }
 
     iconOnly() {
+        if (this.styleOverride) {
+            return;
+        }
         this.style = "ICON";
         const nodes = this.headerButton.children;
         nodes[0].classList.remove("hidden");
