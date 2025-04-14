@@ -761,19 +761,90 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
         /**
-         * Application Vertical Menu (right side)
-         * @namespace USER_INTERFACE.VerticalMenu
+         * Application TopRightMenu
+         * @namespace USER_INTERFACE.TopRightMenu
          */
-        VerticalMenu: {
-            context: $("#left-side-buttons"),
+        TopFullscreenButton:{
+            context: $("#top-fullscreen"),
+            button: "",
+
+            init: function () {
+                this.button = new Button({
+                                            id: "fullscreen-button",
+                                            size: Button.SIZE.SMALL,
+                                            onClick: function () {
+                                                console.log("TODO: implement fullscreen functionality");
+                                            }
+                                        },
+                                        new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
+                this.button.attachTo(this.context);
+            }
+        },
+        /**
+         * Application TopRightMenu
+         * @namespace USER_INTERFACE.TopUserMenu
+         */
+        TopUserMenu:{
+            context: $("#top-user"),
             menu: "",
 
             init: function () {
                 this.menu = new UI.MainPanel({
                     id: "left-side-buttons-menu",
-                    orientation: UI.Menu.ORIENTATION.RIGHT,
+                    orientation: UI.Menu.ORIENTATION.TOP,
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                    rounded: UI.Menu.ROUNDED.DISABLE,
+                    rounded: UI.Menu.ROUNDED.ENABLE,
+                    extraClasses: { bg: "bg-transparent" }
+                }, { id: "settings", icon: "fa-gear", title: "Settings", body: "xdd"},
+                   { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+                   { id: "share", icon: "fa-share-nodes", title: "Share", body: "xdd"},
+                   { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: "xd", styleOverride: true, class: UI.MenuButton}
+                );
+
+                this.menu.attachTo(this.context);
+                this.menu.set(UI.Menu.DESIGN.ICONONLY);
+            }
+        },
+
+        /**
+         * Application Top Middle Menu
+         * @namespace USER_INTERFACE.TopVisualMenu
+         */
+        TopVisualMenu:{
+            context: $("#top-visual"),
+            menu: "",
+
+            init: function () {
+                this.menu = new UI.MainPanel({
+                    id: "settings-menu",
+                    orientation: UI.Menu.ORIENTATION.TOP,
+                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
+                    rounded: UI.Menu.ROUNDED.ENABLE,
+                    extraClasses: { bg: "bg-transparent" },
+                }, { id: "visual", icon: "fa-window-restore", title: "Visual Settings", body: "Visual Setting" },
+                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "plugins" },
+                    
+                );
+
+                this.menu.attachTo(this.context);
+                this.menu.set(UI.Menu.DESIGN.ICONONLY);
+            }
+        },
+
+        /**
+         * Application Vertical Menu (right side)
+         * @namespace USER_INTERFACE.TopPluginsMenu
+         */
+        TopPluginsMenu: {
+            context: $("#top-plugins"),
+            menu: "",
+
+            init: function () {
+                this.menu = new UI.MainPanel({
+                    id: "left-side-buttons-menu",
+                    orientation: UI.Menu.ORIENTATION.TOP,
+                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
+                    rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
                 }, { id: "share", icon: "fa-share-nodes", title: "Share", body: [...this.getShareDropdown()], class: UI.menuDropdown },
                     { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: [this.getPluginsBody()] },
