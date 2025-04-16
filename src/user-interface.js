@@ -795,10 +795,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "settings", icon: "fa-gear", title: "Settings", body: "xdd"},
+                }, { id: "settings", icon: "fa-gear", title: "Settings", body: undefined},
                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                   { id: "share", icon: "fa-share-nodes", title: "Share", body: "xdd"},
-                   { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: "xd", styleOverride: true, class: UI.MenuButton}
+                   { id: "share", icon: "fa-share-nodes", title: "Share", body: undefined},
+                   { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
                 );
 
                 this.menu.attachTo(this.context);
@@ -821,8 +821,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-window-restore", title: "Visual Settings", body: "Visual Setting" },
-                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: "plugins" },
+                }, { id: "visual", icon: "fa-window-restore", title: "Visual Settings", body: undefined },
+                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined },
                     
                 );
 
@@ -846,11 +846,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: [...this.getShareDropdown()], class: UI.menuDropdown },
-                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: [this.getPluginsBody()] },
+                }, { id: "share", icon: "fa-share-nodes", title: "Share", body: undefined, class: UI.menuDropdown },
+                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined },
                     { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                    { id: "settings", icon: "fa-gear", title: "Setting", body: [this.getSettingsBody()] },
-                    { id: "sha", icon: "fa-eye", title: "shaders", body: [this.createShadersMenu()] },
+                    { id: "settings", icon: "fa-gear", title: "Setting", body: undefined },
+                    { id: "sha", icon: "fa-eye", title: "shaders", body: undefined },
                 );
 
                 this.menu.attachTo(this.context);
@@ -1089,6 +1089,57 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             );
             return logo;
             }                       
+        },
+
+        /**
+         * Application TopRightMenu
+         * @namespace USER_INTERFACE.TopSlideMenu
+         */
+        TopSlideMenu:{
+            context: $("#top-slide"),
+            menu: "",
+
+            init: function () {
+                const { div, input, span } = van.tags;
+
+                const copy = new UI.Button({
+                    id: "copy-slide",
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        UTILITIES.copyToClipboard(this.previousElementSibling.textContent);
+                    }
+                }, new UI.FAIcon("fa-copy"));
+
+                const text = new UI.Div(
+                    {id: "slide-name", 
+                     class: "", 
+                     extraClasses: {btn: "btn btn-primary btn-sm"}, 
+                     additionalProperties: {style: "box-sizing: border-box; vertical-align: center"},
+                    }, 
+                    "TODO Slidename"); 
+                
+                const error = new UI.Div(
+                    {id: "tissue-title-header", 
+                        class: "", 
+                        extraClasses: {btn: "btn btn-primary btn-sm"}, 
+                        style: "flex-grow: 1;"}, "TODO error");
+                    
+                const checkbox = new UI.Div(
+                    {id: "global-tissue-visibility",
+                    class: "", 
+                    extraClasses: {btn: "btn btn-primary btn-sm"},
+                    style: "display: flex; align-items: center;"},
+                    input({ type: "checkbox", style: "vertical-align: middle;", checked: "", class: "form-control mr-1", onchange: () => {VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)}})
+                )
+
+                const x = div({ style: "display: flex; flex-direction: row;", class: "join bg-join join-horizontal" },
+                    span({ id: "global-tissue-visibility", class: "join-item btn btn-primary btn-sm", style: "display: flex; align-items: center;" },
+                        input({ type: "checkbox", style: "vertical-align: middle;", checked: "", class: "form-control mr-1",}), 
+                    ),
+                );
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL},error, text, copy, checkbox);
+                menu.attachTo(this.context);
+            }
         },
 
         /**
