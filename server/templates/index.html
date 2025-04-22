@@ -99,16 +99,15 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 </div>
 
 <!-- Main Panel -->
-<div id="top-side" class="d-flex flex-row width-full" style="position: relative; background-color: gray; justify-content: space-between;">
-    <div id="top-slide" class="" style="margin-left: 10px; margin-right: 10px; margin-top: 3px; margin-bottom: 3px;"></div>  
-    <div style="display: flex; flex-direction: row;">
+<div id="top-side" class="d-flex flex-row width-full" style="position: relative; background-color: gray; align-items: flex-start;">
+    <div id="top-slide" class="" style="position: absolute; left: 50%; transform: translateX(-50%); top: 3px; bottom: auto;"></div>
+    <div style="display: flex; flex-direction: row; justify-content: flex-end; width: 100%;">
         <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
         <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
         <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
         <div id = "top-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
     </div>
 </div>
-
 
 <div id="left-side" class="d-flex flex-column height-full" style="position: fixed; background-color: gray;">
     <div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
