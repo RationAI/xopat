@@ -1,75 +1,79 @@
 import { BaseComponent } from "./baseComponent.mjs";
 import van from "../vanjs.mjs";
+
 import { FAIcon } from "./fa-icon.mjs";
 import { Button } from "./buttons.mjs";
 import { Div } from "./div.mjs";
 import { MenuTab } from "./menuTab.mjs";
 
-const ui = { Button, Div, FAIcon };
 const { span, div } = van.tags
 
-/**
- * @class checkboxMenuTab
- * @description A internal tab component for the menu component
- * @example
- * const tab = new checkboxMenuTab({id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"}, menu);
- */
 class MultiPanelMenuTab extends MenuTab{
-    /**
-     * @param {*} item dictionary with id, icon, title, body which will be created
-     * @param {*} parent parent menu component
-     */
+
     constructor(item, parent) {
         super(item, parent);
         this.closedButton;
         this.openButton;
         this.openDiv;
+        this.divider;
     }
 
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });        
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
 
-        let action = (item["onClick"]) ? item["onClick"] : () => {};
-
-        let c = undefined;
-
-        this.closedButton = new ui.Button({
-            id: this.parent.id + "-closedb-" + item.id,
-            size: ui.Button.SIZE.SMALL,
+        this.closedButton = new Button({
+            id: this.parent.id + "-b-closed-" + item.id,
+            size: Button.SIZE.SMALL,
             additionalProperties: { title: inText },
             onClick: () => {
-                action();
                 this.focus();
             },
-        }, inIcon, span(inText));
+            }, inIcon, span(inText));
 
-        this.openButton = new ui.Button({
-            id: this.parent.id + "-openb-" + item.id,
-            size: ui.Button.SIZE.SMALL,
-            orientation: ui.Button.ORIENTATION.VERTICAL_LEFT,
+        this.openButton = new Button({
+            id: this.parent.id + "-b-opened-" + item.id,
+            size: Button.SIZE.SMALL,
+            orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             additionalProperties: { title: inText, style: "margin-left: auto;" },
             onClick: () => {
-                action();
                 this.focus();
             },
-        }, inIcon, span(inText));
+            }, inIcon, span(inText));
 
-        this.openDiv = new ui.Div({ 
+        this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row"},
             extraProperties: {style: "flexGreow: 1;"},
-        },  div(...content), this.openButton);
+            }, div(...content), this.openButton);
 
-        c = new ui.Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "", flex: "flex flex-col"} }, this.closedButton, this.openDiv);
+        this.divider = new Div({
+            id: this.parent.id + "-divider-" + item.id,
+            extraClasses: {display: "hidden", divider: "divider"},
+            additionalProperties: {style: "margin: 0px; padding: 0px;"},
+            }, span(inText) );
+
+        let c = new Div({ 
+            id: this.parent.id + "-c-" + item.id, 
+            extraClasses: {display: "", flex: "flex flex-col"} 
+            }, this.divider, this.closedButton, this.openDiv);
 
         // TODO solve to set initializing automatically
         this.openDiv._initializing = false;
         this.closedButton._initializing = false;
         this.openButton._initializing = false;
+        this.divider._initializing = false;
 
         return [undefined, c];
+    }
+
+    removeTab() {
+        this.contentDiv.remove();
+        this.closedButton.remove();
+        this.openButton.remove();
+        this.openDiv.remove();
+        this.divider.remove();
     }
 
     focus() {
@@ -82,18 +86,60 @@ class MultiPanelMenuTab extends MenuTab{
 
     _setFocus() {
         this.focused = true;
-        if (this.contentDiv){
-            this.openDiv.setClass("display", "");
-            this.closedButton.setClass("display", "hidden");
-        };
+
+        this.openDiv.setClass("display", "");
+        this.divider.setClass("display", "");
+        this.closedButton.setClass("display", "hidden");
     }
 
     _removeFocus() {
         this.focused = false;
-        if (this.contentDiv){
-            this.openDiv.setClass("display", "hidden");
-            this.closedButton.setClass("display", "");
+
+        this.openDiv.setClass("display", "hidden");
+        this.divider.setClass("display", "hidden");
+        this.closedButton.setClass("display", "");
+    }
+
+    close() {
+        this._removeFocus();
+    }
+
+    setStyleOverride(styleOverride) {
+        this.styleOverride = styleOverride;
+    }
+
+    // TODO make work even withouth inicialization
+    titleOnly() {
+        if (this.styleOverride) {
+            return;
         }
+        this.style = "TITLE";
+        this.closedButton.titleOnly();
+        this.openButton.titleOnly();
+    }
+
+    titleIcon() {
+        if (this.styleOverride) {
+            return;
+        }
+        this.style = "ICONTITLE";
+        this.closedButton.titleIcon();
+        this.openButton.titleIcon();
+    }
+
+    iconOnly() {
+        if (this.styleOverride) {
+            return;
+        }
+        this.style = "ICON";
+        this.closedButton.iconOnly();
+        this.openButton.iconOnly();
+    }
+
+    iconRotate(){
+        this.closedButton.iconRotate();
+        this.openButton.iconRotate();
     }
 }
+
 export { MultiPanelMenuTab };

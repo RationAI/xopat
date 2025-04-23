@@ -1,21 +1,17 @@
 import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
 import { MenuTab } from "./menuTab.mjs";
 import { Join } from "./join.mjs";
 import { Div } from "./div.mjs";
 import { Button } from "./buttons.mjs";
+import { Menu } from "./menu.mjs";
 
 const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags
 
-class MultiPanelMenu extends BaseComponent {
+class MultiPanelMenu extends Menu {
 
     constructor(options, ...args) {
         super(options,);
-        if (!this.id) {
-            this.id = "menu-" + Math.random().toString(36).substring(7);
-        }
-
         this.tabs = {};
 
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
