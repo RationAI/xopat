@@ -33,10 +33,11 @@ class Button extends BaseComponent {
         this.classMap["type"] = "btn-primary";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
+        this.classMap["orientation"] = "";
 
         if (options) {
             if (options.onClick) this.onClick = options.onClick;
-            this._applyOptions(options, "size", "outline", "type");
+            this._applyOptions(options, "size", "outline", "type", "orientation");
         }
     }
 

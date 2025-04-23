@@ -13,8 +13,9 @@ import { MainPanel } from "./components/mainPanel.mjs";
 import { menuDropdown } from "./components/menuDropdown.mjs";
 import { MenuButton } from "./components/menuButton.mjs";
 import { MultiPanelMenuTab } from "./components/multiPanelMenuTab.mjs";
+import { MultiPanelMenu } from "./components/multiPanelMenu.mjs";
 
-const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel, menuDropdown, MenuButton, MultiPanelMenuTab };
+const UI = { Button, Collapse, FAIcon, Join, Menu, Div, MainPanel, menuDropdown, MenuButton, MultiPanelMenuTab, MultiPanelMenu };
 globalThis.UI = UI;
 
 globalThis.vanRegister = function (id, component) {

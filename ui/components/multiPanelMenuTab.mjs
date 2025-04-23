@@ -6,7 +6,7 @@ import { Div } from "./div.mjs";
 import { MenuTab } from "./menuTab.mjs";
 
 const ui = { Button, Div, FAIcon };
-const { span } = van.tags
+const { span, div } = van.tags
 
 /**
  * @class checkboxMenuTab
@@ -21,6 +21,9 @@ class MultiPanelMenuTab extends MenuTab{
      */
     constructor(item, parent) {
         super(item, parent);
+        this.closedButton;
+        this.openButton;
+        this.openDiv;
     }
 
     createTab(item) {
@@ -30,21 +33,10 @@ class MultiPanelMenuTab extends MenuTab{
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
-
-        const b = new ui.Button({
-            id: this.parent.id + "-b-" + item.id,
-            size: ui.Button.SIZE.SMALL,
-            additionalProperties: { title: inText },
-            onClick: () => {
-                action();
-                this.focus();
-            },
-        }, inIcon, span(inText));
-
         let c = undefined;
 
-        const b1 = new ui.Button({
-            id: this.parent.id + "-b-" + item.id,
+        this.closedButton = new ui.Button({
+            id: this.parent.id + "-closedb-" + item.id,
             size: ui.Button.SIZE.SMALL,
             additionalProperties: { title: inText },
             onClick: () => {
@@ -52,11 +44,32 @@ class MultiPanelMenuTab extends MenuTab{
                 this.focus();
             },
         }, inIcon, span(inText));
-        
-        if (content){
-            c = new ui.Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", flex: "flex flex-col"} }, b1, ...content);
-        };
-        return [b, c];
+
+        this.openButton = new ui.Button({
+            id: this.parent.id + "-openb-" + item.id,
+            size: ui.Button.SIZE.SMALL,
+            orientation: ui.Button.ORIENTATION.VERTICAL_LEFT,
+            additionalProperties: { title: inText, style: "margin-left: auto;" },
+            onClick: () => {
+                action();
+                this.focus();
+            },
+        }, inIcon, span(inText));
+
+        this.openDiv = new ui.Div({ 
+            id: this.parent.id + "-opendiv-" + item.id, 
+            extraClasses: {display: "display-none", flex: "flex flex-row"},
+            extraProperties: {style: "flexGreow: 1;"},
+        },  div(...content), this.openButton);
+
+        c = new ui.Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "", flex: "flex flex-col"} }, this.closedButton, this.openDiv);
+
+        // TODO solve to set initializing automatically
+        this.openDiv._initializing = false;
+        this.closedButton._initializing = false;
+        this.openButton._initializing = false;
+
+        return [undefined, c];
     }
 
     focus() {
@@ -69,17 +82,17 @@ class MultiPanelMenuTab extends MenuTab{
 
     _setFocus() {
         this.focused = true;
-        this.headerButton.setClass("display", "hidden");
         if (this.contentDiv){
-            this.contentDiv.setClass("display", "");
+            this.openDiv.setClass("display", "");
+            this.closedButton.setClass("display", "hidden");
         };
     }
 
     _removeFocus() {
         this.focused = false;
-        this.headerButton.setClass("display", "");
         if (this.contentDiv){
-            this.contentDiv.setClass("display", "hidden");
+            this.openDiv.setClass("display", "hidden");
+            this.closedButton.setClass("display", "");
         }
     }
 }
