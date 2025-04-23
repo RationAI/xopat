@@ -1,4 +1,5 @@
 import van from "../vanjs.mjs";
+const { span } = van.tags;
 
 const HtmlRenderer = (htmlString) => {
     const container = van.tags.div(); // Create a container div
@@ -31,6 +32,9 @@ class BaseComponent {
             if (options.id) {
                 this.id = options.id;
                 delete options.id;
+            }
+            else {
+                this.id = Math.random().toString(36).substring(2, 15);
             }
             this.options = options;
         } else {
@@ -91,7 +95,7 @@ class BaseComponent {
                 return child;
             }
             if (typeof child === "string") {
-                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : child;
+                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : span(child);
             }
             console.warn(`Invalid child component provided - ${typeof child}:`, child);
             return undefined;
@@ -136,6 +140,18 @@ class BaseComponent {
      */
     create() {
         throw new Error("Component must override create method");
+    }
+
+    remove() {
+        if (this._initializing) {
+            this._children.forEach(child => {
+                if (child instanceof BaseComponent) {
+                    child.remove();
+                }
+            });
+        } else {
+            document.getElementById(this.id).remove();
+        }
     }
 
     /**

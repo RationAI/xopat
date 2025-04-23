@@ -30,9 +30,6 @@ class Menu extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options,);
-        if (!this.id) {
-            this.id = "menu-" + Math.random().toString(36).substring(7);
-        }
 
         this.tabs = {};
         this.orientation = "TOP";
