@@ -1,5 +1,7 @@
 import van from "../vanjs.mjs";
 import { BaseComponent } from "./baseComponent.mjs";
+import { Div } from "./div.mjs";
+import { FAIcon } from "./fa-icon.mjs";
 
 const { button } = van.tags
 
@@ -28,12 +30,13 @@ class Button extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-
         this.classMap["base"] = "btn";
         this.classMap["type"] = "btn-primary";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
         this.classMap["orientation"] = "";
+        this.style = "ICONTITLE";
+
 
         if (options) {
             if (options.onClick) this.onClick = options.onClick;
@@ -46,6 +49,53 @@ class Button extends BaseComponent {
             { ...this.commonProperties, onclick: this.onClick, ...this.additionalProperties },
             ...this.children
         );
+    }
+
+    iconOnly(){
+        this.style = "ICONONLY";
+        const nodes = this.children;
+        for (let n of nodes){
+            if (n.nodeName === "SPAN"){
+                n.classList.add("hidden");
+            } else{
+                n.classList.remove("hidden");
+            }
+        }
+    }
+
+    titleOnly(){
+        this.style = "TITLEONLY";
+        const nodes = this.children;
+        for (let n of nodes){
+            if (n.nodeName === "SPAN"){
+                n.classList.remove("hidden");
+            }
+            else{
+                n.classList.add("hidden");
+            }
+        }
+    }
+
+    titleIcon(){
+        this.style = "TITLEICON";
+        const nodes = this.children;
+        for (let n of nodes){
+            n.classList.remove("hidden");
+        }
+    }
+
+    iconRotate(){
+        const nodes = this.headerButton.children;
+        for (let n of nodes){
+            if (n.nodeName === "I"){
+                if(this.orientation==="b-vertical-right"){
+                    n.classList.add("rotate-90");
+                
+                } else if(this.orientation==="b-vertical-left"){
+                    n.classList.add("-rotate-90");
+                }
+            }
+        }
     }
 
     static generateCode() {
@@ -93,12 +143,27 @@ Button.TYPE = {
 Button.ORIENTATION = {
     HORIZONTAL: function () {
         this.setClass("orientation", "");
+        this.iconRotate();
     },
     VERTICAL_LEFT: function () {
         this.setClass("orientation", "b-vertical-left");
+        this.iconRotate();
     },
     VERTICAL_RIGHT: function () {
         this.setClass("orientation", "b-vertical-right");
+        this.iconRotate();
+    }
+};
+
+Button.STYLE = {
+    ICONONLY: function () {
+        this.iconOnly();
+    },
+    TITLEONLY: function () {
+        this.titleOnly();
+    },
+    TITLEICON: function () {
+        this.titleIcon();
     }
 };
 
