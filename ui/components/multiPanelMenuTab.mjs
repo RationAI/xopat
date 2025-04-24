@@ -25,8 +25,8 @@ class MultiPanelMenuTab extends MenuTab{
 
         this.closedButton = new Button({
             id: this.parent.id + "-b-closed-" + item.id,
-            size: Button.SIZE.SMALL,
-            additionalProperties: { title: inText },
+            size: Button.SIZE.TINY,
+            additionalProperties: { title: inText, style: "margin-top: 5px;" },
             onClick: () => {
                 this.focus();
             },
@@ -34,7 +34,7 @@ class MultiPanelMenuTab extends MenuTab{
 
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
-            size: Button.SIZE.SMALL,
+            size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             additionalProperties: { title: inText, style: "margin-left: auto;" },
             onClick: () => {
@@ -45,14 +45,22 @@ class MultiPanelMenuTab extends MenuTab{
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row"},
-            extraProperties: {style: "flexGreow: 1;"},
+            extraProperties: {style: "margin-right: 5px; margin-left: 5px;"},
             }, div(...content), this.openButton);
+
+        const dividerButton = new Button({
+            id: this.parent.id + "-divider-button-" + item.id,
+            size: Button.SIZE.TINY,
+            onClick: () => {
+                this.focus();
+            },
+            }, inIcon, span(inText) );
 
         this.divider = new Div({
             id: this.parent.id + "-divider-" + item.id,
             extraClasses: {display: "hidden", divider: "divider"},
-            additionalProperties: {style: "margin: 0px; padding: 0px;"},
-            }, span(inText) );
+            additionalProperties: {style: "margin: 0px; padding: 0px; margin-bottom: 10px; margin-top: 10px;"},
+            },span(inText));
 
         let c = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
