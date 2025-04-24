@@ -1091,6 +1091,28 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }                       
         },
 
+        LeftMenu: {
+            context: $("#left-side"),
+            menu: "",
+
+            init: function () {
+                const { div } = van.tags;
+                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+
+                const viewer = div();
+                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
+                                        <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
+                                   </div>`;
+                this.menu = new UI.MultiPanelMenu({
+                    id: "myMenu",
+                },
+                {id: "minimap", icon: "fa-gear", title: "Viewer Map", body: [viewer]},
+                {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"},
+                {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
+                this.menu.attachTo(this.context);
+            }
+        },
+
         /**
          * Application TopRightMenu
          * @namespace USER_INTERFACE.TopSlideMenu
