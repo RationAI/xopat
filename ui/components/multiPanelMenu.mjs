@@ -19,13 +19,13 @@ class MultiPanelMenu extends Menu {
         this.body = new ui.Div({ 
             id: this.id + "-body", 
             extraClasses: {height: "h-full", width: "w-full"}, 
-            additionalProperties: {style: "background-color: gray;"}},);
+            });
 
         for (let i of args) {
             this.addTab(i);
         }
 
-        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
+        this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
 
         if (options) {

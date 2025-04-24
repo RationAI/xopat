@@ -15,7 +15,6 @@ class MultiPanelMenuTab extends MenuTab{
         this.closedButton;
         this.openButton;
         this.openDiv;
-        this.divider;
     }
 
     createTab(item) {
@@ -44,34 +43,19 @@ class MultiPanelMenuTab extends MenuTab{
 
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
-            extraClasses: {display: "display-none", flex: "flex flex-row"},
-            extraProperties: {style: "margin-right: 5px; margin-left: 5px;"},
+            extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200"},
+            additionalProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
             }, div(...content), this.openButton);
-
-        const dividerButton = new Button({
-            id: this.parent.id + "-divider-button-" + item.id,
-            size: Button.SIZE.TINY,
-            onClick: () => {
-                this.focus();
-            },
-            }, inIcon, span(inText) );
-
-        this.divider = new Div({
-            id: this.parent.id + "-divider-" + item.id,
-            extraClasses: {display: "hidden", divider: "divider"},
-            additionalProperties: {style: "margin: 0px; padding: 0px; margin-bottom: 10px; margin-top: 10px;"},
-            },span(inText));
 
         let c = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
             extraClasses: {display: "", flex: "flex flex-col"} 
-            }, this.divider, this.closedButton, this.openDiv);
+            }, this.closedButton, this.openDiv);
 
         // TODO solve to set initializing automatically
         this.openDiv._initializing = false;
         this.closedButton._initializing = false;
         this.openButton._initializing = false;
-        this.divider._initializing = false;
 
         return [undefined, c];
     }
@@ -81,7 +65,6 @@ class MultiPanelMenuTab extends MenuTab{
         this.closedButton.remove();
         this.openButton.remove();
         this.openDiv.remove();
-        this.divider.remove();
     }
 
     focus() {
@@ -96,7 +79,6 @@ class MultiPanelMenuTab extends MenuTab{
         this.focused = true;
 
         this.openDiv.setClass("display", "");
-        this.divider.setClass("display", "");
         this.closedButton.setClass("display", "hidden");
     }
 
@@ -104,7 +86,6 @@ class MultiPanelMenuTab extends MenuTab{
         this.focused = false;
 
         this.openDiv.setClass("display", "hidden");
-        this.divider.setClass("display", "hidden");
         this.closedButton.setClass("display", "");
     }
 
