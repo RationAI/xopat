@@ -85,7 +85,7 @@ class Button extends BaseComponent {
     }
 
     iconRotate(){
-        const nodes = this.headerButton.children;
+        const nodes = this.children;
         for (let n of nodes){
             if (n.nodeName === "I"){
                 if(this.orientation==="b-vertical-right"){

@@ -1106,10 +1106,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "minimap", icon: "fa-gear", title: "Viewer Map", body: [viewer]},
+                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},
                 {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"},
                 {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
+                
+                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.attachTo(this.context);
+                
             }
         },
 
