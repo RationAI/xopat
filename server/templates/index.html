@@ -112,10 +112,6 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 <div id="right-side-menu" class="d-flex flex-column height-full" style="position: fixed; width: 400px;">
 </div>
 
-<!-- TODO REMOVE -->
-<div id="main-panel" class="position-fixed d-flex flex-column height-full top-0" style="width: 400px; max-width: 100vw;"></div>
-
-
     <!-- Appended controls for other plugins -->
 
 
@@ -157,7 +153,6 @@ window.onerror = function (message, file, line, col, error) {
     const withLayers = () => APPLICATION_CONTEXT.layersAvailable;
     window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
         {'next #viewer-container' : $.t('tutorials.basic.1')
-        }, {'next #main-panel' : $.t('tutorials.basic.2')
         }, {'next #navigator-container' : $.t('tutorials.basic.3')
         }, {'next #navigator-container' : $.t('tutorials.basic.4'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}

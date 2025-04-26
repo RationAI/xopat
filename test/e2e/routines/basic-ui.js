@@ -19,8 +19,6 @@ export default {
 
         cy.get("#navigator-pin").click()
 
-        cy.get("#main-panel-hide").click()
-
         cy.get("#navigator-pin").should('be.visible').should('have.class', 'pressed')
 
         cy.get("#panel-navigator").should('be.visible')
@@ -31,13 +29,11 @@ export default {
 
         ["#global-tissue-visibility", "#global-export", "#add-plugins"].forEach(x =>  cy.get(x).should('not.be.visible'))
 
-        cy.get("#main-panel-show").click()
-
         if (!config.params.stackedBackground) {
             cy.get("#global-tissue-visibility input").should('be.checked');
         }
 
-        ["#add-plugins", "#panel-navigator", "#navigator-pin", "#main-panel-hide",
+        ["#add-plugins", "#panel-navigator", "#navigator-pin",
             "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
     },
 

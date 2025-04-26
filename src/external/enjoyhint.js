@@ -307,13 +307,6 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                         $('.enjoyhint_skip_btn').css('visibility', 'visible');
                     }
 
-                    doit = setTimeout(function() {
-                        if(boundingClientRect.top < 0 || boundingClientRect.bottom > (window.innerHeight || document.documentElement.clientHeight)){
-                            $('#main-panel-content').scrollTo(that.stepData.enjoyHintElementSelector, 150, {offset: -200, onAfter:renderAfterResize});
-                        }
-                        else renderAfterResize();
-                    }, 150);
-
 
                     var newWidth = window.innerWidth;
                     var newHeight = window.innerHeight;
@@ -1339,8 +1332,6 @@ var EnjoyHint = function(configs) {
                 bounds = bounds.getBoundingClientRect();
                 if(bounds.top < 0 || bounds.bottom > (window.innerHeight || document.documentElement.clientHeight)){
                     hideCurrentHint();
-                    //todo fixme find out whether element in this container
-                    $('#main-panel-content').scrollTo(step_data.selector, step_data.scrollAnimationSpeed || 250, {offset: -200});
                 } else {
                     // if previous button has been clicked and element are in viewport to prevent custom step scrollAnimationSpeed set scrollSpeed to default
                     scrollSpeed = 250;
