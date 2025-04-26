@@ -28,7 +28,7 @@ class Div extends BaseComponent {
 
     create() {
         return div(
-            { ...this.commonProperties, ...this.additionalProperties },
+            { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
     }

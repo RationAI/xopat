@@ -23,13 +23,13 @@ class menuDropdown extends MenuTab{
         this.list = new Div({
             id: this.parent.id + "-c-" + item.id, 
             extraClasses: {display: "display-none", component:  "dropdown-content menu bg-base-100 rounded-box z-1 p-2 shadow-sm"},
-            additionalProperties: {style: "position: absolute; right: 12%; row-gap: 5px;"}, // TODO make for all orientations
+            extraProperties: {style: "position: absolute; right: 12%; row-gap: 5px;"}, // TODO make for all orientations
             }, ...content);
 
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,
             size: Button.SIZE.SMALL,
-            additionalProperties: { title: inText},
+            extraProperties: { title: inText},
             onClick: () => {
                 action();
                 this.focus();

@@ -991,7 +991,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     {id: "slide-name", 
                      class: "", 
                      extraClasses: {btn: "btn btn-primary btn-sm"}, 
-                     additionalProperties: {style: "box-sizing: border-box; vertical-align: center"},
+                     extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
                     }, 
                     "TODO Slidename"); 
                 

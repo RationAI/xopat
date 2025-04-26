@@ -45,7 +45,7 @@ class MenuTab {
         const b = new ui.Button({
             id: this.parent.id + "-b-" + item.id,
             size: ui.Button.SIZE.SMALL,
-            additionalProperties: { title: inText },
+            extraProperties: { title: inText },
             onClick: () => {
                 action();
                 this.focus();

@@ -44,7 +44,7 @@ class Button extends BaseComponent {
 
     create() {
         return button(
-            { ...this.commonProperties, onclick: this.onClick, ...this.additionalProperties },
+            { ...this.commonProperties, onclick: this.onClick, ...this.extraProperties },
             ...this.children
         );
     }

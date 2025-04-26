@@ -22,7 +22,7 @@ class BaseComponent {
     constructor(options, ...args) {
         const extraClasses = options["extraClasses"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
-        this.additionalProperties = options["additionalProperties"] || {};
+        this.extraProperties = options["extraProperties"] || {};
         this._children = args;
         this._renderedChildren = null;
         this._initializing = true;

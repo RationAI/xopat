@@ -25,7 +25,7 @@ class MultiPanelMenuTab extends MenuTab{
         this.closedButton = new Button({
             id: this.parent.id + "-b-closed-" + item.id,
             size: Button.SIZE.TINY,
-            additionalProperties: { title: inText, style: "margin-top: 5px;" },
+            extraProperties: { title: inText, style: "margin-top: 5px;" },
             onClick: () => {
                 this.focus();
             },
@@ -35,7 +35,7 @@ class MultiPanelMenuTab extends MenuTab{
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            additionalProperties: { title: inText, style: "margin-left: auto;" },
+            extraProperties: { title: inText, style: "margin-left: auto;" },
             onClick: () => {
                 this.focus();
             },
@@ -44,7 +44,7 @@ class MultiPanelMenuTab extends MenuTab{
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200"},
-            additionalProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
+            extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
             }, div(...content), this.openButton);
 
         let c = new Div({ 

@@ -50,7 +50,7 @@ class Collapse extends BaseComponent {
 
     create() {
         return details(
-            { ...this.commonProperties, ...this.additionalProperties, open: this.startOpen },
+            { ...this.commonProperties, ...this.extraProperties, open: this.startOpen },
             summary({ class: ["collapse-title select-none", this.classMap["textSize"], this.classMap["font"], ...this.classMap["summaryClassList"]].join(" ") }, this.summary),
             div({ class: "collapse-content" + " " + this.classMap["detailsClassList"].join(" ") },
                 ...this.children

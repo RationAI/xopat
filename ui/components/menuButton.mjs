@@ -21,7 +21,7 @@ class MenuButton extends MenuTab{
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,
             size: Button.SIZE.SMALL,
-            additionalProperties: { title: inText},
+            extraProperties: { title: inText},
             onClick: () => {
                 action();
                 this.focus();

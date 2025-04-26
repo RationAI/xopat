@@ -39,7 +39,7 @@ class FAIcon extends BaseComponent {
     }
 
     create() {
-        return i({ ...this.commonProperties, ...this.additionalProperties });
+        return i({ ...this.commonProperties, ...this.extraProperties });
     }
 
     static generateCode() {
