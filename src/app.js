@@ -930,7 +930,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 if (window.innerWidth >= 900) {
                     $('#navigator-pin').click();
                 }
-                USER_INTERFACE.MainMenu.close();
             }
 
             window.onerror = null;

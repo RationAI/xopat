@@ -585,7 +585,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#system-message-details").html(description);
                 $("#system-message").removeClass("d-none");
                 $("#viewer-container").addClass("disabled");
-                if (withHiddenMenu) USER_INTERFACE.MainMenu.close();
                 USER_INTERFACE.Tools.close();
                 this.active = true;
             },
@@ -625,6 +624,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                             id: "fullscreen-button",
                                             size: Button.SIZE.SMALL,
                                             onClick: function () {
+                                                console.log(USER_INTERFACE);
+                                                document.getElementById("top-side").style.display = "none";
                                                 console.log("TODO: implement fullscreen functionality");
                                             }
                                         },
@@ -1086,7 +1087,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (this.closed) return;
                 if (!this.context) {
                     this._init();
-                    USER_INTERFACE.MainMenu._sync();
                 }
                 // this.context.classList.remove("hover-dim"); not working: does not trigger animation
                 this.context.firstElementChild.innerHTML = message;
