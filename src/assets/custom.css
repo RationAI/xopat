@@ -112,3 +112,18 @@ button div {
     padding: 10px;
     writing-mode: horizontal-tb;
 }
+
+#top-slide {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 3px;
+    bottom: auto;
+}
+
+@media (max-width: 1610px) {
+    #top-slide {
+        left: 0%;
+        transform: translateX(0%);
+    }
+}
