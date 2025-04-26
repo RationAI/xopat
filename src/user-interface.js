@@ -624,9 +624,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                             id: "fullscreen-button",
                                             size: Button.SIZE.SMALL,
                                             onClick: function () {
-                                                console.log(USER_INTERFACE);
-                                                document.getElementById("top-side").style.display = "none";
-                                                console.log("TODO: implement fullscreen functionality");
+                                                document.getElementById("top-slide").classList.toggle("hidden");
+                                                for (var c of document.getElementById("top-menus").children) {
+                                                    if (c.id !== "top-fullscreen") {
+                                                        c.classList.toggle("hidden");
+                                                    }
+                                                }
+                                                // add components which you want to be hidden on fullscreen here:
+                                                document.getElementById("top-side").classList.toggle("bg-base-200");
+                                                document.getElementById("right-side-menu").classList.toggle("hidden");
                                             }
                                         },
                                         new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
