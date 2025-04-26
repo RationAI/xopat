@@ -443,7 +443,7 @@ input.switch:checked + label span {
 #openseadragon-view {background: var(--color-bg-tertiary)}
 #left-side-buttons {background: var(--color-bg-tertiary)}
 #left-side-top {z-index: 89; background: var(--color-bg-tertiary)}
-#left-side {z-index: 90;right: 0;}
+#right-side-menu {z-index: 90;right: 0;}
 #left-side-full {z-index: 90;right: 0; pointer-events: none; user-select: none;}
 #main-panel {z-index: 80;right: 0;transition: right 0.3s;user-select: none; pointer-events: none; }
 #main-panel-hide {cursor: pointer;margin-left: -12px;}

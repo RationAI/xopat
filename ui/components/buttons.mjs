@@ -1,7 +1,5 @@
 import van from "../vanjs.mjs";
 import { BaseComponent } from "./baseComponent.mjs";
-import { Div } from "./div.mjs";
-import { FAIcon } from "./fa-icon.mjs";
 
 const { button } = van.tags
 

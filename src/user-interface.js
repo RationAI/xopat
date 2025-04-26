@@ -1091,8 +1091,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }                       
         },
 
-        LeftMenu: {
-            context: $("#left-side"),
+        RightSideMenu: {
+            context: $("#right-side-menu"),
             menu: "",
 
             init: function () {

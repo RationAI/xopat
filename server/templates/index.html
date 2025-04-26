@@ -109,7 +109,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     </div>
 </div>
 
-<div id="left-side" class="d-flex flex-column height-full" style="position: fixed; width: 400px;">
+<div id="right-side-menu" class="d-flex flex-column height-full" style="position: fixed; width: 400px;">
 </div>
 
 <!-- TODO REMOVE -->
@@ -201,26 +201,5 @@ window.onerror = function (message, file, line, col, error) {
         APPLICATION_CONTEXT.config.visualizations
     );
 </script>
-
-<script>
-    // hiding the user name if left-side-buttons are too small
-    window.addEventListener('DOMContentLoaded', () => {
-      const leftSideButtons = document.getElementById('left-side-buttons');
-      const userName = document.getElementById('user-name');
-  
-      const observer = new ResizeObserver(entries => {
-        for (let entry of entries) {
-            const width = entry.contentRect.width;
-            if (width < 100) {
-                userName.style.display = 'none';
-            } else {
-                userName.style.display = '';
-            }
-        }
-      });
-  
-      observer.observe(document.getElementById('left-side-buttons'));
-    });
-  </script>
 </body>
 </html>
