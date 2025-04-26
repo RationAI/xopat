@@ -191,7 +191,6 @@ function initXopatScripts() {
             }
 
             if (e.key === 'Escape') {
-                USER_INTERFACE.AdvancedMenu.close();
                 USER_INTERFACE.Tutorials.hide();
                 USER_INTERFACE.DropDown.hide();
             }
