@@ -128,10 +128,6 @@ button div {
     }
 }
 
-.darkened {
-    background-color: rgba(0, 0, 0, 0.5);
-}
-
 #overlay-content{
     position: absolute; 
     pointer-events: auto; 
@@ -145,4 +141,15 @@ button div {
     transform: translateX(-50%);
     padding-left: 10px;
     padding-right: 10px;
+}
+
+#overlay-darken{
+    position: absolute; 
+    height: 100%; 
+    width: 100%; 
+    pointer-events: none;
+    top:0; 
+    left:0; 
+    z-index: 4;
+    background-color: rgba(0, 0, 0, 0.5);
 }
