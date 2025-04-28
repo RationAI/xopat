@@ -132,7 +132,7 @@ button div {
     position: absolute; 
     pointer-events: auto; 
     z-index: 5; 
-    background-color: white; 
+    background-color: var(--color-bg-tertiary); 
     max-width: 690px; 
     width: calc(-65px + 100vw);
     height: calc(100% - 45px);
@@ -147,7 +147,6 @@ button div {
     position: absolute; 
     height: 100%; 
     width: 100%; 
-    pointer-events: none;
     top:0; 
     left:0; 
     z-index: 4;

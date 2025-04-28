@@ -31,7 +31,7 @@ class FullscreenMenu extends BaseComponent{
         this.content.attachTo(this);
 
         return div({ id: "overlay", class: "hidden" },
-                    div({ id: "overlay-darken"}),
+                    div({ id: "overlay-darken", onclick: () => {document.getElementById("overlay").classList.toggle("hidden");}}),
                     div({ id: "overlay-content" }, ...this.children),
                 );
     }
