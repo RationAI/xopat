@@ -440,11 +440,9 @@ input.switch:checked + label span {
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .material-icons {color: var(--color-border-inverse);}
+#top-side {z-index: 99;}
 #openseadragon-view {background: var(--color-bg-tertiary)}
-#left-side-buttons {background: var(--color-bg-tertiary)}
-#left-side-top {z-index: 89; background: var(--color-bg-tertiary)}
-#right-side-menu {z-index: 90;right: 0;}
-#left-side-full {z-index: 90;right: 0; pointer-events: none; user-select: none;}
+#right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
 .inner-panel::after {content: '';}

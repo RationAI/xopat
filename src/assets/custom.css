@@ -127,3 +127,22 @@ button div {
         transform: translateX(0%);
     }
 }
+
+.darkened {
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+#overlay-content{
+    position: absolute; 
+    pointer-events: auto; 
+    z-index: 5; 
+    background-color: white; 
+    max-width: 690px; 
+    width: calc(-65px + 100vw);
+    height: calc(100% - 45px);
+    top: 45px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding-left: 10px;
+    padding-right: 10px;
+}
