@@ -99,7 +99,7 @@ class MenuTab {
     close() {
         this.headerButton.setClass("type", "btn-primary");
         if (this.contentDiv){
-            document.getElementById(this.contentDiv.id).style.display = "none";
+            this._removeFocus();
         };
     }
 

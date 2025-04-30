@@ -864,12 +864,35 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     extraClasses: { bg: "bg-transparent" }
                 }, { id: "settings", icon: "fa-gear", title: "Settings", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                   { id: "share", icon: "fa-share-nodes", title: "Share", body: undefined},
+                   { id: "share", icon: "fa-share-nodes", title: "Share", body: this.getShareDropdown(), class: UI.menuDropdown},
                    { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
                 );
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
+            },
+
+            getShareDropdown: function () {
+                const b1 = new UI.Button({
+                    id: "global-export",
+                    extraProperties: { "data-i18n": "[title]main.bar.explainExportFile" },
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        UTILITIES.export();
+                        this.menu.closeTab("share");
+                    },
+                }, new UI.FAIcon({ name: "fa-download" }), "Export");
+
+                const b2 = new UI.Button({
+                    id: "copy-url-inner",
+                    extraProperties: { "data-i18n": "[title]main.bar.explainExportUrl" },
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        UTILITIES.copyUrlToClipboard();
+                        this.menu.closeTab("share");
+                    },
+                }, new UI.FAIcon({ name: "fa-link" }), "URL");
+                return [b1, b2];
             },
         },
 
