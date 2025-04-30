@@ -64,18 +64,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     initXopatUI();
 
-    /*--------------------------------------------------------------*/
-    /*------------ Initialization of  new UI -----------------------*/
-    /*--------------------------------------------------------------*/
-
-    USER_INTERFACE.TopPluginsMenu.init();
-    USER_INTERFACE.TopVisualMenu.init();
-    USER_INTERFACE.TopUserMenu.init();
-    USER_INTERFACE.TopFullscreenButton.init();
-    USER_INTERFACE.TopSlideMenu.init();
-    USER_INTERFACE.RightSideMenu.init();
-    USER_INTERFACE.FullscreenMenu.init();
-
     //Setup language and parse config if function provided
     function localizeDom() {
         jqueryI18next.init(i18next, $, {
@@ -396,6 +384,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             dirty: false
         }
     };
+
+    /*--------------------------------------------------------------*/
+    /*------------ Initialization of  new UI -----------------------*/
+    /*--------------------------------------------------------------*/
+
+    USER_INTERFACE.TopPluginsMenu.init();
+    USER_INTERFACE.TopVisualMenu.init();
+    USER_INTERFACE.TopUserMenu.init();
+    USER_INTERFACE.TopFullscreenButton.init();
+    USER_INTERFACE.TopSlideMenu.init();
+    USER_INTERFACE.RightSideMenu.init();
+    USER_INTERFACE.FullscreenMenu.init();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
