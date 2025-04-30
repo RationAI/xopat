@@ -49,7 +49,7 @@ class MultiPanelMenuTab extends MenuTab{
 
         let c = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
-            extraClasses: {display: "", flex: "flex flex-col"} 
+            extraClasses: {display: "", flex: "flex flex-col", item: "ui-menu-item"} 
             }, this.closedButton, this.openDiv);
 
         // TODO solve to set initializing automatically
