@@ -776,7 +776,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 return new UI.Div({id: "shaders-menu"}, innerHTML);
             },
             createPluginDiv: function (plugin, pluginCount) {
-                const { div, img, button } = van.tags;
+                const { div, img, button, input } = van.tags;
 
                 let errMessage = plugin.error ? div({ class: "p-1 rounded-2 error-container" }, `${plugin.error}`) : "";
                 let problematic = div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" },`${errMessage}`);
