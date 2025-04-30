@@ -617,7 +617,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 this.menu = new UI.FullscreenMenu({
                     id: "fullscreen-menu",
-                },this.getSettingsBody());
+                },this.getSettingsBody(), this.getPluginsBody(),
+            );
 
                 this.menu.attachTo(this.context);
             },
@@ -686,6 +687,136 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             span({ class: "f6", style: `color: var(--color-text-tertiary);position: absolute; bottom: ${positionBottom+143}px;right: ${positionRight+20}px;` }, "v2.1.1"),
             );
             return logo;
+            },
+            getPluginsBody: function () {
+                const { button, div, span} = van.tags;
+                let pluginCount = 0;
+                let pluginDivs = [];
+                for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+                    //todo maybe avoid using _dangerously* ?
+                    let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
+                        pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
+        
+                    //permaLoad plugins are not available for interaction
+                    if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
+                        (plugin.hasOwnProperty("hidden") && plugin.hidden) ||
+                        (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) continue;
+        
+                    const pluginDiv = this.createPluginDiv(plugin, pluginCount);
+                    pluginDivs.push(pluginDiv);
+                    pluginCount++;
+                }
+        
+                if (pluginCount < 1) {
+                    emptyPlugin = {
+                        id: "_undefined_",
+                        name: $.t('plugins.noPluginsAvailable'),
+                        description: $.t('plugins.noPluginsDetails'),
+                        icon: null,
+                        error: false,
+                        loaded: false,
+                    }
+                    const pluginDiv = this.createPluginDiv(emptyPlugin, 0);
+                    pluginDivs.push(pluginDiv);
+                }
+
+                                
+                const logo = this.getLogo(-70, 20);
+                const body = new UI.Div({ id: "app-plugins", class: "height-full position-relative", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" },
+                    div({ class: "d-flex flex-column-reverse" },
+                        button({ onclick: function () {USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
+                    ),
+                    span({ class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
+                    div({ id: "plug-list-content-inner" },
+                            div({ id: "plug-list-content-inner-content" }, ...pluginDivs),
+                        ),
+                    logo,
+                );
+
+                return body;
+                
+            },
+            createShadersMenu: function () {
+                const div = van.tags.div();
+                div.innerHTML = `
+<div id="panel-images" class="inner-panel mt-2"></div>
+
+<div id="panel-shaders" class="inner-panel" style="display:none;">
+
+    <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
+    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+        <div><!-- TODO fix clickHeader -->
+            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+            APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
+            <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
+                <!--populated with shaders from the list -->
+            </select>
+            <div class="d-inline-block float-right position-relative hover-selectable">
+                <span id="cache-snapshot" class="material-icons btn-pointer text-right"
+                style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
+                <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
+                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
+                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                </div>
+            </div>
+            <br>
+            <div id="global-opacity" class="float-right">
+                <label>
+                    <span data-i18n="main.global.layerOpacity">Opacity</span>
+                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
+                </label>
+            </div>
+        </div>
+
+        <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
+                <!--populated with options for a given image data -->
+        </div>
+        <div id="blending-equation"></div>
+    </div>
+</div>`
+                return div;
+            },
+            createPluginDiv: function (plugin, pluginCount) {
+                const { div, img, button } = van.tags;
+
+                let errMessage = plugin.error ? div({ class: "p-1 rounded-2 error-container" }, `${plugin.error}`) : "";
+                let problematic = div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" },`${errMessage}`);
+
+                let actionPart;
+                if (errMessage || plugin.loaded){
+                    actionPart = div({ id: `load-plugin-${plugin.id}` }, 
+                                        button({class: "btn btn-disabled" }, 
+                                            "Loaded"
+                                        )
+                                    )
+                } else{
+                    actionPart = div({ id: `load-plugin-${plugin.id}` },
+                                        button({ onclick: function () {UTILITIES.loadPlugin(plugin.id); return false;}, class: "btn" },
+                                            `${$.t('common.Load')}`,
+                                        ),
+                                    );
+                }
+
+                let icon = plugin.icon || (plugin.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
+                if (icon && !icon.includes('<')) {
+                    icon = img({ src: `${icon}`, class: "d-block m-2 rounded-2", style: "height: 40px;" });
+                }
+
+                let text = div({ class: "d-flex flex-column", style: "flex-grow: 1;" },
+                                div({ class: "f3-light" }, plugin.name),
+                                div({ class: "text-small color-text-secondary" }, plugin.description),
+                              );
+                    
+                const plugin_div = div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
+                    input({ type: "checkbox", name: "plug-list-content", class: "d-none selectable-image-row-context", value: plugin.id }),
+                    div({ class: "width-full d-flex selectable-image-row rounded-2 pointer", onclick: function () {$(this.previousElementSibling).click()} },
+                        icon,
+                        text,
+                        actionPart,    
+                    ),
+                    problematic,
+                )  
+                return plugin_div;          
             },
         },
 
@@ -759,7 +890,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
                 }, { id: "visual", icon: "fa-window-restore", title: "Visual Settings", body: undefined },
-                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined },
+                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
                     
                 );
 

@@ -36,16 +36,25 @@ class FullscreenMenu extends BaseComponent{
                 );
     }
     focus(id){
-        document.getElementById("overlay").classList.toggle("hidden");
+        const overlay = document.getElementById("overlay");
+
+        if (overlay.classList.contains("hidden")) {
+            document.getElementById("overlay").classList.toggle("hidden");
+        }
 
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
+
         for (let tab of Object.values(this.tabs)) {
-            if(tab.id == id) {
+            if(tab.id == id && tab.classMap.display != "") {
                 tab.setClass("display", "");
+                continue;
             }
-            else {
-                tab.setClass("display", "hidden");
+            else if(tab.id == id && tab.classMap.display == "") {
+                document.getElementById("overlay").classList.toggle("hidden");
             }
+
+            tab.setClass("display", "hidden");
+
         }
     }
 
