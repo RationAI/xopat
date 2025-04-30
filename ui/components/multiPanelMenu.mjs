@@ -9,9 +9,26 @@ import { MultiPanelMenuTab } from "./multiPanelMenuTab.mjs";
 const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags
 
+/**
+ * @class MultiPanelMenu
+ * @extends Menu
+ * @description A menu component which allows to have multiple tabs open with different content
+ * @example
+ * const menu = new MultiPanelMenu({
+ *                       id: "myMenu",
+ *                      orientation: Menu.ORIENTATION.TOP
+ *                      },
+ *                      {id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"},
+ *                      {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"});
+ * menu.attachTo(document.body);
+**/
+
 // TODO add side functionality to choose if the menu is on the left or right side
 class MultiPanelMenu extends Menu {
-
+    /**
+     * @param {*} options
+     * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
+     */
     constructor(options, ...args) {
         super(options,);
         this.tabs = {};
@@ -53,7 +70,6 @@ class MultiPanelMenu extends Menu {
     }
 
     /**
-     *
      * @param {*} item dictionary with id, icon, title, body which will be added to the menu
      */
     addTab(item) {

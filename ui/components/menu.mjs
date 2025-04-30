@@ -109,6 +109,10 @@ class Menu extends BaseComponent {
         }
         return false;
     }
+
+    /**
+     * @description unfocus all tabs
+     */
     unfocusAll() {
         for (let tab of Object.values(this.tabs)) {
             tab._removeFocus();

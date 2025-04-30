@@ -7,6 +7,17 @@ import { Div } from "./div.mjs";
 
 const { span } = van.tags;
 
+/**
+ * @class menuDropdown
+ * @description A internal tab component for the menu component which shows its body in dropdown
+ * @extends MenuTab
+ * @example
+ * this.menu = new MainPanel({
+ *    id: "left-side-buttons-menu",
+ * },
+ *   { id: "share", icon: "fa-share-nodes", title: "Share", body: [Button, Button], class: UI.menuDropdown},
+ * );
+ */
 class menuDropdown extends MenuTab{
     constructor(item, parent) {
         super(item, parent);

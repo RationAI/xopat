@@ -8,8 +8,23 @@ import { MenuTab } from "./menuTab.mjs";
 
 const { span, div } = van.tags
 
+/**
+ * @class MultiPanelMenuTab
+ * @description A internal tab component for the multiPanelMenu component
+ * @extends MenuTab
+ * @example
+ * this.menu = new UI.MultiPanelMenu({
+ *     id: "myMenu",
+ * },
+ * {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"}, -> these will create MultiPanelMenuTab in multiPanelMenu
+ * {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
+ */
 class MultiPanelMenuTab extends MenuTab{
 
+    /**
+     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {*} parent parent menu component
+    **/
     constructor(item, parent) {
         super(item, parent);
         this.closedButton;

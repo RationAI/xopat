@@ -58,7 +58,7 @@ class BaseComponent {
     }
 
     /**
-     * Refresh the state of the component, e.g. class names
+     * @description Refresh the state of the component, e.g. class names
      */
     refreshState() {
         this.classState.val = Object.values(this.classMap).join(" ");
@@ -82,7 +82,7 @@ class BaseComponent {
     }
 
     /**
-     * getter for children which will automatically refresh them and create them if they are BaseComponent
+     * @description getter for children which will automatically refresh them and create them if they are BaseComponent
      */
     get children() {
         if (this._renderedChildren) return this._renderedChildren;
@@ -104,7 +104,7 @@ class BaseComponent {
     }
 
     /**
-     * getter for commonProperties which are shared against all components
+     * @description getter for commonProperties which are shared against all components
      */
     get commonProperties() {
         if (this.id) {
@@ -142,6 +142,9 @@ class BaseComponent {
         throw new Error("Component must override create method");
     }
 
+    /**
+     * @description Remove the component from the DOM
+     */
     remove() {
         if (this._initializing) {
             this._children.forEach(child => {

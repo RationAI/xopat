@@ -1,7 +1,7 @@
 import van from "../vanjs.mjs";
 import { BaseComponent } from "./baseComponent.mjs";
 
-const { div, input, details, summary } = van.tags
+const { div, details, summary } = van.tags
 
 /**
  * @class Collapse

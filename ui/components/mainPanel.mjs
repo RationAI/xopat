@@ -2,7 +2,22 @@ import { Menu } from './menu.mjs';
 import van from "../vanjs.mjs";
 const { div, h3, span } = van.tags
 
-
+/**
+ * @class MainPanel
+ * @extends Menu
+ * @description A menu component to group e.g. buttons, inputs..
+ * @example
+ * const menu = new MainPanel({
+ *                        id: "myMenu",
+ *                        orientation: Menu.ORIENTATION.TOP
+ *                       },
+ *                       {id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"},
+ *                       {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"});
+ * menu.attachTo(document.body);
+ * 
+ * //class to simulate original mainMenu and AdvancedMenu components from previous versions of xOpat
+ * // WIP
+ */
 class MainPanel extends Menu {
     constructor(options, ...args) {
         super(options, ...args);

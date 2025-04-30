@@ -6,7 +6,21 @@ import van from "../vanjs.mjs";
 
 const {span} = van.tags;
 
+/**
+ * @class MenuButton
+ * @description A internal tab component for the menu component which adds only Button and not content
+ * @example
+ * this.menu = new MainPanel({
+ *     id: "left-side-buttons-menu",
+ * }, 
+ *     { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
+ * );
+*/
 class MenuButton extends MenuTab{
+    /**
+     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {*} parent parent menu component
+     */
     constructor(item, parent) {
         super(item, parent);
         this.list;

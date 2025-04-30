@@ -49,6 +49,9 @@ class Button extends BaseComponent {
         );
     }
 
+    /**
+     * @description Sets button to show only icon
+    **/
     iconOnly(){
         this.style = "ICONONLY";
         const nodes = this.children;
@@ -61,6 +64,9 @@ class Button extends BaseComponent {
         }
     }
 
+    /**
+     * @description Sets button to show only title
+    **/
     titleOnly(){
         this.style = "TITLEONLY";
         const nodes = this.children;
@@ -74,6 +80,9 @@ class Button extends BaseComponent {
         }
     }
 
+    /**
+     * @description Sets button to show title and icon
+    **/
     titleIcon(){
         this.style = "TITLEICON";
         const nodes = this.children;
@@ -82,6 +91,9 @@ class Button extends BaseComponent {
         }
     }
 
+    /**
+     * @description Rotates icon based on orientation
+    **/
     iconRotate(){
         const nodes = this.children;
         for (let n of nodes){

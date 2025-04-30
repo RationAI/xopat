@@ -103,6 +103,10 @@ class MenuTab {
         };
     }
 
+    /**
+     * @description make possible to keep its visual settings -> it keeps only Icon even if the whole menu is set to show Icon and Title
+     * @param {boolean} styleOverride - if true, it will keep its visual settings
+     */
     setStyleOverride(styleOverride) {
         this.styleOverride = styleOverride;
     }
