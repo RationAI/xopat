@@ -617,7 +617,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 this.menu = new UI.FullscreenMenu({
                     id: "fullscreen-menu",
-                },this.getSettingsBody(), this.getPluginsBody(),
+                },this.getSettingsBody(), this.getPluginsBody(), this.createShadersMenu(),
             );
 
                 this.menu.attachTo(this.context);
@@ -737,11 +737,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 
             },
             createShadersMenu: function () {
-                const div = van.tags.div();
-                div.innerHTML = `
+                const innerHTML = `
 <div id="panel-images" class="inner-panel mt-2"></div>
 
-<div id="panel-shaders" class="inner-panel" style="display:none;">
+<div id="panel-shaders" class="inner-panel">
 
     <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
@@ -774,7 +773,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         <div id="blending-equation"></div>
     </div>
 </div>`
-                return div;
+                return new UI.Div({id: "shaders-menu"}, innerHTML);
             },
             createPluginDiv: function (plugin, pluginCount) {
                 const { div, img, button } = van.tags;
@@ -914,52 +913,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "sha", icon: "fa-eye", title: "shaders", body: [this.createShadersMenu] },
+                }, { id: "sha", icon: "fa-eye", title: "shaders", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("shaders-menu")} },
                 );
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
-            createShadersMenu: function () {
-                const div = van.tags.div();
-                div.innerHTML = `
-<div id="panel-images" class="inner-panel mt-2"></div>
-
-<div id="panel-shaders" class="inner-panel" style="display:none;">
-
-    <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
-    <div class="inner-panel-content noselect" id="inner-panel-content-1">
-        <div><!-- TODO fix clickHeader -->
-            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-            APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
-            <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
-                <!--populated with shaders from the list -->
-            </select>
-            <div class="d-inline-block float-right position-relative hover-selectable">
-                <span id="cache-snapshot" class="material-icons btn-pointer text-right"
-                style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
-                <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
-                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
-                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
-                </div>
-            </div>
-            <br>
-            <div id="global-opacity" class="float-right">
-                <label>
-                    <span data-i18n="main.global.layerOpacity">Opacity</span>
-                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
-                </label>
-            </div>
-        </div>
-
-        <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
-                <!--populated with options for a given image data -->
-        </div>
-        <div id="blending-equation"></div>
-    </div>
-</div>`
-                return div;
-            },    
         },
 
         RightSideMenu: {
