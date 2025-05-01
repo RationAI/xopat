@@ -107,6 +107,7 @@ class BaseComponent {
      * @description getter for commonProperties which are shared against all components
      */
     get commonProperties() {
+        this.refreshState();
         if (this.id) {
             return {
                 id: this.id,

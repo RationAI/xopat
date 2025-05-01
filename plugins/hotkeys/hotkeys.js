@@ -32,21 +32,24 @@ addPlugin('hotkeys', class extends XOpatPlugin {
     }
 
     pluginReady() {
-        USER_INTERFACE.AdvancedMenu.setMenu(this.id, "hotkeys", "Hotkey Shortcuts", `
-<h2>Shortcuts</h2>
-This plugin is a naive shortcut add-on. Later version will attempt to allow users re-defining
-system shortcuts and map available ones real-time.
+        USER_INTERFACE.TopPluginsMenu.menu.addTab({ id: "b-hotkey-plugins", icon: "fa-eye", title: "hotkeys", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("hotkey-plugins")} })
+        const inHTML = `
+                        <h2>Shortcuts</h2>
+                        This plugin is a naive shortcut add-on. Later version will attempt to allow users re-defining
+                        system shortcuts and map available ones real-time.
 
-<br><br>
-<div>
-<span class="key">Alt</span>+<span class="key">w</span> &emsp; Viewport Focus <br>
-<span class="text-small">Copies current viewport or aligns the viewport if copied already. <b>Transferable between different viewers.</b></span>
-<br><br>
-<span class="key">Alt</span>+<span class="key">s</span> &emsp; Screenshot <br>
-<span class="text-small">Opens the current viewport as an image in a new tab.</span>
-</div>
-        
-        `, 'keyboard_keys');
+                        <br><br>
+                        <div>
+                        <span class="key">Alt</span>+<span class="key">w</span> &emsp; Viewport Focus <br>
+                        <span class="text-small">Copies current viewport or aligns the viewport if copied already. <b>Transferable between different viewers.</b></span>
+                        <br><br>
+                        <span class="key">Alt</span>+<span class="key">s</span> &emsp; Screenshot <br>
+                        <span class="text-small">Opens the current viewport as an image in a new tab.</span>
+                        </div>`;
+
+        const d = new UI.Div({ id: "hotkey-plugins" }, inHTML);
+        USER_INTERFACE.FullscreenMenu.menu.addTab(d);
+
 
         const _this = this;
         //todo make key management module that adds shortcuts support handling in uniform way and checks for collisions
