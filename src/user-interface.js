@@ -964,6 +964,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
+                this.menu.focus("navigator"); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
                 
             }
