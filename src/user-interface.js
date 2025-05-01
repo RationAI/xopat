@@ -979,44 +979,31 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                const { div, input, span } = van.tags;
+                const { input } = van.tags;
 
                 const copy = new UI.Button({
                     id: "copy-slide",
                     size: UI.Button.SIZE.SMALL,
-                    onClick: () => {
+                    onClick: function () {
                         UTILITIES.copyToClipboard(this.previousElementSibling.textContent);
                     }
                 }, new UI.FAIcon("fa-copy"));
 
                 const text = new UI.Div(
-                    {id: "slide-name", 
+                    {id: "tissue-title-content", 
                      class: "", 
                      extraClasses: {btn: "btn btn-primary btn-sm"}, 
                      extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
-                    }, 
-                    "TODO Slidename"); 
-                
-                const error = new UI.Div(
-                    {id: "tissue-title-header", 
-                        class: "", 
-                        extraClasses: {btn: "btn btn-primary btn-sm"}, 
-                        style: "flex-grow: 1;"}, "TODO error");
+                    },); 
                     
                 const checkbox = new UI.Div(
                     {id: "global-tissue-visibility",
                     class: "", 
                     extraClasses: {btn: "btn btn-primary btn-sm"},
                     style: "display: flex; align-items: center;"},
-                    input({ type: "checkbox", style: "vertical-align: middle;", checked: "", class: "form-control mr-1", onchange: () => {VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)}})
-                )
-
-                const x = div({ style: "display: flex; flex-direction: row;", class: "join bg-join join-horizontal" },
-                    span({ id: "global-tissue-visibility", class: "join-item btn btn-primary btn-sm", style: "display: flex; align-items: center;" },
-                        input({ type: "checkbox", style: "vertical-align: middle;", checked: "", class: "form-control mr-1",}), 
-                    ),
-                );
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL},error, text, copy, checkbox);
+                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1", onchange: function () { VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)}}))
+                
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header"}, checkbox, text, copy);
                 menu.attachTo(this.context);
             }
         },

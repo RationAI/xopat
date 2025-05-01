@@ -524,12 +524,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const tiledImage = VIEWER.world.getItemAt(index);
         const imageData = tiledImage?.getBackgroundConfig() || {};
 
-        const title = $("#tissue-title-header").removeClass('error-container');
+        const title = $("#tissue-title-content").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.find('#tissue-title-content').html(name);
+            title.html(name);
             title.attr('title', name);
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
@@ -539,7 +539,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                 || 'unknown'
             );
-            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
+            title.addClass('error-container').html($.t('main.navigator.faultyTissue', {slide: name}));
             USER_INTERFACE.toggleDemoPage(true);
         } else {
             USER_INTERFACE.toggleDemoPage(false);
@@ -831,7 +831,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
 
         if (confBackground.length > 0) {
-            $("#global-tissue-visibility").css("display", "initial");
+            $("#global-tissue-visibility").css("display", "flex");
 
             const image = confBackground[activeIndex],
                 worldItem =  VIEWER.world.getItemAt(0),

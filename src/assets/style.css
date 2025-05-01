@@ -228,7 +228,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     font-family: 'Material Icons';
     color: var(--color-icon-danger);
     font-size: initial;
-    padding: 3px 9px;
+    padding: 0px 0px;
     /*vertical-align: sub;*/
 }
 .error-container code {
