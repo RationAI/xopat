@@ -14,8 +14,8 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
     context.raiseEvent("segmentation-end");
   }
 
-  static raiseModelLoadedEvent(context) {
-    context.raiseEvent("model-loaded");
+  static raiseModelsLoadedEvent(context) {
+    context.raiseEvent("models-loaded");
   }
 
   static raiseServerAvailable(context, gpuName) {
@@ -25,9 +25,9 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
   }
 
   /**
-     * Creates a drawer for capturing the viewport image.
-     * @returns {OpenSeadragon.Drawer} The drawer instance.
-     */
+   * Creates a drawer for capturing the viewport image.
+   * @returns {OpenSeadragon.Drawer} The drawer instance.
+   */
   static createDrawer() {
     const drawer = new OpenSeadragon.Drawer({
       viewer: VIEWER,
@@ -42,9 +42,9 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
   }
 
   /**
-     * Captures the viewport image at the specified point.
-     * @returns {Promise<{ blob: Blob}>} The captured image.
-     */
+   * Captures the viewport image at the specified point.
+   * @returns {Promise<{ blob: Blob}>} The captured image.
+   */
   static async captureViewportImage() {
     return new Promise(resolve => {
       const drawer = SegmentationUtils.createDrawer();
@@ -95,12 +95,12 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
   }
 
   /**
-     * Displays a mask on the canvas.
-     * @param {Blob} maskBlob - The mask image as a Blob.
-     * @param {{ x: number, y: number }} clickPoint - The point where the mask should be displayed.
-     * @param {number} scale - The scale of the mask.
-     * @param {fabric.Canvas} canvas - The Fabric.js canvas to display the mask on.
-     */
+   * Displays a mask on the canvas.
+   * @param {Blob} maskBlob - The mask image as a Blob.
+   * @param {{ x: number, y: number }} clickPoint - The point where the mask should be displayed.
+   * @param {number} scale - The scale of the mask.
+   * @param {fabric.Canvas} canvas - The Fabric.js canvas to display the mask on.
+   */
   static displayMask(maskBlob, clickPoint, scale, canvas) {
     const maskUrl = URL.createObjectURL(maskBlob);
 
@@ -130,12 +130,12 @@ window.SegmentationUtils = class extends XOpatModuleSingleton {
   }
 
   /**
-     * Converts a binary mask to a polygon.
-     * @param {Uint8Array} binaryMask - The binary mask.
-     * @param {number} width - The width of the mask.
-     * @param {number} height - The height of the mask.
-     * @returns {Array<{ x: number, y: number }>} The polygon points.
-     */
+   * Converts a binary mask to a polygon.
+   * @param {Uint8Array} binaryMask - The binary mask.
+   * @param {number} width - The width of the mask.
+   * @param {number} height - The height of the mask.
+   * @returns {Array<{ x: number, y: number }>} The polygon points.
+   */
   static maskToPolygon(binaryMask, width, height, ref) {
     this.MagicWand = OSDAnnotations.makeMagicWand();
     const bounds = {
