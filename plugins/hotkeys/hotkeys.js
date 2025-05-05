@@ -32,7 +32,7 @@ addPlugin('hotkeys', class extends XOpatPlugin {
     }
 
     pluginReady() {
-        USER_INTERFACE.TopPluginsMenu.menu.addTab({ id: "b-hotkey-plugins", icon: "fa-eye", title: "hotkeys", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("hotkey-plugins")} })
+        USER_INTERFACE.TopPluginsMenu.menu.addTab({ id: "b-hotkey-plugins", icon: "fa-keyboard", title: "hotkeys", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("hotkey-plugins")} })
         const inHTML = `
                         <h2>Shortcuts</h2>
                         This plugin is a naive shortcut add-on. Later version will attempt to allow users re-defining

@@ -33,6 +33,7 @@ class Menu extends BaseComponent {
 
         this.tabs = {};
         this.orientation = "TOP";
+        this.design = "TITLEICON";
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
@@ -86,6 +87,20 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
+        switch (this.design) {
+            case "ICONONLY":
+                tab.iconOnly();
+                break;
+            case "TITLEONLY":
+                tab.titleOnly();
+                break;
+            case "TITLEICON":
+                tab.titleIcon();
+                break;
+            default:
+                throw new Error("Unknown design type");
+        }
+
         if (this._initializing) {
             tab.headerButton.attachTo(this.header);
             if (tab.contentDiv) {
@@ -211,12 +226,15 @@ Menu.BUTTONSIDE = {
 
 Menu.DESIGN = {
     ICONONLY: function () {
+        this.design = "ICONONLY";
         for (let t of Object.values(this.tabs)) { t.iconOnly(); t.iconRotate(); }
     },
     TITLEONLY: function () {
+        this.design = "TITLEONLY";
         for (let t of Object.values(this.tabs)) { t.titleOnly(); t.iconRotate(); }
     },
     TITLEICON: function () {
+        this.design = "TITLEICON";
         for (let t of Object.values(this.tabs)) { t.titleIcon(); t.iconRotate(); }
     }
 }
