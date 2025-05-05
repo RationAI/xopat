@@ -1,7 +1,7 @@
 //TODO consider snapshots as ID-based instance, this way multiple sequences can be supported
 window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     constructor() {
-        super("snaphots");
+        super("snapshots");
         this.viewer = VIEWER;
 
         this.registerAsEventSource();
