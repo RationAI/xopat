@@ -637,9 +637,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const visualMenuContent = document.getElementById("visual-menu-content");
                 visualMenuContent.innerHTML = "";
                 
-                const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
+                const MainMenuTabs = USER_INTERFACE.MainMenu.menu.tabs;
 
-                for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
+                for (const [tKey, t] of Object.entries(MainMenuTabs)) {
                     const checkbox = this.createCheckbox(tKey, () => { t.toggleHiden();}, !t.hidden)
                     visualMenuContent.appendChild(checkbox);
                 }
@@ -970,7 +970,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
         },
 
-        RightSideMenu: {
+        MainMenu: {
             context: $("#right-side-menu"),
             menu: "",
 
@@ -993,6 +993,41 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.focus("navigator"); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
                 
+            },
+
+            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
+                const { div, span, h3 } = van.tags();
+                const titleHtmlIn = div();
+                titleHtmlIn.innerHTML = titleHtml;
+        
+                const htmlIn = div();
+                htmlIn.innerHTML = html;
+        
+                const hiddenHtmlIn = div();
+                hiddenHtmlIn.innerHTML = hiddenHtml;
+        
+                let content =
+                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                        div(
+                            span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: () => {USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));}, style: `padding: 0;` },
+                                `navigate_next`,
+                            ),
+                            h3({ class: `d-inline-block h3 btn-pointer`, onclick: () => {USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));} },
+                                `${title} `,
+                            ),
+                            `${titleHtmlIn}`,
+                        ),
+                        div({ class: `inner-panel-visible` },
+                            `${htmlIn}`,
+                        ),
+                        div({ class: `inner-panel-hidden` },
+                            `${hiddenHtmlIn}`,
+                        ),
+                    )
+                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+                this.menu.addTab({id: id, icon: settingsIcon, title: title, body: [content]})
+            },
+            _sync() {
             }
         },
 

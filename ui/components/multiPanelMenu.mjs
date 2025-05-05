@@ -78,7 +78,13 @@ class MultiPanelMenu extends Menu {
         }
         const tab = new MultiPanelMenuTab(item,this);
         this.tabs[item.id] = tab;
-        tab.contentDiv.attachTo(this.body);
+
+        if (this._initializing) {
+            tab.contentDiv.attachTo(this.body);
+        } else {
+            console.log("tab.contentDiv", tab.contentDiv);
+            document.getElementById(this.id + "-body").appendChild(tab.contentDiv.create()); // TODO shows only [object Object]
+        }
     }
 
     /**

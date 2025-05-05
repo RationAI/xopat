@@ -394,7 +394,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     USER_INTERFACE.TopUserMenu.init();
     USER_INTERFACE.TopFullscreenButton.init();
     USER_INTERFACE.TopSlideMenu.init();
-    USER_INTERFACE.RightSideMenu.init();
+    USER_INTERFACE.MainMenu.init();
     USER_INTERFACE.FullscreenMenu.init();
 
     /*---------------------------------------------------------*/
@@ -438,7 +438,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     new OpenSeadragon.Tools(VIEWER);
-    USER_INTERFACE.RightSideMenu.menu.focus("navigator"); // to close navigator afterwards
+    USER_INTERFACE.MainMenu.menu.focus("navigator"); // to close navigator afterwards
 
     /**
      * Event to fire if you want to avoid explicit warning handling,
