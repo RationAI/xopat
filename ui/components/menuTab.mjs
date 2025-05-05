@@ -23,6 +23,7 @@ class MenuTab {
         this.style = "ICONTITLE";
         this.styleOverride = item["styleOverride"] || false;
         this.focused = false;
+        this.hidden = false;
 
         const [headerButton, contentDiv] = this.createTab(item);
 
@@ -154,6 +155,22 @@ class MenuTab {
         
         } else if(this.parent.orientation==="LEFT"){
             nodes[0].classList.add("-rotate-90");
+        }
+    }
+
+    toggleHiden() {
+        if (this.hidden) {
+            if(this.headerButton){
+                this.headerButton.setClass("display", "");
+            }
+            this.contentDiv.setClass("display", "");
+            this.hidden = false;
+        } else {
+            if(this.headerButton){
+                this.headerButton.setClass("display", "hidden");
+            }
+            this.contentDiv.setClass("display", "hidden");
+            this.hidden = true;
         }
     }
 }

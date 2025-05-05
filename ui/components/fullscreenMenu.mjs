@@ -74,7 +74,7 @@ class FullscreenMenu extends BaseComponent{
         this.content.attachTo(this);
 
         return div({ id: "overlay", class: "hidden" },
-                    div({ id: "overlay-darken", onclick: () => {document.getElementById("overlay").classList.toggle("hidden");}}),
+                    div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
                     div({ id: "overlay-content" }, ...this.children),
                 );
     }
@@ -106,6 +106,14 @@ class FullscreenMenu extends BaseComponent{
 
         }
     }
+
+    unfocusAll() {
+        for (let tab of Object.values(this.tabs)) {
+            tab.setClass("display", "hidden");
+        }
+        document.getElementById("overlay").classList.toggle("hidden");
+    }
+
 
     /**
      * @returns {HTMLElement} - The content DOM node of the menu content
