@@ -1,9 +1,9 @@
 import {default as elements} from './basic-ui-elements';
 
 export default {
-    mainMenu(config) {
+    RightSideMenu(config) {
         if (!config.params.bypassCookies) {
-            cy.log("mainMenu:: Test without bypassCookies is not intended to pass.");
+            cy.log("RightSideMenu:: Test without bypassCookies is not intended to pass.");
         }
 
         ["#panel-navigator", "#navigator-pin", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
@@ -37,7 +37,7 @@ export default {
             "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
     },
 
-    shadersMainMenu(config) {
+    shadersRightSideMenu(config) {
         if (!config.visualizations || config.visualizations.length < 1) {
             cy.get("#shaders").should('not.be.visible')
         } else {

@@ -61,10 +61,10 @@ class MainPanel extends Menu {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div(
-                    span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: `USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));`, style: `padding: 0;` },
+                    span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: `USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));`, style: `padding: 0;` },
                         `navigate_next`,
                     ),
-                    h3({ class: `d-inline-block h3 btn-pointer`, onclick: `USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));` },
+                    h3({ class: `d-inline-block h3 btn-pointer`, onclick: `USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));` },
                         `${title} `,
                     ),
                     `${titleHtmlIn}`,

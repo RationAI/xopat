@@ -115,7 +115,7 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	initHTML() {
-		USER_INTERFACE.MainMenu.appendExtended(
+		USER_INTERFACE.RightSideMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
 <span class="material-icons p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
@@ -203,7 +203,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push('</div>');
 
 		// L/R button
-		modeOptions.push(this.mainMenuVisibleControls());
+		modeOptions.push(this.RightSideMenuVisibleControls());
 
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
@@ -325,7 +325,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		if (asModal) {
 			$("#preset-list-button-mp").click();
 		} else {
-			USER_INTERFACE.MainMenu.open();
+			USER_INTERFACE.RightSideMenu.open();
 			//todo better checks
 			const pin = $("#annotations-panel-pin");
 			if (!pin.hasClass("opened")) {
@@ -388,7 +388,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				$("#annotations-left-click").html(this.getMissingPresetHTML(true));
 			}
 			this.context.createPresetsCookieSnapshot();
-			this._updateMainMenuPresetList();
+			this._updateRightSideMenuPresetList();
 		});
 		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
@@ -649,7 +649,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		W_NO_PRESET: (e) => {
 			Dialogs.show(this.t('errors.noPresetAction', {
 					selfId: this.id,
-					action: `USER_INTERFACE.highlight('MainMenu', 'annotations-panel', '${e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}');`
+					action: `USER_INTERFACE.highlight('RightSideMenu', 'annotations-panel', '${e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}');`
 				}),
 				3000, Dialogs.MSG_WARN, false);
 			return false;
@@ -881,7 +881,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * Output GUI HTML for presets
 	 * @returns {string} HTML
 	 */
-	mainMenuVisibleControls() {
+	RightSideMenuVisibleControls() {
 		return `
 <div style="float: right; transform: translateY(-5px);">
 <span id="annotations-left-click" class="d-inline-block position-relative mt-1 ml-2 border-md rounded-3"
@@ -936,10 +936,10 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 	 */
 	updatePresetsHTML() {
 		this.updatePresetsMouseButtons();
-		this._updateMainMenuPresetList();
+		this._updateRightSideMenuPresetList();
 	}
 
-	_updateMainMenuPresetList() {
+	_updateRightSideMenuPresetList() {
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
 
 		let pushed = false;
@@ -1036,7 +1036,7 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 			//left = true, right = false
 			preset = idOrBoolean ? this.context.presets.left : this.context.presets.right;
 			if (!preset) {
-				USER_INTERFACE.highlight('MainMenu', 'annotations-panel', `${idOrBoolean ? 'annotations-left-click' : 'annotations-right-click'}`);
+				USER_INTERFACE.highlight('RightSideMenu', 'annotations-panel', `${idOrBoolean ? 'annotations-left-click' : 'annotations-right-click'}`);
 				return;
 			}
 			preset = preset.presetID;
@@ -1176,7 +1176,7 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 			node = $(buttonNode);
 		node.before(this.getPresetHTMLById(id, isLeftClick, node.index()));
 		this.context.createPresetsCookieSnapshot();
-		this._updateMainMenuPresetList();
+		this._updateRightSideMenuPresetList();
 	}
 
 	getAnnotationsHeadMenu(error = "") {

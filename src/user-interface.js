@@ -599,7 +599,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
-        // TODO make new component for main-panel -> add methods from user-interface MainMenu
+        // TODO make new component for main-panel -> add methods from user-interface RightSideMenu
         // `<div id="${id}" -> id MENU, on components we will access through API
         // class="inner-panel ${pluginId}-plugin-root -> must be for every top level component of some plugin
         // firstly we add plugin div and in it there will be our UI component hiearchy
@@ -637,9 +637,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const visualMenuContent = document.getElementById("visual-menu-content");
                 visualMenuContent.innerHTML = "";
                 
-                const MainMenuTabs = USER_INTERFACE.MainMenu.menu.tabs;
+                const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
 
-                for (const [tKey, t] of Object.entries(MainMenuTabs)) {
+                for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
                     const checkbox = this.createCheckbox(tKey, () => { t.toggleHiden();}, !t.hidden)
                     visualMenuContent.appendChild(checkbox);
                 }
@@ -769,7 +769,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div><!-- TODO fix clickHeader -->
-            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.MainMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
+            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.RightSideMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
             APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
             <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
                 <!--populated with shaders from the list -->
@@ -841,6 +841,43 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 )  
                 return plugin_div;          
             },
+
+            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
+                const { div, span, h3 } = van.tags();
+                const titleHtmlIn = div();
+                titleHtmlIn.innerHTML = titleHtml;
+        
+                const htmlIn = div();
+                htmlIn.innerHTML = html;
+        
+                const hiddenHtmlIn = div();
+                hiddenHtmlIn.innerHTML = hiddenHtml;
+        
+                let content =
+                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                        div(
+                            span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: () => {USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));}, style: `padding: 0;` },
+                                `navigate_next`,
+                            ),
+                            h3({ class: `d-inline-block h3 btn-pointer`, onclick: () => {USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));} },
+                                `${title} `,
+                            ),
+                            `${titleHtmlIn}`,
+                        ),
+                        div({ class: `inner-panel-visible` },
+                            `${htmlIn}`,
+                        ),
+                        div({ class: `inner-panel-hidden` },
+                            `${hiddenHtmlIn}`,
+                        ),
+                    )
+                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+                const d = new UI.Div({ id: `${id}-settings`, class: "d-flex flex-column" }, content);
+                this.menu.addTab(d);
+                this.menu.addTab({id: id, icon: settingsIcon, title: title, body: [content]})
+            },
+            _sync() {
+            }
         },
 
         /**
@@ -970,7 +1007,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
         },
 
-        MainMenu: {
+        RightSideMenu: {
             context: $("#right-side-menu"),
             menu: "",
 
@@ -994,41 +1031,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.attachTo(this.context);
                 
             },
-
-            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                const { div, span, h3 } = van.tags();
-                const titleHtmlIn = div();
-                titleHtmlIn.innerHTML = titleHtml;
-        
-                const htmlIn = div();
-                htmlIn.innerHTML = html;
-        
-                const hiddenHtmlIn = div();
-                hiddenHtmlIn.innerHTML = hiddenHtml;
-        
-                let content =
-                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
-                        div(
-                            span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: () => {USER_INTERFACE.MainMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));}, style: `padding: 0;` },
-                                `navigate_next`,
-                            ),
-                            h3({ class: `d-inline-block h3 btn-pointer`, onclick: () => {USER_INTERFACE.MainMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));} },
-                                `${title} `,
-                            ),
-                            `${titleHtmlIn}`,
-                        ),
-                        div({ class: `inner-panel-visible` },
-                            `${htmlIn}`,
-                        ),
-                        div({ class: `inner-panel-hidden` },
-                            `${hiddenHtmlIn}`,
-                        ),
-                    )
-                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
-                this.menu.addTab({id: id, icon: settingsIcon, title: title, body: [content]})
-            },
-            _sync() {
-            }
         },
 
         /**
@@ -1086,7 +1088,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (!pluginsToolsBuilder) {
                     pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
                     pluginsToolsBuilder.context.classList.add("bg-opacity");
-                    USER_INTERFACE.MainMenu._sync();
+                    USER_INTERFACE.RightSideMenu._sync();
                 }
                 pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
                 if (pluginsToolsBuilder.isVisible) {
@@ -1238,7 +1240,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#viewer-container").addClass("disabled");
                 $("#tutorials-title").html(title);
                 $("#tutorials-description").html(description);
-                USER_INTERFACE.MainMenu.close();
+                USER_INTERFACE.RightSideMenu.close();
                 USER_INTERFACE.Tools.close();
                 this.running = true;
             },
@@ -1254,7 +1256,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#tutorials-container").addClass("d-none");
                 if (reflectGUIChange) {
                     $("#viewer-container").removeClass("disabled");
-                    USER_INTERFACE.MainMenu.open();
+                    USER_INTERFACE.RightSideMenu.open();
                     USER_INTERFACE.Tools.open();
                 }
                 this.running = false;
@@ -1321,7 +1323,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                USER_INTERFACE.MainMenu.open();
+                USER_INTERFACE.RightSideMenu.open();
                 enjoyhintInstance.set(data);
                 this.hide();
                 enjoyhintInstance.run();

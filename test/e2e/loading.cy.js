@@ -17,9 +17,9 @@ describe('Third party pyramidal image', () => {
             isSecure = x.APPLICATION_CONTEXT.secure;
         });
 
-        testBasic.mainMenu(firstConfig);
+        testBasic.RightSideMenu(firstConfig);
         cy.canvas().matchImage()
-        testBasic.shadersMainMenu(firstConfig);
+        testBasic.shadersRightSideMenu(firstConfig);
 
 
         let secondConfig = {
@@ -48,8 +48,8 @@ describe('Third party pyramidal image', () => {
             }
 
 
-            testBasic.mainMenu(secondConfig);
-            testBasic.shadersMainMenu(secondConfig);
+            testBasic.RightSideMenu(secondConfig);
+            testBasic.shadersRightSideMenu(secondConfig);
             testBasic.settingsMenu(secondConfig);
         });
     })
@@ -83,7 +83,7 @@ describe('Faulty data', () => {
         utils.waitForViewer().then(x => {
             testElements.systemNotification("Failed to load overlays");
             testElements.closeDialog();
-            testBasic.mainMenu(visualization);
+            testBasic.RightSideMenu(visualization);
         });
     })
 
@@ -198,7 +198,7 @@ describe('Faulty data', () => {
         testElements.getStackedImageMenuItem(0).should('contain.text', 'Faulty')
         cy.get("#images-pin").click();
 
-        testBasic.mainMenu(visualization);
+        testBasic.RightSideMenu(visualization);
     })
 })
 
