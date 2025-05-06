@@ -1000,10 +1000,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             hiddenHtmlIn,
                         ),
                     )
-                const d = new UI.Div({ id: `${pluginId}-menu`, class: "d-flex flex-column" }, content);
+                const d = new UI.Div({ id: `${id}-menu`, class: "d-flex flex-column" }, content);
 
                 USER_INTERFACE.FullscreenMenu.menu.addTab(d);
-                this.menu.addTab({ id: id, icon: "fa-circle-question", title: title, body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}-menu`)}})
+                this.menu.addTab({ id: id, icon: "fa-circle-question", title: title, body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${id}-menu`)}})
             },
 
             // TODO find out what should this do
