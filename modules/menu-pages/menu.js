@@ -112,7 +112,7 @@ window.AdvancedMenuPages = class {
             }
 
             let unique = this.getSubMenuId(data.id, this._count++);
-            USER_INTERFACE.AdvancedMenu._buildMenu(this, parent,
+            USER_INTERFACE.TopPluginsMenu._buildMenu(this, parent,
                 parentUnique,
                 data.title,
                 unique,
@@ -146,11 +146,11 @@ window.AdvancedMenuPages = class {
     }
 
     openMenu(id) {
-        USER_INTERFACE.AdvancedMenu.openMenu(this.getMenuId(id));
+        USER_INTERFACE.TopPluginsMenu.openMenu(this.getMenuId(id));
     }
 
     openSubMenu(id) {
-        USER_INTERFACE.AdvancedMenu.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
+        USER_INTERFACE.TopPluginsMenu.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
     }
 
     /**

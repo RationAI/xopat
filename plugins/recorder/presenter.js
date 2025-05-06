@@ -12,7 +12,7 @@ class Presenter extends XOpatPlugin {
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
 
-        USER_INTERFACE.RightSideMenu.appendExtended("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
+        USER_INTERFACE.TopPluginsMenu.appendExtended("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
 <span onclick="this.nextElementSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span>
 <input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
 <span onclick="${this.THIS}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `

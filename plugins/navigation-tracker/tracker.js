@@ -113,7 +113,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
                 })
             });
 
-            USER_INTERFACE.AdvancedMenu.setMenu(this.id, "navigator-export", "Export/Import",
+            USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "navigator-export", "Export/Import",
                 `<h3 class="f2-light">Navigator tracking IO </h3>
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile();return false;" class="btn">Download as a file.</button>`);
         }

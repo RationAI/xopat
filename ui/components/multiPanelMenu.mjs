@@ -82,7 +82,6 @@ class MultiPanelMenu extends Menu {
         if (this._initializing) {
             tab.contentDiv.attachTo(this.body);
         } else {
-            console.log("tab.contentDiv", tab.contentDiv);
             document.getElementById(this.id + "-body").appendChild(tab.contentDiv.create()); // TODO shows only [object Object]
         }
     }

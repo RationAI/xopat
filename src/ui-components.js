@@ -491,6 +491,7 @@ ${contentAction}
         },
     },
 
+    // TODO rewrite for vanjs and our components
     /**
      * Container Builders that auto-layout provided content
      * @namespace UIComponents.Containers
@@ -508,7 +509,7 @@ ${contentAction}
                 this.horizontal = true;
                 this.fullbody = false;
                 this.elements = [];
-                if (!this.context) throw "PanelMenu(): invalid initialization: container does not exist!";
+                //if (!this.context) throw "PanelMenu(): invalid initialization: container does not exist!";
                 this._updateBorder();
             }
 
@@ -670,10 +671,10 @@ ${contentAction}
                 )
 
                 var panelMenu = div({ class: `panel-menu d-flex ${sizeD} ${flexD}` }, head, body);
-                van.add(this.context, panelMenu);
-
-                this.head = this.context.children[0].children[0];
-                this.body = this.context.children[0].children[1];
+                USER_INTERFACE.RightSideMenu.menu.addTab({id: id, icon: icon, title: id, body: [panelMenu]})
+                this.context = document.getElementById(USER_INTERFACE.RightSideMenu.menu.id+"-opendiv-"+id);
+                this.head = document.getElementById(`${this.uid}-head`);
+                this.body = document.getElementById(`${this.uid}-body`);
             }
 
             _getHeader(entityId, id, title, icon, isFirst, bodyId) {

@@ -748,7 +748,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const logo = this.getLogo(-70, 20);
                 const body = new UI.Div({ id: "app-plugins", class: "height-full position-relative", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" },
                     div({ class: "d-flex flex-column-reverse" },
-                        button({ onclick: function () {USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
+                        button({ onclick: function () {USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
                     ),
                     span({ class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
                     div({ id: "plug-list-content-inner" },
@@ -841,43 +841,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 )  
                 return plugin_div;          
             },
-
-            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                const { div, span, h3 } = van.tags();
-                const titleHtmlIn = div();
-                titleHtmlIn.innerHTML = titleHtml;
-        
-                const htmlIn = div();
-                htmlIn.innerHTML = html;
-        
-                const hiddenHtmlIn = div();
-                hiddenHtmlIn.innerHTML = hiddenHtml;
-        
-                let content =
-                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
-                        div(
-                            span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: () => {USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));}, style: `padding: 0;` },
-                                `navigate_next`,
-                            ),
-                            h3({ class: `d-inline-block h3 btn-pointer`, onclick: () => {USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));} },
-                                `${title} `,
-                            ),
-                            `${titleHtmlIn}`,
-                        ),
-                        div({ class: `inner-panel-visible` },
-                            `${htmlIn}`,
-                        ),
-                        div({ class: `inner-panel-hidden` },
-                            `${hiddenHtmlIn}`,
-                        ),
-                    )
-                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
-                const d = new UI.Div({ id: `${id}-settings`, class: "d-flex flex-column" }, content);
-                this.menu.addTab(d);
-                this.menu.addTab({id: id, icon: settingsIcon, title: title, body: [content]})
-            },
-            _sync() {
-            }
         },
 
         /**
@@ -1005,6 +968,52 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
+
+            /**
+             * Adds html to the fullscreenmenu and button to the plugins menu
+             */
+            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
+
+                const { div, span, h3 } = van.tags();
+                const titleHtmlIn = div();
+                titleHtmlIn.innerHTML = titleHtml;
+        
+                const htmlIn = div();
+                htmlIn.innerHTML = html;
+        
+                const hiddenHtmlIn = div();
+                hiddenHtmlIn.innerHTML = hiddenHtml;
+        
+                let content =
+                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                        div(
+                            // TODO find out what should have these onclick functions do
+                            h3({ class: `d-inline-block h3` },
+                                `${title}`,
+                            ),
+                            titleHtmlIn,
+                        ),
+                        div({ class: `inner-panel-visible` },
+                            htmlIn,
+                        ),
+                        div({ class: `inner-panel-hidden` },
+                            hiddenHtmlIn,
+                        ),
+                    )
+                const d = new UI.Div({ id: `${pluginId}-menu`, class: "d-flex flex-column" }, content);
+
+                USER_INTERFACE.FullscreenMenu.menu.addTab(d);
+                this.menu.addTab({ id: id, icon: "fa-circle-question", title: title, body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}-menu`)}})
+            },
+
+            // TODO find out what should this do
+            _sync() {
+            },
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
+                console.log("setmnenu from topplugins");
+                console.log(toolsMenuId);
+                this.appendExtended(title, "", html, "", toolsMenuId, ownerPluginId);
+            }
         },
 
         RightSideMenu: {
@@ -1085,15 +1094,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} icon
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                if (!pluginsToolsBuilder) {
-                    pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("plugin-tools-menu");
-                    pluginsToolsBuilder.context.classList.add("bg-opacity");
-                    USER_INTERFACE.RightSideMenu._sync();
-                }
+                pluginsToolsBuilder = new UIComponents.Containers.PanelMenu(`${toolsMenuId}`);
+                //pluginsToolsBuilder.context.classList.add("bg-opacity");
+                USER_INTERFACE.TopPluginsMenu._sync();
+                console.log(toolsMenuId);
                 pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
-                if (pluginsToolsBuilder.isVisible) {
-                    USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
-                }
             },
             /**
              * Show desired toolBar menu. Also opens the toolbar if closed.
@@ -1375,7 +1380,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     function buildPluginsMenu(ctx) {
         ctx._buildMenu(ctx, "__pMenu", "", "", APPLICATION_CONTEXT.pluginsMenuId,
             APPLICATION_CONTEXT.pluginsMenuId, $.t('plugins.title'), `<div class="d-flex flex-column-reverse">
-<button onclick="USER_INTERFACE.AdvancedMenu.refreshPageWithSelectedPlugins();" class="btn">${$.t('plugins.loadBtn')}</button>
+<button onclick="USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins();" class="btn">${$.t('plugins.loadBtn')}</button>
 </div><hr>
 <div id='plug-list-content-inner'></div>
 `, 'extension', false, true);

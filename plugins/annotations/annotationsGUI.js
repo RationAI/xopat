@@ -115,13 +115,13 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	initHTML() {
-		USER_INTERFACE.RightSideMenu.appendExtended(
+		USER_INTERFACE.TopPluginsMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
 <span class="material-icons p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
 onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><span class="material-icons pl-0 pr-1 v-align-text-top" style="font-size: 19px;">save</span>Save</button>
-<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
+<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
 </div>`,
 			'',
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
@@ -210,7 +210,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 			`<div class="px-3 py-2" id="annotations-tool-bar-content" title="Hold keys or click to select. Scroll controls work with shift if hotkeys are not used.">
 ${modeOptions.join("")}</div>`, 'draw');
 
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
+		USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
 <span class="text-small">Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.</span>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>
@@ -338,11 +338,11 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.isModalHistory = asModal;
 	}
 
-	_createHistoryInAdvancedMenu(focus = false) {
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+	_createHistoryInTopPluginsMenu(focus = false) {
+		USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
 		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		this._openedHistoryMenu = true;
-		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+		if (focus) USER_INTERFACE.TopPluginsMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
 
 	initHandlers() {
