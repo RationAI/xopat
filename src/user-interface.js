@@ -973,6 +973,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * Adds html to the fullscreenmenu and button to the plugins menu
              */
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
+                // adding button to the top plugins menu
+                this.menu.addTab({ 
+                    id: pluginId, 
+                    icon: "fa-circle-question", 
+                    title: title, 
+                    body: undefined, 
+                    onClick: function () {
+                        USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}-menu`)
+                    }
+                });
 
                 const { div, span, h3 } = van.tags();
                 const titleHtmlIn = div();
@@ -985,7 +995,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 hiddenHtmlIn.innerHTML = hiddenHtml;
         
                 let content =
-                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                    div({class: `inner-panel` },
                         div(
                             // TODO find out what should have these onclick functions do
                             h3({ class: `d-inline-block h3` },
@@ -1000,19 +1010,32 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             hiddenHtmlIn,
                         ),
                     )
-                const d = new UI.Div({ id: `${id}-menu`, class: "d-flex flex-column" }, content);
+                const InsideMenu = new UI.MainPanel({
+                    id: `${id}`,
+                    orientation: UI.Menu.ORIENTATION.TOP,
+                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
+                    rounded: UI.Menu.ROUNDED.ENABLE,
+                    extraClasses: { bg: "bg-transparent" }
+                },{ 
+                    id: "sha", 
+                    icon: "fa-eye", 
+                    title: "shaders", 
+                    body: [content]
+                });  
+
+                const d = new UI.Div({ id: `${pluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
 
                 USER_INTERFACE.FullscreenMenu.menu.addTab(d);
-                this.menu.addTab({ id: id, icon: "fa-circle-question", title: title, body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${id}-menu`)}})
             },
 
             // TODO find out what should this do
             _sync() {
             },
+
+            // should add submenus to plugin menu
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                console.log("setmnenu from topplugins");
-                console.log(toolsMenuId);
-                this.appendExtended(title, "", html, "", toolsMenuId, ownerPluginId);
+                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`];
+                console.log(insideMenu);
             }
         },
 
