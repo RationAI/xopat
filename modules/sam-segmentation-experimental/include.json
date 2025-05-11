@@ -1,0 +1,31 @@
+{
+  "id": "sam-segmentation-experimental",
+  "name": "SegmentAnything",
+  "author": "Miriam Strihavkova",
+  "version": "0.1.0",
+  "includes": [
+    "samInference.js",
+    "samState.js"
+  ],
+  "requires": ["annotations"],
+
+  "models": ["Xenova/slimsam-77-uniform", "Xenova/medsam-vit-base"],
+  "transformers" : {
+    "library":  "//cdn.jsdelivr.net/npm/@huggingface/transformers",
+    "hash": "79fad8c1c2fd165bf1e77ace20ce023fab4dc13b6621f0e586c9b8c59c4d09d8"
+  },
+  "servers": [
+    {
+      "name": "A10",
+      "path": "https://testrat.dyn.cloud.e-infra.cz/sam-a10"
+    },
+    {
+      "name": "A40",
+      "path": "https://testrat.dyn.cloud.e-infra.cz/sam-a40"
+    },
+    {
+      "name": "H100",
+      "path": "https://testrat.dyn.cloud.e-infra.cz/sam-h100"
+    }
+  ]
+}

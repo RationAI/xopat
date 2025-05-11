@@ -1,21 +1,3 @@
-window.GPU_SERVERS = {
-  A10: {
-    path: "/sam-a10",
-    domain: "https://testrat.dyn.cloud.e-infra.cz",
-    available: false
-  },
-  A40: {
-    path: "/sam-a40",
-    domain: "https://testrat.dyn.cloud.e-infra.cz",
-    available: false
-  },
-  H100: {
-    path: "/sam-h100",
-    domain: "https://testrat.dyn.cloud.e-infra.cz",
-    available: false
-  }
-};
-
 /**
  * Class representing the state of the Segment Anything (SAM) annotation tool.
  */
@@ -28,18 +10,21 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
       "🅢 segment anything"
     );
     this._samProcessing = false;
-    this.MagicWand = OSDAnnotations.makeMagicWand();
+    this.sam = window.SAMInference.instance();
+    this._initializeSAM();
+  }
 
-    // Wait for SAMInference instance to be ready
-    window.SAMInferenceReady.then(async sam => {
-      this.sam = sam;
-      this.sam.loadAllModels().then(() => {
-        SegmentationUtils.raiseModelsLoadedEvent(this.context);
-        this.sam.setModel(Object.keys(window.ALLOWED_MODELS)[0]);
-      });
-      this._checkGpuServersAvailability();
-      this._registerEventListeners();
-    });
+  async _initializeSAM() {
+    await this.sam.loadAllModels();
+    this.sam.raiseModelsLoadedEvent(this.context);
+
+    // set default model (first one)
+    const defaultModel = Object.keys(this.sam.ALLOWED_MODELS)[0];
+    this.sam.setModel(defaultModel);
+
+    // continue initialization
+    this._checkGpuServersAvailability();
+    this._registerEventListeners();
   }
 
   /**
@@ -64,18 +49,22 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
    */
   async _checkGpuServersAvailability() {
     let availableCount = 0;
+    console.group(this.sam.GPU_SERVERS);
     const checkPromises = Object.entries(
-      window.GPU_SERVERS
+      this.sam.GPU_SERVERS
     ).map(async ([gpu, serverInfo]) => {
       try {
-        const response = await fetch(
-          `${serverInfo.domain}${serverInfo.path}/gpu`,
-          { mode: "cors" }
-        );
+        console.log(`${serverInfo.path}/gpu`);
+        const response = await fetch(`${serverInfo.path}/gpu`, {
+          mode: "cors"
+        });
         if (response.ok) {
-          window.GPU_SERVERS[gpu].available = true;
-          availableCount++;
-          console.log(`GPU server available: ${gpu}`);
+          const data = await response.json();
+          if (data.gpu_available == true) {
+            this.sam.GPU_SERVERS[gpu].available = true;
+            availableCount++;
+            console.log(`GPU server available: ${gpu}`);
+          }
         }
       } catch (error) {
         console.log(`GPU server ${gpu} not available:`, error);
@@ -86,7 +75,7 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
 
     if (availableCount > 0) {
       console.log(`At least one GPU server is available.`);
-      SegmentationUtils.raiseServerAvailable(this.context, window.GPU_SERVERS);
+      this.sam.raiseServerAvailableEvent(this.context);
     } else {
       console.log("No GPU servers are available.");
     }
@@ -106,12 +95,10 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._isLeft = isLeftClick;
     console.log(`Starting segmentation on point: ${point}`);
 
-    SegmentationUtils.raiseSegmentationStartEvent(this.context);
-
     const clickX = o.clientX;
     const clickY = o.clientY;
     const ref = VIEWER.scalebar.getReferencedTiledImage();
-    const { blob } = await SegmentationUtils.captureViewportImage();
+    const { blob } = await this.sam.captureViewportImage();
 
     if (!blob) {
       console.error("Failed to capture viewport image");
@@ -124,12 +111,7 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     result = await this.sam.runInference(blob, samCoords);
     if (result) {
       const { binaryMask, width, height } = result;
-      const polygon = SegmentationUtils.maskToPolygon(
-        binaryMask,
-        width,
-        height,
-        ref
-      );
+      const polygon = this.sam.maskToPolygon(binaryMask, width, height, ref);
 
       let visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
       const factory = this.context.getAnnotationObjectFactory("polygon");
@@ -138,6 +120,5 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     }
 
     this._samProcessing = false;
-    SegmentationUtils.raiseSegmentationEndEvent(this.context);
   }
 };

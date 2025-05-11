@@ -3,7 +3,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
     super(id);
     this.registerAsEventSource();
     this._serverAvailable = false;
-    this._serverGPUName = null;
   }
 
   /**
@@ -18,40 +17,19 @@ class SAMSegmentationPlugin extends XOpatPlugin {
     }
 
     // Display model choice when loaded
-    this.context.addHandler("models-loaded", () => {
+    this.addHandler("models-loaded", () => {
       this.setUpModelDropdown();
     });
 
     // Display GPU server choice when available
-    this.context.addHandler("server-available", event => {
+    this.context.addHandler("server-available", () => {
       this._serverAvailable = true;
-      this._serverGPUName = event.gpuName;
       this.setUpComputationDropdown();
-      console.log("Server available with GPU:", this._serverGPUName);
     });
 
-    this.context.addHandler("segmentation-start", () =>
-      this.changeCursor("wait")
-    );
-    this.context.addHandler("segmentation-end", () =>
-      this.changeCursor("grab")
-    );
     this.context.addHandler("annotations-gui-ready", () =>
       this.raiseSetUpEvents()
     );
-  }
-
-  /**
-   * Change the cursor type for waiting or grabbing.
-   * @param {*} cursorType - The type of cursor to set.
-   */
-  changeCursor(cursorType) {
-    const upperCanvas = document.querySelector(".upper-canvas");
-    if (upperCanvas) {
-      upperCanvas.style.cursor = cursorType;
-    } else {
-      console.warn(".upper-canvas element not found, cursor change failed.");
-    }
   }
 
   /**
@@ -61,7 +39,9 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   setUpModelDropdown() {
     $("#sam-model-dropdown").remove();
 
-    const models = Object.keys(window.ALLOWED_MODELS || {});
+    const models = Object.keys(
+      window.SAMInference.instance().ALLOWED_MODELS || {}
+    );
     if (!models.length) {
       console.warn("No models found in ALLOWED_MODELS.");
       return;
@@ -88,7 +68,9 @@ class SAMSegmentationPlugin extends XOpatPlugin {
     $("#sam-computation-dropdown").remove();
 
     const availableDevices = ["Client"];
-    for (const [gpu, info] of Object.entries(window.GPU_SERVERS || {})) {
+    for (const [gpu, info] of Object.entries(
+      window.SAMInference.instance().GPU_SERVERS || {}
+    )) {
       if (info.available) {
         availableDevices.push(gpu);
       }
@@ -143,4 +125,4 @@ class SAMSegmentationPlugin extends XOpatPlugin {
 }
 
 // Instantiate the plugin
-addPlugin("sam-segmentation", SAMSegmentationPlugin);
+addPlugin("sam-segment-tool-experimental", SAMSegmentationPlugin);
