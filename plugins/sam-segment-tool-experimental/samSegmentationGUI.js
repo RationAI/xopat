@@ -15,21 +15,48 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       console.error("OSDAnnotations instance not found.");
       return;
     }
+    this.integrateWithPlugin("gui_annotations", annotationsPlugin => {
+      this.annotationsPlugin = annotationsPlugin;
+    });
+    if (!this.annotationsPlugin) {
+      VIEWER.raiseEvent("warn-user", {
+        originType: "plugin",
+        originId: "sam-segment-tool-experimental",
+        code: "NO_ANNOTATIONS_PLUGIN",
+        message:
+          "The Annotations plugin is not loaded. Please load it to use Segment Anything."
+      });
+    }
 
-    // Display model choice when loaded
-    this.addHandler("models-loaded", () => {
-      this.setUpModelDropdown();
+    this.context.addHandler("annotations-gui-ready", () => {
+      this.integrateWithPlugin("gui_annotations", annotationsPlugin => {
+        this.annotationsPlugin = annotationsPlugin;
+      });
+      this.raiseRegisterCustomModeEvent();
+      $("#annotations-tool-bar-content").append(`
+  <div id="sam-loading-info" class="d-inline-block mx-1">
+    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+    <span> Loading segmentation models...</span>
+  </div>
+`);
     });
 
-    // Display GPU server choice when available
-    this.context.addHandler("server-available", () => {
-      this._serverAvailable = true;
+    this.context.addHandler("models-loaded", () => {
+      $("#sam-loading-info").remove();
+      this.raiseRegisterToolControlsEvent();
+      this.setUpModelDropdown();
       this.setUpComputationDropdown();
     });
 
-    this.context.addHandler("annotations-gui-ready", () =>
-      this.raiseSetUpEvents()
-    );
+    this.context.addHandler("segmentation-finished", () => {
+      console.log("Segmentation finished");
+      this.hideSegmentationOverlay();
+      this.annotationsPlugin.switchModeActive("auto");
+    });
+
+    this.context.addHandler("segmentation-started", () => {
+      this.showSegmentationOverlay();
+    });
   }
 
   /**
@@ -43,7 +70,13 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       window.SAMInference.instance().ALLOWED_MODELS || {}
     );
     if (!models.length) {
-      console.warn("No models found in ALLOWED_MODELS.");
+      VIEWER.raiseEvent("warn-user", {
+        originType: "plugin",
+        originId: "sam-segment-tool-experimental",
+        code: "NO_MODELS",
+        message:
+          "No models available for segmentation, add models to your configuration."
+      });
       return;
     }
 
@@ -66,7 +99,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
    */
   setUpComputationDropdown() {
     $("#sam-computation-dropdown").remove();
-
     const availableDevices = ["Client"];
     for (const [gpu, info] of Object.entries(
       window.SAMInference.instance().GPU_SERVERS || {}
@@ -76,10 +108,8 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       }
     }
 
+    console.log(availableDevices);
     if (availableDevices.length < 2) {
-      console.warn(
-        "No additional GPU servers available for computation dropdown."
-      );
       return;
     }
 
@@ -94,14 +124,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       </select>`;
 
     $("#annotations-tool-bar-content").append(dropdownHTML);
-  }
-
-  /**
-   * Raises setup events for the plugin.
-   */
-  raiseSetUpEvents() {
-    this.raiseRegisterCustomModeEvent();
-    this.raiseRegisterToolControlsEvent();
   }
 
   /**
@@ -121,6 +143,47 @@ class SAMSegmentationPlugin extends XOpatPlugin {
     this.context.raiseEvent("register-tool-controls", {
       mode: this.context.Modes.SAM_SEGMENTATION
     });
+  }
+
+  /**
+   * Displays a loading overlay during segmentation.
+   */
+  showSegmentationOverlay() {
+    if ($("#segmentation-overlay").length === 0) {
+      $("body").append(`
+        <div id="segmentation-overlay" class="segmentation-overlay">
+          <div class="segmentation-overlay-content">
+            <div class="spinner-border" role="status"></div>
+            <div>Waiting for segmentation...</div>
+          </div>
+        </div>
+      `);
+    }
+    this._blockUserInteraction();
+  }
+
+  /**
+   * Removes the loading overlay after segmentation is complete.
+   */
+  hideSegmentationOverlay() {
+    $("#segmentation-overlay").remove();
+  }
+
+  /**
+   * Blocks user interaction with the page during segmentation.
+   */
+  _blockUserInteraction() {
+    this._interactionBlocker = e => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    };
+
+    document.removeEventListener("mousemove", this._interactionBlocker, true);
+    document.removeEventListener("mousedown", this._interactionBlocker, true);
+    document.removeEventListener("mouseup", this._interactionBlocker, true);
+    document.removeEventListener("click", this._interactionBlocker, true);
+    document.removeEventListener("wheel", this._interactionBlocker, true);
+    document.removeEventListener("keydown", this._interactionBlocker, true);
   }
 }
 

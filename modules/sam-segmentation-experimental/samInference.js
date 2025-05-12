@@ -1,13 +1,17 @@
+/**
+ * This class is responsible for loading Transformers.js library, loading models and running inference.
+ */
 window.SAMInference = class extends XOpatModuleSingleton {
   constructor() {
     super("sam-segmentation-experimental");
-    this.models = {};
-    this.processors = {};
-    this.modelLoaded = false;
-    this.selectedModel = null;
-    this.selectedComputationDevice = "Client";
+    this._models = {};
+    this._processors = {};
+    this._modelsLoaded = false;
+    this._selectedModel = null;
+    this._selectedComputationDevice = "Client";
     this.registerAsEventSource();
 
+    // Servers defined in the configuration
     const serverConfigs = this.getStaticMeta("servers", []);
     this.GPU_SERVERS = {};
     for (const server of serverConfigs) {
@@ -17,6 +21,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
       };
     }
 
+    // Models defined in the configuration
     const models = this.getStaticMeta("models", []);
     this.ALLOWED_MODELS = {};
     for (const model of models) {
@@ -25,24 +30,98 @@ window.SAMInference = class extends XOpatModuleSingleton {
     }
   }
 
-  async raiseServerAvailableEvent(context) {
-    context.raiseEvent("server-available");
-  }
-
   async raiseModelsLoadedEvent(context) {
     context.raiseEvent("models-loaded");
   }
 
+  async raiseSegmentationStarted(context) {
+    context.raiseEvent("segmentation-started");
+  }
+
+  async raiseSegmentationFinished(context) {
+    context.raiseEvent("segmentation-finished");
+  }
+
+  /**
+   * Load models specified in the configuration (include.json).
+   */
+  async loadAllModels() {
+    await this._loadDependencies();
+
+    const device = await this._getBestDevice();
+    globalThis.TRANSFORMERS_BACKEND = device;
+
+    for (const hfModelName of Object.keys(this.ALLOWED_MODELS)) {
+      this._processors[hfModelName] = await this.AutoProcessor.from_pretrained(
+        hfModelName
+      );
+      this._models[
+        hfModelName
+      ] = await this.SamModel.from_pretrained(hfModelName, {
+        dtype: "q8"
+      });
+    }
+
+    this._selectedModel = Object.keys(this.ALLOWED_MODELS)[0];
+    this._modelsLoaded = true;
+    console.log("All allowed models loaded.");
+  }
+
+  /**
+   * Setter for active model.
+   * @param {*} modelName
+   */
+  setModel(modelName) {
+    if (this._models[modelName]) {
+      this._selectedModel = modelName;
+      console.log(`Model switched to: ${modelName}`);
+    } else {
+      console.error(`Model ${modelName} not loaded.`);
+    }
+  }
+
+  /**
+   * Setter for active computation device.
+   * @param {*} computationDevice
+   */
+  setComputationDevice(computationDevice) {
+    this._selectedComputationDevice = computationDevice;
+    console.log(`Computation switched to: ${computationDevice}`);
+  }
+
+  /**
+   * Runs inference based on the selected model and computation device.
+   * @param {*} viewportBlob Blob of the viewport image.
+   * @param {*} clickCoords Coordinates of the segmentation.
+   * @returns
+   */
+  async runInference(viewportBlob, clickCoords) {
+    if (!this._modelsLoaded) {
+      console.error("Models not loaded.");
+      return null;
+    }
+    if (!viewportBlob) {
+      console.error("Invalid viewportBlob passed.");
+      return null;
+    }
+
+    if (this._selectedComputationDevice === "Client") {
+      return await this._runInferenceClient(viewportBlob, clickCoords);
+    } else {
+      return await this._runInferenceServer(viewportBlob, clickCoords);
+    }
+  }
+
+  /**
+   * Loads the dependencies for the transformers library.
+   * @returns
+   */
   async _loadDependencies() {
     if (this.AutoProcessor) return;
 
     const transformersConfig = this.getStaticMeta("transformers", {});
-    console.log(transformersConfig);
     const libPath = transformersConfig.library;
     const expectedHash = transformersConfig.hash;
-
-    console.log(libPath);
-    console.log(expectedHash);
 
     if (!libPath || !expectedHash) {
       console.error("Transformers library path or hash not found in config.");
@@ -59,6 +138,12 @@ window.SAMInference = class extends XOpatModuleSingleton {
     }
   }
 
+  /**
+   * Fetches the script and verifies its hash.
+   * @param {*} libPath Path to the library.
+   * @param {*} expectedHash Expected hash of the library.
+   * @returns {Promise<*>} The imported library.
+   */
   async _fetchAndVerifyScript(libPath, expectedHash) {
     const res = await fetch(libPath);
     const scriptText = await res.text();
@@ -73,8 +158,6 @@ window.SAMInference = class extends XOpatModuleSingleton {
       .join("");
 
     if (hashHex !== expectedHash) {
-      console.log(hashHex);
-      console.log(expectedHash);
       throw new Error("Script hash verification failed.");
     }
 
@@ -84,64 +167,14 @@ window.SAMInference = class extends XOpatModuleSingleton {
     return lib;
   }
 
+  /**
+   * Gets the best device for client computation.
+   * @returns {Promise<string>} The best available device.
+   */
   async _getBestDevice() {
     if (navigator.gpu) return "webgpu";
     if (navigator.webgl) return "webgl";
     return "wasm";
-  }
-
-  async loadAllModels() {
-    await this._loadDependencies();
-
-    const device = await this._getBestDevice();
-    globalThis.TRANSFORMERS_BACKEND = device;
-    console.log("Best device:", device);
-
-    for (const hfModelName of Object.keys(this.ALLOWED_MODELS)) {
-      this.processors[hfModelName] = await this.AutoProcessor.from_pretrained(
-        hfModelName
-      );
-      this.models[
-        hfModelName
-      ] = await this.SamModel.from_pretrained(hfModelName, {
-        dtype: "q8"
-      });
-    }
-
-    this.selectedModel = Object.keys(this.ALLOWED_MODELS)[0];
-    this.modelLoaded = true;
-    console.log("All allowed models loaded.");
-  }
-
-  setModel(modelName) {
-    if (this.models[modelName]) {
-      this.selectedModel = modelName;
-      console.log(`Model switched to: ${modelName}`);
-    } else {
-      console.error(`Model ${modelName} not loaded.`);
-    }
-  }
-
-  setComputationDevice(computationDevice) {
-    this.selectedComputationDevice = computationDevice;
-    console.log(`Computation switched to: ${computationDevice}`);
-  }
-
-  async runInference(viewportBlob, clickCoords) {
-    if (!this.modelLoaded) {
-      console.error("Models not loaded.");
-      return null;
-    }
-    if (!viewportBlob) {
-      console.error("Invalid viewportBlob passed.");
-      return null;
-    }
-
-    if (this.selectedComputationDevice === "Client") {
-      return await this._runInferenceClient(viewportBlob, clickCoords);
-    } else {
-      return await this._runInferenceServer(viewportBlob, clickCoords);
-    }
   }
 
   async _runInferenceClient(viewportBlob, clickCoords) {
@@ -150,8 +183,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
       const image = await this.RawImage.read(imageUrl);
 
       const input_points = [[[[clickCoords.x, clickCoords.y]]]];
-      const processor = this.processors[this.selectedModel];
-      const model = this.models[this.selectedModel];
+      const processor = this._processors[this._selectedModel];
+      const model = this._models[this._selectedModel];
 
       const inputs = await processor(image, { input_points });
       const outputs = await model(inputs);
@@ -176,7 +209,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
     return new Promise((resolve, reject) => {
       reader.onload = async () => {
         const base64String = reader.result.split(",")[1];
-        const serverModelName = this.ALLOWED_MODELS[this.selectedModel];
+        const serverModelName = this.ALLOWED_MODELS[this._selectedModel];
         const requestBody = {
           image: base64String,
           x: clickCoords.x,
@@ -185,7 +218,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
         };
 
         try {
-          const serverInfo = this.GPU_SERVERS[this.selectedComputationDevice];
+          const serverInfo = this.GPU_SERVERS[this._selectedComputationDevice];
           const url = `${serverInfo.path}/segment`;
 
           const response = await fetch(url, {
@@ -215,6 +248,12 @@ window.SAMInference = class extends XOpatModuleSingleton {
     });
   }
 
+  /**
+   * Processes the segmentation masks.
+   * @param {*} masks Candidate masks.
+   * @param {*} scores IoU scores of the masks.
+   * @returns {Promise<{ binaryMask: Uint8Array, width: number, height: number }>} The processed mask.
+   */
   async _processSegmentationMask(masks, scores) {
     const resizedImage = this.RawImage.fromTensor(masks[0][0].mul(255));
     const image = resizedImage;
@@ -242,6 +281,32 @@ window.SAMInference = class extends XOpatModuleSingleton {
    * @returns {Array<{ x: number, y: number }>} The polygon points.
    */
   maskToPolygon(binaryMask, width, height, ref) {
+    const totalPixels = binaryMask.length;
+    const filledPixels = binaryMask.reduce((sum, val) => sum + val, 0);
+    const filledRatio = filledPixels / totalPixels;
+
+    // Warn if nothing is segmented
+    if (filledPixels === 0) {
+      VIEWER.raiseEvent("warn-user", {
+        originType: "module",
+        originId: "sam-segmentation-experimental",
+        code: "W_SAM_NO_SEGMENTATION",
+        message: "Empty segmenation mask received."
+      });
+      return null;
+    }
+
+    // Warn if segmentation covers more than 90%
+    if (filledRatio > 0.9) {
+      VIEWER.raiseEvent("warn-user", {
+        originType: "module",
+        originId: "sam-segmentation-experimental",
+        code: "W_SAM_OVER_SEGMENTATION",
+        message:
+          "Segmentation mask covers more than 90% of the image, it is considered invalid."
+      });
+      return null;
+    }
     this.MagicWand = OSDAnnotations.makeMagicWand();
     const bounds = {
       minX: 0,
@@ -302,7 +367,6 @@ window.SAMInference = class extends XOpatModuleSingleton {
       const viewerWidth = VIEWER.container.clientWidth;
       const viewerHeight = VIEWER.container.clientHeight;
 
-      // create a temporary canvas to resize the captured image
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = viewerWidth;
       tempCanvas.height = viewerHeight;
@@ -320,7 +384,6 @@ window.SAMInference = class extends XOpatModuleSingleton {
         viewerHeight
       );
 
-      // convert the resized canvas to a blob
       tempCanvas.toBlob(blob => {
         if (!blob) {
           console.error("Failed to capture viewport image");

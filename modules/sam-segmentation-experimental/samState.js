@@ -14,16 +14,18 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._initializeSAM();
   }
 
+  /**
+   * Initializes the SAM instance and loads all models.
+   */
   async _initializeSAM() {
+    this._checkGpuServersAvailability();
+
     await this.sam.loadAllModels();
     this.sam.raiseModelsLoadedEvent(this.context);
 
-    // set default model (first one)
     const defaultModel = Object.keys(this.sam.ALLOWED_MODELS)[0];
     this.sam.setModel(defaultModel);
 
-    // continue initialization
-    this._checkGpuServersAvailability();
     this._registerEventListeners();
   }
 
@@ -75,7 +77,6 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
 
     if (availableCount > 0) {
       console.log(`At least one GPU server is available.`);
-      this.sam.raiseServerAvailableEvent(this.context);
     } else {
       console.log("No GPU servers are available.");
     }
@@ -83,9 +84,9 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
 
   /**
    * Handles the click event for segmentation.
-   * @param {*} o - The event object.
-   * @param {*} point - The click point.
-   * @param {*} isLeftClick - Indicates if the click is a left click.
+   * @param {*} o The event object.
+   * @param {*} point The click point.
+   * @param {*} isLeftClick Indicates if the click is a left click.
    * @param {*} _
    * @returns {Promise<void>}
    */
@@ -95,6 +96,16 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._isLeft = isLeftClick;
     console.log(`Starting segmentation on point: ${point}`);
 
+    this.sam.raiseSegmentationStarted(this.context);
+    setTimeout(() => this._executeSegmentation(o), 0);
+  }
+
+  /**
+   * Executes the segmentation process.
+   * @param {*} o The event object.
+   * @returns {Promise<void>}
+   */
+  async _executeSegmentation(o) {
     const clickX = o.clientX;
     const clickY = o.clientY;
     const ref = VIEWER.scalebar.getReferencedTiledImage();
@@ -103,22 +114,38 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     if (!blob) {
       console.error("Failed to capture viewport image");
       this._samProcessing = false;
+      this.sam.raiseSegmentationFinished(this.context);
       return;
     }
+
     const samCoords = { x: clickX, y: clickY };
+    try {
+      const result = await this.sam.runInference(blob, samCoords);
 
-    let result;
-    result = await this.sam.runInference(blob, samCoords);
-    if (result) {
-      const { binaryMask, width, height } = result;
-      const polygon = this.sam.maskToPolygon(binaryMask, width, height, ref);
+      if (result) {
+        const { binaryMask, width, height } = result;
+        const polygon = this.sam.maskToPolygon(binaryMask, width, height, ref);
 
-      let visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
-      const factory = this.context.getAnnotationObjectFactory("polygon");
-      this.result = factory.create(polygon, visualProps);
-      this.context.addAnnotation(this.result);
+        let visualProps = this.context.presets.getAnnotationOptions(
+          this._isLeft
+        );
+        const factory = this.context.getAnnotationObjectFactory("polygon");
+        this.result = factory.create(polygon, visualProps);
+        this.context.addAnnotation(this.result);
+      }
+
+      this.sam.raiseSegmentationFinished(this.context, this.result);
+      this._samProcessing = false;
+    } catch (error) {
+      console.error("Error during segmentation:", error);
+      this._samProcessing = false;
+      VIEWER.raiseEvent("error-user", {
+        originType: "module",
+        originId: "sam-segmentation-experimental",
+        code: "W_SAM_ERROR",
+        message: "Error during segmentation: " + error.message
+      });
+      this.sam.raiseSegmentationFinished(this.context);
     }
-
-    this._samProcessing = false;
   }
 };
