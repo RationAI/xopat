@@ -993,33 +993,60 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         
                 const hiddenHtmlIn = div();
                 hiddenHtmlIn.innerHTML = hiddenHtml;
-        
+
+
                 let content =
-                    div({class: `inner-panel` },
+                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                         div(
-                            // TODO find out what should have these onclick functions do
-                            h3({ class: `d-inline-block h3` },
-                                `${title}`,
+                            span({ 
+                                class: "material-icons inline-arrow plugins-pin btn-pointer",
+                                id: `${id}-pin`, 
+                                onclick: function(){
+                                    toVisible = this.offsetParent.lastChild;
+                                    if (toVisible.classList.contains('force-visible')){
+                                        toVisible.classList.remove('force-visible');
+                                        this.classList.remove('opened');
+                                    } else{
+                                        toVisible.classList.add('force-visible');
+                                        this.classList.add('opened');
+                                    }
+                                },
+                                style: "padding: 0;" },
+                                "navigate_next",
+                            ),
+                            h3({ 
+                                class: "d-inline-block h3 btn-pointer",
+                                onclick: function(){
+                                    toVisible = this.previousElementSibling.offsetParent.lastChild;
+                                    if (toVisible.classList.contains('force-visible')){
+                                        toVisible.classList.remove('force-visible');
+                                        this.previousElementSibling.classList.remove('opened');
+                                    } else{
+                                        toVisible.classList.add('force-visible');
+                                        this.previousElementSibling.classList.add('opened');
+                                    }
+                                } },
+                                title ,
                             ),
                             titleHtmlIn,
                         ),
-                        div({ class: `inner-panel-visible` },
+                        div({ class: "inner-panel-visible" },
                             htmlIn,
                         ),
-                        div({ class: `inner-panel-hidden` },
+                        div({ class: "inner-panel-hidden" },
                             hiddenHtmlIn,
                         ),
                     )
                 const InsideMenu = new UI.MainPanel({
-                    id: `${id}`,
+                    id: `${pluginId}-submenu`,
                     orientation: UI.Menu.ORIENTATION.TOP,
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
                 },{ 
-                    id: "sha", 
-                    icon: "fa-eye", 
-                    title: "shaders", 
+                    id: id, 
+                    icon: "fa-circle-question", 
+                    title: title, 
                     body: [content]
                 });  
 
@@ -1033,11 +1060,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             // should add submenus to plugin menu
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-circle-question") {
                 const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
                 const d = van.tags().div();
                 d.innerHTML = html;
-                insideMenu.addTab({id: toolsMenuId, icon: "fa-settings", title: title, body: [d]});
+                insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
             }
         },
 
