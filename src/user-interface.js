@@ -1038,7 +1038,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const d = van.tags().div();
                 d.innerHTML = html;
                 insideMenu.addTab({id: toolsMenuId, icon: "fa-settings", title: title, body: [d]});
-                console.log(insideMenu);
             }
         },
 
@@ -1053,7 +1052,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const viewer = div();
                 viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
                                         <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
-                                   </div>`;
+                                    </div>`;
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
@@ -1089,9 +1088,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 const text = new UI.Div(
                     {id: "tissue-title-content", 
-                     class: "", 
-                     extraClasses: {btn: "btn btn-primary btn-sm"}, 
-                     extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
+                    class: "", 
+                    extraClasses: {btn: "btn btn-primary btn-sm"}, 
+                    extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
                     },); 
                     
                 const checkbox = new UI.Div(

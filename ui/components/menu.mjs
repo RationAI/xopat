@@ -112,6 +112,15 @@ class Menu extends BaseComponent {
                 tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
             }
         }
+
+        if (Object.keys(this.tabs).length === 1){
+            this.header.setClass("hidden", "hidden");
+            this.tabs[Object.keys(this.tabs)[0]].focus();
+        }
+        else {
+            this.header.setClass("hidden", "");
+            this.unfocusAll();
+        }
     }
 
     /**
@@ -159,6 +168,15 @@ class Menu extends BaseComponent {
      */
     getHeaderDomNode() {
         return document.getElementById(this.id + "-header");
+    }
+
+    headerSwitchVisible(){
+        this.header_visible = !this.header_visible;
+        if (this.header_visible) {
+            this.header.setClass("hidden", "hidden");
+        } else {
+            this.header.setClass("hidden", "");
+        }
     }
 
     static generateCode() {

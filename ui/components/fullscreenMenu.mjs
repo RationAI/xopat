@@ -68,6 +68,11 @@ class FullscreenMenu extends BaseComponent{
             this.getContentDomNode().appendChild(item.create());
         }
         item._initializing = false;
+        for (let c of item._children) {
+            if (c instanceof BaseComponent) {
+                c._initializing = false;
+            }
+        }
     }
 
     create(){
