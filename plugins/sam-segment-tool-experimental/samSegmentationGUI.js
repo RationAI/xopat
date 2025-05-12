@@ -1,3 +1,6 @@
+/**
+ * This plugin integrates the Segment Anything Model (SAM) into the Annotations plugin.
+ */
 class SAMSegmentationPlugin extends XOpatPlugin {
   constructor(id) {
     super(id);
@@ -17,6 +20,22 @@ class SAMSegmentationPlugin extends XOpatPlugin {
     }
     this.integrateWithPlugin("gui_annotations", annotationsPlugin => {
       this.annotationsPlugin = annotationsPlugin;
+      this.context.setCustomModeUsed(
+        "SAM_SEGMENTATION",
+        OSDAnnotations.SegmentAnythingState
+      );
+      this._waitForElement("#annotations-tool-bar-content")
+        .then(() => {
+          $("#annotations-tool-bar-content").append(`
+      <div id="sam-loading-info" class="d-inline-block mx-1">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        <span> Loading segmentation models...</span>
+      </div>
+    `);
+        })
+        .catch(error => {
+          console.error(error);
+        });
     });
     if (!this.annotationsPlugin) {
       VIEWER.raiseEvent("warn-user", {
@@ -28,24 +47,11 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       });
     }
 
-    this.context.addHandler("annotations-gui-ready", () => {
-      this.integrateWithPlugin("gui_annotations", annotationsPlugin => {
-        this.annotationsPlugin = annotationsPlugin;
-      });
-      this.raiseRegisterCustomModeEvent();
-      $("#annotations-tool-bar-content").append(`
-  <div id="sam-loading-info" class="d-inline-block mx-1">
-    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-    <span> Loading segmentation models...</span>
-  </div>
-`);
-    });
-
     this.context.addHandler("models-loaded", () => {
       $("#sam-loading-info").remove();
-      this.raiseRegisterToolControlsEvent();
-      this.setUpModelDropdown();
-      this.setUpComputationDropdown();
+      this._registerToolControls(this.context.Modes.SAM_SEGMENTATION);
+      this._setUpModelDropdown();
+      this._setUpComputationDropdown();
     });
 
     this.context.addHandler("segmentation-finished", () => {
@@ -60,10 +66,66 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   }
 
   /**
+   * Waits until a DOM element is present.
+   */
+  async _waitForElement(selector, timeout = 3000) {
+    const interval = 50;
+    const maxAttempts = timeout / interval;
+    let attempts = 0;
+
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if ($(selector).length > 0) {
+          resolve();
+        } else if (++attempts >= maxAttempts) {
+          reject(new Error(`Element "${selector}" not found in time.`));
+        } else {
+          setTimeout(check, interval);
+        }
+      };
+      check();
+    });
+  }
+
+  /**
+   * Registers the tool controls for the segmentation mode.
+   * @param {*} mode The segmentation mode.
+   */
+  _registerToolControls(mode) {
+    const modeId = mode.getId();
+    const controlId = `${modeId}-annotation-mode`;
+    const labelId = `${modeId}-annotation-label`;
+    $(`#${controlId}, #${labelId}`).remove();
+
+    const selected = mode.default() ? "checked" : "";
+    const controlHTML = `
+    <input type="radio" id="${controlId}" class="d-none switch" ${selected} name="annotation-modes-selector">
+    <label id="${labelId}" for="${controlId}" class="label-annotation-mode position-relative" title="${mode.getDescription()}">
+      <span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span>
+    </label>
+  `;
+
+    $("#annotations-tool-bar-content").append(controlHTML);
+    $(`#${labelId}`).on("click contextmenu", event => {
+      event.preventDefault();
+      if (
+        this.annotationsPlugin &&
+        typeof this.annotationsPlugin.switchModeActive === "function"
+      ) {
+        this.annotationsPlugin.switchModeActive(modeId);
+      } else {
+        console.warn(
+          "Annotations plugin is not available or does not support switchModeActive."
+        );
+      }
+    });
+  }
+
+  /**
    * Set up the model dropdown menu.
    * @returns {Promise<void>}
    */
-  setUpModelDropdown() {
+  _setUpModelDropdown() {
     $("#sam-model-dropdown").remove();
 
     const models = Object.keys(
@@ -97,7 +159,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
    * Set up the computation dropdown menu.
    * @returns {Promise<void>}
    */
-  setUpComputationDropdown() {
+  _setUpComputationDropdown() {
     $("#sam-computation-dropdown").remove();
     const availableDevices = ["Client"];
     for (const [gpu, info] of Object.entries(
@@ -108,7 +170,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       }
     }
 
-    console.log(availableDevices);
     if (availableDevices.length < 2) {
       return;
     }
@@ -124,25 +185,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       </select>`;
 
     $("#annotations-tool-bar-content").append(dropdownHTML);
-  }
-
-  /**
-   * Raises a custom mode registration event for the annotations plugin.
-   */
-  raiseRegisterCustomModeEvent() {
-    this.context.raiseEvent("register-custom-mode", {
-      id: "SAM_SEGMENTATION",
-      classObj: OSDAnnotations.SegmentAnythingState
-    });
-  }
-
-  /**
-   * Raises a tool controls registration event for the annotations plugin.
-   */
-  raiseRegisterToolControlsEvent() {
-    this.context.raiseEvent("register-tool-controls", {
-      mode: this.context.Modes.SAM_SEGMENTATION
-    });
   }
 
   /**

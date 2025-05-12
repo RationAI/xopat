@@ -18,8 +18,6 @@
 !/modules/webgl
 !/modules/sam-segmentation-experimental
 !/modules/sam-segmentation-experimental/**
-!/modules/segmentation
-!/modules/segmentation/**
 
 /plugins/**
 !/plugins/annotations
