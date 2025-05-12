@@ -1034,7 +1034,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             // should add submenus to plugin menu
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`];
+                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
+                const d = van.tags().div();
+                d.innerHTML = html;
+                insideMenu.addTab({id: toolsMenuId, icon: "fa-settings", title: title, body: [d]});
                 console.log(insideMenu);
             }
         },
