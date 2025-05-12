@@ -1149,7 +1149,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 pluginsToolsBuilder = new UIComponents.Containers.PanelMenu(`${toolsMenuId}`);
                 //pluginsToolsBuilder.context.classList.add("bg-opacity");
                 USER_INTERFACE.TopPluginsMenu._sync();
-                console.log(toolsMenuId);
                 pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
             },
             /**
