@@ -491,7 +491,6 @@ ${contentAction}
         },
     },
 
-    // TODO rewrite for vanjs and our components
     /**
      * Container Builders that auto-layout provided content
      * @namespace UIComponents.Containers
@@ -509,7 +508,7 @@ ${contentAction}
                 this.horizontal = true;
                 this.fullbody = false;
                 this.elements = [];
-                //if (!this.context) throw "PanelMenu(): invalid initialization: container does not exist!";
+                if (!this.context) throw "PanelMenu(): invalid initialization: container does not exist!";
                 this._updateBorder();
             }
 
@@ -641,19 +640,9 @@ ${contentAction}
             }
 
             _createLayout(entityId, id, firstTitle, icon, html, bodyId) {
-                const { div } = van.tags;
-
-                const horizontal = this.horizontal ? "width-full px-3 flex-row" : "height-full py-3 flex-column";
-                const show = this.menuShow ? 'display:flex' : 'display:none';
-                const horizontalStyle = this.horizontal ? "height: 32px;" : "width: 120px; min-width: 120px; text-align: right;";
-                let head = div({
-                    id: `${this.uid}-head`,
-                    class: `flex-items-start ${horizontal}`,
-                    style: `${show}; ${horizontalStyle}; background: var(--color-bg-tertiary); z-index: 2"`
-                },
-                    this._getHeader(entityId, id, firstTitle, icon, true, bodyId)
-                )
-
+                let head = `<div id="${this.uid}-head" class="flex-items-start ${this.horizontal ? "windth-full px-3 flex-row" : "height-full py-3 flex-column"}"
+    style="${this.menuShow ? 'display:flex;' : 'display:none;'} ${this.horizontal ? "height: 32px;" : "width: 120px; min-width: 120px; text-align: right;"} background: var(--color-bg-tertiary); z-index: 2">
+    ${this._getHeader(entityId, id, firstTitle, icon, true, bodyId)}</div>`;
                 let flexD;
                 if (this.horizontal) flexD = this.menuReversed ? "flex-column-reverse panel-horizontal" : "flex-column panel-horizontal";
                 else flexD = "flex-row panel-vertical";
@@ -662,68 +651,29 @@ ${contentAction}
                 else sizeD = this.horizontal ? "width-full" : "height-full";
                 let overflow = this.horizontal ? "overflow-x:auto;overflow-y:hidden;" : "overflow-y:auto;overflow-x:hidden;";
 
-                let body = div({
-                    id: `${this.uid}-body`,
-                    class: `panel-menu-content ${sizeD} position-relative`,
-                    style: overflow
-                },
-                    this._getBody(entityId, id, html, true, bodyId)
-                )
-
-                var panelMenu = div({ class: `panel-menu d-flex ${sizeD} ${flexD}` }, head, body);
-                USER_INTERFACE.RightSideMenu.menu.addTab({id: id, icon: icon, title: id, body: [panelMenu]})
-                this.context = document.getElementById(USER_INTERFACE.RightSideMenu.menu.id+"-opendiv-"+id);
-                this.head = document.getElementById(`${this.uid}-head`);
-                this.body = document.getElementById(`${this.uid}-body`);
+                let body = `<div id="${this.uid}-body" class="panel-menu-content ${sizeD} position-relative" style="${overflow}">
+    ${this._getBody(entityId, id, html, true, bodyId)}</div>`;
+                this.context.innerHTML = `<div class="panel-menu d-flex ${sizeD} ${flexD}">${head + body}</div>`;
+                this.head = this.context.children[0].children[0];
+                this.body = this.context.children[0].children[1];
             }
 
             _getHeader(entityId, id, title, icon, isFirst, bodyId) {
-                const { input, label, span } = van.tags;
-
                 entityId = entityId ? entityId + "-plugin-root" : "";
-                icon = icon ? span({ class: "material-icons", style: "font-size: 14px; padding-bottom: 3px;" }, icon) : "";
-                const uid = this.uid;
-                return span({
-                    id: `${id}-menu-header`,
-                    class: "width-full",
-                    style: "flex-basis: min-content"
-                },
-                    input({
-                        type: "radio",
-                        name: `${this.uid}-header`,
-                        checked: isFirst ? "checked" : "",
-                        id: `${id}-input-header`,
-                        class: `panel-menu-input ${entityId}`,
-                        onclick: function () {
-                            for (let ch of document.getElementById(uid + "-body").children) {
-                                ch.style.display = 'none'
-                            }
-                            document.getElementById(bodyId).style.display = 'block';
-                            let head = this.nextSibling;
-                            head.classList.remove('notification');
-                            head.dataset.notification = '0'
-                        }
-                    }),
-                    label({
-                        for: `${id}-input-header`,
-                        class: `pointer ${entityId} ${this.borderClass} panel-menu-label`,
-                        "data-animation": "popIn"
-                    }),
-                    icon, title);
+                icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
+                return `<span id="${id}-menu-header" class="width-full" style="flex-basis: min-content">
+    <input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
+    class="panel-menu-input ${entityId}" onclick="
+    for (let ch of document.getElementById('${this.uid}-body').children) {ch.style.display = 'none'}
+    document.getElementById('${bodyId}').style.display='block'; let head=this.nextSibling;head.classList.remove('notification');
+    head.dataset.notification='0';"><label for="${id}-input-header" class="pointer ${entityId} ${this.borderClass}
+    panel-menu-label" data-animation="popIn">${icon}${title}</label></span>`;
             }
 
             _getBody(entityId, id, html, isFirst, bodyId) {
                 entityId = entityId ? entityId + "-plugin-root" : "";
                 let size = this.horizontal ? "width-full" : "height-full";
-                const { section } = van.tags;
-                const container = van.tags.div(); // Create a container div
-                container.innerHTML = html;
-                return section({
-                    id: bodyId,
-                    class: `${entityId} position-relative ${size}`,
-                    style: `${isFirst ? '' : 'display: none;'}`
-                },
-                    container);
+                return `<section id="${bodyId}" class="${entityId} position-relative ${size}" style="${isFirst ? '' : 'display: none;'}">${html}</section>`;
             }
         },
 

@@ -980,7 +980,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     title: title, 
                     body: undefined, 
                     onClick: function () {
-                        USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}-menu`)
+                        USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}`)
                     }
                 });
 
@@ -1050,7 +1050,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     body: [content]
                 });  
 
-                const d = new UI.Div({ id: `${pluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
+                const d = new UI.Div({ id: `${pluginId}-insideMenu`, class: "d-flex flex-column" }, InsideMenu);
 
                 USER_INTERFACE.FullscreenMenu.menu.addTab(d);
             },
@@ -1061,7 +1061,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             // should add submenus to plugin menu
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-circle-question") {
-                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
+                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-insideMenu`]._children[0];
                 const d = van.tags().div();
                 d.innerHTML = html;
                 insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
@@ -1074,7 +1074,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             init: function () {
                 const { div } = van.tags;
-                const settingsIcon = new ui.FAIcon({name: "fa-gear"});
 
                 const viewer = div();
                 viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
@@ -1083,9 +1082,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},
-                {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"},
-                {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
+                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},)
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.focus("navigator"); // if not visible, navigator wont show
@@ -1146,10 +1143,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} icon
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                pluginsToolsBuilder = new UIComponents.Containers.PanelMenu(`${toolsMenuId}`);
-                //pluginsToolsBuilder.context.classList.add("bg-opacity");
-                USER_INTERFACE.TopPluginsMenu._sync();
+
+                if (!pluginsToolsBuilder) {
+                    pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("toolbar");
+                    pluginsToolsBuilder.context.classList.add("bg-opacity");
+                    //USER_INTERFACE.MainMenu._sync();
+                }
+
                 pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
+                if (pluginsToolsBuilder.isVisible) {
+                    USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
+                }
+
             },
             /**
              * Show desired toolBar menu. Also opens the toolbar if closed.
