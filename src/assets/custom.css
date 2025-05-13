@@ -133,7 +133,7 @@ button div {
     pointer-events: auto; 
     z-index: 5; 
     background-color: var(--color-bg-tertiary); 
-    max-width: 690px; 
+    max-width: 800px; 
     width: calc(-65px + 100vw);
     height: calc(100% - 45px);
     top: 45px;
@@ -141,6 +141,7 @@ button div {
     transform: translateX(-50%);
     padding-left: 10px;
     padding-right: 10px;
+    padding-top: 10px;
 }
 
 #overlay-darken{
