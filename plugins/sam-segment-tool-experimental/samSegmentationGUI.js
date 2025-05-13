@@ -14,6 +14,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
    */
   async pluginReady() {
     this.context = OSDAnnotations.instance();
+    this.sam = window.SAMInference.instance();
     if (!this.context) {
       console.error("OSDAnnotations instance not found.");
       return;
@@ -47,20 +48,20 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       });
     }
 
-    this.context.addHandler("models-loaded", () => {
+    this.sam.addHandler("models-loaded", () => {
       $("#sam-loading-info").remove();
       this._registerToolControls(this.context.Modes.SAM_SEGMENTATION);
       this._setUpModelDropdown();
       this._setUpComputationDropdown();
     });
 
-    this.context.addHandler("segmentation-finished", () => {
+    this.sam.addHandler("segmentation-finished", () => {
       console.log("Segmentation finished");
       this.hideSegmentationOverlay();
       this.annotationsPlugin.switchModeActive("auto");
     });
 
-    this.context.addHandler("segmentation-started", () => {
+    this.sam.addHandler("segmentation-started", () => {
       this.showSegmentationOverlay();
     });
   }
@@ -201,7 +202,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
         </div>
       `);
     }
-    this._blockUserInteraction();
   }
 
   /**
@@ -209,23 +209,6 @@ class SAMSegmentationPlugin extends XOpatPlugin {
    */
   hideSegmentationOverlay() {
     $("#segmentation-overlay").remove();
-  }
-
-  /**
-   * Blocks user interaction with the page during segmentation.
-   */
-  _blockUserInteraction() {
-    this._interactionBlocker = e => {
-      e.stopImmediatePropagation();
-      e.preventDefault();
-    };
-
-    document.removeEventListener("mousemove", this._interactionBlocker, true);
-    document.removeEventListener("mousedown", this._interactionBlocker, true);
-    document.removeEventListener("mouseup", this._interactionBlocker, true);
-    document.removeEventListener("click", this._interactionBlocker, true);
-    document.removeEventListener("wheel", this._interactionBlocker, true);
-    document.removeEventListener("keydown", this._interactionBlocker, true);
   }
 }
 

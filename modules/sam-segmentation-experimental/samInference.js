@@ -30,16 +30,12 @@ window.SAMInference = class extends XOpatModuleSingleton {
     }
   }
 
-  async raiseModelsLoadedEvent(context) {
-    context.raiseEvent("models-loaded");
+  raiseSegmentationStarted() {
+    this.raiseEvent("segmentation-started");
   }
 
-  async raiseSegmentationStarted(context) {
-    context.raiseEvent("segmentation-started");
-  }
-
-  async raiseSegmentationFinished(context) {
-    context.raiseEvent("segmentation-finished");
+  raiseSegmentationFinished() {
+    this.raiseEvent("segmentation-finished");
   }
 
   /**
@@ -65,6 +61,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
     this._selectedModel = Object.keys(this.ALLOWED_MODELS)[0];
     this._modelsLoaded = true;
     console.log("All allowed models loaded.");
+    this.raiseEvent("models-loaded");
   }
 
   /**

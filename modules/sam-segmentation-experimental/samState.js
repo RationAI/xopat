@@ -12,6 +12,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._samProcessing = false;
     this.sam = window.SAMInference.instance();
     this._initializeSAM();
+    this._interactionUnlockedAt = Date.now();
+    this._ignoreEventGracePeriod = 100;
   }
 
   /**
@@ -21,7 +23,6 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._checkGpuServersAvailability();
 
     await this.sam.loadAllModels();
-    this.sam.raiseModelsLoadedEvent(this.context);
 
     const defaultModel = Object.keys(this.sam.ALLOWED_MODELS)[0];
     this.sam.setModel(defaultModel);
@@ -91,12 +92,21 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
    * @returns {Promise<void>}
    */
   async handleClickDown(o, point, isLeftClick, _) {
+    const now = Date.now();
+    if (
+      now - this._interactionUnlockedAt < this._ignoreEventGracePeriod ||
+      this._samProcessing
+    ) {
+      console.log("Ignoring buffered or duplicate click event.");
+      return;
+    }
     if (!isLeftClick || this._samProcessing) return;
     this._samProcessing = true;
     this._isLeft = isLeftClick;
     console.log(`Starting segmentation on point: ${point}`);
 
-    this.sam.raiseSegmentationStarted(this.context);
+    this.context.setOSDTracking(false);
+    this.sam.raiseSegmentationStarted();
     setTimeout(() => this._executeSegmentation(o), 0);
   }
 
@@ -114,7 +124,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     if (!blob) {
       console.error("Failed to capture viewport image");
       this._samProcessing = false;
-      this.sam.raiseSegmentationFinished(this.context);
+      this.sam.raiseSegmentationFinished();
+      this.context.setOSDTracking(true);
       return;
     }
 
@@ -135,6 +146,7 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
       }
 
       this.sam.raiseSegmentationFinished(this.context, this.result);
+      this.context.setOSDTracking(true);
       this._samProcessing = false;
     } catch (error) {
       console.error("Error during segmentation:", error);
@@ -145,7 +157,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
         code: "W_SAM_ERROR",
         message: "Error during segmentation: " + error.message
       });
-      this.sam.raiseSegmentationFinished(this.context);
+      this.sam.raiseSegmentationFinished();
+      this.context.setOSDTracking(true);
     }
   }
 };
