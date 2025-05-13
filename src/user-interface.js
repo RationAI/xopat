@@ -969,21 +969,65 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
 
-            /**
-             * Adds html to the fullscreenmenu and button to the plugins menu
-             */
-            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                // adding button to the top plugins menu
-                this.menu.addTab({ 
-                    id: pluginId, 
-                    icon: "fa-circle-question", 
-                    title: title, 
-                    body: undefined, 
-                    onClick: function () {
-                        USER_INTERFACE.FullscreenMenu.menu.focus(`${pluginId}`)
-                    }
-                });
+            // TODO find out what should this do
+            _sync() {
+            },
 
+            // should add submenus to plugin menu
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
+
+                // adds button to topPluginsMenu and new div to the fullscreenMenu
+                if(!this.menu.tabs[ownerPluginId]){
+                    this.menu.addTab({
+                        id: ownerPluginId, 
+                        icon: "fa-fw", 
+                        title: ownerPluginId, 
+                        body: undefined, 
+                        onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${ownerPluginId}-menu`)}});
+
+                    const InsideMenu = new UI.MainPanel({
+                        id: `${ownerPluginId}-submenu`,
+                        orientation: UI.Menu.ORIENTATION.TOP,
+                        buttonSide: UI.Menu.BUTTONSIDE.LEFT,
+                        rounded: UI.Menu.ROUNDED.ENABLE,
+                        extraClasses: { bg: "bg-transparent" }
+                    },);  
+        
+                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
+        
+                    USER_INTERFACE.FullscreenMenu.menu.addTab(d);
+                }
+
+                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
+                const d = van.tags().div();
+                d.innerHTML = html;
+                insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
+
+            }
+        },
+
+        RightSideMenu: {
+            context: $("#right-side-menu"),
+            menu: "",
+
+            init: function () {
+                const { div } = van.tags;
+
+                const viewer = div();
+                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
+                                        <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
+                                    </div>`;
+                this.menu = new UI.MultiPanelMenu({
+                    id: "myMenu",
+                },
+                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},)
+                
+                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
+                this.menu.focus("navigator"); // if not visible, navigator wont show
+                this.menu.attachTo(this.context);
+                
+            },
+            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 const { div, span, h3 } = van.tags();
                 const titleHtmlIn = div();
                 titleHtmlIn.innerHTML = titleHtml;
@@ -1037,57 +1081,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             hiddenHtmlIn,
                         ),
                     )
-                const InsideMenu = new UI.MainPanel({
-                    id: `${pluginId}-submenu`,
-                    orientation: UI.Menu.ORIENTATION.TOP,
-                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                    rounded: UI.Menu.ROUNDED.ENABLE,
-                    extraClasses: { bg: "bg-transparent" }
-                },{ 
-                    id: id, 
-                    icon: "fa-circle-question", 
-                    title: title, 
-                    body: [content]
-                });  
-
-                const d = new UI.Div({ id: `${pluginId}-insideMenu`, class: "d-flex flex-column" }, InsideMenu);
-
-                USER_INTERFACE.FullscreenMenu.menu.addTab(d);
-            },
-
-            // TODO find out what should this do
-            _sync() {
-            },
-
-            // should add submenus to plugin menu
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-circle-question") {
-                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-insideMenu`]._children[0];
-                const d = van.tags().div();
-                d.innerHTML = html;
-                insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
-            }
-        },
-
-        RightSideMenu: {
-            context: $("#right-side-menu"),
-            menu: "",
-
-            init: function () {
-                const { div } = van.tags;
-
-                const viewer = div();
-                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
-                                        <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
-                                    </div>`;
-                this.menu = new UI.MultiPanelMenu({
-                    id: "myMenu",
-                },
-                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},)
-                
-                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
-                this.menu.focus("navigator"); // if not visible, navigator wont show
-                this.menu.attachTo(this.context);
-                
+                this.menu.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
             },
         },
 

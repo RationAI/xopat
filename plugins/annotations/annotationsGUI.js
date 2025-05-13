@@ -115,7 +115,7 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	initHTML() {
-		USER_INTERFACE.TopPluginsMenu.appendExtended(
+		USER_INTERFACE.RightSideMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
 <span class="material-icons p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
