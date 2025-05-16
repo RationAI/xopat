@@ -82,11 +82,11 @@
     /**
      * Compute more visually-pleasing zoom value for rendering.
      * @memberOf fabric.Canvas
-     * @param zoom
+     * @param zoom zoom value, if undefined it gets the current zoom
      * @return {number}
      */
-    fabric.Canvas.prototype.computeGraphicZoom = function (zoom) {
-        return Math.sqrt(zoom) / 2;
+    fabric.Canvas.prototype.computeGraphicZoom = function (zoom = undefined) {
+        return Math.sqrt(zoom === undefined ? this.getZoom() : zoom) / 2;
     };
 
     if (!window.OpenSeadragon) {

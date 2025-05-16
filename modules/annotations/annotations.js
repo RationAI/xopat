@@ -317,7 +317,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		} catch (e) {
 			const formats = OSDAnnotations.Convertor.formats;
 			const triedFormat = options.format;
-			console.log("Failed to load annotations as default, attempt to parse some of the remaining supported formats:", formats);
+			console.log(`Failed to load annotations as ${options.format}: ${e}, attempt to parse some of the remaining supported formats:`, formats);
 
 			for (let format of formats) {
 				if (format === triedFormat) continue;
@@ -325,7 +325,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					options.format = format;
 					toImport = await OSDAnnotations.Convertor.decode(options, data, this);
 					console.log("Successfully parsed as", format);
-				} catch (e) {
+					break;
+				} catch (_e) {
 					//pass
 				}
 			}
@@ -345,7 +346,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (Array.isArray(toImport) && toImport.length > 0) {
 			imported = true;
 			//if no presets, maybe we are importing object array
-			await this._loadObjects({objects: toImport}, clear, undefined, inheritSession);
+			await this._loadObjects({objects: toImport}, clear, inheritSession);
 		} else {
 			if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
 				imported = true;
@@ -353,7 +354,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 			if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
 				imported = true;
-				await this._loadObjects(toImport, clear, undefined, inheritSession);
+				await this._loadObjects(toImport, clear, inheritSession);
 			}
 		}
 
@@ -441,7 +442,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//todo allow for 'redo' history (once layers are introduced)
 		if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
 		if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
-		return this._loadObjects(annotations, clear, undefined, inheritSession);
+		return this._loadObjects(annotations, clear, inheritSession);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -1773,57 +1774,55 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		}
 	}
 
-	_loadObjects(input, clear, reviver, inheritSession) {
+	_loadObjects(input, clear, inheritSession = false) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
 		const multipolygonFactory = this.multiPolygonFactory;
 
-		return new Promise((resolve, reject) => {
-			// TODO Dirty patch, detect factory and forward before-import hook via its API
-			input.objects.forEach(obj => {
+		// If we get already fabric.js objects, avoid passing them to enlivenObjects
+		const fabricObjects = [];
+		const nonFabricObjects = [];
+		for (let obj of input.objects) {
+			if (obj instanceof fabric.Object) {
+				fabricObjects.push(obj);
+			} else {
+				// TODO Dirty patch, detect factory and forward before-import hook via its API
 				if (obj.type === 'path' && obj.points && !obj.path) {
 					obj.path = multipolygonFactory._createPathFromPoints(obj.points);
 				}
-			});
+				nonFabricObjects.push(obj);
+			}
+		}
 
-			//todo try re-implement with fabric.util.enlivenObjects(...)? not private api
-			this.canvas._enlivenObjects(input.objects, function (enlivenedObjects) {
-				if (input.objects.length > 0 && enlivenedObjects.length < 1) {
-					return reject("Failed to import objects. Check the attribute syntax. Do you specify 'type' attribute?");
+		return fabric.util.enlivenObjects(nonFabricObjects, objects => {
+		 if (clear) this.canvas.clear();
+			let insertion = 0;
+
+			function initObject(obj) {
+				if (inheritSession && !obj.sessionID) {
+					obj.sessionID = self.session;
 				}
+				self.checkLayer(obj);
+				self.checkAnnotation(obj);
+				obj.on('selected', self._objectClicked.bind(self));
+				obj.on('deselected', self._objectDeselected.bind(self));
+				_this.insertAt(obj, insertion++);
+			}
 
-				if (clear) _this.clear();
-				_this._setBgOverlay(input, function () {
-					enlivenedObjects.forEach(function(obj, index) {
+			for (let obj of objects) {
+				initObject(obj);
+			}
 
-						if (inheritSession && !obj.sessionID) {
-							obj.sessionID = self.session;
-						}
-
-						self.checkLayer(obj);
-						self.checkAnnotation(obj);
-
-						obj.on('selected', self._objectClicked.bind(self));
-						//todo consider annotation creation event?
-						_this.insertAt(obj, index);
-					});
-					delete input.objects;
-					delete input.backgroundImage;
-					delete input.overlayImage;
-					delete input.background;
-					delete input.overlay;
-					_this._setOptions(input);
-					self.history.assignIDs(_this.getObjects());
-					_this.renderAll();
-					return resolve();
-				});
-			}, reviver);
+			// Process also enlivenObjects - avoided items
+			for (let obj of fabricObjects) {
+				initObject(obj);
+			}
+			self.history.assignIDs(_this.getObjects());
 		});
 	}
 
 	_edgesMouseNavigation(e) {
 		if (this.mode !== this.Modes.AUTO) {
-
 			const edgeThreshold = 20;
 			const mouseX = e.clientX;
 			const mouseY = e.clientY;

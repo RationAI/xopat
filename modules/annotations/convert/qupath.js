@@ -159,23 +159,23 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     decoders = {
         Point: (object) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("point");
-            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, {});
+            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.context.presets.getCommonProperties());
         },
         MultiPoint: (object) => this._decodeMulti(object, "Point"),
         LineString: (object) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polyline");
-            return factory.create(this._toNativeRing(object.coordinates, false), {});
+            return factory.create(this._toNativeRing(object.coordinates, false), this.context.presets.getCommonProperties());
         },
         MultiLineString: (object) => this._decodeMulti(object, "LineString"),
         Polygon: (object) => {
             if (object.coordinates.length > 1) {
                 let factory = OSDAnnotations.instance().getAnnotationObjectFactory("multipolygon");
                 const rings = object.coordinates.map(ring => this._toNativeRing(ring));
-                return factory.create(rings, {});
+                return factory.create(rings, this.context.presets.getCommonProperties());
             }
 
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polygon");
-            return factory.create(this._toNativeRing(object.coordinates[0] || []), {});
+            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.context.presets.getCommonProperties());
         },
         MultiPolygon: (object) => this._decodeMulti(object, "Polygon"),
         GeometryCollection: (object) => {

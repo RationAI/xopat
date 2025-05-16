@@ -578,7 +578,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         async importData(data) {}
 
         /**
-         *
+         * TODO: this does not wait once module is fully loaded!
          * @param moduleId
          * @param callback
          * @return {boolean} true if finished immediatelly, false if registered handler for the

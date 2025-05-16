@@ -136,6 +136,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
                 setItem(key, value) {
                     Cookies.set(key, value);
+                    if (!Cookies.get(key)) {
+                        console.warn("Cookie value too big to store!", key);
+                    }
                 }
                 removeItem(key) {
                     Cookies.remove(key);

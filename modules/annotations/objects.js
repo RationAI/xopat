@@ -2,6 +2,7 @@
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
+ * @class OSDAnnotations.AnnotationObjectFactory
  */
 OSDAnnotations.AnnotationObjectFactory = class {
 
@@ -516,6 +517,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
                 const canvas = this._context.canvas;
                 props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+            } else {
+                // Shared props object carries over the value
+                delete props.strokeWidth;
             }
             ofObject.set(props);
         }
@@ -523,15 +527,19 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Create array of points - approximation of the object shape. This method should be overridden.
-     * For groups, it should return the best possible approximation via single array of points.
-     *  - if difficult, you can return undefined, in that case some features will not work.
+     * For groups, it should return the best possible approximation via single array of points
+     * (or nested points see multipolygons). If difficult, you can return undefined,
+     * in that case some features will not work (like exporting to some formats!).
+     *
+     * For multipolygons, it should return [ [bounding polygon points], [hole1] .... ].
+     * Usage of withObjectPoint and withArrayPoint as converter.
      *
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint
      * @param {number} digits decimal precision, default undefined
      * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-     * @return {Array} array of items returned by the converter - points
+     * @return {Array} array of items returned by the converter - points or arrays in case of multipolygon
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
         return undefined;
@@ -548,6 +556,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     static withArrayPoint(x, y) {
         return [x, y];
+    }
+
+    /**
+     * Revert toPointArray, useful for converters when they need to serialize unsupported object type.
+     * Usage of fromObjectPoint or fromArrayPoint as deconvertors.
+     *
+     * @param {Array} obj approximated object
+     * @param {function} deconvertor take two elements and convert and return item, see
+     *  fromObjectPoint, fromArrayPoint.
+     * @return {object} object suitable for create(...) call of the given factory
+     */
+    fromPointArray(obj, deconvertor) {
+        return undefined;
+    }
+
+    /**
+     * Strategy de-convertor, converts point to an object compatible with the internal point representation.
+     */
+    static fromObjectPoint(point) {
+        return point; //identity
+    }
+
+    /**
+     * Strategy de-convertor, converts point to an object compatible with the internal point representation.
+     */
+    static fromArrayPoint(point) {
+        return {x: point[0], y: point[1]};
     }
 };
 
@@ -596,9 +631,9 @@ OSDAnnotations.PolygonUtilities = {
 
     getBoundingBox: function (points) {
 		if (!points || points.length === 0) return null;
-	
+
         let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-	
+
 		for (let i = 0; i < points.length; i++) {
             const point = points[i];
             minX = Math.min(minX, point.x);

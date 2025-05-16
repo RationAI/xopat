@@ -27,6 +27,29 @@ To register a new converter, register the converter class after its definition w
 
 Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
 
+### Generic polygon / multipolygon representation
+
+You can abstract from understanding the object internals, which is useful in case of export to some
+format that does not support the target annotation type.
+
+````js
+const poly = factory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, 0);
+````
+When polygon is retrieved, it can be either a polygon or a nested polygon (when multipolygon appears).
+You need to somehow store this object, preferably along with ``factoryID``. Later, you can re-import
+it using:
+
+````js
+const factory = this.context.getAnnotationObjectFactory(type);
+const annotation = factory.create(factory.fromPointArray(poly, 
+    OSDAnnotations.AnnotationObjectFactory.fromArrayPoint), this.context.presets.getCommonProperties());
+````
+The application can consume both JSON-exported representations or fully fabric objects coming from ``factory.create(..)``.
+We don't need to call ``getCommonProperties`` with preset instance as this will be handled during annotations import -
+we now care about correct geometry / instance creation. The properties also carry information like zoom level and so on.
+
+> The downside is that in the given format, the annotation itself might not be well understood or represented! 
+
 ### Native Format
 This format is used when rendering annotations, and any other format is sooner or later converted to this
 format. It includes the most detailed export data. The output is a JSON object with three
