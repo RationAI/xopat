@@ -5,6 +5,10 @@ to the versions 1.x.x.
 
 ### 2.2.1.dev (HEAD for 2.1.1)
 **Bugfixes**: faster zooming constant, disabled dynamic speed adjustment.
+Fixed annotation visuals for point, line. Fix annotations rest IO, fix logics with refreshing token,
+more robust behavior.
+
+**Features**: annotation reconstruction from point array new API. Useful for convertors.
 
 ### 2.2.0
 **NEW UI SYSTEM**. The UI now supports component system using Van.js library. A lightweight
