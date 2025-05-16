@@ -210,7 +210,8 @@
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
-                "nouislider.min.js"
+                "nouislider.min.js",
+                "autocomplete.js"
             ]
         },
         /**
