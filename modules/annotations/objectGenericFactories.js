@@ -1854,7 +1854,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         for (let i = 0; i < pointsArray.length; i++) {
             const polygonPoints = pointsArray[i];
             const polygonObj = this._polygonFactory.fromPointArray(polygonPoints, deconvertor);
-            multipolygonPoints.push(polygonObj.points);
+            multipolygonPoints.push(polygonObj);
         }
 
         return multipolygonPoints;
