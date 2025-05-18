@@ -1,5 +1,8 @@
 /**
  * This plugin integrates the Segment Anything Model (SAM) into the Annotations plugin.
+ * @class SAMSegmentationPlugin
+ * @extends XOpatPlugin
+ * @param {string} id The ID of the plugin.
  */
 class SAMSegmentationPlugin extends XOpatPlugin {
   constructor(id) {
@@ -11,6 +14,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   /**
    * Plugin initialization function.
    * @returns {Promise<void>}
+   * @async
    */
   async pluginReady() {
     this.context = OSDAnnotations.instance();
@@ -48,6 +52,13 @@ class SAMSegmentationPlugin extends XOpatPlugin {
       });
     }
 
+    this._blockerHandler = e => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+
     this.sam.addHandler("models-loaded", () => {
       $("#sam-loading-info").remove();
       this._registerToolControls(this.context.Modes.SAM_SEGMENTATION);
@@ -57,17 +68,27 @@ class SAMSegmentationPlugin extends XOpatPlugin {
 
     this.sam.addHandler("segmentation-finished", () => {
       console.log("Segmentation finished");
-      this.hideSegmentationOverlay();
-      this.annotationsPlugin.switchModeActive("auto");
+      setTimeout(() => {
+        this._deactivateGlobalEventBlocker();
+        USER_INTERFACE.Loading.show(false);
+      }, 50);
     });
 
     this.sam.addHandler("segmentation-started", () => {
-      this.showSegmentationOverlay();
+      this._activateGlobalEventBlocker();
+      USER_INTERFACE.Loading.show(true);
+      USER_INTERFACE.Loading.text("Waiting for segmentation...");
     });
   }
 
   /**
    * Waits until a DOM element is present.
+   * @param {string} selector The CSS selector of the element to wait for.
+   * @param {number} timeout The maximum time to wait in milliseconds.
+   * @returns {Promise<void>}
+   * @throws {Error} If the element is not found within the timeout.
+   * @private
+   * @async
    */
   async _waitForElement(selector, timeout = 3000) {
     const interval = 50;
@@ -91,6 +112,8 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   /**
    * Registers the tool controls for the segmentation mode.
    * @param {*} mode The segmentation mode.
+   * @returns {Promise<void>}
+   * @private
    */
   _registerToolControls(mode) {
     const modeId = mode.getId();
@@ -125,6 +148,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   /**
    * Set up the model dropdown menu.
    * @returns {Promise<void>}
+   * @private
    */
   _setUpModelDropdown() {
     $("#sam-model-dropdown").remove();
@@ -159,6 +183,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   /**
    * Set up the computation dropdown menu.
    * @returns {Promise<void>}
+   * @private
    */
   _setUpComputationDropdown() {
     $("#sam-computation-dropdown").remove();
@@ -189,26 +214,31 @@ class SAMSegmentationPlugin extends XOpatPlugin {
   }
 
   /**
-   * Displays a loading overlay during segmentation.
+   * Block mouse movements globally and consume them fully.
    */
-  showSegmentationOverlay() {
-    if ($("#segmentation-overlay").length === 0) {
-      $("body").append(`
-        <div id="segmentation-overlay" class="segmentation-overlay">
-          <div class="segmentation-overlay-content">
-            <div class="spinner-border" role="status"></div>
-            <div>Waiting for segmentation...</div>
-          </div>
-        </div>
-      `);
-    }
+  _activateGlobalEventBlocker() {
+    this._blockerHandler = e => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+    window.addEventListener("mousemove", this._blockerHandler, {
+      capture: true,
+      passive: false
+    });
   }
 
   /**
-   * Removes the loading overlay after segmentation is complete.
+   * Remove the global event blocker.
    */
-  hideSegmentationOverlay() {
-    $("#segmentation-overlay").remove();
+  _deactivateGlobalEventBlocker() {
+    if (!this._blockerHandler) return;
+    window.removeEventListener("mousemove", this._blockerHandler, {
+      capture: true,
+      passive: false
+    });
+    this._blockerHandler = null;
   }
 }
 
