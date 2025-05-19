@@ -142,17 +142,18 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
             if (allowUserPrompt === ALWAYS) {
                 await this._promptLogin();
             } else if (allowUserPrompt === IF_NECESSARY) {
-                await this.userManager.signinSilent();
-
-                const user = await this.userManager.getUser();
-                if (!user) {
+                const refreshTokenExpiration = this.getRefreshTokenExpiration();
+                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
                     USER_INTERFACE.Loading.text("Log-in required...");
                     await this._promptLogin();
+                } else {
+                    console.debug("OIDC: login[IF_NECESSARY] silently...");
+                    await this.userManager.signinSilent();
                 }
             } else {
                 // SignInUserInteraction.NEVER
                 USER_INTERFACE.Loading.text("Attempting to log in...");
-                console.debug("OIDC: Signing silently...");
+                console.debug("OIDC: login[NEVER] silently...");
                 await this.userManager.signinSilent();
             }
 
@@ -340,7 +341,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
             return true;
         } else {
             this.disableEvents();
-            USER_INTERFACE.Loading.text("Failed to log in.");
+            USER_INTERFACE.Loading.text("");
         }
         return returnNeedsRefresh();
     }
