@@ -142,7 +142,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
             if (allowUserPrompt === ALWAYS) {
                 await this._promptLogin();
             } else if (allowUserPrompt === IF_NECESSARY) {
-                const refreshTokenExpiration = this.getRefreshTokenExpiration();
+                const refreshTokenExpiration = await this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
                     USER_INTERFACE.Loading.text("Log-in required...");
                     await this._promptLogin();
