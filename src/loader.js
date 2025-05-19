@@ -192,6 +192,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     };
 
     /**
+     * Get one of allowed plugin meta keys
+     * @param id
+     * @param {string} metaKey one of "name", "description", "author", "version"
+     */
+    window.pluginMeta = function(id, metaKey) {
+        return ["name", "description", "author", "version"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+    }
+
+    /**
      * Get a module singleton reference if instantiated.
      * @param id module id
      * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated

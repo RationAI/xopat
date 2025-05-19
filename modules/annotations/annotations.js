@@ -118,47 +118,45 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			strictSchema: false
 		});
 
-		await this._initIoFromCache();
+		if (this._storeCacheSnapshots) {
+			await this._initIoFromCache();
 
-		let guard = 0; const _this=this;
-		function editRoutine(event, force=false) {
-			if (force || guard++ > 10) {
+			let guard = 0; const _this=this;
+			function editRoutine(event, force=false) {
+				if (force || guard++ > 10) {
+					guard = 0;
+					//todo ensure cache can be non-persistent as a fallback
+					_this.cache.set('_unsaved', {
+						session: APPLICATION_CONTEXT.sessionName,
+						objects: _this.toObject(true)?.objects,
+						presets: _this.presets.toObject()
+					});
+				}
+			}
+
+			this.addHandler('export', () => {
+				_this.cache.set('_unsaved', null);
 				guard = 0;
-				//todo ensure cache can be non-persistent as a fallback
-				_this.cache.set('_unsaved', {
-					session: APPLICATION_CONTEXT.sessionName,
-					objects: _this.toObject(true)?.objects,
-					presets: _this.presets.toObject()
-				});
+			});
+			this.addHandler('annotation-create', editRoutine);
+			this.addHandler('annotation-delete', editRoutine);
+			this.addHandler('annotation-replace', editRoutine);
+			this.addHandler('annotation-edit', editRoutine);
+			window.addEventListener("beforeunload", event => {
+				if (guard === 0 || !_this.history.canUndo()) return;
+				editRoutine(null, true);
+			});
+
+			if (!this._avoidImport) {
+				await this.loadPresetsCookieSnapshot();
 			}
 		}
-
-		this.addHandler('export', () => {
-			_this.cache.set('_unsaved', null);
-			guard = 0;
-		});
-		this.addHandler('annotation-create', editRoutine);
-		this.addHandler('annotation-delete', editRoutine);
-		this.addHandler('annotation-replace', editRoutine);
-		this.addHandler('annotation-edit', editRoutine);
-		window.addEventListener("beforeunload", event => {
-			if (guard === 0 || !_this.history.canUndo()) return;
-			editRoutine(null, true);
-		});
-
-		if (!this._avoidImport) {
-			await this.loadPresetsCookieSnapshot();
-		}
-
-		if (this.presets.getExistingIds().length < 1) {
-			const newPreset = this.presets.addPreset();
-			this.presets.selectPreset(newPreset.presetID, true);
-		}
-
 		return store;
 	}
 
 	async _initIoFromCache() {
+		if (!this._storeCacheSnapshots) return;
+
 		//todo verify how this behaves with override data import later from the data API
 		// also problem: if cache implemented over DB? we could add cache.local option that could
 		// explicitly request / enforce local storage usage
@@ -681,12 +679,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			preset = this.presets.get(object.presetID);
 			if (!preset) {
 				console.log("Object refers to an invalid preset: using default one.");
-				preset = this.presets.left || this.presets.getOrCreate("__default__");
+				preset = this.presets.left || this.presets.unknownPreset;
 				object.presetID = preset.presetID;
 			}
 		} else {
 			//todo maybe try to find a preset with the exact same color...
-			preset = this.presets.left || this.presets.getOrCreate("__default__");
+			preset = this.presets.left || this.presets.unknownPreset;
 			object.presetID = preset.presetID;
 		}
 		const props = this.presets.getCommonProperties(preset);
@@ -1280,13 +1278,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean}
 	 */
 	async createPresetsCookieSnapshot() {
-		return await this.cache.set('presets', JSON.stringify(this.presets.toObject()));
+		if (this._storeCacheSnapshots) {
+			return await this.cache.set('presets', JSON.stringify(this.presets.toObject()));
+		}
 	}
 
 	/**
 	 * Load cookies cache if available
 	 */
 	async loadPresetsCookieSnapshot(ask=true) {
+		if (!this._storeCacheSnapshots) return;
+
 		const presets = this.presets;
 		const presetCookiesData = this.cache.get('presets');
 
@@ -1346,6 +1348,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._wasModeFiredByKey = false;
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
+		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -1409,6 +1412,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @type {OSDAnnotations.AnnotationObjectFactory}
 		 */
 		this.multiPolygonFactory = this._requireAnnotationObjectPresence("multipolygon");
+
 
 		this._layers = {};
 		if (Object.keys(this._layers).length < 1) this.createLayer();

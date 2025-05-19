@@ -2,6 +2,17 @@
 
 OSDAnnotations.Preset = class {
     /**
+     * @typedef OSDAnnotations.PresetMeta
+     * @type {Object<string,OSDAnnotations.PresetMetaItem>}
+     */
+
+    /**
+     * @typedef OSDAnnotations.PresetMetaItem
+     * @property {string} name
+     * @property {string} value
+     */
+
+    /**
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
      * @param {string} id
      * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
@@ -13,17 +24,26 @@ OSDAnnotations.Preset = class {
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
+        /**
+         * @type {OSDAnnotations.PresetMeta}
+         */
         this.meta = {};
         this.meta.category = {
             name: 'Name',
             value: category
         };
         this._used = false;
+        this._tmp = {};
     }
 
     /**
      * Create the object from JSON representation
      * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
+     * @param {string} parsedObject.color
+     * @param {string} parsedObject.factoryID
+     * @param {string} parsedObject.presetID
+     * @param {OSDAnnotations.PresetMeta} [parsedObject.meta]
+     * @param {Object<string,any>} [parsedObject.temporary] temporary data to attach, optional
      * @param {OSDAnnotations} context function able to get object factory from id
      * @return {OSDAnnotations.Preset} instantiated preset
      */
@@ -41,12 +61,13 @@ OSDAnnotations.Preset = class {
             preset.meta = parsedObject.meta;
         }
         preset._used = true; //keep imported
+        preset._tmp = parsedObject.temporary || {};
         return preset;
     }
 
     /**
      * Convert the preset to JSON-friendly object
-     * @return {{color: string, factoryID: string, meta: {}, presetID: string}}
+     * @return {{color: string, factoryID: string, meta: OSDAnnotations.PresetMeta, presetID: string}}
      */
     toJSONFriendlyObject() {
         return {
@@ -73,6 +94,25 @@ OSDAnnotations.Preset = class {
      */
     getMetaValue(key) {
         return this.meta[key] ? this.meta[key].value : undefined;
+    }
+
+    /**
+     * Temporary Metadata, not exported
+     * @param {string} key
+     * @param {any} value
+     */
+    setTemporaryMeta(key, value) {
+        this._tmp[key] = value;
+    }
+
+    /**
+     * Temporary Metadata, not exported
+     * @param {string} key
+     * @param {any} defaultValue
+     */
+    getTemporaryMeta(key, defaultValue) {
+        const value = this._tmp[key];
+        return value === undefined ? defaultValue : value;
     }
 }; // end of namespace Preset
 
@@ -160,6 +200,17 @@ OSDAnnotations.PresetManager = class {
         });
     }
 
+    /**
+     * Get default unknown preset: this preset is used when annotation references unknown preset ID
+     * @type {OSDAnnotations.Preset}
+     */
+    get unknownPreset() {
+        if (!this._unknownPreset) {
+            this._unknownPreset = new OSDAnnotations.Preset("__unknown__", this._context.polygonFactory, "Unknown", "#adadad");
+        }
+        return this._unknownPreset;
+    }
+
     getActivePreset(isLeftClick) {
         return isLeftClick ? this.left : this.right;
     }
@@ -238,7 +289,7 @@ OSDAnnotations.PresetManager = class {
             for (const k in this._presets) {
                 if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
             }
-            return undefined;
+            return this.unknownPreset;
         }
         return this._presets[id];
     }
@@ -323,10 +374,11 @@ OSDAnnotations.PresetManager = class {
      * @param {string} id preset id
      * @param {string} name new meta field name
      * @param {string} value default value
-     * @return {string} the new meta id
+     * @return {string|undefined} the new meta id, undefined if no preset found
      */
     addCustomMeta(id, name, value) {
         let preset = this._presets[id];
+        if (!preset) return undefined;
         let key = "k"+Date.now();
         preset.meta[key] = {
             name: name,
@@ -346,9 +398,9 @@ OSDAnnotations.PresetManager = class {
         let preset = this._presets[id];
         if (preset && preset.meta[key]) {
             delete preset.meta[key];
+            this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
             return true;
         }
-        this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
         return false;
     }
 

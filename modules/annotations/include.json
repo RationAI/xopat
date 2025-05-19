@@ -22,5 +22,7 @@
         "freeFormTool.js",
         "history.js"
     ],
-    "requires": ["webgl", "fabricjs"]
+    "requires": ["webgl", "fabricjs"],
+    // Whether to store presets in the local storage
+    "storeCacheSnapshots": true,
 }
