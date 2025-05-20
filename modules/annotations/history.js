@@ -757,7 +757,7 @@ ${editIcon}
             }
             if (toRemove) {
                 canvas.remove(toRemove);
-                this._context.raiseEvent('annotation-delete', {object: toAdd});
+                this._context.raiseEvent('annotation-delete', {object: toRemove});
             }
             canvas.setActiveObject(toAdd);
             this._context.raiseEvent('annotation-create', {object: toAdd});
@@ -768,7 +768,7 @@ ${editIcon}
             }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
-            this._context.raiseEvent('annotation-delete', {object: toAdd});
+            this._context.raiseEvent('annotation-delete', {object: toRemove});
         }
         canvas.renderAll();
     }
