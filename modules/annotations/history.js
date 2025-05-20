@@ -755,9 +755,11 @@ ${editIcon}
                     await this._sleep(150); //let user to orient where canvas moved before deleting the element
                 }
             }
-            if (toRemove) canvas.remove(toRemove);
+            if (toRemove) {
+                canvas.remove(toRemove);
+                this._context.raiseEvent('annotation-delete', {object: toAdd});
+            }
             canvas.setActiveObject(toAdd);
-
             this._context.raiseEvent('annotation-create', {object: toAdd});
         } else if (toRemove) {
             if (withFocus && (!focusOnlyIfNecessary || !this._annotationVisible(toRemove))) {

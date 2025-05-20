@@ -375,6 +375,11 @@ input.switch:checked + label span {
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
+/* tailwind fix */
+.btn {
+    height: auto !important;
+    min-height: 0 !important;
+}
 /* fallback */
 @font-face {
     font-family: 'Material Icons';

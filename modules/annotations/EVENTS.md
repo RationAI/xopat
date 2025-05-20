@@ -22,7 +22,8 @@ considered as the creation.
 
 ##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
-in fact replace annotation with a new one. This event is called only once per update, 
+in fact replace annotation with a new one, although the annotation identity as perceived
+by the user remains the same. This event is called only once per update, 
 at the end.
 
 ##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
