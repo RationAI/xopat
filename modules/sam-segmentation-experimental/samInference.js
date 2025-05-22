@@ -1,7 +1,10 @@
 /**
  * This class is responsible for loading Transformers.js library, loading models and running inference.
+ * @class SAMInference
+ * @extends XOpatModuleSingleton
+ * @param {string} id - The ID of the module
  */
-window.SAMInference = class extends XOpatModuleSingleton {
+class SAMInference extends XOpatModuleSingleton {
   constructor() {
     super("sam-segmentation-experimental");
     this._models = {};
@@ -24,22 +27,32 @@ window.SAMInference = class extends XOpatModuleSingleton {
     // Models defined in the configuration
     const models = this.getStaticMeta("models", []);
     this.ALLOWED_MODELS = {};
-    for (const model of models) {
-      const shortName = model.split("/").pop();
-      this.ALLOWED_MODELS[model] = shortName;
+    for (const [shortName, fullName] of Object.entries(models)) {
+      this.ALLOWED_MODELS[fullName] = shortName;
     }
+    console.log("Allowed models:", this.ALLOWED_MODELS);
   }
 
+  /**
+   * Raises event to signal the start of segmentation.
+   * @returns {void}
+   */
   raiseSegmentationStarted() {
     this.raiseEvent("segmentation-started");
   }
 
+  /**
+   * Raises event to signal the end of segmentation.
+   * @returns {void}
+   */
   raiseSegmentationFinished() {
     this.raiseEvent("segmentation-finished");
   }
 
   /**
    * Load models specified in the configuration (include.json).
+   * @returns {Promise<void>}
+   * @async
    */
   async loadAllModels() {
     await this._loadDependencies();
@@ -66,7 +79,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
 
   /**
    * Setter for active model.
-   * @param {*} modelName
+   * @param {*} modelName Name of the model to set.
+   * @returns {void}
    */
   setModel(modelName) {
     if (this._models[modelName]) {
@@ -79,7 +93,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
 
   /**
    * Setter for active computation device.
-   * @param {*} computationDevice
+   * @param {*} computationDevice Name of the computation device to set.
+   * @returns {void}
    */
   setComputationDevice(computationDevice) {
     this._selectedComputationDevice = computationDevice;
@@ -90,7 +105,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
    * Runs inference based on the selected model and computation device.
    * @param {*} viewportBlob Blob of the viewport image.
    * @param {*} clickCoords Coordinates of the segmentation.
-   * @returns
+   * @returns {Promise<{ binaryMask: Uint8Array, width: number, height: number }>} The segmentation mask.
+   * @async
    */
   async runInference(viewportBlob, clickCoords) {
     if (!this._modelsLoaded) {
@@ -111,7 +127,9 @@ window.SAMInference = class extends XOpatModuleSingleton {
 
   /**
    * Loads the dependencies for the transformers library.
-   * @returns
+   * @returns {Promise<void>}
+   * @private
+   * @async
    */
   async _loadDependencies() {
     if (this.AutoProcessor) return;
@@ -140,6 +158,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
    * @param {*} libPath Path to the library.
    * @param {*} expectedHash Expected hash of the library.
    * @returns {Promise<*>} The imported library.
+   * @private
+   * @async
    */
   async _fetchAndVerifyScript(libPath, expectedHash) {
     const res = await fetch(libPath);
@@ -167,6 +187,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
   /**
    * Gets the best device for client computation.
    * @returns {Promise<string>} The best available device.
+   * @private
+   * @async
    */
   async _getBestDevice() {
     if (navigator.gpu) return "webgpu";
@@ -174,6 +196,14 @@ window.SAMInference = class extends XOpatModuleSingleton {
     return "wasm";
   }
 
+  /**
+   * Runs inference on the client.
+   * @param {*} viewportBlob Blob of the viewport image.
+   * @param {*} clickCoords Coordinates of the segmentation.
+   * @returns {Promise<{ binaryMask: Uint8Array, width: number, height: number }>} The segmentation mask.
+   * @private
+   * @async
+   */
   async _runInferenceClient(viewportBlob, clickCoords) {
     try {
       const imageUrl = URL.createObjectURL(viewportBlob);
@@ -199,6 +229,14 @@ window.SAMInference = class extends XOpatModuleSingleton {
     }
   }
 
+  /**
+   * Runs inference on the server.
+   * @param {*} viewportBlob Blob of the viewport image.
+   * @param {*} clickCoords Coordinates of the segmentation.
+   * @returns {Promise<{ binaryMask: Uint8Array, width: number, height: number }>} The segmentation mask.
+   * @private
+   * @async
+   */
   async _runInferenceServer(viewportBlob, clickCoords) {
     const reader = new FileReader();
     reader.readAsDataURL(viewportBlob);
@@ -250,6 +288,8 @@ window.SAMInference = class extends XOpatModuleSingleton {
    * @param {*} masks Candidate masks.
    * @param {*} scores IoU scores of the masks.
    * @returns {Promise<{ binaryMask: Uint8Array, width: number, height: number }>} The processed mask.
+   * @private
+   * @async
    */
   async _processSegmentationMask(masks, scores) {
     const resizedImage = this.RawImage.fromTensor(masks[0][0].mul(255));
@@ -341,6 +381,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
   /**
    * Captures the viewport image at the specified point.
    * @returns {Promise<{ blob: Blob}>} The captured image.
+   * @async
    */
   async captureViewportImage() {
     return new Promise(resolve => {
@@ -396,4 +437,7 @@ window.SAMInference = class extends XOpatModuleSingleton {
       }, "image/png");
     });
   }
-};
+}
+
+// Register the module
+window.SAMInference = SAMInference;
