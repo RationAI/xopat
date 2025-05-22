@@ -98,6 +98,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
+            hasControls: true,
             hasBorders: false
         });
     }

@@ -1821,7 +1821,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	/**
 	 * Highlights selected annotation by adding highlight object as
 	 * helper annotation
-	 * @param {*} selectedObject selected annotation to highlight
+	 * @param {fabric.Object} selectedObject selected annotation to highlight
 	 */
 	async highlightAnnotation(selectedObject) {
 		this.removeHighlight();
@@ -1837,7 +1837,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	/**
 	 * Sets the highlight object, removing any existing one first
-	 * @param {*} highlightObject 
+	 * @param {fabric.Object} highlightObject the object to be set as highlight
 	 */
 	setHighlight(highlightObject) {
 		if (this._currentHighlight) {
