@@ -708,7 +708,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		//todo make sure cached zoom value
 		const zoom = this.canvas.getZoom();
-		object.internalID = object.internalID || Date.now();
+		object.internalID = object.internalID || this._generateInternalId()
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
 	}
 
@@ -825,6 +825,30 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/************************ Canvas object modification utilities *******************************/
 
+	_generateInternalId() {
+		const MULTIPLIER = 100;
+		const now = Date.now();
+		const objects = this.canvas._objects;
+		let lastIdTime = null;
+
+  		if (objects.length > 0) {
+			const lastObj = objects.at(-1);
+        	const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
+
+        	if (idSource?.internalID) {
+            	lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
+        	}
+  		}
+
+	  	if (now === lastIdTime) {
+	  	  this._idCounter++;
+	  	} else {
+	  	  this._idCounter = 0;
+	  	}
+
+	  	return now * MULTIPLIER + this._idCounter;
+	}
+
 	/**
 	 * Add annotation to the canvas without registering it with with available features (history, events...)
 	 * @param {fabric.Object} annotation
@@ -852,7 +876,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.sessionID = this.session;
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
-		annotation.internalID = annotation.instaceID || annotation.created;
+
+		annotation.id = annotation.id || crypto.randomUUID();
+		annotation.internalID = annotation.internalID || this._generateInternalId();
 		if (!_dangerousSkipHistory) this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -903,9 +929,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise @private
 	 */
 	deleteAnnotation(annotation, _raise=true) {
-		annotation.off('selected');
 		this.canvas.remove(annotation);
 		this.history.push(null, annotation);
+		this.removeHighlight();
+
 		this.canvas.renderAll();
 		if (_raise) this.raiseEvent('annotation-delete', {object: annotation});
 	}
@@ -915,6 +942,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {fabric.Object} annotation annotation to describe
 	 * @param {string} desiredKey metadata key to read and return
 	 * @param {boolean} defaultIfUnknown if false, empty string is returned in case no property was found
+	 * @param {boolean} withCoordinates if true, includes coordinates in the default name
 	 * @return {string|*} annotation description
 	 */
 	getAnnotationDescription(annotation, desiredKey="category", defaultIfUnknown=true, withCoordinates=true) {
@@ -1230,6 +1258,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean} true on update success
 	 */
 	updateSingleAnnotationVisuals(object) {
+		if (object.isHighlight) return false;
+
 		let preset = this.presets.get(object.presetID);
 		if (preset) {
 			const factory = this.getAnnotationObjectFactory(object.factoryID);
@@ -1334,6 +1364,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			return factory;
 		}
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
+			if (this.isHighlight) _this.highlightOnZoom(this, zoom, _realZoom);
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
 
@@ -1348,6 +1379,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._wasModeFiredByKey = false;
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
+		this._idCounter = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
@@ -1744,6 +1776,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				this.canvas.setActiveObject(event.target);
 				this.disabledInteraction = false;
 			}
+			this.removeHighlight();
+
 		} catch (e) {
 			console.error(e);
 		}
@@ -1769,8 +1803,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 						});
 					}
 				} else {
-					let factory = this.getAnnotationObjectFactory(object.factoryID);
-					if (factory) factory.selected(object);
+					this.highlightAnnotation(object);
 				}
 			}
 		} catch (e) {
@@ -1778,10 +1811,73 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		}
 	}
 
+	/**
+	 * Removes the current highlight of annotation, if any
+	 */
+	removeHighlight() {
+		this.setHighlight(null);
+	}
+
+	/**
+	 * Highlights selected annotation by adding highlight object as
+	 * helper annotation
+	 * @param {*} selectedObject selected annotation to highlight
+	 */
+	async highlightAnnotation(selectedObject) {
+		this.removeHighlight();
+
+		let factory = this.getAnnotationObjectFactory(selectedObject.factoryID);
+		if (!factory) return;
+
+		const highlight = await factory.selected(selectedObject);
+		if (!highlight) return;
+
+		this.setHighlight(highlight);
+	}
+
+	/**
+	 * Sets the highlight object, removing any existing one first
+	 * @param {*} highlightObject 
+	 */
+	setHighlight(highlightObject) {
+		if (this._currentHighlight) {
+			this.deleteHelperAnnotation(this._currentHighlight);
+			this._currentHighlight = null;
+		}
+
+		if (highlightObject) {
+			this._currentHighlight = highlightObject;
+			this.addHelperAnnotation(highlightObject);
+		}
+	}
+
+	/**
+	 * Retrieves the currently active highlight object, if any
+	 * @returns {fabric.Object|null} the highlight object or null if none
+	 */
+	getHighlight() {
+		return this._currentHighlight;
+	}
+
+	/**
+	 * Adjusts the visual style of an annotation's highlight based on zoom levels
+	 * @param {fabric.Object} object highlight object to adjust
+	 * @param {number} graphicZoom scaled zoom value to better draw graphics
+	 * @param {number} realZoom real zoom value of the viewer
+	 */
+	highlightOnZoom(object, graphicZoom, realZoom) {
+		const zoom = graphicZoom * 15;
+
+		//TO DO - adjust the size of the stroke while zooming
+		object.set({
+			strokeWidth: object.originalStrokeWidth / zoom,
+			strokeDashArray: object.originalStrokeDashArray.map(value => value / zoom),
+		});
+	}
+
 	_loadObjects(input, clear, inheritSession = false) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
-		const multipolygonFactory = this.multiPolygonFactory;
 
 		// If we get already fabric.js objects, avoid passing them to enlivenObjects
 		const fabricObjects = [];
@@ -1790,10 +1886,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			if (obj instanceof fabric.Object) {
 				fabricObjects.push(obj);
 			} else {
-				// TODO Dirty patch, detect factory and forward before-import hook via its API
-				if (obj.type === 'path' && obj.points && !obj.path) {
-					obj.path = multipolygonFactory._createPathFromPoints(obj.points);
-				}
+				const factory = this.getAnnotationObjectFactory(obj.factoryID);
+				factory.initializeBeforeImport(obj);
 				nonFabricObjects.push(obj);
 			}
 		}

@@ -438,7 +438,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
 		this.context.addHandler('history-select', e => {
-			if (e.originalEvent.isPrimary) return;
+			if (e.originalEvent.isPrimary || e.originalEvent.button === 0) return;
 			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
 			if (!annotationObject) return; //todo error message
 

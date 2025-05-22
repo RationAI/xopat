@@ -52,6 +52,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "cornerColor",
         "borderScaleFactor",
         "hasControls",
+        "hasBorders",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -61,6 +62,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "id",
         "author",
         "created",
+        "label",
     ];
 
     /**
@@ -79,6 +81,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "id",
+        "label",
     ];
 
     /**
@@ -189,6 +192,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     exportsGeometry() {
         return [];
+    }
+
+    /**
+     * Initialize object before import
+     * @param {fabric.Object} object object to be initialized
+     */
+    initializeBeforeImport(object) {
     }
 
     trimExportJSON(objectList) {
@@ -464,10 +474,59 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Creates a deep clone of a Fabric.js object
+     * @param {fabric.Object} theObject the Fabric.js object to clone
+     * @param {string[]} customProps an array of custom properties to include in the clone
+     * @returns {Promise<fabric.Object>} a promise that resolves with the cloned object
+     */
+    cloneFabricObject(theObject, customProps = []) {
+        return new Promise((resolve, reject) => {
+            theObject.clone(cloned => {
+                resolve(cloned);
+            }, customProps, error => {
+                reject(error || new Error("Failed to clone Fabric object"));
+            });
+        });
+    }
+
+    /**
      * Called when object is selected
      * @param {fabric.Object} theObject selected fabricjs object
+     * @returns fabricjs object that will be used for highlighting
      */
-    selected(theObject) {
+    async selected(theObject) {
+        try {
+            const clonedObj = await this.cloneFabricObject(theObject);
+
+            //TO DO - adjust the size of the stroke
+            const zoom = this._context.canvas.getZoom();
+            const scaleFactor = (Math.sqrt(zoom) / 2) * 15;
+
+            const strokeWidth = 1500 / scaleFactor;
+            const strokeDashArray = [5000, 2500].map(value => value / scaleFactor);
+
+            clonedObj.set({
+                fill: '',
+                stroke: theObject.cornerColor,
+                strokeWidth: strokeWidth,
+                originalStrokeWidth: strokeWidth,
+                strokeDashArray: strokeDashArray,
+                originalStrokeDashArray: strokeDashArray,
+                strokeLineCap: 'round',
+                strokeUniform: true,
+                left: clonedObj.left + clonedObj.width / 2,
+                top: clonedObj.top + clonedObj.height / 2,
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                isHighlight: true
+            });
+    
+            return clonedObj;
+        } catch (error) {
+            console.error("Error in selected function:", error);
+            return null;
+        }
     }
 
     /**

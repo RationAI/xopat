@@ -155,6 +155,7 @@ OSDAnnotations.PresetManager = class {
         borderScaleFactor: 3,
         strokeSide: 'center',
         hasControls: false,
+        hasBorders: true,
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,

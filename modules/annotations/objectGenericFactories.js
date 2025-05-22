@@ -682,6 +682,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             text: "Placeholder"
         };
     }
+
+    selected(theObject) {
+        return undefined;
+    }
 };
 
 
@@ -1813,12 +1817,22 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return copy;
     }
 
-    setPoints(object, points) {
-        object.points = points;
-        const newPathString = this._createPathFromPoints(points);
+    setPoints(object, points = null) {
+        const newPoints = points || object.points;
 
-        object._setPath(fabric.util.parsePath(newPathString));
+        if (!newPoints || !Array.isArray(newPoints)) {
+            console.warn("Invalid or missing points for multipolygon annotation:", object);
+            return object;
+        }
+
+        object.points = newPoints;
+
+        const pathString = this._createPathFromPoints(newPoints);
+        const pathData = fabric.util.parsePath(pathString);
+
+        object._setPath(pathData);
         object.setCoords();
+
         return object;
     }
 
@@ -1858,5 +1872,22 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         }
 
         return multipolygonPoints;
+    }
+
+    async selected(theObject) {
+        try {
+            const result = await super.selected(theObject);
+            return this.setPoints(result);
+
+        } catch (error) {
+            console.error("Error in Multipolygon selected function:", error);
+            return null;
+        }
+    }
+
+    initializeBeforeImport(object) {
+        if (object.points && !object.path) {
+            object.path = this._createPathFromPoints(object.points);
+        }
     }
 };

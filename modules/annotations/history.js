@@ -23,6 +23,7 @@ OSDAnnotations.History = class {
 
         this.BUFFER_LENGTH = null;
         this._autoIncrement = 0;
+        this._labelIncrement = 0;
         this._boardSelected = null;
         this._context = context;
         this._presets = presetManager;
@@ -351,16 +352,16 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         let board = $(ctx.document.getElementById("annotation-logs"));
 
         if (this._boardSelected && board) {
-            board.find(`#log-object-${this._boardSelected.incrementId}`).css("background", "none");
+            board.find(`#log-object-${this._boardSelected.label}`).css("background", "none");
         }
 
         if (!object || !object.hasOwnProperty("incrementId")) return;
 
         if (object && board) {
-            let node = board.find(`#log-object-${object.incrementId}`);
+            let node = board.find(`#log-object-${object.label}`);
             if (!node) {
                 this._addToBoard(object);
-                node = board.find(`#log-object-${object.incrementId}`);
+                node = board.find(`#log-object-${object.label}`);
             }
             node.css("background", "var(--color-bg-success)");
             if (node[0]) {
@@ -400,7 +401,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
      * @param {object} object fabricjs object
      */
     itemEdit(object) {
-        let node = this._getNode(`edit-log-object-${object.incrementId}`);
+        let node = this._getNode(`edit-log-object-${object.label}`);
         if (node) {
             let bbox = this._getFocusBBox(object);
             this._boardItemEdit(node, bbox, object);
@@ -411,6 +412,10 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         for (let object of objects) {
             if (!object.hasOwnProperty("incrementId")) {
                 object.incrementId = this._autoIncrement++;
+            }
+            
+            if (!object.hasOwnProperty("label")) {
+                object.label = this._labelIncrement++;
             }
         }
     }
@@ -445,16 +450,10 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     _syncLoad() {
         let _this = this;
         //todo sort by incrementId?
-        this._context.canvas.getObjects().some(o => {
-            if (o.presetID && o.factoryID) {
-                if (!o.incrementId || isNaN(o.incrementId)) {
-                    o.incrementId = _this._autoIncrement++;
-                }
-                _this._addToBoard(o);
-            } else if (o.incrementId && !isNaN(o.incrementId)) {
-                _this._addToBoard(o);
+        this._context.canvas.getObjects().forEach(o => {
+            if ((o.presetID && o.factoryID) || (o.incrementId && !isNaN(o.incrementId))) {
+                this._addToBoard(o);
             }
-            return false;
         });
 
         let active = this._context.canvas.getActiveObject();
@@ -506,7 +505,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     _updateBoardText(object, text) {
         if (!text || text.length < 0) text = this._context.getDefaultAnnotationName(object);
         this._performAtJQNode("annotation-logs", node =>
-            node.find(`#log-object-${object.incrementId} span.desc`).html(text));
+            node.find(`#log-object-${object.label} span.desc`).html(text));
     }
 
     _sleep(ms) {
@@ -515,7 +514,7 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 
     _removeFromBoard(object) {
         this._performAtJQNode("annotation-logs", node =>
-            node.children(`#log-object-${object.incrementId}`).remove());
+            node.children(`#log-object-${object.label}`).remove());
     }
 
     _setControlsVisuallyEnabled(enabled) {
@@ -550,8 +549,12 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         let factory = this._context.getAnnotationObjectFactory(object.factoryID);
         let icon = factory ? factory.getIcon() : "question_mark";
 
-        if (!object.hasOwnProperty("incrementId")) {
+        if (!object.hasOwnProperty("incrementId") || isNaN(object.incrementId) || object.incrementId === null) {
             object.incrementId = this._autoIncrement++;
+        }
+
+        if (!object.hasOwnProperty("label") || isNaN(object.incrementId) || object.label === null) {
+            object.label = this._labelIncrement++;
         }
 
         // Commented ability to edit
@@ -575,10 +578,10 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         //     }
         // }
         let color = this._context.getAnnotationColor(object),
-            mainRowContent = this._context.getDefaultAnnotationName(object, false),
-            name = this._context.getAnnotationDescription(object, "category", true);
+            mainRowContent = this._context.getAnnotationDescription(object, "category", true, false),
+            name = new Date(object.created).toLocaleString();
 
-        mainRowContent = mainRowContent ? (mainRowContent + " " + object.incrementId) : '';
+        mainRowContent = mainRowContent ? (mainRowContent + " " + object.label) : '';
 
         let area = factory.getArea(object);
         if (area) {
@@ -596,12 +599,12 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         const _this = this;
         const focusBox = this._getFocusBBoxAsString(object, factory);
         const editable = false; //todo: temporarily disabled factory.isEditable();
-        const editIcon = editable ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.incrementId}"
+        const editIcon = editable ? `<span class="material-icons btn-pointer v-align-top mt-1" id="edit-log-object-${object.label}"
 title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
-<div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.internalID}"
+<div id="log-object-${object.label}" class="rounded-2" data-order="${object.internalID}"
 onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
 oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
@@ -613,11 +616,12 @@ ${editIcon}
         const newPosition = object.internalID;
         function insertAt(containerRef, newObjectRef) {
             let inserted = false;
-            containerRef.children('.item').each(function() {
+
+            containerRef.children().each(function() {
                 const current = $(this);
                 const currentOrder = current.data('order');
 
-                if (newPosition < currentOrder) {
+                if (newPosition > currentOrder) {
                     // Insert before the current element
                     newObjectRef.insertBefore(current);
                     inserted = true;
@@ -625,12 +629,12 @@ ${editIcon}
                 }
             });
             if (!inserted) {
-                containerRef.prepend(newObjectRef);
+                containerRef.append(newObjectRef);
             }
         }
 
-        if (typeof replaced === "object" && !isNaN(replaced?.incrementId)) {
-            this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
+        if (typeof replaced === "object" && !isNaN(replaced?.label)) {
+            this._performAtJQNode(`log-object-${replaced.label}`, node => {
                 if (node.length) {
                     node.replaceWith(html);
                 } else {
@@ -746,6 +750,7 @@ ${editIcon}
     async _performSwap(canvas, toAdd, toRemove, withFocus=true, focusOnlyIfNecessary=false) {
         if (toAdd) {
             canvas.add(toAdd);
+            await this._context.highlightAnnotation(toAdd);
             this._addToBoard(toAdd, toRemove);
             if (withFocus) {
                 if (focusOnlyIfNecessary && this._annotationVisible(toAdd)) {
@@ -766,6 +771,8 @@ ${editIcon}
                 this._focus(this._getFocusBBox(toRemove), undefined, !focusOnlyIfNecessary);
                 await this._sleep(150); //let user to orient where canvas moved before deleting the element
             }
+
+            this._context.removeHighlight();
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
             this._context.raiseEvent('annotation-delete', {object: toRemove});
