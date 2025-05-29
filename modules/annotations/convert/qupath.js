@@ -148,6 +148,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
+    // Todo instead of groups, try to unpack them into a list of objects and put them to the same layer per group
     _decodeMulti(object, type) {
         let result = new fabric.Group(object.coordinates.map(g => this.decoders[type]({ coordinates: g, type: type })))
         result.objects = result._objects; //hack, import works without underscore

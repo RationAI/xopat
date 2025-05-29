@@ -1689,8 +1689,8 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         ofObject.forEachObject(o => {
-            const factory = ofObject._factory();
-            factory && factory.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+            const factory = o._factory();
+            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
         });
     }
 
