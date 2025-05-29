@@ -283,6 +283,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                             }
                         }
                     }
+                    parsedResult.presetID = pid;
                 }
                 parsedResult.meta = {};
                 parsedResult.meta.category = object.properties.name;
