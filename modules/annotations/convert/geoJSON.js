@@ -125,6 +125,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         "ruler": (object) => this._getAsNativeObject(object),
     };
 
+    // todo support unpacking like qupath does
     _decodeMulti(object, type) {
         let result = {};
         //for now we do not make use of Multi* so this has to be external GeoJSON
