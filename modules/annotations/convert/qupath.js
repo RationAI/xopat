@@ -250,7 +250,9 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         const addAnnotations = (parsedResult, object, presets, annotations) => {
             if (object.properties?.classification) {
                 const p = object.properties.classification;
-                presets[p.name] = {
+
+                const builtInPreset = this._defaultQuPathPresets.find(p => p.presetID === p.name);
+                presets[p.name] = builtInPreset || {
                     color: asHexColor(p.color),
                     factoryID: "polygon",
                     presetID: p.name,
@@ -266,9 +268,11 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             if (object.properties?.name) {
                 // todo some warning that the preset was generated, not imported
                 const pid = object.properties?.name;
+                const builtInPreset = this._defaultQuPathPresets.find(p => p.presetID === pid);
+
                 // define if not exists
                 if (!presets[pid]) {
-                    presets[pid] = {
+                    presets[pid] = builtInPreset || {
                         color: this.context.presets.randomColorHexString(),
                         factoryID: "polygon",
                         presetID: pid,
