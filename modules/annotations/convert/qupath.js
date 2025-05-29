@@ -264,6 +264,22 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                 parsedResult.presetID = p.name;
             }
             if (object.properties?.name) {
+                // todo some warning that the preset was generated, not imported
+                const pid = object.properties?.name;
+                // define if not exists
+                if (!presets[pid]) {
+                    presets[pid] = {
+                        color: this.context.presets.randomColorHexString(),
+                        factoryID: "polygon",
+                        presetID: pid,
+                        meta: {
+                            category: {
+                                name: 'Category',
+                                value: pid
+                            }
+                        }
+                    }
+                }
                 parsedResult.meta = {};
                 parsedResult.meta.category = object.properties.name;
             }
