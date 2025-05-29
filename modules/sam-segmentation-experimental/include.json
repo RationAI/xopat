@@ -8,8 +8,10 @@
     "samState.js"
   ],
   "requires": ["annotations"],
-
-  "models": ["Xenova/slimsam-77-uniform", "Xenova/medsam-vit-base"],
+  "models": {
+    "slimsam-77-uniform": "Xenova/slimsam-77-uniform",
+    "medsam-vit-base": "Xenova/medsam-vit-base"
+  },
   "transformers" : {
     "library":  "//cdn.jsdelivr.net/npm/@huggingface/transformers",
     "hash": "79fad8c1c2fd165bf1e77ace20ce023fab4dc13b6621f0e586c9b8c59c4d09d8"

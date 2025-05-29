@@ -1,7 +1,10 @@
 /**
  * Class representing the state of the Segment Anything (SAM) annotation tool.
+ * @class
+ * @extends OSDAnnotations.AnnotationState
+ * @param {Object} context - The context of the OSDAnnotations instance.
  */
-OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationState {
+class SegmentAnythingState extends OSDAnnotations.AnnotationState {
   constructor(context) {
     super(
       context,
@@ -12,12 +15,13 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
     this._samProcessing = false;
     this.sam = window.SAMInference.instance();
     this._initializeSAM();
-    this._interactionUnlockedAt = Date.now();
-    this._ignoreEventGracePeriod = 100;
   }
 
   /**
    * Initializes the SAM instance and loads all models.
+   * @returns {Promise<void>}
+   * @private
+   * @async
    */
   async _initializeSAM() {
     this._checkGpuServersAvailability();
@@ -32,6 +36,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
 
   /**
    * Raises setup events for the plugin.
+   * @returns {Promise<void>}
+   * @private
    */
   _registerEventListeners() {
     this.context.addHandler("change-selected-model", e => {
@@ -49,6 +55,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
 
   /**
    * Checks the availability of GPU servers.
+   * @returns {Promise<void>}
+   * @private
    */
   async _checkGpuServersAvailability() {
     let availableCount = 0;
@@ -84,23 +92,20 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
   }
 
   /**
-   * Handles the click event for segmentation.
+   * Handles the click-up event for segmentation.
    * @param {*} o The event object.
-   * @param {*} point The click point.
-   * @param {*} isLeftClick Indicates if the click is a left click.
-   * @param {*} _
-   * @returns {Promise<void>}
+   * @param {*} point The point where the click occurred.
+   * @param {*} isLeftClick Indicates if the click was a left click.
+   * @param {*} _ 
+   * @returns {void}
    */
-  async handleClickDown(o, point, isLeftClick, _) {
-    const now = Date.now();
-    if (
-      now - this._interactionUnlockedAt < this._ignoreEventGracePeriod ||
-      this._samProcessing
-    ) {
-      console.log("Ignoring buffered or duplicate click event.");
-      return;
-    }
-    if (!isLeftClick || this._samProcessing) return;
+  handleClickUp(o, point, isLeftClick, _) {
+    const clickTime = Date.now();
+    const clickDelta = clickTime - this.context.cursor.mouseTime;
+
+    // Block if already processing or invalid click
+    if (clickDelta > 300 || !isLeftClick || this._samProcessing) return;
+
     this._samProcessing = true;
     this._isLeft = isLeftClick;
     console.log(`Starting segmentation on point: ${point}`);
@@ -114,6 +119,8 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
    * Executes the segmentation process.
    * @param {*} o The event object.
    * @returns {Promise<void>}
+   * @private
+   * @async
    */
   async _executeSegmentation(o) {
     const clickX = o.clientX;
@@ -161,4 +168,6 @@ OSDAnnotations.SegmentAnythingState = class extends OSDAnnotations.AnnotationSta
       this.context.setOSDTracking(true);
     }
   }
-};
+}
+
+OSDAnnotations.SegmentAnythingState = SegmentAnythingState;
