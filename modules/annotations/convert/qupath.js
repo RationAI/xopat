@@ -153,6 +153,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         return object.coordinates.map(g => {
             const item = this.decoders[type]({coordinates: g, type: type});
             item.id = featureParentDict.id; // todo id not unique!
+            return item;
         });
     }
 
