@@ -76,9 +76,6 @@ addPlugin(
             if (mutation.type === "childList" || mutation.type === "subtree") {
               const newForm = container.querySelector("form");
               if (newForm && !newForm.dataset.modified) {
-                console.log(
-                  "New YouTrack form detected, re-applying modifications."
-                );
                 this.modifyForm();
                 break;
               }
@@ -141,7 +138,7 @@ An authorized person needs to enable the form for this domain.
             const description = this.findDescriptionTextarea(e.target);
             const trace =
               "\n\n\n### Attached app logs:\n```\n" +
-              (window.console?.appTrace || []).join("\n") +
+              (window.console?.appTrace || ["No app trace found!"]).join("\n") +
               "\n```\n";
             form.setBlockValue("description", description + trace);
           },
