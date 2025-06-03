@@ -882,9 +882,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	changeAnnotationPreset(annotation, presetID, _raise=true) {
 		let factory = annotation._factory();
 		if (factory !== undefined) {
+			const oldPresetID = annotation.presetID;
 			const options = this.presets.getAnnotationOptionsFromInstance(this.presets.get(presetID));
 			factory.configure(annotation, options);
-			if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID});
+			if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID, oldPresetID: oldPresetID});
 		}
 	}
 

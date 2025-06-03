@@ -6,7 +6,7 @@ to the versions 1.x.x.
 ### 2.2.2
 
 **Bugfixes**: Fixed annotation visuals for point, line. Fix annotations rest IO, fix logics with refreshing token,
-more robust behavior. Better behavior of tutorials.
+more robust behavior. Better behavior of tutorials. Better points rendering.
 
 **Features**: annotation reconstruction from point array new API. Useful for convertors.
 Using 'Unknown', non-exported annotation preset instead of creating new. Configurable data snapshots.

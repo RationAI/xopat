@@ -254,6 +254,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 const preset = object.properties;
                 presets[preset.presetID] = preset;
             } else {
+                // todo try to detect & map onto existing presets in the system
                 let result;
                 const type = object.properties["factoryID"] || object.properties["type"];
                 if (type) result = this.nativeDecoders[type]?.(object);

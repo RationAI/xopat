@@ -734,37 +734,45 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
      * @param object given object type for the factory type
      * @param options
+     *
+     * todo try (also with other props https://fabricjs.com/demos/stroke-uniform-property/) uniform stroke
      */
     configure(object, options) {
-        const zoom = 5 / this._context.canvas.computeGraphicZoom();
+        const graphicZoom = this._context.canvas.computeGraphicZoom();
+        const zoom = 3 / graphicZoom;
         $.extend(object, options, {
             angle: 0,
             rx: zoom,
             ry: zoom,
             width: zoom*1.5,
             height: zoom*1.5,
-            // strokeWidth: 1,
-            // originalStrokeWidth: 1,
+            strokeWidth: 2 / graphicZoom,
+            stroke: options.color,
+            originalStrokeWidth: 2,
             originX: 'center',
             originY: 'center',
             type: this.type,
             factoryID: this.factoryID,
-            fill: options.color,
+            uniformStroke: true,
         });
         //todo not directly draggable some error there -> update force bounds
         return object;
     }
 
+    getCreationRequiredMouseDragDurationMS() {
+        return 0;
+    }
+
     onZoom(ofObject, graphicZoom, realZoom) {
-        const zoom = 5 / graphicZoom;
+        const zoom = 3 / graphicZoom;
         ofObject.rx = ofObject.ry = zoom;
         ofObject.width = ofObject.height = zoom*1.5;
+        ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         // visualProperties.modeOutline = false;
-        // visualProperties.stroke = preset.color;
-        // delete visualProperties.originalStrokeWidth;
+        visualProperties.stroke = preset.color;
         // delete visualProperties.strokeWidth;
         // delete visualProperties.stroke;
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);

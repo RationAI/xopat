@@ -45,7 +45,7 @@ This event is fired when user performs direct annotation editing.
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
 
-##### annotation-preset-change | ``{object: fabric.Object, presetID: string}``
+##### annotation-preset-change | ``{object: fabric.Object, presetID: string, oldPresetID: string}``
 
 ##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
 
