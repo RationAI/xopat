@@ -10,6 +10,9 @@ To deploy xOpat, we need to configure it statically,
        
     !!! note 
         This env.json file is suitable for WSI-Server. If you have your own image server you need to configure your own.
+
+    !!! warning
+        Be sure that you use this env file with openseadragon* attributes or you have openseadragon builded in your repository.
        
     ``` json title="env.json"
     {
