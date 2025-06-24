@@ -865,6 +865,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                 // add components which you want to be hidden on fullscreen here:
                                                 document.getElementById("top-side").classList.toggle("bg-base-200");
                                                 document.getElementById("right-side-menu").classList.toggle("hidden");
+                                                document.getElementById("toolbar").classList.toggle("hidden");
                                             }
                                         },
                                         new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
