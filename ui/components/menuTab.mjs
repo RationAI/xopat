@@ -29,6 +29,14 @@ class MenuTab {
 
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
+
+        if (this.headerButton){
+            this.headerButton._initializing = false;
+        }
+
+        if (this.contentDiv){
+            this.contentDiv._initializing = false;
+        }
     }
 
     /**

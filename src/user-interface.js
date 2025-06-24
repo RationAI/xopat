@@ -688,7 +688,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             createCheckbox: function (text, onchangeFunction, checked=false) {
                 const {input, label } = van.tags;
-                return label({ style: "font-weight: initial;", class: "btn-pointer d-flex"},
+                return label({ style: "font-weight: initial; user-select: none;", class: "btn-pointer d-flex"},
                         input({ type: "checkbox", class: "form-control v-align-middle", checked: "checked" ? checked : "", onchange: onchangeFunction }),
                         "\u00A0" + text,
                 );
