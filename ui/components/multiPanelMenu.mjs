@@ -79,6 +79,21 @@ class MultiPanelMenu extends Menu {
         const tab = new MultiPanelMenuTab(item,this);
         this.tabs[item.id] = tab;
 
+
+        switch (this.design) {
+            case "ICONONLY":
+                tab.iconOnly();
+                break;
+            case "TITLEONLY":
+                tab.titleOnly();
+                break;
+            case "TITLEICON":
+                tab.titleIcon();
+                break;
+            default:
+                throw new Error("Unknown design type");
+        }
+
         if (this._initializing) {
             tab.contentDiv.attachTo(this.body);
         } else {
