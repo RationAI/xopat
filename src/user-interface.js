@@ -617,7 +617,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 this.menu = new UI.FullscreenMenu({
                     id: "fullscreen-menu",
-                },this.getSettingsBody(), this.getPluginsBody(), this.createShadersMenu(), this.getVisualBody(),
+                },this.getSettingsBody(), this.getPluginsBody(), this.getVisualBody(),
             );
 
                 this.menu.attachTo(this.context);
@@ -760,45 +760,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 return body;
                 
             },
-            createShadersMenu: function () {
-                const innerHTML = `
-<div id="panel-images" class="inner-panel mt-2"></div>
 
-<div id="panel-shaders" class="inner-panel">
-
-    <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
-    <div class="inner-panel-content noselect" id="inner-panel-content-1">
-        <div><!-- TODO fix clickHeader -->
-            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow" onclick="let jqSelf = $(this); USER_INTERFACE.RightSideMenu.clickHeader(jqSelf, jqSelf.parents().eq(1).children().eq(1));
-            APPLICATION_CONTEXT.AppCookies.set('_shadersPin', String(jqSelf.hasClass('opened')));" style="padding: 0;">navigate_next</span>
-            <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
-                <!--populated with shaders from the list -->
-            </select>
-            <div class="d-inline-block float-right position-relative hover-selectable">
-                <span id="cache-snapshot" class="material-icons btn-pointer text-right"
-                style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
-                <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
-                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
-                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
-                </div>
-            </div>
-            <br>
-            <div id="global-opacity" class="float-right">
-                <label>
-                    <span data-i18n="main.global.layerOpacity">Opacity</span>
-                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
-                </label>
-            </div>
-        </div>
-
-        <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
-                <!--populated with options for a given image data -->
-        </div>
-        <div id="blending-equation"></div>
-    </div>
-</div>`
-                return new UI.Div({id: "shaders-menu"}, innerHTML);
-            },
             createPluginDiv: function (plugin, pluginCount) {
                 const { div, img, button, input } = van.tags;
 
@@ -1021,7 +983,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},)
+                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},
+                {id: "test", icon: "fa-gear", title: "shaders menu", body: [this.createShadersMenu()]})
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.focus("navigator"); // if not visible, navigator wont show
@@ -1071,7 +1034,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                         this.previousElementSibling.classList.add('opened');
                                     }
                                 } },
-                                title ,
+                                title,
                             ),
                             titleHtmlIn,
                         ),
@@ -1083,6 +1046,58 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         ),
                     )
                 this.menu.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+            },
+            createShadersMenu: function () {
+                const innerHTML = `
+<div id="panel-images" class="inner-panel mt-2"></div>
+
+<div id="panel-shaders" class="inner-panel">
+
+    <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
+    <div class="inner-panel-content noselect" id="inner-panel-content-1">
+        <div><!-- TODO fix clickHeader -->
+            <span id="shaders-pin" class="material-icons btn-pointer inline-arrow"
+            onclick="console.log(this);                                    
+                     toVisible = document.getElementById('data-layer-options');
+                     console.log(toVisible);
+                        if (toVisible.classList.contains('force-visible')){
+                            toVisible.classList.remove('force-visible');
+                            this.classList.remove('opened');
+                        } else{
+                            toVisible.classList.add('force-visible');
+                            this.classList.add('opened');
+                        }
+                    "
+            style="padding: 0;">navigate_next</span>
+            <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
+                <!--populated with shaders from the list -->
+            </select>
+            <div class="d-inline-block float-right position-relative hover-selectable">
+                <span id="cache-snapshot" class="material-icons btn-pointer text-right"
+                style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
+                <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
+                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
+                    <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                </div>
+            </div>
+            <br>
+            <div id="global-opacity" class="float-right">
+                <label>
+                    <span data-i18n="main.global.layerOpacity">Opacity</span>
+                    <input type="range"  min="0" max="1" value="1" step="0.1" class="ml-1" style="width: 100px;">
+                </label>
+            </div>
+        </div>
+
+        <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
+                <!--populated with options for a given image data -->
+        </div>
+        <div id="blending-equation"></div>
+    </div>
+</div>`
+                const shadersMenu = div();
+                shadersMenu.innerHTML = innerHTML;
+                return shadersMenu;
             },
         },
 
