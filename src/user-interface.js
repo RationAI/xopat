@@ -925,11 +925,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "sha", icon: "fa-eye", title: "shaders", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("shaders-menu")} },
+                },
                 );
 
                 this.menu.attachTo(this.context);
-                this.menu.set(UI.Menu.DESIGN.ICONONLY);
+                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
             },
 
             // TODO find out what should this do
@@ -957,7 +957,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     },);  
         
                     const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
-        
+
                     USER_INTERFACE.FullscreenMenu.menu.addTab(d);
                 }
 
@@ -983,8 +983,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "navigator", icon: "fa-gear", title: "Navigator", body: [viewer]},
-                {id: "test", icon: "fa-gear", title: "shaders menu", body: [this.createShadersMenu()]})
+                {id: "navigator", icon: "fa-map", title: "Navigator", body: [viewer]},
+                {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.focus("navigator"); // if not visible, navigator wont show
@@ -1057,9 +1057,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div><!-- TODO fix clickHeader -->
             <span id="shaders-pin" class="material-icons btn-pointer inline-arrow"
-            onclick="console.log(this);                                    
-                     toVisible = document.getElementById('data-layer-options');
-                     console.log(toVisible);
+            onclick="console.log(this);
+                    toVisible = document.getElementById('data-layer-options');
                         if (toVisible.classList.contains('force-visible')){
                             toVisible.classList.remove('force-visible');
                             this.classList.remove('opened');
