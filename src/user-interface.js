@@ -990,6 +990,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.focus("navigator"); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
                 
+                // defaultly open menus
+                this.menu.focus("navigator");
+                
             },
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 const { div, span, h3 } = van.tags();
