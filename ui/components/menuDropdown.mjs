@@ -34,7 +34,7 @@ class menuDropdown extends MenuTab{
         this.list = new Div({
             id: this.parent.id + "-c-" + item.id, 
             extraClasses: {display: "display-none", component:  "dropdown-content menu bg-base-100 rounded-box z-1 p-2 shadow-sm"},
-            extraProperties: {style: "position: absolute; right: 12%; row-gap: 5px;"}, // TODO make for all orientations
+            extraProperties: {style: "position: absolute; row-gap: 5px;"}, // TODO make for all orientations
             }, ...content);
 
         const b = new Button({
