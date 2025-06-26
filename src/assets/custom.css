@@ -156,6 +156,15 @@ button div {
 
 .ui-menu{
     pointer-events: none;
+    /* removes scrollbar */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+/* removes scrollbar on webkit browsers */
+.ui-menu::-webkit-scrollbar {
+    width: 0;
+    height: 0;
 }
 
 .ui-menu-item{

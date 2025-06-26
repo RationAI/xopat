@@ -1057,7 +1057,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
     <div class="inner-panel-content noselect" id="inner-panel-content-1">
         <div><!-- TODO fix clickHeader -->
             <span id="shaders-pin" class="material-icons btn-pointer inline-arrow"
-            onclick="console.log(this);
+            onclick="
                     toVisible = document.getElementById('data-layer-options');
                         if (toVisible.classList.contains('force-visible')){
                             toVisible.classList.remove('force-visible');

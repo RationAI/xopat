@@ -99,7 +99,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 </div>
 
 <!-- Main Panel -->
-<div id="top-side" class="flex-row width-full bg-base-200" style="display: flex; position: relative; align-items: flex-start;">
+<div id="top-side" class="flex-row width-full bg-base-200" style="display: flex; position: relative; align-items: flex-start; height: 45px">
     <div id="top-slide" class=""></div>
     <div id="top-menus" style="display: flex; flex-direction: row; justify-content: flex-end; width: 100%;">
         <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
@@ -111,7 +111,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
 
 <div id="fullscreen-menu"></div>
 
-<div id="right-side-menu" class="flex-column height-full ui-menu" style="position: fixed; width: 500px;"></div>
+<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 500px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
 <div id="toolbar" class="" style="position: fixed; left: 0;"></div>
 <!-- Appended controls for other plugins -->
