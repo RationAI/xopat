@@ -649,9 +649,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     option({ value: "dark_dimmed" }, "Dimmed Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
-                  this.createCheckbox("Show ToolBar", () => {$('#plugin-tools-menu').toggleClass('d-none')}),
-                  this.createCheckbox("Show Scale Bar", () => {APPLICATION_CONTEXT.setOption('scaleBar', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
-                  this.createCheckbox("Show Status Bar", () => {APPLICATION_CONTEXT.setOption('statusBar', this.checked, false);USER_INTERFACE.Status.setClosed(!this.checked);}),
+                  this.createCheckbox("Show ToolBar", () => {$('#toolbar').toggleClass('d-none');}, true),
+                  this.createCheckbox("Show Scale Bar", () => {$('#viewer-magnification').toggleClass('d-none');  $('#viewer-scale-bar').toggleClass('d-none')}, true),
+                  this.createCheckbox("Show Status Bar", () => {$('#viewer-status-bar').toggleClass('d-none')}, true),
                   
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
                   this.createCheckbox("Disable Cookies", () => {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
@@ -1110,19 +1110,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 const { input } = van.tags;
 
-                const copy = new UI.Button({
-                    id: "copy-slide",
-                    size: UI.Button.SIZE.SMALL,
-                    onClick: function () {
-                        UTILITIES.copyToClipboard(this.previousElementSibling.textContent);
-                    }
-                }, new UI.FAIcon("fa-copy"));
-
                 const text = new UI.Div(
                     {id: "tissue-title-content", 
                     class: "", 
                     extraClasses: {btn: "btn btn-primary btn-sm"}, 
                     extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
+                    onClick: function () {
+                        UTILITIES.copyToClipboard(this.textContent);
+                    }
                     },); 
                     
                 const checkbox = new UI.Div(
@@ -1130,9 +1125,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     class: "", 
                     extraClasses: {btn: "btn btn-primary btn-sm"},
                     style: "display: flex; align-items: center;"},
-                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1", onchange: function () { VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)}}))
+                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
+                        onchange: function () { 
+                            VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
+                        }}))
                 
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header"}, checkbox, text, copy);
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header"}, checkbox, text);
                 menu.attachTo(this.context);
             }
         },

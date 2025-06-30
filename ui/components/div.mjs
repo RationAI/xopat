@@ -28,7 +28,7 @@ class Div extends BaseComponent {
 
     create() {
         return div(
-            { ...this.commonProperties, ...this.extraProperties },
+            { ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties },
             ...this.children
         );
     }
