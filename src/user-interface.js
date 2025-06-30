@@ -643,10 +643,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const settings = div(span({ class: "f3-light header-sep" },
                     "Appearance"),
                   "Theme",
-                  select({ class: "select-sm form-control", onchange: () => {APPLICATION_CONTEXT.setOption('theme', $(this).val(), true); UTILITIES.updateTheme();} },
-                    option({ value: "auto" }, "Automatic",),
+                  select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)} },
+                    option({ value: undefined }, "Automatic",),
                     option({ value: "light", selected: "" }, "Light Theme", ),
-                    option({ value: "dark_dimmed" }, "Dimmed Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
                   this.createCheckbox("Show ToolBar", () => {$('#toolbar').toggleClass('d-none');}, true),
@@ -1187,7 +1186,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             close() {
                 USER_INTERFACE.Margins.bottom = 0;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
-            }
+            },
+            changeTheme(theme = undefined) {
+                //["dark", "light", undefined]
+                if (theme === "dark" ||
+                    (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                    document.body.setAttribute("data-theme", "catppuccin-mocha");
+                } else {
+                    document.body.removeAttribute("data-theme"); // light theme
+                }
+            },
         },
 
         /**
