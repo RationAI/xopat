@@ -621,7 +621,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				}, {
 					"click #show-annotation-export": "There are also various export options. Click here to open the menu."
 				}, {
-					"next #annotations-shared": "You can export or import different annotation formats via files.<br>"
+					"next #gui_annotations-submenu-c-annotations-shared": "You can export or import different annotation formats via files.<br>"
 				}, {
 					"next #annotations-local-export-panel": "Importing is dependent on the active format!<br>It is possible to export annotations themselves;<br> some formats allow also exporting presets only."
 				},

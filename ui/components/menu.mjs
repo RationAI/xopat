@@ -32,6 +32,7 @@ class Menu extends BaseComponent {
         super(options,);
 
         this.tabs = {};
+        this.focused = undefined;
         this.orientation = "TOP";
         this.design = "TITLEICON";
 
@@ -120,6 +121,7 @@ class Menu extends BaseComponent {
     focus(id) {
         if (id in this.tabs) {
             this.tabs[id].focus();
+            this.focused = id;
             return true;
         }
         return false;
@@ -129,6 +131,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab._setFocus();
         }
+        this.focused = "all";
     }
 
     /**
@@ -138,6 +141,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab._removeFocus();
         }
+        this.focused= undefined;
     }
 
     /**

@@ -965,7 +965,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
                 // TODO move to mainPanel class and solve toggle
                 USER_INTERFACE.FullscreenMenu.menu.focus(`${atPluginId}-menu`);
-                USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(atSubId);
+                if ( USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focused != atSubId){
+                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].unfocusAll();
+                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(atSubId);
+                }
 
             },
         },
