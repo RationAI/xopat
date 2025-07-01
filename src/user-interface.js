@@ -961,7 +961,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 d.innerHTML = html;
                 insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
 
-            }
+            },
+            openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
+                // TODO move to mainPanel class and solve toggle
+                USER_INTERFACE.FullscreenMenu.menu.focus(`${atPluginId}-menu`);
+                USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(atSubId);
+
+            },
         },
 
         RightSideMenu: {
@@ -1315,8 +1321,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#viewer-container").addClass("disabled");
                 $("#tutorials-title").html(title);
                 $("#tutorials-description").html(description);
-                USER_INTERFACE.RightSideMenu.close();
-                USER_INTERFACE.Tools.close();
+                USER_INTERFACE.RightSideMenu.menu.unfocusAll();
                 this.running = true;
             },
 
@@ -1331,8 +1336,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#tutorials-container").addClass("d-none");
                 if (reflectGUIChange) {
                     $("#viewer-container").removeClass("disabled");
-                    USER_INTERFACE.RightSideMenu.open();
-                    USER_INTERFACE.Tools.open();
                 }
                 this.running = false;
                 APPLICATION_CONTEXT.AppCookies.set('_shadersPin', 'false');
@@ -1398,7 +1401,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                USER_INTERFACE.RightSideMenu.open();
+                USER_INTERFACE.RightSideMenu.menu.focusAll();
                 enjoyhintInstance.set(data);
                 this.hide();
                 enjoyhintInstance.run();

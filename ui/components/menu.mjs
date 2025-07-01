@@ -125,6 +125,12 @@ class Menu extends BaseComponent {
         return false;
     }
 
+    focusAll(){
+        for (let tab of Object.values(this.tabs)) {
+            tab._setFocus();
+        }
+    }
+
     /**
      * @description unfocus all tabs
      */

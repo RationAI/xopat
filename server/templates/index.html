@@ -155,8 +155,8 @@ window.onerror = function (message, file, line, col, error) {
     const withLayers = () => APPLICATION_CONTEXT.layersAvailable;
     window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
         {'next #viewer-container' : $.t('tutorials.basic.1')
-        }, {'next #navigator-container' : $.t('tutorials.basic.3')
-        }, {'next #navigator-container' : $.t('tutorials.basic.4'),
+        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.3')
+        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.4'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
         }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
@@ -174,8 +174,8 @@ window.onerror = function (message, file, line, col, error) {
         }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
         }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
         }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
-        }, {'next #copy-url' : $.t('tutorials.basic.14')
-        }, {'next #global-help' : $.t('tutorials.basic.15')}], function() {
+        }, {'next #left-side-buttons-menu-b-share' : $.t('tutorials.basic.14')
+        }, {'next #left-side-buttons-menu-b-tutorial' : $.t('tutorials.basic.15')}], function() {
         if (withLayers()) {
             //prerequisite - pin in default state
             let pin = $("#shaders-pin");
