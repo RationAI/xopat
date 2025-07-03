@@ -648,18 +648,26 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     option({ value: "light", selected: "" }, "Light Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
-                  this.createCheckbox("Show ToolBar", () => {$('#toolbar').toggleClass('d-none');}, true),
-                  this.createCheckbox("Show Scale Bar", () => {$('#viewer-magnification').toggleClass('d-none');  $('#viewer-scale-bar').toggleClass('d-none')}, true),
-                  this.createCheckbox("Show Status Bar", () => {$('#viewer-status-bar').toggleClass('d-none')}, true),
+                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('d-none');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
+                  this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('d-none');  $('#viewer-scale-bar').toggleClass('d-none')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
+                  this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('d-none')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
                   
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
-                  this.createCheckbox("Disable Cookies", () => {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox("Disable Cookies", function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
         
                   span({ class: "f3-light header-sep" }, "Other", ),
-                  this.createCheckbox("Debug Mode", () => {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
-                  this.createCheckbox("Debug Rendering", () => {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox("Debug Mode", function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox("Debug Rendering", function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                 );      
                 result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
+                
+                // TODO where to put it to make it work?
+                // To hide status bar
+                if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
+                    console.log(document.getElementById("viewer-status-bar"))
+                    $('#viewer-status-bar').toggleClass('d-none');
+                }
+
                 return result;
             },
             createCheckbox: function (text, onchangeFunction, checked=false) {

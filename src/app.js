@@ -512,7 +512,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
     });
 
-
+    
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
@@ -614,9 +614,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             backgroundColor: "rgba(255, 255, 255, 0.5)",
             fontSize: "small",
             barThickness: 2,
-            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false),
+            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false), // TODO does not work right? it negates again in _init function
             magnification: mag
         });
+        // TODO make in destroy???
+        if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
+            $('#viewer-magnification').toggleClass('d-none');  
+            $('#viewer-scale-bar').toggleClass('d-none');
+        }
     };
 
     let preventedSwap = false;
