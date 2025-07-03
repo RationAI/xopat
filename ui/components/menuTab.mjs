@@ -24,6 +24,7 @@ class MenuTab {
         this.styleOverride = item["styleOverride"] || false;
         this.focused = false;
         this.hidden = false;
+        this.id = item.id;
 
         const [headerButton, contentDiv] = this.createTab(item);
 
@@ -79,12 +80,15 @@ class MenuTab {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton.id != this.headerButton.id) {
                 tab._removeFocus();
+                APPLICATION_CONTEXT.setOption(tab.id, false);
             }
         };
 
         if (this.focused) {
+            APPLICATION_CONTEXT.setOption(this.id, false);
             this._removeFocus();
         } else {
+            APPLICATION_CONTEXT.setOption(this.id, true);
             this._setFocus();
         };
     }

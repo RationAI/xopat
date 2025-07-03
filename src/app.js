@@ -385,6 +385,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
     };
 
+    // Initialize middleware before we run scripts initialization
+    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
+    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
+
     /*--------------------------------------------------------------*/
     /*------------ Initialization of  new UI -----------------------*/
     /*--------------------------------------------------------------*/
@@ -438,7 +442,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     });
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     new OpenSeadragon.Tools(VIEWER);
-    USER_INTERFACE.RightSideMenu.menu.focus("navigator"); // to close navigator afterwards
 
     /**
      * Event to fire if you want to avoid explicit warning handling,
@@ -1219,10 +1222,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             openAll(0);
         }
     }
-
-    // Initialize middleware before we run scripts initialization
-    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
-    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
     initXopatScripts();
     function checkLocalState() {

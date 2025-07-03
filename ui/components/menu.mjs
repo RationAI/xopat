@@ -129,7 +129,7 @@ class Menu extends BaseComponent {
 
     focusAll(){
         for (let tab of Object.values(this.tabs)) {
-            tab._setFocus();
+            tab.focus();
         }
         this.focused = "all";
     }
@@ -139,7 +139,7 @@ class Menu extends BaseComponent {
      */
     unfocusAll() {
         for (let tab of Object.values(this.tabs)) {
-            tab._removeFocus();
+            tab.unfocus();
         }
         this.focused= undefined;
     }

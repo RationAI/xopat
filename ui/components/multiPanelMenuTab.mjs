@@ -84,8 +84,10 @@ class MultiPanelMenuTab extends MenuTab{
 
     focus() {
         if (this.focused) {
+            APPLICATION_CONTEXT.setOption(this.id, false);
             this._removeFocus();
         } else {
+        APPLICATION_CONTEXT.setOption(this.id, true);
             this._setFocus();
         };
     }

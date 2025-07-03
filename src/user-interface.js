@@ -991,12 +991,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
-                this.menu.focus("navigator"); // if not visible, navigator wont show
+                this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
                 
                 // defaultly open menus
-                this.menu.focus("navigator");
-                
+                for(i of Object.keys(this.menu.tabs)){
+                    if (APPLICATION_CONTEXT.getOption(i)){
+                        this.menu.tabs[i]._setFocus();
+                    }
+                    else{
+                        this.menu.tabs[i]._removeFocus();
+                    }
+                } 
             },
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 const { div, span, h3 } = van.tags();
