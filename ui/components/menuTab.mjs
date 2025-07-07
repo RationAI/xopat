@@ -93,6 +93,11 @@ class MenuTab {
         };
     }
 
+    unfocus(){
+        APPLICATION_CONTEXT.setOption(this.id, false);
+        this._removeFocus();
+    }
+
     _setFocus() {
         this.focused = true;
         this.headerButton.setClass("type", "btn-secondary");
