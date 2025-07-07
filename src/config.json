@@ -230,7 +230,7 @@
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         },
         "ui": {
-            "van": ["index.mjs"]
+            "van": ["index.js"]
         }
     },
     /**
