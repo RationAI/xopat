@@ -142,6 +142,10 @@ The event occurs each time the viewer runs a visualization goal (switched betwee
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.
 
+#### `visualization-redrawn`
+Called every time the user changes visualization configuration. Should not run expensive computation,
+as it blocks the rendering frames.
+
 #### `close`
 Native OpenSeadragon event called when the canvas gets reloaded.
 

@@ -1,20 +1,9 @@
 const http = require("node:http");
+const url = require('url');
 const fs = require("node:fs");
 const path = require("node:path");
 const querystring = require('querystring');
-
-//todo https:
-// const https = require('node:https');
-//
-// const options = {
-//     key: fs.readFileSync('key.pem'),
-//     cert: fs.readFileSync('cert.pem')
-// };
-//
-// https.createServer(options, (req, res) => {
-//     res.writeHead(200);
-//     res.end("hello world\n");
-// }).listen(8000);
+const i18n = require('../../src/libs/i18next.min');
 
 const PROJECT_PATH = "";
 
@@ -23,8 +12,14 @@ const { loadPlugins } = require("../templates/javascript/plugins");
 const { loadUI } = require("../templates/javascript/vanUI");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
-const { files } = require("../../docs/include");
 const { ABSPATH } = require("./constants");
+
+
+// TODO hardcoded language!
+const language = 'en';
+const languageServerConf = getI18NData(language);
+languageServerConf.fallbackLng = 'en';
+i18n.init(languageServerConf);
 
 const rawReqToString = async (req) => {
     const buffers = [];
@@ -45,18 +40,33 @@ const initViewerCoreAndPlugins = (req, res) => {
     core.CORE.serverStatus.name = "node";
     core.CORE.serverStatus.supportsPost = true;
 
-    loadUI(core, fs.existsSync,);
-
-    //todo o18n and locale
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
+    const requestUrl = url.parse(req.url, true);
+    const language = requestUrl.query.lang;
+    if (language) core.CORE.setup.locale = language;
+
     loadPlugins(core, fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
-        { t: function () { return "Unknown Error (e-translate)."; } });
+        i18n);
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
     return core;
 }
 
+function getI18NData(language) {
+    const localeFile = `${constants.ABSPATH}/src/locales/${language}.json`;
+    if (!fs.existsSync(localeFile)) {
+        console.error("File with locales for language does not exist, defaulting to 'en'!", language, localeFile);
+        language = 'en';
+    }
+    const data = fs.readFileSync(localeFile, {encoding: 'utf8', flag: 'r'});
+    return {
+        resources: {
+            [language]: JSON.parse(data),
+        },
+        lng: language,
+    }
+}
 
 async function responseStaticFile(req, res, targetPath) {
     //taken from https://stackoverflow.com/questions/28061080/node-itself-can-serve-static-files-without-express-or-any-other-module
@@ -164,8 +174,6 @@ ${core.requireCore("env")}`;
             case "app":
                 return `
     <script type="text/javascript">
-    //todo better handling of translation data and the data uploading, now hardcoded
-    const lang = 'en';
     initXopat(
         ${JSON.stringify(core.PLUGINS)},
         ${JSON.stringify(core.MODULES)},
@@ -174,13 +182,7 @@ ${core.requireCore("env")}`;
         '${core.PLUGINS_FOLDER}',
         '${core.MODULES_FOLDER}',
         '${core.VERSION}',
-        //i18next init config
-        {
-            resources: {
-                [lang] : ${fs.readFileSync(constants.ABSPATH + "src/locales/en.json", { encoding: 'utf8', flag: 'r' })}
-            },
-            lng: lang,
-        }
+        ${JSON.stringify(getI18NData(core.CORE.setup.locale))}
     );
     </script>`;
 

@@ -1,6 +1,6 @@
 services:
   xopat-php:
-    image: ghcr.io/rationai/xopat:dev2.0.4 
+    image: ghcr.io/rationai/xopat:2.2.0
     ports:
       - "9001:8000"
     environment:
@@ -43,4 +43,3 @@ services:
             }
           }
         }
-    

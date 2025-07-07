@@ -136,6 +136,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
                 setItem(key, value) {
                     Cookies.set(key, value);
+                    if (!Cookies.get(key)) {
+                        console.warn("Cookie value too big to store!", key);
+                    }
                 }
                 removeItem(key) {
                     Cookies.remove(key);
@@ -301,7 +304,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
-         * @param name
+         * @param name;
          * @param value
          * @param cache
          */
@@ -426,7 +429,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
         maxZoomPixelRatio: 2,
+        zoomPerClick: 2,
+        zoomPerScroll: 1.7,
         blendTime: 0,
+        // This is due to annotations (multipolygon brush) that are disabled during animations
+        // ease out behavior makes user think they can already start drawing and slows them down
+        animationTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
@@ -1013,7 +1021,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             for (let pid in PLUGINS) {
                 const hasParams = CONFIG.plugins[pid];
                 const plugin = PLUGINS[pid];
-                if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
+                if (
+                    (plugin.loaded && !plugin.instance) ||  // load plugin if loaded=true but instance not set
+                    (!plugin.loaded && (hasParams || pluginKeys.includes(pid)))
+                ) {
                     if (plugin.error) {
                         console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
                     } else {
@@ -1265,17 +1276,38 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // Clean up instance references before serialization
             const plugins = {...PLUGINS};
             const modules = {...MODULES};
-            for (let id in plugins) delete plugins[id].instance;
-            for (let id in modules) delete modules[id].instance;
-            sessionStorage.setItem('__xopat_session__', JSON.stringify({
+            for (let id in plugins) {
+                delete plugins[id].instance;
+            }
+            for (let id in modules) {
+                delete modules[id].loaded;
+            }
+            sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
                 ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
             }));
-
+            return true;
         } catch (e) {
             console.error("Failed to store application state!", e);
         }
         return false;
+    }
+
+    function safeStringify(obj) {
+        const seenData = new WeakMap();
+
+        return JSON.stringify(obj, function(key, value) {
+            if (key.startsWith("_") || ["eventSource"].includes(key)) {
+                return undefined;
+            }
+            if (value && typeof value === 'object') {
+                if (seenData.has(value)) {
+                    return undefined;
+                }
+                seenData.set(value, true);
+            }
+            return value;
+        });
     }
 
     if (CONFIG.error) {

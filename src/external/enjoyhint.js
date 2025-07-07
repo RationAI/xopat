@@ -1185,6 +1185,7 @@ var EnjoyHint = function(configs) {
     var options = $.extend(defaults, _options);
     var data = [];
     var current_step = 0;
+    var last_selector = null;
 
     var $body = $(body);
 
@@ -1288,7 +1289,7 @@ var EnjoyHint = function(configs) {
             }
         }
 
-        if (! $(step_data.selector).length) {
+        if (!$(step_data.selector).length) {
             //if we cannot find the element, silently step over it, if the direction was backwards, step = step-1
             console.warn("Tutorial Selector ", step_data.selector, "invalid!");
             stepAction(current_step > step ? step-1 : step + 1);
@@ -1327,27 +1328,34 @@ var EnjoyHint = function(configs) {
                 that.clear();
             }, 250);
 
-            var bounds = $(step_data.selector).get(0);
-            if (bounds) {
-                bounds = bounds.getBoundingClientRect();
-                if(bounds.top < 0 || bounds.bottom > (window.innerHeight || document.documentElement.clientHeight)){
-                    hideCurrentHint();
+            const is_new = last_selector !== step_data.selector;
+
+            if (is_new) {
+                var bounds = $(step_data.selector).get(0);
+                if (bounds) {
+                    bounds = bounds.getBoundingClientRect();
+                    if(bounds.top < 0 || bounds.bottom > (window.innerHeight || document.documentElement.clientHeight)){
+                        hideCurrentHint();
+                        //todo fixme find out whether element in this container
+                        $('#main-panel-content').scrollTo(step_data.selector, step_data.scrollAnimationSpeed || 250, {offset: -200});
+                    } else {
+                        // if previous button has been clicked and element are in viewport to prevent custom step scrollAnimationSpeed set scrollSpeed to default
+                        scrollSpeed = 250;
+                    }
                 } else {
-                    // if previous button has been clicked and element are in viewport to prevent custom step scrollAnimationSpeed set scrollSpeed to default
+                    Dialogs.show("Upps. It seems we were unable to complete the tutorial.", 2500, Dialogs.MSG_WARN);
+                    $body.enjoyhint("skipAll");
                     scrollSpeed = 250;
                 }
-            } else {
-                Dialogs.show("Upps. It seems we were unable to complete the tutorial.", 2500, Dialogs.MSG_WARN);
-                $body.enjoyhint("skipAll");
-                scrollSpeed = 250;
             }
-
 
             setTimeout(function() {
                 var $element = $(step_data.selector);
 
                 var event = makeEventName(step_data.event);
-                $body.enjoyhint("show");
+                if (is_new) {
+                    $body.enjoyhint("show");
+                }
                 $event_element = $element;
 
                 if (step_data.event_selector) {
@@ -1484,6 +1492,7 @@ var EnjoyHint = function(configs) {
                 $body.enjoyhint("render_label_with_shape", shape_data, that.stop, customBtnProps, isLastStep);
 
             }, scrollSpeed + 20 || 270);
+            last_selector = step_data.selector;
         }, timeout);
     };
 

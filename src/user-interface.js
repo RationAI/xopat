@@ -99,7 +99,7 @@ function initXopatUI() {
                 if (this._timer) clearTimeout(this._timer);
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
                 this._opts = opts;
-                this._opts.onShow && this._opts.onShow();
+                this._opts && this._opts.onShow && this._opts.onShow();
             }
         },
 
@@ -347,7 +347,7 @@ window.addEventListener("beforeunload", (e) => {
 
             let close = params.allowClose ? this._getCloseButton(parentId) : '';
             let resize = params.allowResize ? "resize:vertical;" : "";
-            footer = footer ? `<div class="position-absolute bottom-0 right-0 left-0 border-top"
+            footer = footer ? `<div class="border-top"
 style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             let limits = isModal ? "style='width: 100%; height: 100vh;'" : "style='max-width:80vw; max-height: 80vh'";
@@ -360,7 +360,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
       ${close}
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
-      <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
+      <div class="Box-body pr-2" style="padding-bottom: 5px; min-height: 100%">
 	  ${content}
 	  </div>
     </div>
@@ -1370,9 +1370,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             add: function (plugidId, name, description, icon, steps, prerequisites = undefined) {
                 if (!icon) icon = "school";
+                const pluginName = pluginMeta(plugidId, "name");
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
+                const label = pluginName ? `<span class="rounded-2 px-3 py-1 position-absolute top-1 right-1 bg-opacity" style="font-size: 9px">${pluginName}</span>` : "";
                 this.tutorials.append(`
-<div class='d-inline-block px-2 py-2 m-1 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+<div class='d-inline-block px-2 pb-2 pt-3 m-1 pointer position-relative v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+${label}
 <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
                 this.steps.push(steps);
                 this.prerequisites.push(prerequisites);

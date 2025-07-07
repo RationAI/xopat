@@ -25,6 +25,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
+		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
 		await this.setupFromParams();
 
@@ -110,8 +111,10 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	setEdgeCursorNavigate(enable) {
+		enable = this.context.setCloseEdgeMouseNavigation(enable);
 		this.setOption("edgeCursorNavigate", enable);
-		this.context.setCloseEdgeMouseNavigation(enable);
+
+		return enable;
 	}
 
 	initHTML() {
@@ -141,7 +144,7 @@ ${UIComponents.Elements.checkBox({
 ${UIComponents.Elements.checkBox({
 				label: 'Enable edge navigation',
 				classes: "pl-2",
-				onchange: `${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
+				onchange: `this.checked = ${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
 				default: this.getOption("edgeCursorNavigate", true)})}
 </div>
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
@@ -198,6 +201,9 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
+		modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
+		modeOptions.push(vertSeparator);
+
 		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
 		modeOptions.push(this.context.mode.customHtml());
 		modeOptions.push('</div>');
@@ -500,17 +506,17 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				}, {
 					"next #annotations-panel": "This was the main panel menu. Now let's move to the toolbar."
 				}, {
-					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand."
+					"next #plugin-tools-menu": "To annotate, you need an annotation mode. <br> Here you can switch from the default, navigation mode <br> to manual control, brush or a magic wand.<br> Switching can be done by mouse or<br>with shortcuts by holding a keyboard key."
 				}, {
-					"next #annotations-left-click": "Switching can be done by mouse or with shortcuts by holding a keyboard key. <br>Modes are closely described in other tutorials."
+					"next #annotations-left-click": "Modes are closely described in other tutorials.<br> This button shows what annotation class is being created<br> by a left mouse button."
 				}, {
 					"click #annotations-right-click": "To open <b>Annotation Class dialog window</b>, click on the button."
 				}, {
-					"next #preset-no-0": "This is an example of an annotation class."
+					"next .preset-option:first": "This is an example of an annotation class <b>preset</b>."
 				}, {
 					"next #preset-add-new": "Here you create a new class."
 				}, {
-					"click #preset-no-0": "Click anywhere on the preset. This will select it for the right mouse button."
+					"click .preset-option:first": "Click anywhere on the preset. This will select it for the right mouse button."
 				}, {
 					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
 				}, {
@@ -909,13 +915,6 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 	}
 
 	updatePresetsMouseButtons() {
-		if (Object.keys(this.context.presets._presets).length < 1) {
-			const p = this.context.presets.addPreset();
-			if (!this.context.presets.getActivePreset(true)) {
-				this.context.presets.selectPreset(p.presetID, true, false);
-			}
-		}
-
 		let leftPreset = this.context.getPreset(true),
 			rightPreset = this.context.getPreset(false),
 			left = $("#annotations-left-click"),
@@ -966,10 +965,9 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 	 * Preset modification GUI part, used to show preset modification tab
 	 * @param {OSDAnnotations.Preset} preset object
 	 * @param {OSDAnnotations.Preset} [defaultPreset=undefined] default to highlight
-	 * @param {Number} [index=undefined] if set, the element is assigned an ID in the HTML, should differ in each call if set
 	 * @returns {string} HTML
 	 */
-	getPresetHTML(preset, defaultPreset=undefined, index=undefined) {
+	getPresetHTML(preset, defaultPreset=undefined) {
 		let select = "",
 			disabled = this.enablePresetModify ? "" : " disabled ";
 
@@ -985,9 +983,7 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 			}
 		});
 
-		let id = index === undefined ? "" : `id="preset-no-${index}"`;
-
-		let html = [`<div ${id} class="position-relative border v-align-top border-dashed p-1 rounded-3 d-inline-block mb-2 `];
+		let html = [`<div data-preset-id="${preset.presetID}" class="preset-option position-relative border v-align-top border-dashed p-1 rounded-3 d-inline-block mb-2 `];
 		if (preset.presetID === defaultPreset?.presetID) {
 			html.push('highlighted-preset');
 			this._presetSelection = preset.presetID;
@@ -1018,7 +1014,7 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 		}
 		html.push('<div>');
 		if (this.enablePresetModify) {
-			html.push(`<input class="form-control my-1" type="text" placeholder="new field" style="width: 140px;">
+			html.push(`<input class="form-control my-1" type="text" placeholder="name new field" style="width: 140px;">
 <span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');">playlist_add</span>`);
 		}
 		html.push('</div></div>');
@@ -1096,7 +1092,7 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
 onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')">delete</span>` : "";
 
-		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 ${classes}" type="text" onchange="
+		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 ${classes}" placeholder="unknown" type="text" onchange="
 ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}" ${disabled}>${delButton}</div>`;
 	}
 
@@ -1114,16 +1110,15 @@ ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${me
 		const allowSelect = isLeftClick !== undefined;
 		this._presetSelection = undefined;
 
-		let html = ['<div style="min-width: 270px">'],
-			counter = 0,
-			_this = this;
-
 		let currentPreset = this.context.getPreset(isLeftClick) || this.context.presets.get();
 
-		this.context.presets.foreach(preset => {
-			html.push(_this.getPresetHTML(preset, currentPreset, counter));
-			counter++;
-		});
+		let html = ['<div style="min-width: 270px">'];
+
+		const event = {presets: Object.values(this.context.presets._presets)};
+		this.raiseEvent('render-annotation-presets', event);
+		html.push(...event.presets.map(p => {
+			return typeof p === "string" ? p : this.getPresetHTML(p, currentPreset);
+		}));
 
 		if (this.enablePresetModify) {
 			html.push(`<div id="preset-add-new" class="border-dashed p-1 mx-2 my-2 rounded-3 d-inline-block 
@@ -1132,14 +1127,30 @@ onclick="${this.THIS}.createNewPreset(this, ${isLeftClick});"><span class="mater
 		}
 		html.push('</div>');
 
-		Dialogs.showCustom("preset-modify-dialog",
-			"<b>Annotations presets</b>",
-			html.join(""),
-			allowSelect ? `<div class="d-flex flex-row-reverse">
+		const footer = allowSelect
+			? `<div class="d-flex flex-row-reverse">
 <button id="select-annotation-preset-right" onclick="return ${this.THIS}._clickPresetSelect(false);" 
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false);" class="btn m-2">Set for right click </button>
 <button id="select-annotation-preset-left" onclick="return ${this.THIS}._clickPresetSelect(true);" 
-class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2" onclick="Dialogs.closeWindow(\'preset-modify-dialog\');">Save</button></div>');
+class="btn m-2">Set for left click </button></div>`
+			: `<div class="d-flex flex-row-reverse"><button class="btn btn-primary m-2" onclick="Dialogs.closeWindow('preset-modify-dialog');">Save</button></div>`;
+
+		Dialogs.showCustom("preset-modify-dialog", "<b>Annotations presets</b> <input id=\"preset-filter-select\" class=\"form-control ml-3\" type=\"text\" placeholder=\"Filter presets...\" />", html.join(""), footer);
+
+		// After DOM is rendered, attach BVSelect
+		setTimeout(() => {
+			$("#preset-filter-select").on('input', e => {
+				const search = e.target.value.toLowerCase();
+				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
+					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
+					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
+						el.classList.remove("d-none");
+					} else {
+						el.classList.add("d-none");
+					}
+				});
+			});
+		}, 0);
 	}
 
 	_clickPresetSelect(isLeft, presetID = undefined) {
@@ -1149,10 +1160,10 @@ class="btn m-2">Set for left click </button></div>`: '<div class="d-flex flex-ro
 		}
 
 		let preset = presetID ? this.context.presets.get(presetID) : this._presetSelection;
-		const _this = this;
-		setTimeout(function () {
+		setTimeout(( ) => {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.context.setPreset(preset, isLeft);
+			this._bvselect = null;
+			this.context.setPreset(preset, isLeft);
 		}, 150);
 		return false;
 	}
