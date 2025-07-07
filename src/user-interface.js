@@ -1213,9 +1213,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 //["dark", "light", undefined]
                 if (theme === "dark" ||
                     (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                    document.body.setAttribute("data-theme", "catppuccin-mocha");
+                    document.body.setAttribute("data-theme", "dark");
                 } else {
-                    document.body.removeAttribute("data-theme"); // light theme
+                    document.body.setAttribute("data-theme", "light");
                 }
             },
         },

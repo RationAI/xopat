@@ -40,7 +40,7 @@ class FullscreenMenu extends BaseComponent{
         super(options, );
         this.tabs = {};
 
-        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full"} });
+        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full", color: "bg-base-100"} });
         for (let i of args) {
             this.addTab(i);
         }

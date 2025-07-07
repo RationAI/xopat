@@ -132,7 +132,7 @@ button div {
     position: absolute; 
     pointer-events: auto; 
     z-index: 5; 
-    background-color: var(--color-bg-tertiary); 
+    background-color: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));
     max-width: 800px; 
     width: calc(-65px + 100vw);
     height: calc(100% - 45px);
@@ -169,4 +169,8 @@ button div {
 
 .ui-menu-item{
     pointer-events: auto;
+}
+
+#fullscreen-menu-content{
+
 }

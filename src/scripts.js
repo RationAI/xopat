@@ -303,37 +303,11 @@ function initXopatScripts() {
      * @param {?string} theme primer_css theme
      */
     window.UTILITIES.updateTheme = function(theme=undefined) {
-        theme = theme || APPLICATION_CONTEXT.getOption("theme");
-        if (!["dark", "dark_dimmed", "light", "auto"].some(t => t === theme)) theme = APPLICATION_CONTEXT.config.defaultParams.theme;
-
-        // also set theme for detached preview mode
-        const isStatic = APPLICATION_CONTEXT.getOption("isStaticPreview");
-
-        if (theme === "dark_dimmed") {
-            document.documentElement.dataset['darkTheme'] = "dark_dimmed";
-            document.documentElement.dataset['colorMode'] = "dark";
-            document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
-        } else if (theme === "auto" && isStatic) {
-            const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-            if (isLight) {
-                document.documentElement.dataset['colorMode'] = "light";
-                document.body.setAttribute("data-theme", "crimson-dawn");
-            }
-            else {
-                document.documentElement.dataset['colorMode'] = "dark";
-                document.documentElement.dataset['darkTheme'] = "dark";
-                document.body.setAttribute("data-theme", "blood-moon");
-            }
+        if (theme === "dark" ||
+            (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.body.setAttribute("data-theme", "dark");
         } else {
-            document.documentElement.dataset['darkTheme'] = "dark";
-            document.documentElement.dataset['colorMode'] = theme;
-            if (theme === "dark") {
-                document.body.setAttribute("data-theme", isStatic ? "blood-moon" : "catppuccin-mocha");
-            } else if (isStatic) {
-                document.body.setAttribute("data-theme", "crimson-dawn");
-            } else {
-                document.body.removeAttribute("data-theme");
-            }
+            document.body.setAttribute("data-theme", "light");
         }
     };
 

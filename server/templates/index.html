@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr" data-light-theme="light">
+<html lang="en" dir="ltr">
 
 <head>
     <meta charset="utf-8">
@@ -50,13 +50,6 @@
     <!-- Template ui -->
     <template id="template-ui"></template>
 
-<script>
-if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.body.setAttribute("data-theme", "catppuccin-mocha");
-} else {
-    document.body.removeAttribute("data-theme");
-}
-</script>
 <!-- OSD viewer -->
 <div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
     <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
@@ -109,7 +102,7 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     </div>
 </div>
 
-<div id="fullscreen-menu"></div>
+<div id="fullscreen-menu" class="bg-base-100"></div>
 
 <div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 500px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
