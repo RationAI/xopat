@@ -664,7 +664,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 // TODO where to put it to make it work?
                 // To hide status bar
                 if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
-                    console.log(document.getElementById("viewer-status-bar"))
                     $('#viewer-status-bar').toggleClass('d-none');
                 }
 

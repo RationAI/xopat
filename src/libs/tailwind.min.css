@@ -3207,16 +3207,12 @@ details.collapse summary::-webkit-details-marker {
   position: relative;
 }
 
-.bottom-0 {
-  bottom: 0px;
-}
-
 .left-0 {
   left: 0px;
 }
 
-.right-0 {
-  right: 0px;
+.right-1 {
+  right: 0.25rem;
 }
 
 .right-2 {
@@ -3225,6 +3221,10 @@ details.collapse summary::-webkit-details-marker {
 
 .top-0 {
   top: 0px;
+}
+
+.top-1 {
+  top: 0.25rem;
 }
 
 .float-right {
@@ -3430,6 +3430,11 @@ details.collapse summary::-webkit-details-marker {
   padding-right: 0.5rem;
 }
 
+.px-3 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
 .px-4 {
   padding-left: 1rem;
   padding-right: 1rem;
@@ -3450,6 +3455,10 @@ details.collapse summary::-webkit-details-marker {
   padding-bottom: 0.75rem;
 }
 
+.pb-2 {
+  padding-bottom: 0.5rem;
+}
+
 .pl-0 {
   padding-left: 0px;
 }
@@ -3460,6 +3469,10 @@ details.collapse summary::-webkit-details-marker {
 
 .pr-2 {
   padding-right: 0.5rem;
+}
+
+.pt-3 {
+  padding-top: 0.75rem;
 }
 
 .text-center {
