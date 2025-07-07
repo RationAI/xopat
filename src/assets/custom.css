@@ -171,6 +171,8 @@ button div {
     pointer-events: auto;
 }
 
-#fullscreen-menu-content{
-
+.form-control {
+    display: flex;
+    flex-direction: column;
+    color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
 }

@@ -421,7 +421,7 @@ input.switch:checked + label span {
     direction: ltr;
     -webkit-font-feature-settings: 'liga';
     -webkit-font-smoothing: antialiased;
-    color: var( --color-icon-primary);
+    color: var(oklch(var(--pc)));
     vertical-align: middle;
     padding: 0 5px;
     text-rendering: optimizeLegibility;
