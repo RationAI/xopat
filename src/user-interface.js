@@ -691,7 +691,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 ),
             span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+125}px; right: ${positionRight+34}px;` }, "xOpat"),
             span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+108}px; right: ${positionRight+21}px;` }, "Viewer"),
-            span({ class: "f6", style: `color: var(--color-text-tertiary);position: absolute; bottom: ${positionBottom+143}px;right: ${positionRight+20}px;` }, "v2.1.1"),
+            span({ class: "f6", style: `position: absolute; bottom: ${positionBottom+143}px;right: ${positionRight+20}px;` }, "v2.1.1"),
             );
             return logo;
             },

@@ -8,7 +8,7 @@
 }
 /*Text with bg color outline*/
 .text-shadow {
-    text-shadow: -1px 0 var(--color-bg-primary), 0 1px var(--color-bg-primary), 1px 0 var(--color-bg-primary), 0 -1px var(--color-bg-primary);
+    text-shadow: -1px 0 var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 0 1px var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 1px 0 var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 0 -1px var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));
 }
 .text-shadow-mild {
     text-shadow: 0px 0px 3px var(--color-bg-primary);
@@ -584,8 +584,8 @@ input.selectable-image-row-context:checked + div {
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
-.svg-bg {fill: var(--color-bg-tertiary);}
-.svg-fg {fill: var(--color-text-primary);}
+.svg-bg {fill: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));}
+.svg-fg {fill: var(--fallback-bc,oklch(var(--bc)/1));}
 a {cursor: pointer;}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
