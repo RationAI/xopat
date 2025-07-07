@@ -211,7 +211,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
 .header-sep::after {
     content: '';
     flex-grow: 1;
-    border: 1px solid var(--color-border-primary) !important;
+    border: 1px solid var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity, 1))) !important;
     height: 0;
     margin-left: 20px;
     margin-top: 4px;
