@@ -875,10 +875,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 		annotation.sessionID = this.session;
 		annotation.author = XOpatUser.instance().id;
-		annotation.created = Date.now();
-
+		annotation.created = annotation.created || Date.now();
 		annotation.id = annotation.id || crypto.randomUUID();
 		annotation.internalID = annotation.internalID || this._generateInternalId();
+
 		if (!_dangerousSkipHistory) this.history.push(annotation);
 		this.canvas.setActiveObject(annotation);
 
@@ -1866,12 +1866,9 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	 * @param {number} realZoom real zoom value of the viewer
 	 */
 	highlightOnZoom(object, graphicZoom, realZoom) {
-		const zoom = graphicZoom * 15;
-
-		//TO DO - adjust the size of the stroke while zooming
 		object.set({
-			strokeWidth: object.originalStrokeWidth / zoom,
-			strokeDashArray: object.originalStrokeDashArray.map(value => value / zoom),
+			strokeWidth: (object.originalStrokeWidth / graphicZoom) * 7,
+			strokeDashArray: [object.strokeWidth * 4, object.strokeWidth * 2]
 		});
 	}
 

@@ -206,6 +206,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return false;
     }
 
+    getLength(theObject) {
+        return theObject._objects[1]?.text;
+    }
+
+
     _round(value) {
         return Math.round(value * 100) / 100;
     }
@@ -316,6 +321,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: text.text,
+            hasBorders: false,
         });
     }
 

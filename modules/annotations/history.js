@@ -584,8 +584,12 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         mainRowContent = mainRowContent ? (mainRowContent + " " + object.label) : '';
 
         let area = factory.getArea(object);
+        let length = factory.getLength(object);
+
         if (area) {
             mainRowContent += `<span class="float-right">Area ${VIEWER.scalebar.imageAreaToGivenUnits(area)}</span>`;
+        } else if (length) {
+            mainRowContent += `<span class="float-right">Length ${length}</span>`;
         }
         inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name||'unknown'}">${mainRowContent}</span>`);
         // else {  //never happens: description shows at least default description

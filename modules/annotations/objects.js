@@ -81,7 +81,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "id",
-        "label",
     ];
 
     /**
@@ -446,6 +445,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Returns the length of the object if applicable (for objects that do not have area).
+     * By default, returns undefined. Should be overridden in subclasses for line-like objects.
+     * @param {fabric.Object} theObject object to measure
+     * @return {Number|undefined} length in pixels and unit, or undefined if not applicable
+     */
+    getLength(theObject) {
+        return undefined;
+    }
+
+    /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
      * @param {fabric.Object} ofObject
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
@@ -498,20 +507,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
         try {
             const clonedObj = await this.cloneFabricObject(theObject);
 
-            //TO DO - adjust the size of the stroke
-            const zoom = this._context.canvas.getZoom();
-            const scaleFactor = (Math.sqrt(zoom) / 2) * 15;
-
-            const strokeWidth = 1500 / scaleFactor;
-            const strokeDashArray = [5000, 2500].map(value => value / scaleFactor);
+            let newStroke = theObject.strokeWidth * 7;
+            let newStrokeDashArray = [newStroke * 4, newStroke * 2];
 
             clonedObj.set({
                 fill: '',
                 stroke: theObject.cornerColor,
-                strokeWidth: strokeWidth,
-                originalStrokeWidth: strokeWidth,
-                strokeDashArray: strokeDashArray,
-                originalStrokeDashArray: strokeDashArray,
+                strokeWidth: newStroke,
+                originalStrokeWidth: theObject.originalStrokeWidth,
+                strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
                 strokeUniform: true,
                 left: clonedObj.left + clonedObj.width / 2,
@@ -519,8 +523,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 originX: 'center',
                 originY: 'center',
                 selectable: false,
+                opacity: 1,
                 isHighlight: true
             });
+            delete clonedObj.type;
     
             return clonedObj;
         } catch (error) {

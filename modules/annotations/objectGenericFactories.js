@@ -147,6 +147,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
+        if (obj.width === 0 || obj.height === 0) return true;
+
         this._context.addAnnotation(obj);
         this._current = undefined;
         return true;
