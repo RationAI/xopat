@@ -301,7 +301,6 @@ window.addEventListener("beforeunload", (e) => {
         <title>${title}</title>
         <!--TODO dirty hardcoded path-->
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/primer_css.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
@@ -583,7 +582,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.Tutorials._hideImpl(false); //preventive
                 $("#system-message-title").html(title);
                 $("#system-message-details").html(description);
-                $("#system-message").removeClass("d-none");
+                $("#system-message").removeClass("hidden");
                 $("#viewer-container").addClass("disabled");
                 USER_INTERFACE.Tools.close();
                 this.active = true;
@@ -592,7 +591,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * Hide system-wide error.
              */
             hide: function () {
-                $("#system-message").addClass("d-none");
+                $("#system-message").addClass("hidden");
                 $("#viewer-container").removeClass("disabled");
                 USER_INTERFACE.Tools.open();
                 this.active = false;
@@ -644,13 +643,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     "Appearance"),
                   "Theme",
                   select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)} },
-                    option({ value: undefined }, "Automatic",),
+                    option({ value: "auto" }, "Automatic",),
                     option({ value: "light", selected: "" }, "Light Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
-                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('d-none');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
-                  this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('d-none');  $('#viewer-scale-bar').toggleClass('d-none')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
-                  this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('d-none')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
+                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
+                  this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
+                  this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
                   
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
                   this.createCheckbox("Disable Cookies", function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
@@ -664,7 +663,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 // TODO where to put it to make it work?
                 // To hide status bar
                 if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
-                    $('#viewer-status-bar').toggleClass('d-none');
+                    $('#viewer-status-bar').toggleClass('hidden');
                 }
 
                 return result;
@@ -776,7 +775,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                               );
                     
                 const plugin_div = div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
-                    input({ type: "checkbox", name: "plug-list-content", class: "d-none selectable-image-row-context", value: plugin.id }),
+                    input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
                     div({ class: "width-full d-flex selectable-image-row rounded-2 pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
                         text,
@@ -1209,13 +1208,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.Margins.bottom = 0;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
             },
-            changeTheme(theme = undefined) {
-                //["dark", "light", undefined]
+            changeTheme(theme = "auto") {
+                //["dark", "light", "auto"]
                 if (theme === "dark" ||
-                    (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                    document.body.setAttribute("data-theme", "dark");
+                    (theme === "auto" && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                    document.body.setAttribute("data-theme", "xOpat-dark");
                 } else {
-                    document.body.setAttribute("data-theme", "light");
+                    document.body.setAttribute("data-theme", "xOpat-light");
                 }
             },
         },
@@ -1333,7 +1332,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (!title) title = $.t('tutorials.menu.title');
                 if (!description) description = $.t('tutorials.menu.description')
 
-                $("#tutorials-container").removeClass("d-none");
+                $("#tutorials-container").removeClass("hidden");
                 $("#viewer-container").addClass("disabled");
                 $("#tutorials-title").html(title);
                 $("#tutorials-description").html(description);
@@ -1349,7 +1348,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             _hideImpl: function (reflectGUIChange) {
-                $("#tutorials-container").addClass("d-none");
+                $("#tutorials-container").addClass("hidden");
                 if (reflectGUIChange) {
                     $("#viewer-container").removeClass("disabled");
                 }

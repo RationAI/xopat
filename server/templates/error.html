@@ -19,7 +19,7 @@
 </script>
 
 <!-- System messaging -->
-<div id="system-message" class="d-none system-container">
+<div id="system-message" class="hidden system-container">
     <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<template id="template-text-title"></template></div>
     <div id="system-message-title" class="f2-light text-center clearfix color-text-primary mb-3"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><template id="template-text-details"></template></button>
@@ -45,12 +45,12 @@
         show: function(title, description) {
             this.msgTitle.html(title);
             this.msgDetails.html(description);
-            this.msgContainer.removeClass("d-none");
+            this.msgContainer.removeClass("hidden");
             this.screenContainer.addClass("disabled");
         },
 
         hide: function() {
-            this.msgContainer.addClass("d-none");
+            this.msgContainer.addClass("hidden");
             this.screenContainer.removeClass("disabled");
         }
     };

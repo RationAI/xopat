@@ -302,14 +302,7 @@ function initXopatScripts() {
      * Set the App theme
      * @param {?string} theme primer_css theme
      */
-    window.UTILITIES.updateTheme = function(theme=undefined) {
-        if (theme === "dark" ||
-            (theme === undefined && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-            document.body.setAttribute("data-theme", "dark");
-        } else {
-            document.body.setAttribute("data-theme", "light");
-        }
-    };
+    window.UTILITIES.updateTheme = USER_INTERFACE.Tools.changeTheme;
 
     /**
      * Create the viewer configuration serialized
@@ -569,7 +562,7 @@ ${await UTILITIES.getForm()}
     };
 
     $("body")
-        .append("<a id='link-download-helper' class='d-none'></a>")
+        .append("<a id='link-download-helper' class='hidden'></a>")
         .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
 
     UTILITIES.updateTheme();

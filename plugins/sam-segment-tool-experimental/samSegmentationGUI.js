@@ -123,7 +123,7 @@ class SAMSegmentationPlugin extends XOpatPlugin {
 
     const selected = mode.default() ? "checked" : "";
     const controlHTML = `
-    <input type="radio" id="${controlId}" class="d-none switch" ${selected} name="annotation-modes-selector">
+    <input type="radio" id="${controlId}" class="hidden switch" ${selected} name="annotation-modes-selector">
     <label id="${labelId}" for="${controlId}" class="label-annotation-mode position-relative" title="${mode.getDescription()}">
       <span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span>
     </label>

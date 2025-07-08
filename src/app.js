@@ -627,8 +627,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         });
         // TODO make in destroy???
         if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
-            $('#viewer-magnification').toggleClass('d-none');  
-            $('#viewer-scale-bar').toggleClass('d-none');
+            $('#viewer-magnification').toggleClass('hidden');  
+            $('#viewer-scale-bar').toggleClass('hidden');
         }
     };
 

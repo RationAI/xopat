@@ -51,8 +51,8 @@
     <template id="template-ui"></template>
 
 <!-- OSD viewer -->
-<div id="viewer-container" class="position-absolute width-full height-full top-0 left-0" style="pointer-events: none;">
-    <div id="osd" style="pointer-events: auto;" class="position-absolute width-full height-full top-0 left-0"></div>
+<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">
+    <div id="osd" style="pointer-events: auto;" class="absolute w-full h-full top-0 left-0"></div>
     <div id='viewer-demo-advertising' style='display: none'>
         <h1>xOpat - The WSI Viewer</h1>
         <p>The viewer is missing the target data to view; this might happen, if</p>
@@ -68,22 +68,22 @@
 </div>
 
 <!-- System messaging -->
-<div id="system-message" class="d-none system-container">
-    <div id="system-message-warn" class="f00-light text-center">
-        <span class="material-icons f0-light mr-1" style="transform: translate(0px, -5px);">error_outline</span>
+<div id="system-message" class="hidden system-container">
+    <div id="system-message-warn" class="font-light text-4xl text-center">
+        <span class="material-icons font-light text-3xl mr-1" style="transform: translate(0px, -5px);">error_outline</span>
         <span data-i18n="error.title">Error</span>
     </div>
-    <div id="system-message-title" class="f2-light text-center clearfix"></div>
-    <div id="system-message-subtitle" class="text-normal text-center"></div>
-    <div class="text-small text-center mb-4" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <div id="system-message-title" class="font-light text-3xl text-center"></div>
+    <div id="system-message-subtitle" class="font-normal text-center"></div>
+    <div class="text-sm text-center mb-4" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('display', 'none');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
     <div id="system-message-details" class="px-4 py-3 mb-2 border radius-3 overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
     <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()" class="btn" type="button" data-i18n="error.dismissBtn">dismiss</button>
 </div>
 
 <!--Tutorials-->
-<div id="tutorials-container" class="d-none system-container">
-    <div id="tutorials-title" class="f1-light text-center clearfix"></div>
+<div id="tutorials-container" class="hidden system-container">
+    <div id="tutorials-title" class="font-light text-3xl text-center"></div>
     <p id="tutorials-description" class="text-center"></p>
     <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
     <br>
@@ -92,9 +92,9 @@
 </div>
 
 <!-- Main Panel -->
-<div id="top-side" class="flex-row width-full bg-base-200" style="display: flex; position: relative; align-items: flex-start; height: 45px">
+<div id="top-side" class="flex-row w-full bg-base-200" style="display: flex; position: relative; align-items: flex-start; height: 45px">
     <div id="top-slide" class=""></div>
-    <div id="top-menus" style="display: flex; flex-direction: row; justify-content: flex-end; width: 100%;">
+    <div id="top-menus" class="flex flex-row w-full justify-end">
         <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
         <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
         <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>

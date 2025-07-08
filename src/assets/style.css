@@ -317,7 +317,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
 /**
   Selectable multi-icon buttons (use with input radio or checkbox)
   Use (strictly follow this):
-    <input id="id" type="radio" name="name" class="switch d-none">
+    <input id="id" type="radio" name="name" class="switch hidden">
     <label for="id"><span class="material-icons">icon_name</span></label>
  */
 input.switch:checked + label span {

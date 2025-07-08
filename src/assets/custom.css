@@ -175,4 +175,5 @@ button div {
     display: flex;
     flex-direction: column;
     color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
+    background-color: var(--fallback-bg,oklch(var(--b3)/var(--tw-bg-opacity)));
 }

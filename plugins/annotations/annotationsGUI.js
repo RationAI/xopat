@@ -164,7 +164,7 @@ ${UIComponents.Elements.checkBox({
 			modes = this.context.Modes;
 		const defaultModeControl = (mode) => {
 			let selected = mode.default() ? "checked" : "";
-			return(`<input type="radio" id="${mode.getId()}-annotation-mode" class="d-none switch" ${selected} name="annotation-modes-selector">
+			return(`<input type="radio" id="${mode.getId()}-annotation-mode" class="hidden switch" ${selected} name="annotation-modes-selector">
 <label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
  oncontextmenu="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
  title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
@@ -180,7 +180,7 @@ ${UIComponents.Elements.checkBox({
 			const factory = this.context.getAnnotationObjectFactory(factoryID);
 			if (factory) {
 				modeOptions.push(`
-<input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="d-none switch" name="annotation-modes-selector">
+<input type="radio" id="${factoryID}-annotation-mode" data-factory="${factoryID}" class="hidden switch" name="annotation-modes-selector">
 <label for="${factoryID}-annotation-mode" class="label-annotation-mode position-relative" 
 onclick="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true);" 
 oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
@@ -246,7 +246,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	getIOFormatRadioButton(format) {
 		const selected = format === this.exportOptions.format ? "checked" : "";
 		const convertor = OSDAnnotations.Convertor.get(format);
-		return `<div class="d-inline-block p-2"><input type="radio" id="${format}-export-format" class="d-none switch" ${selected} name="annotation-format-switch">
+		return `<div class="d-inline-block p-2"><input type="radio" id="${format}-export-format" class="hidden switch" ${selected} name="annotation-format-switch">
 <label for="${format}-export-format" class="position-relative format-selector" title="${convertor.description || ''}" onclick="${this.THIS}.updateSelectedFormat('${format}');"><span style="font-size: smaller">${convertor.title}</span><br>
 <span class="show-hint d-inline-block" data-hint="Format"><span class="btn">${format}</span></span></label></div>`;
 	}
@@ -1144,9 +1144,9 @@ class="btn m-2">Set for left click </button></div>`
 				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
 					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
 					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
-						el.classList.remove("d-none");
+						el.classList.remove("hidden");
 					} else {
-						el.classList.add("d-none");
+						el.classList.add("hidden");
 					}
 				});
 			});
