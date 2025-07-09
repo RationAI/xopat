@@ -880,7 +880,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-window-restore", title: "Visual Settings", body: [], class: UI.menuDropdown, onClick: function () {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()}},
+                }, { id: "visual", icon: "fa-eye-slash", title: "Window", body: [], class: UI.menuDropdown, onClick: function () {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()}},
                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
                     
                 );
