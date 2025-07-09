@@ -890,7 +890,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             refreshVisualDropdown: function () {
-                console.log(document.getElementById("visual-menu-c-visual"));
                 const visualMenuContent = document.getElementById("visual-menu-c-visual");
                 visualMenuContent.innerHTML = "";
                 
