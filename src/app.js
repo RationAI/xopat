@@ -541,7 +541,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
             title.html(name);
-            title.attr('title', name);
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
             //todo merge tile sources with layers/background to simplify mapping, now we need to guess where error occurs on error event

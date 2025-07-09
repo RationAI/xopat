@@ -1134,7 +1134,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     {id: "tissue-title-content", 
                     class: "", 
                     extraClasses: {btn: "btn btn-primary btn-sm"}, 
-                    extraProperties: {style: "box-sizing: border-box; vertical-align: center"},
+                    extraProperties: {style: "box-sizing: border-box; vertical-align: center", title: "Copy"},
                     onClick: function () {
                         UTILITIES.copyToClipboard(this.textContent);
                     }
