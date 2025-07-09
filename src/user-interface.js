@@ -639,12 +639,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     ),
                   );
 
+                theme = APPLICATION_CONTEXT.getOption("theme");
+                themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
+
                 const settings = div(span({ class: "f3-light header-sep" },
                     "Appearance"),
                   "Theme",
-                  select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)} },
+                  select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}},
+                    option({value: "", selected: "selected", hidden:"hidden"}, themePretty ),
                     option({ value: "auto" }, "Automatic",),
-                    option({ value: "light", selected: "" }, "Light Theme", ),
+                    option({ value: "light"}, "Light Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
                   this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
@@ -1217,13 +1221,23 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 USER_INTERFACE.Margins.bottom = 0;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
             },
-            changeTheme(theme = "auto") {
+            changeTheme(theme = undefined) {
+                if (theme === undefined){
+                    theme = APPLICATION_CONTEXT.getOption("theme", "auto");
+                }
                 //["dark", "light", "auto"]
                 if (theme === "dark" ||
                     (theme === "auto" && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
                     document.body.setAttribute("data-theme", "xOpat-dark");
+                    APPLICATION_CONTEXT.setOption("theme", "dark");
+
+                    if(theme === "auto"){
+                        APPLICATION_CONTEXT.setOption("theme", "auto");
+                    }
+
                 } else {
                     document.body.setAttribute("data-theme", "xOpat-light");
+                    APPLICATION_CONTEXT.setOption("theme", "light");
                 }
             },
         },
