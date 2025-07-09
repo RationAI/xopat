@@ -882,7 +882,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     extraClasses: { bg: "bg-transparent" },
                 }, { id: "visual", icon: "fa-eye-slash", title: "Window", body: [], class: UI.menuDropdown, onClick: function () {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()}},
                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
-                    
+                   { id: "clone", icon: "fa-clone", title: "Clone the viewer and synchronize", body: undefined, onClick: function () {UTILITIES.clone();}},
                 );
 
                 this.menu.attachTo(this.context);
