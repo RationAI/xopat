@@ -579,7 +579,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param withHiddenMenu
              */
             show: function (title, description, withHiddenMenu = false) {
-                USER_INTERFACE.Tutorials._hideImpl(false); //preventive
+                USER_INTERFACE.Tutorials._hideImpl(); //preventive
                 $("#system-message-title").html(title);
                 $("#system-message-details").html(description);
                 $("#system-message").removeClass("hidden");
@@ -998,7 +998,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
-                
+
+                if (APPLICATION_CONTEXT.getOption("navigator") === undefined){
+                    APPLICATION_CONTEXT.setOption("navigator", true);
+                }
+
                 // defaultly open menus
                 for(i of Object.keys(this.menu.tabs)){
                     if (APPLICATION_CONTEXT.getOption(i)){
@@ -1332,10 +1336,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (!description) description = $.t('tutorials.menu.description')
 
                 $("#tutorials-container").removeClass("hidden");
-                $("#viewer-container").addClass("disabled");
+                $("#tutorials-overlay").removeClass("hidden");
                 $("#tutorials-title").html(title);
                 $("#tutorials-description").html(description);
-                USER_INTERFACE.RightSideMenu.menu.unfocusAll();
                 this.running = true;
             },
 
@@ -1343,14 +1346,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * Hide Tutorials
              */
             hide: function () {
-                this._hideImpl(true);
+                this._hideImpl();
             },
 
-            _hideImpl: function (reflectGUIChange) {
+            _hideImpl: function () {
                 $("#tutorials-container").addClass("hidden");
-                if (reflectGUIChange) {
-                    $("#viewer-container").removeClass("disabled");
-                }
+                $("#tutorials-overlay").addClass("hidden");
                 this.running = false;
                 APPLICATION_CONTEXT.AppCookies.set('_shadersPin', 'false');
             },
