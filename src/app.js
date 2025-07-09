@@ -403,6 +403,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     USER_INTERFACE.TopSlideMenu.init();
     USER_INTERFACE.RightSideMenu.init();
     USER_INTERFACE.FullscreenMenu.init();
+    USER_INTERFACE.Toolbar.init();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/

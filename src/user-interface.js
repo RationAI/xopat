@@ -659,12 +659,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox("Debug Rendering", function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                 );      
                 result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
-                
-                // TODO where to put it to make it work?
-                // To hide status bar
-                if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
-                    $('#viewer-status-bar').toggleClass('hidden');
-                }
 
                 return result;
             },
@@ -785,6 +779,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 )  
                 return plugin_div;          
             },
+        },
+
+        /**
+         * 
+         * @namespace USER_INTERFACE.Toolbar
+         */
+        Toolbar:{
+            init: function () {
+                if (!APPLICATION_CONTEXT.getOption("toolBar")){
+                    document.getElementById("toolbar").classList.toggle("hidden");
+                }
+            }
         },
 
         /**
@@ -1266,6 +1272,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 node.appendChild(content);
                 document.body.appendChild(node);
                 this.context = node;
+
+                if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
+                    $('#viewer-status-bar').toggleClass('hidden');
+                }
             }
         },
 
