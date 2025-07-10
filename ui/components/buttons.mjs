@@ -58,7 +58,7 @@ class Button extends BaseComponent {
         for (let n of nodes){
             if (n.nodeName === "SPAN"){
                 n.classList.add("hidden");
-            } else{
+            } else if (n.nodeName === "I") {
                 n.classList.remove("hidden");
             }
         }
@@ -71,11 +71,11 @@ class Button extends BaseComponent {
         this.style = "TITLEONLY";
         const nodes = this.children;
         for (let n of nodes){
-            if (n.nodeName === "SPAN"){
-                n.classList.remove("hidden");
-            }
-            else{
+            if (n.nodeName === "I"){
                 n.classList.add("hidden");
+            }
+            else if(n.nodeName === "SPAN"){
+                n.classList.remove("hidden");
             }
         }
     }

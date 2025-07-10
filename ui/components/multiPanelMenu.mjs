@@ -32,6 +32,7 @@ class MultiPanelMenu extends Menu {
     constructor(options, ...args) {
         super(options,);
         this.tabs = {};
+        this.pinnedTabs={};
 
         this.body = new ui.Div({ 
             id: this.id + "-body", 

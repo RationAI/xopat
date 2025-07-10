@@ -30,6 +30,8 @@ class MultiPanelMenuTab extends MenuTab{
         this.closedButton;
         this.openButton;
         this.openDiv;
+        this.pin;
+        this.id = item.id;
     }
 
     createTab(item) {
@@ -46,15 +48,27 @@ class MultiPanelMenuTab extends MenuTab{
             },
             }, inIcon, span(inText));
 
+        this.pin = new Button({
+            id: this.parent.id + "-b-opened" + item.id,
+            type: Button.TYPE.SECONDARY,
+            size: Button.SIZE.TINY,
+            orientation: Button.ORIENTATION.HORIZONTAL,
+            extraProperties: { title: "Pin to fullscreen", style: "position: absolute; top: 0px;"},
+            onClick: (event) => {
+                this.togglePinned();
+                event.stopPropagation();
+            }
+        }, new FAIcon({ name: "fa-thumbtack" }))
+
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 35px; padding-bottom: 35px;" },
             onClick: () => {
                 this.focus();
             },
-            }, inIcon, span(inText));
+            }, inIcon, span(inText), this.pin);
 
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
@@ -145,6 +159,14 @@ class MultiPanelMenuTab extends MenuTab{
     iconRotate(){
         this.closedButton.iconRotate();
         this.openButton.iconRotate();
+    }
+
+    togglePinned(){
+        if (this.parent.pinnedTabs[this.id]){
+            this.parent.pinnedTabs[this.id] = false;
+        } else{
+            this.parent.pinnedTabs[this.id] = true;
+        }
     }
 }
 
