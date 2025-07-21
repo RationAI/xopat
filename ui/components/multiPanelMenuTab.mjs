@@ -56,9 +56,17 @@ class MultiPanelMenuTab extends MenuTab{
             extraProperties: { title: "Pin to fullscreen", style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 this.togglePinned();
+                const iconNode = document.getElementById(this.parent.id+"-b-icon"+item.id);
+                iconNode.classList.toggle("fa-thumbtack");
+                iconNode.classList.toggle("fa-thumbtack-slash");
+
+                if(USER_INTERFACE.TopFullscreenButton.fullscreen){
+                    this.hide();
+                }
+
                 event.stopPropagation();
             }
-        }, new FAIcon({ name: "fa-thumbtack" }))
+        }, new FAIcon({id: this.parent.id + "-b-icon"+ item.id, name: "fa-thumbtack" }))
 
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
@@ -86,6 +94,7 @@ class MultiPanelMenuTab extends MenuTab{
         this.closedButton._initializing = false;
         this.openButton._initializing = false;
 
+        this.fullId = this.parent.id + "-c-" + item.id;
         return [undefined, c];
     }
 
@@ -167,6 +176,10 @@ class MultiPanelMenuTab extends MenuTab{
         } else{
             this.parent.pinnedTabs[this.id] = true;
         }
+    }
+
+    hide(){
+        document.getElementById(this.fullId).classList.toggle("hidden");
     }
 }
 

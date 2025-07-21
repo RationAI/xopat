@@ -804,12 +804,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         TopFullscreenButton:{
             context: $("#top-fullscreen"),
             button: "",
+            fullscreen: false,
 
             init: function () {
                 this.button = new Button({
                                             id: "fullscreen-button",
                                             size: Button.SIZE.SMALL,
                                             onClick: function () {
+
                                                 document.getElementById("top-slide").classList.toggle("hidden");
                                                 for (var c of document.getElementById("top-menus").children) {
                                                     if (c.id !== "top-fullscreen") {
@@ -818,13 +820,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                 }
                                                 // add components which you want to be hidden on fullscreen here:
                                                 document.getElementById("top-side").classList.toggle("bg-base-200");
+
                                                 for(tab of Object.keys(USER_INTERFACE.RightSideMenu.menu.tabs)){
-                                                    if (USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
-                                                        document.getElementById(USER_INTERFACE.RightSideMenu.menu.tabs[tab].id).classList.toggle("hidden");
+                                                    if (!USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
+                                                        USER_INTERFACE.RightSideMenu.menu.tabs[tab].hide();
                                                     }
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
                                                 document.getElementById("toolbar").classList.toggle("hidden");
+
+                                                USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
                                             }
                                         },
                                         new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
