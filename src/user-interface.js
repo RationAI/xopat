@@ -966,7 +966,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         icon: "fa-fw", 
                         title: ownerPluginId, 
                         body: undefined, 
-                        onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus(`${ownerPluginId}-menu`)}});
+                        onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}});
 
                     const InsideMenu = new UI.MainPanel({
                         id: `${ownerPluginId}-submenu`,
@@ -990,9 +990,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
                 // TODO move to mainPanel class and solve toggle
                 USER_INTERFACE.FullscreenMenu.menu.focus(`${atPluginId}-menu`);
-                if ( USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focused != atSubId){
-                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].unfocusAll();
-                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(atSubId);
+
+                if (USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focused === undefined && atSubId === undefined){
+                    const stTabId = Object.keys(USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].tabs)[0];
+                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(stTabId);
                 }
 
             },
