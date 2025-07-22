@@ -382,6 +382,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
      * @typedef {{
      *  icon: string | undefined,
      * 	iconCss: string | undefined,
+     *  containerCss: string | undefined,
      * 	title: string,
      * 	action: function,
      * 	selected: boolean | undefined
@@ -432,9 +433,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
          *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
          *      - you can also pass custom HTML and override the default styles and content, handler system etc...
-         *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.containerCss {string} css for the container, optional
          *   config.iconCss {string} css for icon
          */
         bind: function(context, optionsGetter) {
@@ -494,7 +495,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected} style="${opts.containerCss || ''}"><a class="pl-1 dropdown-item pointer"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);
