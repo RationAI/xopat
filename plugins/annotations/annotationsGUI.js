@@ -1154,7 +1154,20 @@ class="btn m-2">Set for left click </button></div>`
 				const search = e.target.value.toLowerCase();
 				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
 					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
-					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
+					// also filter by collection. not included in the preset meta, so its being searched in the HTML
+					let collection = '';
+					let sibling = el.previousElementSibling;
+					while (sibling) {
+						if (sibling.tagName === 'P') {
+							collection = sibling.innerText.toLowerCase();
+							break;
+						}
+						sibling = sibling.previousElementSibling;
+					}
+					if (
+						!search || value.includes(search) || ("unknown".includes(search) && !value) ||
+						collection.includes(search)
+					) {
 						el.classList.remove("d-none");
 					} else {
 						el.classList.add("d-none");
