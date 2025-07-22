@@ -968,7 +968,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         body: undefined, 
                         onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}});
 
-                    const InsideMenu = new UI.MainPanel({
+                    const InsideMenu = new UI.TabsMenu({
                         id: `${ownerPluginId}-submenu`,
                         orientation: UI.Menu.ORIENTATION.TOP,
                         buttonSide: UI.Menu.BUTTONSIDE.LEFT,

@@ -28,8 +28,8 @@ class Button extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-        this.classMap["base"] = "btn";
-        this.classMap["type"] = "btn-primary";
+        this.classMap["base"] = options["base"] || "btn";
+        this.classMap["type"] = options["type"] || "btn-primary";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
         this.classMap["orientation"] = "";
@@ -147,7 +147,8 @@ Button.OUTLINE = {
 Button.TYPE = {
     PRIMARY: function () { this.setClass("type", "btn-primary") },
     SECONDARY: function () { this.setClass("type", "btn-secondary") },
-    TERNARY: function () { this.setClass("type", "btn-accent") }
+    TERNARY: function () { this.setClass("type", "btn-accent") },
+    NONE: function () { this.setClass("type", "") }
 };
 
 Button.ORIENTATION = {
