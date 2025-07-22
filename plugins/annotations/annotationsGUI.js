@@ -424,9 +424,13 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const isActive =
+					(this.context.selectedPresets &&
+					!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : undefined;
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss: isActive,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -449,9 +453,13 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const isActive =
+					(this.context.selectedPresets &&
+					!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : undefined;
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss: isActive,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -943,8 +951,11 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 		let pushed = false;
 		this.context.presets.foreach(preset => {
+			const isActive =
+				(this.context.selectedPresets &&
+				!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : '';
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
+			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1; ${isActive}"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
