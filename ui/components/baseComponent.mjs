@@ -22,7 +22,16 @@ class BaseComponent {
     constructor(options, ...args) {
         const extraClasses = options["extraClasses"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
-        this.extraProperties = options["extraProperties"] || {};
+
+        const extraProperties = options["extraProperties"];
+        this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
+        this.propertiesStateMap = {};
+        if (extraProperties){
+            for (let key in this.propertiesMap) {
+                this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
+            }
+        }
+
         this._children = args;
         this._renderedChildren = null;
         this._initializing = true;
@@ -48,7 +57,8 @@ class BaseComponent {
      */
     attachTo(element) {
         this._initializing = false;
-        this.refreshState();
+        this.refreshClassState();
+        this.refreshPropertiesState();
         if (element instanceof BaseComponent) {
             element.addChildren(this);
         } else {
@@ -60,10 +70,15 @@ class BaseComponent {
     /**
      * @description Refresh the state of the component, e.g. class names
      */
-    refreshState() {
+    refreshClassState() {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
 
+    refreshPropertiesState() {
+        for (let key in this.propertiesStateMap) {
+            this.propertiesStateMap[key].val = this.propertiesMap[key] instanceof Object ? this.propertiesMap[key].join(" ") : this.propertiesMap[key];
+        }
+    }
     /**
      *
      * @param  {...any} properties - functions to set the state of the component
@@ -88,7 +103,8 @@ class BaseComponent {
         if (this._renderedChildren) return this._renderedChildren;
         this._renderedChildren = (this._children || []).map(child => {
             if (child instanceof BaseComponent) {
-                child.refreshState();
+                child.refreshClassState();
+                child.refreshPropertiesState();
                 return child.create();
             }
             if (child instanceof Element) {
@@ -107,7 +123,7 @@ class BaseComponent {
      * @description getter for commonProperties which are shared against all components
      */
     get commonProperties() {
-        this.refreshState();
+        this.refreshClassState();
         if (this.id) {
             return {
                 id: this.id,
@@ -118,6 +134,11 @@ class BaseComponent {
         return {
             class: this.classState
         };
+    }
+
+    get extraProperties() {
+        this.refreshPropertiesState();
+        return this.propertiesStateMap;
     }
 
     /**
@@ -186,7 +207,8 @@ class BaseComponent {
         }
         this._initializing = wasInitializing;
         if (wasInitializing) {
-            this.refreshState();
+            this.refreshClassState();
+            this.refreshPropertiesState();
         }
 
     }
