@@ -430,7 +430,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const isActive =
-					this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : undefined;
+					this.isNotPreferredPreset(preset.presetID) && 'opacity: 0.5;';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
@@ -458,7 +458,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const isActive =
-					this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : undefined;
+					this.isNotPreferredPreset(preset.presetID) && 'opacity: 0.5;';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
