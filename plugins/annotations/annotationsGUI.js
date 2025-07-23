@@ -5,6 +5,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		super(id);
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
+		/**
+		 * @type {Set<string>}
+		 */
+		this.preferredPresets = new Set();
+
 		this.registerAsEventSource();
 	}
 
@@ -425,8 +430,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const isActive =
-					(this.context.selectedPresets &&
-					!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : undefined;
+					this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : undefined;
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
@@ -454,8 +458,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const isActive =
-					(this.context.selectedPresets &&
-					!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : undefined;
+					this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : undefined;
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
@@ -952,8 +955,7 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const isActive =
-				(this.context.selectedPresets &&
-				!this.context.selectedPresets.includes(preset.presetID)) ? 'opacity: 0.5;' : '';
+				this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : '';
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1; ${isActive}"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
@@ -1233,6 +1235,40 @@ class="btn m-2">Set for left click </button></div>`
 			this.exportToFile();
 		}
 	}
+
+	/**
+	 * Set preferred preset IDs for the GUI
+	 * @param {string[]} presets array of presetIDs
+	 */
+	setPreferredPresets(presetIDs) {
+		this.preferredPresets = new Set(presetIDs);
+	}
+
+	/**
+	 * Add a preset ID to the preferred presets
+	 * @param {string} presetID 
+	 */
+	addPreferredPreset(presetID) {
+		this.preferredPresets.add(presetID);
+	}
+
+	/**
+	 * Remove a preset ID from the preferred presets
+	 * @param {string} presetID 
+	 */
+	removePreferredPreset(presetID) {
+		this.preferredPresets.delete(presetID);
+	}
+
+	/**
+	 * Check if a preset ID is not preferred
+	 * @param {string} presetID 
+	 * @returns {boolean} true if the preset is not preferred
+	 */
+	isNotPreferredPreset(presetID) {
+		return this.preferredPresets.size > 0 && !this.preferredPresets.has(presetID);
+	}
+
 }
 
 /*------------ Initialization of OSD Annotations ------------*/
