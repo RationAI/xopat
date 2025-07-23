@@ -184,4 +184,5 @@ button div {
     --tw-bg-opacity: 1;
     background-color: var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)));
     padding: 0.25rem;
+    margin: 0.25rem;
 }

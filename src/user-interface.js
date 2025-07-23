@@ -642,7 +642,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 theme = APPLICATION_CONTEXT.getOption("theme");
                 themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
 
-                const settings = div(span({ class: "f3-light header-sep" },
+                const settings = div(
+                  div({ class: "boxed"},
+                    span({ class: "f3-light header-sep" },
                     "Appearance"),
                   "Theme",
                   select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}},
@@ -654,13 +656,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
                   this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
                   this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
-                  
+                  ),
+                  div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
                   this.createCheckbox("Disable Cookies", function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
-        
+                  ),
+                  div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Other", ),
                   this.createCheckbox("Debug Mode", function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                   this.createCheckbox("Debug Rendering", function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  ),
                 );      
                 result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
 
@@ -731,7 +736,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         button({ onclick: function () {USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
                     ),
                     span({ class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
-                    div({ id: "plug-list-content-inner" },
+                    div({ id: "plug-list-content-inner", class: "boxed" },
                             div({ id: "plug-list-content-inner-content" }, ...pluginDivs),
                         ),
                     logo,
