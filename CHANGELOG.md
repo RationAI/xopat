@@ -3,6 +3,10 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### 2.2.3
+
+**Features**: added a way to set preferred annotation preset IDs for the GUI
+
 ### 2.2.2
 
 **Bugfixes**: Fixed annotation visuals for point, line. Fix annotations rest IO, fix logics with refreshing token,
