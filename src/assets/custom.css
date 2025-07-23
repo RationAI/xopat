@@ -178,3 +178,10 @@ button div {
     color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
     background-color: var(--fallback-bg,oklch(var(--b3)/var(--tw-bg-opacity)));
 }
+
+.boxed {
+    border-radius: var(--rounded-btn, 0.5rem);
+    --tw-bg-opacity: 1;
+    background-color: var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)));
+    padding: 0.25rem;
+}

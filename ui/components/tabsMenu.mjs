@@ -17,7 +17,7 @@ class TabsMenu extends BaseComponent {
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
-        this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full" } });
+        this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed" } });
 
         for (let i of args) {
             this.addTab(i);
