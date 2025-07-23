@@ -3,7 +3,7 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### 2.2.3
+### 2.2.3 (unreleased)
 
 **Features**: added a way to set preferred annotation preset IDs for the GUI
 
