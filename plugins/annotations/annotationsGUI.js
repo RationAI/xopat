@@ -8,7 +8,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		/**
 		 * @type {Set<string>}
 		 */
-		this.preferredPresets = new Set();
+		this._preferredPresets = new Set();
 
 		this.registerAsEventSource();
 	}
@@ -1241,7 +1241,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {string[]} presets array of presetIDs
 	 */
 	setPreferredPresets(presetIDs) {
-		this.preferredPresets = new Set(presetIDs);
+		this._preferredPresets = new Set(presetIDs);
 	}
 
 	/**
@@ -1249,7 +1249,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {string} presetID 
 	 */
 	addPreferredPreset(presetID) {
-		this.preferredPresets.add(presetID);
+		this._preferredPresets.add(presetID);
 	}
 
 	/**
@@ -1257,7 +1257,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {string} presetID 
 	 */
 	removePreferredPreset(presetID) {
-		this.preferredPresets.delete(presetID);
+		this._preferredPresets.delete(presetID);
 	}
 
 	/**
@@ -1266,7 +1266,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @returns {boolean} true if the preset is not preferred
 	 */
 	isNotPreferredPreset(presetID) {
-		return this.preferredPresets.size > 0 && !this.preferredPresets.has(presetID);
+		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
 
 }
