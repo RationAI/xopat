@@ -430,7 +430,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const containerCss =
-					this.isNotPreferredPreset(preset.presetID) && 'opacity-50';
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
@@ -458,7 +458,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
 				const containerCss =
-					this.isNotPreferredPreset(preset.presetID) && 'opacity-50';
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
@@ -955,7 +955,7 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		let pushed = false;
 		this.context.presets.foreach(preset => {
 			const containerCss =
-				this.isNotPreferredPreset(preset.presetID) ? 'opacity-50' : '';
+				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
@@ -1257,7 +1257,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {string} presetID 
 	 * @returns {boolean} true if the preset is not preferred
 	 */
-	isNotPreferredPreset(presetID) {
+	isUnpreferredPreset(presetID) {
 		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
 
