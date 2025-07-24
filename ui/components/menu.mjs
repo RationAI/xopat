@@ -102,16 +102,9 @@ class Menu extends BaseComponent {
                 throw new Error("Unknown design type");
         }
 
-        if (this._initializing) {
-            tab.headerButton.attachTo(this.header);
-            if (tab.contentDiv) {
-                tab.contentDiv.attachTo(this.body);
-            }
-        } else {
-            tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
-            if (tab.contentDiv) {
-                tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
-            }
+        tab.headerButton.attachTo(this.header);
+        if (tab.contentDiv) {
+            tab.contentDiv.attachTo(this.body);
         }
     }
 

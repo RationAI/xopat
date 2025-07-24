@@ -95,11 +95,7 @@ class MultiPanelMenu extends Menu {
                 throw new Error("Unknown design type");
         }
 
-        if (this._initializing) {
-            tab.contentDiv.attachTo(this.body);
-        } else {
-            document.getElementById(this.id + "-body").appendChild(tab.contentDiv.create()); // TODO shows only [object Object]
-        }
+        tab.contentDiv.attachTo(this.body);
     }
 
     /**

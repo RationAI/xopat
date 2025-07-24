@@ -61,18 +61,8 @@ class FullscreenMenu extends BaseComponent{
         this.tabs[item.id] = item;
         item.setClass("display", "hidden");
 
-        // TODO move to base component
-        if(this._initializing){
-            item.attachTo(this.content);
-        } else {
-            this.getContentDomNode().appendChild(item.create());
-        }
-        item._initializing = false;
-        for (let c of item._children) {
-            if (c instanceof BaseComponent) {
-                c._initializing = false;
-            }
-        }
+        item.attachTo(this.content);
+
     }
 
     create(){

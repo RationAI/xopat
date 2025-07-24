@@ -48,16 +48,9 @@ class TabsMenu extends BaseComponent {
         const tab = this.createTab(item);
         this.tabs[item.id] = tab;
 
-        if (this._initializing) {
-            tab.headerButton.attachTo(this.header);
-            if (tab.contentDiv) {
-                tab.contentDiv.attachTo(this.body);
-            }
-        } else {
-            tab.headerButton.attachTo(document.getElementById(this.id + "-header"));
-            if (tab.contentDiv) {
-                tab.contentDiv.attachTo(document.getElementById(this.id + "-body"));
-            }
+        tab.headerButton.attachTo(this.header);
+        if (tab.contentDiv) {
+            tab.contentDiv.attachTo(this.body);
         }
     }
 

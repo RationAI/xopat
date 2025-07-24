@@ -34,7 +34,6 @@ class BaseComponent {
 
         this._children = args;
         this._renderedChildren = null;
-        this._initializing = true;
         this.classState = van.state("");
 
         if (options) {
@@ -56,9 +55,9 @@ class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
-        this._initializing = false;
         this.refreshClassState();
         this.refreshPropertiesState();
+
         if (element instanceof BaseComponent) {
             element.addChildren(this);
         } else {
@@ -151,9 +150,12 @@ class BaseComponent {
      */
     setClass(key, value) {
         this.classMap[key] = value;
-        if (!this._initializing) {
-            this.classState.val = Object.values(this.classMap).join(" ");
-        }
+        this.classState.val = Object.values(this.classMap).join(" ");
+    }
+
+    setExtraProperty(key, value) {
+        this.propertiesMap[key] = value;
+        this.propertiesStateMap[key].val = value instanceof Object ? value.join(" ") : value;
     }
 
     /**
@@ -168,15 +170,12 @@ class BaseComponent {
      * @description Remove the component from the DOM
      */
     remove() {
-        if (this._initializing) {
-            this._children.forEach(child => {
-                if (child instanceof BaseComponent) {
-                    child.remove();
-                }
-            });
-        } else {
-            document.getElementById(this.id).remove();
-        }
+        this._children.forEach(child => {
+            if (child instanceof BaseComponent) {
+                child.remove();
+            }
+        });
+        document.getElementById(this.id).remove();
     }
 
     /**
@@ -195,8 +194,6 @@ class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
-        const wasInitializing = this._initializing;
-        this._initializing = true;
         for (let prop of names) {
             const option = options[prop];
             try {
@@ -205,12 +202,9 @@ class BaseComponent {
                 console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
             }
         }
-        this._initializing = wasInitializing;
-        if (wasInitializing) {
-            this.refreshClassState();
-            this.refreshPropertiesState();
-        }
 
+        this.refreshClassState();
+        this.refreshPropertiesState();
     }
 }
 
