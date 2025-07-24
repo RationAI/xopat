@@ -5,6 +5,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		super(id);
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
+		/**
+		 * @type {Set<string>}
+		 */
+		this._preferredPresets = new Set();
+
 		this.registerAsEventSource();
 	}
 
@@ -424,9 +429,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -449,9 +457,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -943,10 +954,12 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 		let pushed = false;
 		this.context.presets.foreach(preset => {
+			const containerCss =
+				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -1142,8 +1155,13 @@ class="btn m-2">Set for left click </button></div>`
 			$("#preset-filter-select").on('input', e => {
 				const search = e.target.value.toLowerCase();
 				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
-					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
-					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
+					const meta = this.context.presets._presets[el.dataset.presetId].meta;
+					const value = meta.category?.value.toLowerCase();
+					const collection = meta.collection?.name.toLowerCase() || "";
+					if (
+						!search || value.includes(search) || ("unknown".includes(search) && !value) ||
+						collection.includes(search)
+					) {
 						el.classList.remove("d-none");
 					} else {
 						el.classList.add("d-none");
@@ -1209,6 +1227,40 @@ class="btn m-2">Set for left click </button></div>`
 			this.exportToFile();
 		}
 	}
+
+	/**
+	 * Set preferred preset IDs for the GUI
+	 * @param {string[]} presets array of presetIDs
+	 */
+	setPreferredPresets(presetIDs) {
+		this._preferredPresets = new Set(presetIDs);
+	}
+
+	/**
+	 * Add a preset ID to the preferred presets
+	 * @param {string} presetID 
+	 */
+	addPreferredPreset(presetID) {
+		this._preferredPresets.add(presetID);
+	}
+
+	/**
+	 * Remove a preset ID from the preferred presets
+	 * @param {string} presetID 
+	 */
+	removePreferredPreset(presetID) {
+		this._preferredPresets.delete(presetID);
+	}
+
+	/**
+	 * Check if a preset ID is not preferred
+	 * @param {string} presetID 
+	 * @returns {boolean} true if the preset is not preferred
+	 */
+	isUnpreferredPreset(presetID) {
+		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+	}
+
 }
 
 /*------------ Initialization of OSD Annotations ------------*/
