@@ -851,7 +851,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             init: function () {
                 this.menu = new UI.MainPanel({
-                    id: "left-side-buttons-menu",
+                    id: "top-user-buttons-menu",
                     orientation: UI.Menu.ORIENTATION.TOP,
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
@@ -945,7 +945,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             init: function () {
                 this.menu = new UI.MainPanel({
-                    id: "left-side-buttons-menu",
+                    id: "top-plugins-buttons-menu",
                     orientation: UI.Menu.ORIENTATION.TOP,
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
