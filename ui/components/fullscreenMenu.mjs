@@ -66,11 +66,9 @@ class FullscreenMenu extends BaseComponent{
     }
 
     create(){
-        this.content.attachTo(this);
-
         return div({ id: "overlay", class: "hidden" },
                     div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
-                    div({ id: "overlay-content" }, ...this.children),
+                    div({ id: "overlay-content" }, this.content.create()),
                 );
     }
 

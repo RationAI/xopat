@@ -58,9 +58,12 @@ class BaseComponent {
         this.refreshClassState();
         this.refreshPropertiesState();
 
-        if (element instanceof BaseComponent) {
+        if (document.getElementById(element.id) !== null) {
+            document.getElementById(element.id).appendChild(this.create());
+
+        }else if (element instanceof BaseComponent) {
             element.addChildren(this);
-        } else {
+        }else {
             van.add(element,
                 this.create());
         }
