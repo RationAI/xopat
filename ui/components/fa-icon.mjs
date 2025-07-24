@@ -38,6 +38,10 @@ class FAIcon extends BaseComponent {
         this.classMap["name"] = options && options["name"] || "";
     }
 
+    changeIcon(name) {
+        this.setClass("name", name);
+    }
+
     create() {
         return i({ ...this.commonProperties, ...this.extraProperties });
     }
