@@ -495,7 +495,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected} style="${opts.containerCss || ''}"><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);

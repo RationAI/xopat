@@ -429,12 +429,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
-				const isActive =
-					this.isNotPreferredPreset(preset.presetID) && 'opacity: 0.5;';
+				const containerCss =
+					this.isNotPreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
-					containerCss: isActive,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -457,12 +457,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
-				const isActive =
-					this.isNotPreferredPreset(preset.presetID) && 'opacity: 0.5;';
+				const containerCss =
+					this.isNotPreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
-					containerCss: isActive,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -954,12 +954,12 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 		let pushed = false;
 		this.context.presets.foreach(preset => {
-			const isActive =
-				this.isNotPreferredPreset(preset.presetID) ? 'opacity: 0.5;' : '';
+			const containerCss =
+				this.isNotPreferredPreset(preset.presetID) ? 'opacity-50' : '';
 			const icon = preset.objectFactory.getIcon();
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1; ${isActive}"
+			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
