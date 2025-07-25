@@ -279,7 +279,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
-		output.objects = output.objects.filter(o => !o.private);
+		if (!this._exportPrivateAnnotations) {
+			output.objects = output.objects.filter(o => (
+				typeof o !== 'object' || o === null || !o.private
+			));
+		}
 		this.raiseEvent('export-partial', {
 			options: options,
 			data: output
@@ -1361,6 +1365,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivateAnnotations", false);
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
