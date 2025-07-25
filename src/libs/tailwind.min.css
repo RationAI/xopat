@@ -2559,6 +2559,26 @@ details.collapse summary::-webkit-details-marker {
   font-weight: 500;
 }
 
+.opacity-0 {
+  opacity: 0;
+}
+
+.opacity-100 {
+  opacity: 1;
+}
+
+.opacity-25 {
+  opacity: 0.25;
+}
+
+.opacity-50 {
+  opacity: 0.5;
+}
+
+.opacity-75 {
+  opacity: 0.75;
+}
+
 .outline {
   outline-style: solid;
 }

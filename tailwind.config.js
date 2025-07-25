@@ -10,6 +10,11 @@ module.exports = {
   //     pattern: /./, // the "." means "everything"
   //   },
   // ],
+  safelist: [
+    {
+      pattern: /^opacity-(0|25|50|75|100)/,
+    },
+  ],
   plugins: [
     require("@catppuccin/tailwindcss"),
     require("daisyui")
