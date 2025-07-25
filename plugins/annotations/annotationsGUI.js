@@ -1266,9 +1266,8 @@ class="btn m-2">Set for left click </button></div>`
 			)
 		) {
 			return false;
-		} else {
-			return {x, y};
 		}
+		return {x, y};
 	}
 
 	_copyAnnotation(annotation) {
