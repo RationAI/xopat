@@ -866,9 +866,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {fabric.Object} annotation Any annotation
 	 * @param {boolean} value New value
 	 */
-	changeAnnotationPrivateProperty(annotation, value) {
+	setAnnotationPrivate(annotation, value) {
 		annotation.private = value;
-		this.raiseEvent('annotation-edit-prop', {object: annotation, property: 'private'});
+		this.raiseEvent('annotation-set-private', {object: annotation});
 	}
 
 	/**

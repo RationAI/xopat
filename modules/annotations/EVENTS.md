@@ -33,10 +33,8 @@ It can be called several times during one edit action.
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
 
-##### annotation-edit-prop | ``{object: fabric.Object, property: string}``
-This event is fired if any extra properties of an annotation change.
-These are properties that don't change the appearance of an annotation and can be stored in a separate database/storage.
-examples: `private`, `locked`
+##### annotation-set-private | ``{object: fabric.Object}``
+This event is fired when the `private` property of an annotation changes
 
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
