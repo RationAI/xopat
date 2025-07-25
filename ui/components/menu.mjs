@@ -4,6 +4,7 @@ import { MenuTab } from "./menuTab.mjs";
 import { Join } from "./join.mjs";
 import { Div } from "./div.mjs";
 import { Button } from "./buttons.mjs";
+import { Dropdown } from "./dropdown.mjs";
 
 const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags
@@ -40,6 +41,10 @@ class Menu extends BaseComponent {
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
         for (let i of args) {
+            if (i.class === Dropdown) {
+                this.addDropdown(i);
+                continue;
+            }
             this.addTab(i);
         }
 
@@ -73,6 +78,40 @@ class Menu extends BaseComponent {
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
         this.tabs[id].removeTab();
         delete this.tabs[id];
+    }
+
+    addDropdown(item){
+        if (item.class !== Dropdown){
+            throw new Error("Item for addDropdown needs to be of type Dropdown");
+        }
+        const tab = new Dropdown({
+            id: item.id,
+            parentId: this.id,
+            icon: item.icon,
+            title: item.title,
+            },
+            ...item.body
+        )
+
+        this.tabs[item.id] = tab;
+
+
+        tab.headerButton.setClass("join", "join-item");
+        switch (this.design) {
+            case "ICONONLY":
+                tab.iconOnly();
+                break;
+            case "TITLEONLY":
+                tab.titleOnly();
+                break;
+            case "TITLEICON":
+                tab.titleIcon();
+                break;
+            default:
+                throw new Error("Unknown design type");
+        }
+
+        tab.attachTo(this.header);
     }
 
     /**

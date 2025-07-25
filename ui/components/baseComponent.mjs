@@ -16,10 +16,10 @@ class BaseComponent {
     /**
      *
      * @param {*} options - other options are defined in the constructor of the derived class
-     * @param  {...any} args
+     * @param  {...any} children
      * @param {string} [options.id] - The id of the component
      */
-    constructor(options, ...args) {
+    constructor(options, ...children) {
         const extraClasses = options["extraClasses"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
 
@@ -32,7 +32,7 @@ class BaseComponent {
             }
         }
 
-        this._children = args;
+        this._children = children;
         this._renderedChildren = null;
         this.classState = van.state("");
 
