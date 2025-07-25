@@ -279,6 +279,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		//prevent immediate serialization as we feed it to a merge
 		options.serialize = false;
 		let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+		output.objects = output.objects.filter(o => !o.private);
 		this.raiseEvent('export-partial', {
 			options: options,
 			data: output
@@ -858,6 +859,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 		this.canvas.renderAll();
+	}
+
+	/**
+	 * Change annotation's `private` property
+	 * @param {fabric.Object} annotation Any annotation
+	 * @param {boolean} value New value
+	 */
+	changeAnnotationPrivateProperty(annotation, value) {
+		annotation.private = value;
+		this.raiseEvent('annotation-edit-prop', {object: annotation, property: 'private'});
 	}
 
 	/**
