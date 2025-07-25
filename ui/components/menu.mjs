@@ -89,6 +89,7 @@ class Menu extends BaseComponent {
             parentId: this.id,
             icon: item.icon,
             title: item.title,
+            onClick: item.onClick || (() => {}),
             },
             ...item.body
         )

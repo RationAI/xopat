@@ -11,11 +11,9 @@ class Dropdown extends BaseComponent {
         super(options, ...children);
         this.title = options["title"] || "";
         this.icon = options["icon"] || "";
-        this.id = options["id"] || Math.random().toString(36).substring(2, 15);
         this.parentId = options["parentId"] || "";
-
+        this.onClick = options["onClick"] || (() => {});
         this.headerButton = this.createButton(options);
-
     }
 
     createButton() {
@@ -30,13 +28,15 @@ class Dropdown extends BaseComponent {
 
         return b;
     }
+
     create() {
-        return div({ class: "dropdown join-item"},
+        return div({ class: "dropdown join-item", onclick: this.onClick},
             // IDK if this will work in safari -> https://bugs.webkit.org/show_bug.cgi?id=22261
                 div({ tabindex: "0", class: ""}, 
                     this.headerButton.create(),
                 ),
-                ul({ class: "dropdown-content bg-base-100 menu rounded-box z-[1] w-52", style: "row-gap: 0.2vh" },
+                ul({ id: this.parentId + "-ul-" + this.id, class: "dropdown-content bg-base-100 menu rounded-box z-[1] w-52", style: "row-gap: 0.2vh",
+                    onclick: (event) => {event.stopPropagation();}},
                     ...this.children,
                 )
             );
@@ -53,5 +53,6 @@ class Dropdown extends BaseComponent {
     iconRotate() {
         this.headerButton.iconRotate();
     }
+    close() {}
 }
 export { Dropdown };

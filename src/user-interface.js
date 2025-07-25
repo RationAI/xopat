@@ -905,7 +905,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-eye-slash", title: "Window", body: [], class: UI.menuDropdown, onClick: function () {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()}},
+                }, { id: "visual", icon: "fa-eye-slash", title: "Window", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
                    { id: "clone", icon: "fa-clone", title: "Clone the viewer and synchronize", body: undefined, onClick: function () {UTILITIES.clone();}},
                 );
@@ -915,23 +915,23 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             refreshVisualDropdown: function () {
-                const visualMenuContent = document.getElementById("visual-menu-c-visual");
+                const visualMenuContent = document.getElementById("visual-menu-ul-visual");
                 visualMenuContent.innerHTML = "";
                 
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
 
                 for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
-                    const checkbox = this.createCheckbox(tKey, () => { t.toggleHiden();}, !t.hidden)
+                    const checkbox = this.createCheckbox(tKey, () => {t.toggleHiden();}, !t.hidden)
                     visualMenuContent.appendChild(checkbox);
                 }
 
             },
             createCheckbox: function (text, onchangeFunction, checked=false) {
                 const {input, label } = van.tags;
-                return label({ style: "font-weight: initial; user-select: none;", class: "btn-pointer d-flex"},
-                        input({ type: "checkbox", class: "form-control v-align-middle", checked: "checked" ? checked : "", onchange: onchangeFunction }),
-                        "\u00A0" + text,
-                );
+                return  label({class: "label cursor-pointer", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
+                            input({ type: "checkbox", class: "checkbox", checked: checked ? "checked" : "", onchange: onchangeFunction }),
+                            span({class: "label-text"}, text),
+                        );
             },
         },
 
