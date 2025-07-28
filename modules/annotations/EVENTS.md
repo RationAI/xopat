@@ -33,6 +33,9 @@ It can be called several times during one edit action.
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
 
+##### annotation-set-private | ``{object: fabric.Object}``
+This event is fired when the `private` property of an annotation changes
+
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
 ##### preset-create | ``{preset: OSDAnnotations.Preset}``

@@ -61,6 +61,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "id",
         "author",
         "created",
+        "private",
     ];
 
     /**

@@ -56,6 +56,8 @@ class AnnotationsGUI extends XOpatPlugin {
 			_this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat($(this).val()));
 		});
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
+
+		this._copiedAnnotation = null
 	}
 
 	async setupFromParams() {
@@ -442,6 +444,67 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					},
 				});
 			});
+
+			if (active) {
+				const props = this._getAnnotationProps(active);
+				const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+
+				actions.push({
+					title: "Modify annotation:",
+				})
+				actions.push({
+					title: props.private ? "Unmark as private" : "Mark as private",
+					icon: props.private ? "visibility" : "visibility_lock",
+					action: () => {
+						handlerMarkPrivate();
+					}
+				})
+			}
+
+			actions.push({
+				title: "Actions:",
+			});
+
+			const handlerCopy = this._copyAnnotation.bind(this, active);
+			actions.push({
+				title: "Copy",
+				icon: "content_copy",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCopy();
+				}
+			})
+
+			const handlerCut = this._cutAnnotation.bind(this, active);
+			actions.push({
+				title: "Cut",
+				icon: "content_cut",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCut();
+				}
+			})
+
+			const canPaste = this._canPasteAnnotation(e);
+			const handlerPaste = this._pasteAnnotation.bind(this, e);
+			actions.push({
+				title: "Paste",
+				icon: "content_paste",
+				containerCss: !canPaste && 'opacity-50',
+				action: () => {
+					if (canPaste) handlerPaste();
+				}
+			})
+
+			const handlerDelete = this._deleteAnnotation.bind(this, active);
+			actions.push({
+				title: "Delete",
+				icon: "delete",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerDelete();
+				}
+			})
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
@@ -1186,6 +1249,120 @@ class="btn m-2">Set for left click </button></div>`
 		return false;
 	}
 
+	_getMousePosition(e, checkBounds = true) {
+		const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+		if (!image) return {x: 0, y: 0};
+		const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+
+		const {x, y} = image.windowToImageCoordinates(screen);
+		const {x: maxX, y: maxY} = image.getContentSize();
+
+		if (
+			checkBounds && (
+				x <= 0 ||
+				y <= 0 ||
+				x >= maxX ||
+				y >= maxY
+			)
+		) {
+			return false;
+		}
+		return {x, y};
+	}
+
+	_copyAnnotation(annotation) {
+		this._copiedAnnotation = annotation;
+	}
+
+	_cutAnnotation(annotation) {
+		this._copiedAnnotation = annotation;
+		this._deleteAnnotation(annotation);
+	}
+
+	_deleteAnnotation(annotation) {
+		this.context.deleteObject(annotation);
+		this.context.canvas.requestRenderAll();
+	}
+
+	_canPasteAnnotation(e, getMouseValue = false) {
+		if (!this._copiedAnnotation) return null;
+		const mousePos = this._getMousePosition(e);
+		if (getMouseValue) return mousePos;
+		else return !!mousePos;
+	}
+
+	_pasteAnnotation(e) {
+		const mousePos = this._canPasteAnnotation(e, true);
+		if (!mousePos) {
+			if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
+			return;
+		}
+
+		const annotation = this._copiedAnnotation;
+		const factory = annotation._factory();
+		let params;
+		switch (annotation.factoryID || annotation.type) {
+			case 'rect':
+				params = {
+					left: mousePos.x,
+					top: mousePos.y,
+					width: annotation.width,
+					height: annotation.height,
+				}
+				break;
+			case 'polygon':
+				const diffX = mousePos.x - annotation.aCoords.tl.x;
+				const diffY = mousePos.y - annotation.aCoords.tl.y;
+				params = {
+					left: mousePos.x,
+					top: mousePos.y,
+					points: annotation.points.map(point => ({x: point.x + diffX, y: point.y + diffY})),
+				}
+				break;
+			case 'ellipse':
+				params = {
+					left: mousePos.x,
+					top: mousePos.y,
+					rx: annotation.rx,
+					ry: annotation.ry,
+				}
+				break;
+			case 'ruler':
+				const line = annotation.item(0);
+				params = {
+					left: mousePos.x,
+					top: mousePos.y,
+					points: [line.x1, line.y1, line.x2, line.y2]
+				}
+				break;
+				// broken
+			case 'text':
+				params = {
+					left: mousePos.x,
+					top: mousePos.y,
+					text: annotation.text,
+					fontSize: annotation.fontSize,
+				}
+				break;
+				// broken internally
+			default:
+				params = null;
+				break;
+		}
+		if (!params) {
+			Dialogs.show('Cannot paste this annotation', 5000, Dialogs.MSG_WARN);
+			return;
+		}
+		const res = factory.copy(
+			annotation,
+			params,
+		)
+		console.log('BEFORE RES', annotation, params);
+		console.log('RES', res);
+		this.context.addAnnotation(res);
+		this.context.canvas.requestRenderAll();
+	}
+
 	_clickAnnotationChangePreset(annotation) {
 		if (this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
@@ -1198,6 +1375,20 @@ class="btn m-2">Set for left click </button></div>`
 			_this.context.canvas.requestRenderAll();
 		}, 150);
 		return false;
+	}
+
+	_clickAnnotationMarkPrivate(annotation) {
+		const _this = this;
+		const newValue = !this._getAnnotationProps(annotation).private;
+
+		_this.context.changeAnnotationPrivateProperty(annotation, newValue);
+		Dialogs.show(`Annotation is now ${newValue ? 'private' : 'public'}.`, 2000, Dialogs.MSG_INFO);
+	}
+
+	_getAnnotationProps(annotation) {
+		return {
+			private: annotation.private
+		};
 	}
 
 	createNewPreset(buttonNode, isLeftClick) {

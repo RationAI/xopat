@@ -900,13 +900,31 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     /**
      * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {Array} parameters array of points: {x, y} objects
+     * @param {Object | Array} parameters array of points or object with:
+     * @param {Array} parameters.points array of points: {x, y} objects
+     * @param {number} parameters.left
+     * @param {number} parameters.top
      */
     copy(ofObject, parameters) {
-        if (!parameters) parameters = [...ofObject.points];
+        if (parameters && Array.isArray(parameters)) {
+            // array kept for backwards compatibility
+            parameters = {
+                points: parameters,
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        } else if (!parameters) {
+            parameters = {
+                points: [...ofObject.points],
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        }
         const props = this.copyProperties(ofObject);
+        props.left = parameters.left;
+        props.top = parameters.top;
         delete props.points;
-        return new this.Class(parameters, props);
+        return new this.Class(parameters.points, props);
     }
 
     getArea(theObject) {
@@ -1812,12 +1830,27 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     copy(ofObject, parameters=undefined) {
-        if (!parameters) parameters = [...ofObject.points];
+        if (parameters && Array.isArray(parameters)) {
+            // array kept for backwards compatibility
+            parameters = {
+                points: parameters,
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        } else if (!parameters) {
+            parameters = {
+                left: ofObject.left,
+                top: ofObject.top,
+                points: [...ofObject.points],
+            };
+        }
         const props = this.copyProperties(ofObject);
         delete props.points;
-        const copy = new fabric.Path(this._createPathFromPoints(parameters), props);
+        const copy = new fabric.Path(this._createPathFromPoints(parameters.points), props);
         // We mimic polygon style - keep points prop
-        copy.points = parameters;
+        copy.points = parameters.points;
+        copy.left = parameters.left;
+        copy.top = parameters.top;
         return copy;
     }
 

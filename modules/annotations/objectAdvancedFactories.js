@@ -51,11 +51,31 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} ofObject fabricjs.Line object that is being copied
      * @param {array} parameters array of line points [x, y, x, y ..]
      */
-    copy(ofObject, parameters=undefined) {
-        let line = ofObject.item(0),
-            text = ofObject.item(1);
-        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-        return new fabric.Group([fabric.Line(parameters, {
+    copy(ofObject, parameters = undefined) {
+
+        /** TODO fix issues
+                issue 1:
+                  the copied ruler initially renders at the correct position
+                  but gets saved at the same position as the original ruler upon refresh
+                issue 2:
+                  on initial render, the ruler has a 1px blue border when selected
+            notes:
+              when comparing the original and resulting copied objects, only `left` and `top` properties
+              of the parent fabric.Group change, which is assumed to be the correct behavior, however there
+              are still the inconsistencies and wrong saved state as mentioned above
+        */
+        
+
+        const line = ofObject.item(0);
+        const text = ofObject.item(1);
+
+        if (!parameters) parameters = {
+            left: ofObject.left,
+            top: ofObject.top,
+            points: [line.x1, line.y1, line.x2, line.y2]
+        }
+
+        return new fabric.Group([new fabric.Line(parameters.points, {
             fill: line.fill,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
@@ -71,9 +91,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementY: line.lockMovementY,
             originalStrokeWidth: line.originalStrokeWidth,
             selectable: false,
-            originX: 'left',
-            originY: 'top'
-        }), new fabric.Text(text.text), {
+            originX: "left",
+            originY: "top",
+            left: line.left,
+            top: line.top,
+        }), new fabric.Text(text.text, {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize,
             lockUniScaling: true,
@@ -83,11 +105,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             stroke: text.stroke,
             fill: text.fill,
-            paintFirst: 'stroke',
+            paintFirst: text.paintFirst,
             strokeWidth: text.strokeWidth,
-            originX: 'left',
-            originY: 'top'
-        }], {
+            originX: "left",
+            originY: "top",
+            left: text.left,
+            top: text.top,
+        })], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
             meta: ofObject.meta,
@@ -98,7 +122,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
-            hasControls: true
+            hasControls: false,
+            left: parameters.left,
+            top: parameters.top,
+            height: ofObject.height,
+            width: ofObject.width,
+            fill: ofObject.fill,
+            stroke: ofObject.stroke,
+            strokeWidth: ofObject.strokeWidth,
+            opacity: ofObject.opacity,
         });
     }
 
