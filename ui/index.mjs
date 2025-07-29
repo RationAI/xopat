@@ -14,8 +14,9 @@ import { MultiPanelMenu } from "./components/multiPanelMenu.mjs";
 import { FullscreenMenu } from "./components/fullscreenMenu.mjs";
 import { TabsMenu } from "./components/tabsMenu.mjs";
 import { Dropdown } from "./components/dropdown.mjs";
+import { Checkbox } from "./components/checkbox.mjs";
 
-const UI = { Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, Dropdown };
+const UI = { Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, Dropdown, Checkbox };
 globalThis.UI = UI;
 
 globalThis.vanRegister = function (id, component) {

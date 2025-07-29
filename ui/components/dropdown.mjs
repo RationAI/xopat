@@ -54,5 +54,6 @@ class Dropdown extends BaseComponent {
         this.headerButton.iconRotate();
     }
     close() {}
+    _removeFocus() {}
 }
 export { Dropdown };

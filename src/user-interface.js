@@ -921,17 +921,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
 
                 for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
-                    const checkbox = this.createCheckbox(tKey, () => {t.toggleHiden();}, !t.hidden)
-                    visualMenuContent.appendChild(checkbox);
+                    const checkbox = new UI.Checkbox({
+                        id: `visual-menu-ul-visual-checkbox-${tKey}`,
+                        label: tKey,
+                        checked: !t.hidden,
+                        onchange: () => {t.toggleHiden()},
+                    });
+                    visualMenuContent.appendChild(checkbox.create());
                 }
 
-            },
-            createCheckbox: function (text, onchangeFunction, checked=false) {
-                const {input, label } = van.tags;
-                return  label({class: "cursor-pointer boxed", style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
-                            input({ type: "checkbox", class: "checkbox", checked: checked ? "checked" : "", onchange: onchangeFunction }),
-                            span({class: ""}, text),
-                        );
             },
         },
 
