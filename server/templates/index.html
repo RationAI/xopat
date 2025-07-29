@@ -107,12 +107,15 @@
 
 <div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 500px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
-<div id="toolbar" class="" style="position: fixed; left: 0;"></div>
+<div id="toolbar-drag" class="draggable" style="position: fixed; left: 0;">
+    <div class="handle">Move me!</div>
+    <div id="toolbar"></div>
+</div>
+
+<div id="bottom-menu"></div>
 <!-- Appended controls for other plugins -->
 
 
-<!-- TODO REMOVE -->
-<div id="fullscreen-menu" class="position-absolute top-0 left-0 noselect height-full color-shadow-medium" style="display:none; background: var(--color-bg-primary); z-index: 3;"></div>
 <div id="fullscreen-loader" class="position-fixed width-full height-full" style="z-index: 999; background-color: var(--color-bg-backdrop);">
     <div class="loader position-fixed" style="top: 50%; left: 50%; transform: translate(-50%, -50%);"></div>
     <div class="position-fixed" style="top: calc(50% + 120px); left: calc(50% + 30px); transform: translate(-50%, -50%); width: 450px; max-width: 85vw;">
@@ -191,6 +194,52 @@ window.onerror = function (message, file, line, col, error) {
         APPLICATION_CONTEXT.config.background,
         APPLICATION_CONTEXT.config.visualizations
     );
+</script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const draggableBox = document.getElementById('toolbar-drag');
+        const handle = draggableBox.querySelector('.handle');
+
+        let isDragging = false;
+        let offsetX, offsetY;
+
+
+        handle.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                isDragging = true;
+                draggableBox.classList.add('dragging');
+
+                offsetX = e.clientX - draggableBox.getBoundingClientRect().left;
+                offsetY = e.clientY - draggableBox.getBoundingClientRect().top;
+
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            let newX = e.clientX - offsetX;
+            let newY = e.clientY - offsetY;
+
+            draggableBox.style.left = `${newX}px`;
+            draggableBox.style.top = `${newY}px`;
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                draggableBox.classList.remove('dragging');
+            }
+        });
+
+        document.addEventListener('mouseleave', (e) => {
+            if (isDragging && e.buttons === 1) {
+                isDragging = false;
+                draggableBox.classList.remove('dragging');
+            }
+        });
+    });
 </script>
 </body>
 </html>
