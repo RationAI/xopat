@@ -928,9 +928,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             createCheckbox: function (text, onchangeFunction, checked=false) {
                 const {input, label } = van.tags;
-                return  label({class: "label cursor-pointer", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
+                return  label({class: "cursor-pointer", style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
                             input({ type: "checkbox", class: "checkbox", checked: checked ? "checked" : "", onchange: onchangeFunction }),
-                            span({class: "label-text"}, text),
+                            span({class: ""}, text),
                         );
             },
         },
