@@ -1337,6 +1337,58 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// note the board would have to reflect the UI state when opening
 
 		const _this = this;
+
+		this._isAnimating = false;
+
+		// real time zoom
+		VIEWER.addHandler('zoom', () => {
+			if (!this._isAnimating) return;
+			const currentZoom = VIEWER.viewport.getZoom();
+			if (this._previousZoom === currentZoom) return;
+			this.raiseEvent('canvas-zoom', {zoom: currentZoom});
+			this._previousZoom = currentZoom;
+		});
+
+		// real time pan
+		VIEWER.addHandler('pan', () => {
+			if (!this._isAnimating) return;
+			const currentCenter = VIEWER.viewport.getCenter();
+			if (this._previousCenter && 
+				this._previousCenter.x === currentCenter.x && 
+				this._previousCenter.y === currentCenter.y) return;
+			this.raiseEvent('canvas-pan', {center: currentCenter});
+			this._previousCenter = currentCenter;
+		});
+
+		VIEWER.addHandler('animation-start', () => {
+			this._isAnimating = true;
+		});
+
+		// sudden zoom/pan
+		VIEWER.addHandler('animation-finish', () => {
+			this._isAnimating = false;
+			
+			const currentZoom = VIEWER.viewport.getZoom();
+			const currentCenter = VIEWER.viewport.getCenter();
+			
+			if (this._previousZoom !== currentZoom) {
+				this.raiseEvent('canvas-zoom', {zoom: currentZoom});
+				this._previousZoom = currentZoom;
+			}
+			
+			if (!this._previousCenter || 
+				this._previousCenter.x !== currentCenter.x || 
+				this._previousCenter.y !== currentCenter.y) {
+				this.raiseEvent('canvas-pan', {center: currentCenter});
+				this._previousCenter = currentCenter;
+			}
+		});
+		
+		this._previousZoom = VIEWER.viewport.getZoom();
+		this._previousCenter = VIEWER.viewport.getCenter();
+		this.raiseEvent('canvas-zoom', {zoom: this._previousZoom});
+		this.raiseEvent('canvas-pan', {center: this._previousCenter});
+
 		/**
 		 * Attach factory getter to each object
 		 */
@@ -1754,6 +1806,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_objectDeselected(event) {
 		if (this.disabledInteraction || !event.target) return;
+		this.raiseEvent('annotation-deselected', {object: event.target});
 		//todo make sure deselect prevent does not prevent also deletion
 		try {
 			if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
@@ -1787,7 +1840,10 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 					}
 				} else {
 					let factory = this.getAnnotationObjectFactory(object.factoryID);
-					if (factory) factory.selected(object);
+					if (factory) {
+						factory.selected(object);
+						this.raiseEvent('annotation-selected', {object});
+					}
 				}
 			}
 		} catch (e) {

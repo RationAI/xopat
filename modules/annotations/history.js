@@ -600,11 +600,13 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
+        const privateIcon = object.private ? `<span class="material-symbols-outlined" style="vertical-align:sub;">visibility_lock</span>` : '';
         const html = `
 <div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.internalID}"
 onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
 oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
+${privateIcon}
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
 </div>`;
