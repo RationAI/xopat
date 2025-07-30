@@ -50,6 +50,10 @@ This event is fired when the `private` property of an annotation changes
 
 ##### annotation-preset-change | ``{object: fabric.Object, presetID: string, oldPresetID: string}``
 
+#### annotation-selected | ``{object: fabric.Object}``
+
+#### annotation-deselected | ``{object: fabric.Object}``
+
 ##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
 
 ##### import | ``{options: object, clear: boolean, data: object}``
@@ -76,5 +80,10 @@ Called when the annotation modes did not handle mouse release action.
 ##### canvas-release-not-handled
 Called when the annotation modes did not handle mouse release action.
 
+##### canvas-pan | ``{x: number, y: number}``
+Called when canvas pans, returns coordinates of viewport getCenter
+
+#### canvas-zoom | ``{zoom: number}``
+Called when canvas zooms, returns value of viewport getZoom
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.
