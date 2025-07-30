@@ -107,12 +107,11 @@
 
 <div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 500px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
-<div id="toolbar-drag" class="draggable" style="position: fixed; left: 0;">
-    <div class="handle">Move me!</div>
-    <div id="toolbar"></div>
+<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
+    <div id="bottom-menu-left"></div>
+    <div id="bottom-menu-center"></div>
+    <div id="bottom-menu-middle"></div>
 </div>
-
-<div id="bottom-menu"></div>
 <!-- Appended controls for other plugins -->
 
 
@@ -201,6 +200,7 @@ window.onerror = function (message, file, line, col, error) {
         const handle = draggableBox.querySelector('.handle');
 
         let isDragging = false;
+        let vertical = "rotate(90deg)" === document.getElementById('toolbar-drag').style.transform;
         let offsetX, offsetY;
 
 

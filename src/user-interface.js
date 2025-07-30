@@ -795,10 +795,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * @namespace USER_INTERFACE.Toolbar
          */
         Toolbar:{
+            context: $("#bottom-menu-center"),
+            menu: "",
             init: function () {
-                if (!APPLICATION_CONTEXT.getOption("toolBar")){
-                    document.getElementById("toolbar").classList.toggle("hidden");
-                }
+                this.menu = new UI.Toolbar({
+                    id: "toolbar",})
+                this.menu.attachTo(this.context);
             }
         },
 
@@ -1140,6 +1142,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         <div id="blending-equation"></div>
     </div>
 </div>`
+                const { div } = van.tags;
                 const shadersMenu = div();
                 shadersMenu.innerHTML = innerHTML;
                 return shadersMenu;
@@ -1196,17 +1199,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} icon
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-
-                if (!pluginsToolsBuilder) {
-                    pluginsToolsBuilder = new UIComponents.Containers.PanelMenu("toolbar");
-                    pluginsToolsBuilder.context.classList.add("bg-opacity");
-                    //USER_INTERFACE.MainMenu._sync();
-                }
-
-                pluginsToolsBuilder.set(ownerPluginId, toolsMenuId, title, html, icon, `${toolsMenuId}-tools-panel`);
-                if (pluginsToolsBuilder.isVisible) {
-                    USER_INTERFACE.Margins.bottom = pluginsToolsBuilder.height;
-                }
+                USER_INTERFACE.Toolbar.menu.addToToolbar({
+                    id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
+                    icon: icon,
+                    title: title,
+                    body: [html],
+                })
 
             },
             /**

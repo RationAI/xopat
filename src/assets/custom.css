@@ -210,11 +210,7 @@ button div {
 }
 
 .draggable .handle {
-    background-color: #388E3C;
     color: white;
-    padding: 10px 15px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
     font-weight: bold;
     text-align: center;
     cursor: grab;
