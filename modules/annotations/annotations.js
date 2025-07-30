@@ -1378,8 +1378,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			
 			if (!this._previousCenter || 
 				this._previousCenter.x !== currentCenter.x || 
-				this._previousCenter.y !== currentCenter.y) {
-				this.raiseEvent('canvas-pan', {center: currentCenter});
+				this._previousCenter.y !== currentCenter.y
+			) {
+				this.raiseEvent('canvas-pan', {x: currentCenter.x, y: currentCenter.y });
 				this._previousCenter = currentCenter;
 			}
 		});
@@ -1387,7 +1388,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._previousZoom = VIEWER.viewport.getZoom();
 		this._previousCenter = VIEWER.viewport.getCenter();
 		this.raiseEvent('canvas-zoom', {zoom: this._previousZoom});
-		this.raiseEvent('canvas-pan', {center: this._previousCenter});
+		this.raiseEvent('canvas-pan', {x: this._previousCenter.x, y: this._previousCenter.y});
 
 		/**
 		 * Attach factory getter to each object
