@@ -45,6 +45,9 @@ class Toolbar extends BaseComponent{
 
         if (Object.keys(this.tabs).length === 1) {
             this.focus(item.id);
+            this.header.setClass("display", "hidden");
+        } else{
+            this.header.setClass("display", "");
         }
 
     }
