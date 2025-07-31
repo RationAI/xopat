@@ -653,7 +653,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     option({ value: "light"}, "Light Theme", ),
                     option({ value: "dark" }, "Dark Theme", ),
                   ),
-                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
+                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar-drag').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
                   this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
                   this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
@@ -834,7 +834,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                     }
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
-                                                document.getElementById("toolbar").classList.toggle("hidden");
+                                                if (APPLICATION_CONTEXT.getOption("toolBar", true)) {
+                                                    document.getElementById("toolbar-drag").classList.toggle("hidden");
+                                                }
 
                                                 USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
                                             }
