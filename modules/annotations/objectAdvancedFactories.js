@@ -131,6 +131,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             stroke: ofObject.stroke,
             strokeWidth: ofObject.strokeWidth,
             opacity: ofObject.opacity,
+            borderColor: ofObject.borderColor,
+            cornerColor: ofObject.cornerColor,
+            borderScaleFactor: ofObject.borderScaleFactor,
+            borderDashArray: ofObject.borderDashArray,
+            cornerSize: ofObject.cornerSize,
+            cornerStyle: ofObject.cornerStyle,
+            transparentCorners: ofObject.transparentCorners,
         });
     }
 
