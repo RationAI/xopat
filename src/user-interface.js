@@ -1296,7 +1296,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 let content = document.createElement("span");
                 content.setAttribute("class", "one-liner");
                 node.appendChild(content);
-                document.body.appendChild(node);
+                document.getElementById("bottom-menu-right").appendChild(node);
                 this.context = node;
 
                 if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
