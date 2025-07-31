@@ -3,8 +3,27 @@ import { BaseComponent } from "./baseComponent.mjs";
 
 const { label, input, span } = van.tags
 
+/**
+ * @class Checkbox
+ * @extends BaseComponent
+ * @description A checkbox component that can be used in forms or settings.
+ * @example
+ * const checkbox = new Checkbox({
+ *                                id: "myCheckbox",
+ *                                label: "Accept Terms and Conditions",
+ *                                checked: true,
+ *                                onchange: () => console.log("Checkbox state changed")
+ *                               });
+ */
 class Checkbox extends BaseComponent {
 
+    /**
+     * @param {*} options 
+     * @param  {...any} args 
+     * @param {string} [options.label] - The label for the checkbox
+     * @param {boolean} [options.checked] - The initial checked state of the checkbox
+     * @param {Function} [options.onchange] - The function to call when the checkbox state changes
+     */
     constructor(options, ...args) {
         super(options, ...args);
         this.label = options["label"] || "";

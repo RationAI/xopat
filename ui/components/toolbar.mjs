@@ -6,13 +6,33 @@ import van from "../vanjs.mjs";
 
 const { div, span } = van.tags;
 
+/**
+ * @class Toolbar
+ * @extends BaseComponent
+ * @description A draggable component that allows to add tabs with content.
+ * @example
+ * const toolbar = new Toolbar({ id: "myToolbar", design: "TITLEICON" });
+ * toolbar.addToToolbar({
+ *      id: "tab1",
+ *      icon: "fa-icon-name",
+ *      title: "Tab 1",
+ *      body: [span("Content for Tab 1")]
+ * });
+ */
 class Toolbar extends BaseComponent{
-    constructor(options, ...args) {
-        super(options, ...args);
+    /**
+     * 
+     * @param {*} options
+     */
+    constructor(options) {
+        super(options,);
+
+        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
+        this.classMap["flex"] = "flex-col";
+        this.design = options.design || "TITLEICON";
 
         this.tabs = {};
         this.focused = undefined;
-        this.design = options.design || "TITLEICON";
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
@@ -21,15 +41,12 @@ class Toolbar extends BaseComponent{
         for (let i of args) {
             this.addTab(i);
         }
-
-        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
-        this.classMap["flex"] = "flex-col";
-
-        if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
-        }
     }
 
+    /**
+     * @description creates new toolbar item and adds it to the toolbar
+     * @param {*} item dictionary with  id, icon, title, body
+     */
     addToToolbar(item) {
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
@@ -52,6 +69,10 @@ class Toolbar extends BaseComponent{
 
     }
 
+    /**
+     * @param {*} item dictionary with  id, icon, title, body
+     * @returns tuple of header Button and content Div components
+     */
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
@@ -88,6 +109,11 @@ class Toolbar extends BaseComponent{
         );
     }
 
+    /**
+     * 
+     * @param {*} id id of tab we want to focus
+     * @returns if the tab was focused
+     */
     focus(id) {
         if (id in this.tabs) {
             this.unfocusAll();
@@ -105,7 +131,6 @@ class Toolbar extends BaseComponent{
      * @description unfocus all tabs
      */
     unfocusAll() {
-        console.log("unfocusing all tabs");
         for (let tab of Object.values(this.tabs)) {
             tab.headerButton.setClass("tab-active", "");
             if (tab.contentDiv) {
