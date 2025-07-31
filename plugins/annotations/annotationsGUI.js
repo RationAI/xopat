@@ -1502,12 +1502,12 @@ class="btn m-2">Set for left click </button></div>`
 				}
 				break;
 			case 'polygon':
-				const diffX = mousePos.x - annotation.aCoords.tl.x;
-				const diffY = mousePos.y - annotation.aCoords.tl.y;
+				const polygondiffX = mousePos.x - annotation.aCoords.tl.x;
+				const polygondiffY = mousePos.y - annotation.aCoords.tl.y;
 				params = {
 					left: mousePos.x,
 					top: mousePos.y,
-					points: annotation.points.map(point => ({x: point.x + diffX, y: point.y + diffY})),
+					points: annotation.points.map(point => ({x: point.x + polygondiffX, y: point.y + polygondiffY})),
 				}
 				break;
 			case 'ellipse':
@@ -1520,10 +1520,12 @@ class="btn m-2">Set for left click </button></div>`
 				break;
 			case 'ruler':
 				const line = annotation.item(0);
+				const rulerDiffX = mousePos.x - annotation.left;
+				const rulerDiffY = mousePos.y - annotation.top;
 				params = {
 					left: mousePos.x,
 					top: mousePos.y,
-					points: [line.x1, line.y1, line.x2, line.y2]
+					points: [line.x1 + rulerDiffX, line.y1 + rulerDiffY, line.x2 + rulerDiffX, line.y2 + rulerDiffY]
 				}
 				break;
 				// broken
@@ -1548,8 +1550,6 @@ class="btn m-2">Set for left click </button></div>`
 			annotation,
 			params,
 		)
-		console.log('BEFORE RES', annotation, params);
-		console.log('RES', res);
 		this.context.addAnnotation(res);
 		this.context.canvas.requestRenderAll();
 	}
