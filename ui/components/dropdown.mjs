@@ -5,8 +5,31 @@ import { FAIcon } from "./fa-icon.mjs";
 
 const { div, ul, span } = van.tags
 
+/**
+ * @class Dropdown
+ * @extends BaseComponent
+ * @description A dropdown component, after clicking on button, it will show a list of children
+ * @example
+ *  const tab = new Dropdown({
+ *      id: item.id,
+ *      parentId: this.id,
+ *      icon: item.icon,
+ *      title: item.title,
+ *      onClick: item.onClick || (() => {}),
+ *      },
+ *      ...children) 
+ */
 class Dropdown extends BaseComponent {
 
+    /**
+     * 
+     * @param {*} options 
+     * @param {string} options.title - The title of the dropdown
+     * @param {string} options.icon - The icon of the dropdown, can be a string or a FAIcon instance
+     * @param {string} options.parentId - The ID of the parent element to which this dropdown belongs
+     * @param {function} options.onClick - The function to be called when the dropdown is clicked
+     * @param  {...any} children 
+     */
     constructor(options, ...children) {
         super(options, ...children);
         this.title = options["title"] || "";
@@ -16,6 +39,10 @@ class Dropdown extends BaseComponent {
         this.headerButton = this.createButton(options);
     }
 
+    /**
+     * 
+     * @returns {Button} - A button component that serves as the header for the dropdown
+     */
     createButton() {
         let inIcon = (this.icon instanceof BaseComponent) ? this.icon : new FAIcon({ name: this.icon });        
 

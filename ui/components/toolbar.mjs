@@ -9,7 +9,7 @@ const { div, span } = van.tags;
 /**
  * @class Toolbar
  * @extends BaseComponent
- * @description A draggable component that allows to add tabs with content.
+ * @description A draggable component that allows to add tabs with content and can be pinned to left or down
  * @example
  * const toolbar = new Toolbar({ id: "myToolbar", design: "TITLEICON" });
  * toolbar.addToToolbar({

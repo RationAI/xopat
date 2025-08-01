@@ -80,6 +80,11 @@ class Menu extends BaseComponent {
         delete this.tabs[id];
     }
 
+    /**
+     * 
+     * @param {*} item 
+     * @description adds a dropdown type item to the menu
+     */
     addDropdown(item){
         if (item.class !== Dropdown){
             throw new Error("Item for addDropdown needs to be of type Dropdown");

@@ -38,6 +38,11 @@ class FAIcon extends BaseComponent {
         this.classMap["name"] = options && options["name"] || "";
     }
 
+    /**
+     * 
+     * @param {*} name name of the new icon from FontAwesome
+     * @description Changes the icon of the component
+     */
     changeIcon(name) {
         this.setClass("name", name);
     }
