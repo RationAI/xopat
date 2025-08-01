@@ -201,6 +201,7 @@ window.onerror = function (message, file, line, col, error) {
 
         let isDragging = false;
         let offsetX, offsetY;
+        const SNAP_DISTANCE = 20;
 
 
         handle.addEventListener('mousedown', (e) => {
@@ -218,8 +219,34 @@ window.onerror = function (message, file, line, col, error) {
         document.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
 
+            document.getElementById("toolbar-drag").style["max-width"] = "";
+
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const boxWidth = draggableBox.offsetWidth;
+            const boxHeight = draggableBox.offsetHeight;
+
             let newX = e.clientX - offsetX;
             let newY = e.clientY - offsetY;
+
+// ----- Logika pro přilepení k okrajům -----
+
+            // Přilepení k levému okraji
+            if (newX < SNAP_DISTANCE) {
+                document.getElementById("toolbar-drag").style["max-width"] = "100px";
+                newY = viewportHeight / 2 - draggableBox.offsetHeight / 2; // Center vertically
+                newX = 0;
+            }
+
+            // Přilepení k dolnímu okraji
+            else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
+                newY = viewportHeight - boxHeight;
+                newX = viewportWidth / 2 - boxWidth / 2; // Center horizontally
+            }
+
+            // Zabraňte přetažení mimo okraje (volitelné, pokud nechceš "snap", ale jen omezení)
+            newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
+            newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
 
             draggableBox.style.left = `${newX}px`;
             draggableBox.style.top = `${newY}px`;
