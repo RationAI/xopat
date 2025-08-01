@@ -200,7 +200,6 @@ window.onerror = function (message, file, line, col, error) {
         const handle = draggableBox.querySelector('.handle');
 
         let isDragging = false;
-        let vertical = "rotate(90deg)" === document.getElementById('toolbar-drag').style.transform;
         let offsetX, offsetY;
 
 
@@ -224,6 +223,9 @@ window.onerror = function (message, file, line, col, error) {
 
             draggableBox.style.left = `${newX}px`;
             draggableBox.style.top = `${newY}px`;
+
+            APPLICATION_CONTEXT.setOption('toolbarPositionLeft', newX);
+            APPLICATION_CONTEXT.setOption('toolbarPositionTop', newY);
         });
 
         document.addEventListener('mouseup', () => {

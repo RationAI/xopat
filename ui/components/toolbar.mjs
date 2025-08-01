@@ -23,8 +23,9 @@ class Toolbar extends BaseComponent{
     /**
      * 
      * @param {*} options
+     * @param {*} args
      */
-    constructor(options) {
+    constructor(options, ...args) {
         super(options,);
 
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
@@ -102,7 +103,8 @@ class Toolbar extends BaseComponent{
     }
 
     create() {
-        return div({id: "toolbar-drag", class: "draggable boxed", style: "position: fixed; left: 0;"},
+        return div({id: "toolbar-drag", class: "draggable boxed", 
+                    style: `position: fixed; left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px`},
                     div({class: "handle"}, "----"),
                     this.header.create(),
                     this.body.create()
