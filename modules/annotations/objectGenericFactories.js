@@ -31,8 +31,11 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
+        parameters.controls = {};
         const instance = new fabric.Rect(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -64,7 +67,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.top = parameters.top;
         copy.width = parameters.width;
         copy.height = parameters.height;
-        return new fabric.Rect(copy);
+        const conf = new fabric.Rect(copy);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -79,7 +84,6 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._left = theObject.left;
         this._top = theObject.top;
         theObject.set({
-            hasControls: true,
             lockMovementX: false,
             lockMovementY: false
         });
@@ -91,7 +95,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+            lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
         });
@@ -238,7 +242,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         const instance = new fabric.Ellipse(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -275,7 +281,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.top = parameters.top;
         copy.rx = parameters.rx;
         copy.ry = parameters.ry;
-        return new fabric.Ellipse(copy);
+        const conf = new fabric.Ellipse(copy);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -471,7 +479,9 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         const instance = new fabric.Text(parameters.text);
-        return this.configure(instance, $.extend(options, parameters));
+        const conf = this.configure(instance, $.extend(options, parameters));
+        this.renderAllControls(conf);
+        return conf;
     }
 
 
@@ -587,7 +597,9 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
         $.extend(props, parameters);
         props.paintFirst = 'stroke';
-        return new fabric.Text(parameters.text, props);
+        const conf = new fabric.Text(parameters.text, props);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     edit(theObject) {
@@ -857,7 +869,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      */
     create(parameters, options) {
         const instance = new this.Class(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     discardCreate() {
@@ -924,7 +938,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         props.left = parameters.left;
         props.top = parameters.top;
         delete props.points;
-        return new this.Class(parameters.points, props);
+        const conf = new this.Class(parameters.points, props);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -1800,6 +1816,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
         this.configure(multipolygon, options);
         multipolygon.points = parameters;
+        this.renderAllControls(multipolygon);
         return multipolygon;
     }
 
@@ -1851,6 +1868,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         copy.points = parameters.points;
         copy.left = parameters.left;
         copy.top = parameters.top;
+        this.renderAllControls(copy);
         return copy;
     }
 

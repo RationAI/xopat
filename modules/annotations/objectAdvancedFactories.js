@@ -75,7 +75,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             points: [line.x1, line.y1, line.x2, line.y2]
         }
 
-        return new fabric.Group([new fabric.Line(parameters.points, {
+        const conf = new fabric.Group([new fabric.Line(parameters.points, {
             fill: line.fill,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
@@ -122,7 +122,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
-            hasControls: false,
+            hasControls: true,
             left: parameters.left,
             top: parameters.top,
             height: ofObject.height,
@@ -138,11 +138,25 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             cornerSize: ofObject.cornerSize,
             cornerStyle: ofObject.cornerStyle,
             transparentCorners: ofObject.transparentCorners,
+            private: ofObject.private,
         });
+        this.renderAllControls(conf);
+        conf.setControlsVisibility({ private: true });
+        return conf;
     }
 
     edit(theObject) {
         //not allowed
+    }
+
+    /**
+     * Called when object is selected - restore custom controls
+     * @param {fabric.Object} theObject selected fabricjs object
+     */
+    selected(theObject) {
+        // Re-apply controls after object selection, as FabricJS might reset them
+        this.renderAllControls(theObject);
+        theObject.setControlsVisibility({ private: true });
     }
 
     recalculate(theObject) {
@@ -330,6 +344,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: text.text,
+            hasControls: true,
         });
     }
 

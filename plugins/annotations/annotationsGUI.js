@@ -90,7 +90,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 
 		this._copiedAnnotation = null;
-		this._selectedAnnotation = null;
 	}
 
 	async setupFromParams() {
@@ -157,135 +156,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		return enable;
 	}
 
-	_buildAnnotationMenuIcon(icon, name, skipDuplicate = true, fnString = undefined) {
-		if (
-			skipDuplicate &&
-			[...document.getElementById("annotation-details-menu").children[0].children]
-				.map(i => i.dataset.name)
-				.includes(name)
-		) return '';
-		return `
-		<div class="bg-stone-200 w-8 h-8 grid items-center rounded-full border border-solid border-stone-900" data-name="${name}">
-			<span class="material-icons text-center p-0 m-0 text-stone-900" style="font-size: 22px;" ${fnString ? `onclick="${this.THIS}.${fnString}"` : ""}>
-				${icon}
-			</span>
-		</div>
-		`;
-	}
-
-	_recalculateAnnotationMenuPosition(object) {
-		const bbox = object.getBoundingRect(true, true);
-		
-		// Use the object factory's focus zone method (used for focusing on annotations)
-		const factory = this.context.getAnnotationObjectFactory(object.factoryID);
-		const focusZone = factory ? factory.getObjectFocusZone(object) : bbox;
-		
-		// Get the center point of the annotation in image coordinates
-		const centerX = focusZone.left;
-		const centerY = focusZone.top;
-		
-		// Convert from image coordinates to window coordinates
-		const referencedImage = VIEWER.scalebar.getReferencedTiledImage();
-		const windowPoint = referencedImage.imageToWindowCoordinates(
-			new OpenSeadragon.Point(centerX, centerY)
-		);
-		
-		// Return viewport relative position
-		return { x: windowPoint.x , y: windowPoint.y };
-	}
-
-	_recalculateAnnotationMenu() {
-		if (this._selectedAnnotation) {
-			const a = this._recalculateAnnotationMenuPosition(this._selectedAnnotation);
-			this._setAnnotationMenu({ pos: a });
-		} else {
-			this._setAnnotationMenu({ show: false });
-		}
-	}
-
-	/**
-	 * 
-	 * @param {AnnotationMenuOptions} opts
-	 */
-	_setAnnotationMenu(opts) {
-		const root = document.getElementById("annotation-details-menu");
-		const iconsContainer = root.children[0];
-
-		const previousHeight = root.scrollHeight;
-
-		if (
-			opts.show === true &&
-			root.classList.contains("hidden")
-		) {
-			root.classList.remove("hidden");
-		} else if (
-			opts.show === false &&
-			!root.classList.contains("hidden")
-		) {
-			root.classList.add("hidden");
-		}
-
-		if (opts.private === true) {
-			iconsContainer.querySelector('[data-name="private-0"]')?.remove();
-			iconsContainer.insertAdjacentHTML(
-				'beforeend',
-				this._buildAnnotationMenuIcon("visibility_lock", "private-1")
-			);
-		} else if (opts.private === false) {
-			iconsContainer.querySelector('[data-name="private-1"]')?.remove();
-			iconsContainer.insertAdjacentHTML(
-				'beforeend',
-				this._buildAnnotationMenuIcon("visibility", "private-0")
-			);
-		}
-
-		// sort icons based on names and order defined in annotationMenuIconOrder
-		const children = [...iconsContainer.children];
-		if (
-			AnnotationsGUI._isAnnotationMenuSorted(
-				children.map(i => i.dataset.name)
-			)
-		) {
-			const currentIcons = children;
-			const sortedIcons = currentIcons.sort((a, b) => {
-				const aIndex = AnnotationsGUI.annotationMenuIconOrder.indexOf(a.dataset.name);
-				const bIndex = AnnotationsGUI.annotationMenuIconOrder.indexOf(b.dataset.name);
-				
-				if (aIndex !== -1 && bIndex !== -1) {
-					return aIndex - bIndex;
-				}
-				if (aIndex !== -1) return -1;
-				if (bIndex !== -1) return 1;
-				return 0;
-			});
-			
-			iconsContainer.innerHTML = '';
-			console.log('sortedIcons', sortedIcons);
-			sortedIcons.forEach(icon => iconsContainer.appendChild(icon));
-		}
-
-		if (opts.pos) {
-			// root.style.left = `${opts.pos.x - root.clientWidth - 10}px`;
-			const left = Math.round(opts.pos.x * 100) / 100;
-			root.style.left = `${left - root.scrollWidth - 10}px`;
-			root.dataset.left = `${left}`;
-			root.style.top = `${opts.pos.y}px`;
-		} else if (root.scrollHeight !== previousHeight) {
-			const left = parseInt(root.dataset.left);
-			if (!Number.isNaN(left)) {
-				root.style.left = `${left - root.scrollWidth - 10}px`;
-			}
-		}
-	}
-
 	initHTML() {
-		USER_INTERFACE.addHtml(`
-		<div class="fixed hidden flex-column gap-2" id="annotation-details-menu">
-			<div class="flex-row gap-2 select-none"></div>
-			<div></div>
-		</div>
-		`, this.id)
-
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
@@ -569,35 +440,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
-		this.context.addHandler('annotation-selected', e => {
-			this._selectedAnnotation = e.object;
-			const pos = this._recalculateAnnotationMenuPosition(e.object);
-			this._setAnnotationMenu({
-				show: true,
-				pos,
-				private: e.object.private ?? false
-			});
-		});
-		this.context.addHandler('annotation-deselected', e => {
-			this._selectedAnnotation = null;
-			this._setAnnotationMenu({ show: false });
-		})
-		this.context.addHandler('annotation-delete', e => {
-			if (e.object.id !== this._selectedAnnotation?.id) return;
-			this._selectedAnnotation = null;
-			this._setAnnotationMenu({ show: false });
-		})
 		this.context.addHandler('annotation-set-private', e => {
-			if (e.object.id !== this._selectedAnnotation?.id) return;
-			this._setAnnotationMenu({ private: e.object.private ?? false });
+			this.context.canvas.requestRenderAll();
 		})
-
-		this.context.addHandler('canvas-zoom', () => {
-			this._recalculateAnnotationMenu()
-		});
-		this.context.addHandler('canvas-pan', () => {
-			this._recalculateAnnotationMenu()
-		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
