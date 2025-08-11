@@ -1367,7 +1367,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
-		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivateAnnotations", false);
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false);
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
