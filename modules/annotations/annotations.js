@@ -872,6 +872,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean} value New value
 	 */
 	setAnnotationPrivate(annotation, value) {
+		if (annotation.private === value) return;
 		annotation.private = value;
 		this.raiseEvent('annotation-set-private', {object: annotation});
 	}
