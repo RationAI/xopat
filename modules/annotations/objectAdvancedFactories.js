@@ -53,18 +53,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     copy(ofObject, parameters = undefined) {
 
-        /** TODO fix issues
-                issue 1:
-                  the copied ruler initially renders at the correct position
-                  but gets saved at the same position as the original ruler upon refresh
-                issue 2:
-                  on initial render, the ruler has a 1px blue border when selected
-            notes:
-              when comparing the original and resulting copied objects, only `left` and `top` properties
-              of the parent fabric.Group change, which is assumed to be the correct behavior, however there
-              are still the inconsistencies and wrong saved state as mentioned above
-        */
-        
+        // TODO: fix issue where the copied ruler line is rendered at a slightly wrong position, misplacing the group
 
         const line = ofObject.item(0);
         const text = ofObject.item(1);
