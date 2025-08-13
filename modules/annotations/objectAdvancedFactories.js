@@ -291,7 +291,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureLine(line, options) {
-        options.stroke = options.color;
+        const lineOptions = Object.assign({}, options);
+        lineOptions.stroke = options.color;
 
         $.extend(line, {
             scaleX: 1,
@@ -301,7 +302,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             originX: 'left',
             originY: 'top'
-        }, options);
+        }, lineOptions);
     }
 
     _configureText(text, options) {
