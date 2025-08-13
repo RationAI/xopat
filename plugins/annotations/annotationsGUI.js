@@ -1335,68 +1335,19 @@ class="btn m-2">Set for left click </button></div>`
 		}
 
 		const annotation = this._copiedAnnotation;
-		const factory = annotation._factory();
-		let params;
-		switch (annotation.factoryID || annotation.type) {
-			case 'rect':
-				params = {
-					left: mousePos.x,
-					top: mousePos.y,
-					width: annotation.width,
-					height: annotation.height,
-				}
-				break;
-			case 'polygon':
-				const polygondiffX = mousePos.x - annotation.aCoords.tl.x;
-				const polygondiffY = mousePos.y - annotation.aCoords.tl.y;
-				params = {
-					left: mousePos.x,
-					top: mousePos.y,
-					points: annotation.points.map(point => ({x: point.x + polygondiffX, y: point.y + polygondiffY})),
-				}
-				break;
-			case 'ellipse':
-				params = {
-					left: mousePos.x,
-					top: mousePos.y,
-					rx: annotation.rx,
-					ry: annotation.ry,
-				}
-				break;
-			case 'ruler':
-				const line = annotation.item(0);
-				const rulerDiffX = mousePos.x - annotation.left;
-				const rulerDiffY = mousePos.y - annotation.top;
-				params = {
-					left: mousePos.x,
-					top: mousePos.y,
-					points: [line.x1 + rulerDiffX, line.y1 + rulerDiffY, line.x2 + rulerDiffX, line.y2 + rulerDiffY]
-				}
-				break;
-				// broken
-			case 'text':
-				params = {
-					left: mousePos.x,
-					top: mousePos.y,
-					text: annotation.text,
-					fontSize: annotation.fontSize,
-				}
-				break;
-				// broken internally
-			default:
-				params = null;
-				break;
-		}
-		if (!params) {
-			Dialogs.show('Cannot paste this annotation', 5000, Dialogs.MSG_WARN);
-			return;
-		}
-		const res = factory.copy(
-			annotation,
-			params,
-		)
+		let factory = annotation._factory();
+
+		const copy = factory.copy(annotation);
+		factory = copy._factory();
+		const res = factory.translate(
+			copy,
+			{
+				x: mousePos.x,
+				y: mousePos.y,
+			}
+		);
 		this.context.addAnnotation(res);
-		this.context.canvas.requestRenderAll();
+		factory.renderAllControls(res);
 	}
 
 	_clickAnnotationChangePreset(annotation) {
