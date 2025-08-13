@@ -100,7 +100,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, width: width, height: height
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -306,12 +308,15 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+            hasControls: true, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, rx: rx, ry: ry
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -624,7 +629,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -806,7 +814,10 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1029,11 +1040,45 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             (value, index) => value === this._origPoints[index])) {
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
-            this._context.replaceAnnotation(theObject, newObject);
+            
+            if (this._context.canvas.getObjects().includes(theObject)) {
+                this._context.replaceAnnotation(theObject, newObject);
+            }
             this._context.canvas.renderAll();
         }
         this._origPoints = null;
         this._initialize(false);
+    }
+
+    translate(theObject, pos) {
+        if (!theObject.points || theObject.points.length === 0) {
+            return theObject;
+        }
+
+        let deltaX, deltaY;
+        
+        if (pos.mode === 'move') {
+            deltaX = pos.x;
+            deltaY = pos.y;
+        } else {
+            deltaX = pos.x - theObject.left;
+            deltaY = pos.y - theObject.top;
+        }
+
+        const translatedPoints = theObject.points.map(point => ({
+            x: point.x + deltaX,
+            y: point.y + deltaY
+        }));
+        const newObject = this.copy(theObject, {
+            points: translatedPoints,
+            left: theObject.left + deltaX,
+            top: theObject.top + deltaY
+        });
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
+
+        return newObject;
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1374,7 +1419,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.x2 = this._origPoints[2];
             theObject.y2 = this._origPoints[3];
 
-            this._context.replaceAnnotation(theObject, newObject);
+            if (this._context.canvas.getObjects().includes(theObject)) {
+                this._context.replaceAnnotation(theObject, newObject);
+            }
             this._context.canvas.renderAll();
         }
         this._origPoints = null;

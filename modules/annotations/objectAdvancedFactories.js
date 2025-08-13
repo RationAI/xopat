@@ -149,7 +149,61 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject) {
-        //not supported error?
+        // warning: untested
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        const points = [line.x1, line.y1, line.x2, line.y2];
+        
+        const newObject = this.copy(theObject, {
+            left: theObject.left,
+            top: theObject.top,
+            points: points
+        });
+
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
+
+        return newObject;
+    }
+
+    translate(theObject, pos) {
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        let deltaX, deltaY;
+        
+        if (pos.mode === 'move') {
+            deltaX = pos.x;
+            deltaY = pos.y;
+        } else {
+            deltaX = pos.x - theObject.left;
+            deltaY = pos.y - theObject.top;
+        }
+
+        const newPoints = [
+            line.x1 + deltaX,
+            line.y1 + deltaY,
+            line.x2 + deltaX,
+            line.y2 + deltaY
+        ];
+
+        const newObject = this.copy(theObject, {
+            left: theObject.left + deltaX,
+            top: theObject.top + deltaY,
+            points: newPoints
+        });
+
+        if (this._context.canvas.getObjects().includes(theObject)) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
+
+        return newObject;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {

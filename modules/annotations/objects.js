@@ -477,6 +477,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Update the object coordinates to the set position
+     * @param {fabric.Object} theObject object to translate
+     * @param {Object} pos new position of object
+     * @param {number} pos.x new x value
+     * @param {number} pos.y new y value
+     * @param {'move' | 'set' | undefined} pos.mode whether to 'move' annotation from its existing position or 'set' a new one.
+     * defaults to `'set'`
+     */
+
+    translate(theObject, pos) {
+        let x, y;
+        if (pos.mode === 'move') {
+            x = theObject.left + pos.x;
+            y = theObject.top + pos.y;
+        } else {
+            x = pos.x;
+            y = pos.y;
+        }
+        theObject.top = y;
+        theObject.left = x;
+        this._top = y;
+        this._left = x;
+        this.recalculate(theObject);
+        return theObject;
+    }
+
+    /**
      * Compute the area of the object in pixels (image dimension) squared
      * @param {fabric.Object} theObject recalculate the object that has been modified
      * @return {Number|undefined} undefined if area not measure-able
