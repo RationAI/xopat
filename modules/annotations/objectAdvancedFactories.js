@@ -130,7 +130,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             private: ofObject.private,
         });
         this.renderAllControls(conf);
-        conf.setControlsVisibility({ private: true });
         return conf;
     }
 
