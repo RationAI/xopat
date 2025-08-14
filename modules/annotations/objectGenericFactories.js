@@ -89,7 +89,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         let height = theObject.getScaledHeight(),
             width = theObject.getScaledWidth(),
             left = theObject.left,
@@ -100,7 +100,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, width: width, height: height
         });
         theObject.calcACoords();
-        if (this._context.canvas.getObjects().includes(theObject)) {
+
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
     }
@@ -302,7 +303,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         let rx = theObject.rx * theObject.scaleX,
             ry = theObject.ry * theObject.scaleY,
             left = theObject.left,
@@ -314,7 +315,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
         theObject.calcACoords();
         
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
     }
@@ -620,7 +621,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return -1; //always allow
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         let left = theObject.left,
             top = theObject.top,
             text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
@@ -630,7 +631,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
         
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
     }
@@ -807,7 +808,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         let left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left, top: this._top,
@@ -815,7 +816,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
         
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
     }
@@ -1031,7 +1032,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
@@ -1041,16 +1042,16 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
             
-            if (this._context.canvas.getObjects().includes(theObject)) {
+            if (!ignoreReplace) {
                 this._context.replaceAnnotation(theObject, newObject);
+                this._context.canvas.renderAll();
             }
-            this._context.canvas.renderAll();
         }
         this._origPoints = null;
         this._initialize(false);
     }
 
-    translate(theObject, pos) {
+    translate(theObject, pos, ignoreReplace) {
         if (!theObject.points || theObject.points.length === 0) {
             return theObject;
         }
@@ -1074,8 +1075,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             left: theObject.left + deltaX,
             top: theObject.top + deltaY
         });
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
         }
 
         return newObject;
@@ -1406,7 +1408,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
@@ -1419,10 +1421,10 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.x2 = this._origPoints[2];
             theObject.y2 = this._origPoints[3];
 
-            if (this._context.canvas.getObjects().includes(theObject)) {
+            if (!ignoreReplace) {
                 this._context.replaceAnnotation(theObject, newObject);
+                this._context.canvas.renderAll();
             }
-            this._context.canvas.renderAll();
         }
         this._origPoints = null;
     }

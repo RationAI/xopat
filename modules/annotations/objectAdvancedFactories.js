@@ -147,7 +147,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.setControlsVisibility({ private: true });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace) {
         // warning: untested
         if (!theObject._objects || theObject._objects.length < 2) {
             return theObject;
@@ -162,14 +162,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             points: points
         });
 
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
         }
 
         return newObject;
     }
 
-    translate(theObject, pos) {
+    translate(theObject, pos, ignoreReplace) {
         if (!theObject._objects || theObject._objects.length < 2) {
             return theObject;
         }
@@ -198,8 +199,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             points: newPoints
         });
 
-        if (this._context.canvas.getObjects().includes(theObject)) {
+        if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
         }
 
         return newObject;

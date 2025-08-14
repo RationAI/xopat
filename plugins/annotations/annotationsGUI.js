@@ -1344,7 +1344,8 @@ class="btn m-2">Set for left click </button></div>`
 			{
 				x: mousePos.x,
 				y: mousePos.y,
-			}
+			},
+			true
 		);
 		this.context.addAnnotation(res);
 		factory.renderAllControls(res);
