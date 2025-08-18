@@ -1335,10 +1335,9 @@ class="btn m-2">Set for left click </button></div>`
 		}
 
 		const annotation = this._copiedAnnotation;
-		let factory = annotation._factory();
+		const factory = annotation._factory();
 
 		const copy = factory.copy(annotation);
-		factory = copy._factory();
 		const res = factory.translate(
 			copy,
 			{
