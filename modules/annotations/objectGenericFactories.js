@@ -94,7 +94,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             width = theObject.getScaledWidth(),
             left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+        theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
             lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
@@ -308,7 +308,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             ry = theObject.ry * theObject.scaleY,
             left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
+        theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
             hasControls: true, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, rx: rx, ry: ry

@@ -497,8 +497,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         }
         theObject.top = y;
         theObject.left = x;
-        this._top = y;
-        this._left = x;
         this.recalculate(theObject, ignoreReplace);
         return theObject;
     }
