@@ -49,16 +49,23 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * @param {Object} ofObject fabricjs.Line object that is being copied
-     * @param {array} parameters array of line points [x, y, x, y ..]
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' [x1, y1, x2, y2] or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters = undefined) {
-
-        // TODO: fix issue where the copied ruler line is rendered at a slightly wrong position, misplacing the group
-
         const line = ofObject.item(0);
         const text = ofObject.item(1);
 
-        if (!parameters) parameters = {
+        if (parameters && Array.isArray(parameters)) {
+            parameters = {
+                left: ofObject.left,
+                top: ofObject.top,
+                points: parameters,
+            }
+        } else if (!parameters) parameters = {
             left: ofObject.left,
             top: ofObject.top,
             points: [line.x1, line.y1, line.x2, line.y2]

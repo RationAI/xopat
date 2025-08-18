@@ -926,10 +926,11 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     /**
      * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {Object | Array} parameters array of points or object with:
-     * @param {Array} parameters.points array of points: {x, y} objects
-     * @param {number} parameters.left
-     * @param {number} parameters.top
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters) {
         if (parameters && Array.isArray(parameters)) {
@@ -1895,6 +1896,14 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return pathString;
     }
 
+    /**
+     * @param {Object} ofObject Multipolygon object that is being copied
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
+     */
     copy(ofObject, parameters=undefined) {
         if (parameters && Array.isArray(parameters)) {
             // array kept for backwards compatibility
