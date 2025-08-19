@@ -642,17 +642,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 theme = APPLICATION_CONTEXT.getOption("theme");
                 themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
 
+                const themeSelect = new UI.Select(
+                    { id: "theme-select", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}, title: "Theme: " },
+                    { value: "", selected: "selected", hidden: "hidden", text: themePretty },
+                    { value: "auto", text: "Automatic" },
+                    { value: "light", text: "Light Theme" },
+                    { value: "dark", text: "Dark Theme" } 
+                );
                 const settings = div(
                   div({ class: "boxed"},
                     span({ class: "f3-light header-sep" },
                     "Appearance"),
-                  "Theme",
-                  select({ class: "select-sm form-control", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}},
-                    option({value: "", selected: "selected", hidden:"hidden"}, themePretty ),
-                    option({ value: "auto" }, "Automatic",),
-                    option({ value: "light"}, "Light Theme", ),
-                    option({ value: "dark" }, "Dark Theme", ),
-                  ),
+                  themeSelect.create(),
                   this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar-drag').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
                   this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
                   this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
