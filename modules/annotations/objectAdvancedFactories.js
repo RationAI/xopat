@@ -154,7 +154,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.setControlsVisibility({ private: true });
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         // warning: untested
         if (!theObject._objects || theObject._objects.length < 2) {
             return theObject;
@@ -177,7 +177,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return newObject;
     }
 
-    translate(theObject, pos, ignoreReplace) {
+    translate(theObject, pos, ignoreReplace=false) {
         if (!theObject._objects || theObject._objects.length < 2) {
             return theObject;
         }

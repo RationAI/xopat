@@ -89,7 +89,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         let height = theObject.getScaledHeight(),
             width = theObject.getScaledWidth(),
             left = theObject.left,
@@ -303,7 +303,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         let rx = theObject.rx * theObject.scaleX,
             ry = theObject.ry * theObject.scaleY,
             left = theObject.left,
@@ -621,7 +621,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return -1; //always allow
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top,
             text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
@@ -808,7 +808,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         });
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left, top: this._top,
@@ -1033,7 +1033,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
     }
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
@@ -1052,7 +1052,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         this._initialize(false);
     }
 
-    translate(theObject, pos, ignoreReplace) {
+    translate(theObject, pos, ignoreReplace=false) {
         if (!theObject.points || theObject.points.length === 0) {
             return theObject;
         }
@@ -1409,7 +1409,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
 
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;

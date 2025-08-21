@@ -392,7 +392,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {string[]} withProperties list of extra properties to export
 	 * @return {object} exported canvas content in {objects:[object], version:string} format
 	 */
-	toObject(withAllProps=true, filter=undefined, ...withProperties) {
+	toObject(withAllProps=true, filter=false, ...withProperties) {
 		let props;
 		if (typeof withAllProps === "boolean") {
 			props = this._exportedPropertiesGlobal(withAllProps);
@@ -402,7 +402,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 		
 		if (typeof filter === "string") {
-			withProperties.unshift(filter);
+			props.push(filter);
 			filter = undefined;
 		}
 		

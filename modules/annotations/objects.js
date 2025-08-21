@@ -474,7 +474,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} theObject recalculate the object that has been modified
      * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
      */
-    recalculate(theObject, ignoreReplace) {
+    recalculate(theObject, ignoreReplace=false) {
     }
 
     /**
@@ -486,7 +486,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {'move' | 'set'} [pos.mode='set'] whether to 'move' annotation from its existing position or 'set' a new one.
      * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
      */
-    translate(theObject, pos, ignoreReplace) {
+    translate(theObject, pos, ignoreReplace=false) {
         let x, y;
         if (pos.mode === 'move') {
             x = theObject.left + pos.x;
