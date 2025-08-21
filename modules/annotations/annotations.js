@@ -387,10 +387,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 *
 	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones,
 	 *   string counts as one of withProperties
+	 * @param {((object) => boolean)|string} filter callback function to filter objects (applied to fabric objects before export),
+	 *   string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
 	 * @return {object} exported canvas content in {objects:[object], version:string} format
 	 */
-	toObject(withAllProps=false, ...withProperties) {
+	toObject(withAllProps=true, filter=undefined, ...withProperties) {
 		let props;
 		if (typeof withAllProps === "boolean") {
 			props = this._exportedPropertiesGlobal(withAllProps);
@@ -398,11 +400,27 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			props = this._exportedPropertiesGlobal(true);
 			props.push(withAllProps);
 		}
+		
+		if (typeof filter === "string") {
+			withProperties.unshift(filter);
+			filter = undefined;
+		}
+		
 		props.push(...withProperties);
 		props.push(...this._extraProps);
 		props = Array.from(new Set(props));
-		const data = this.canvas.toObject(props);
-		if (withAllProps) return data;
+		
+		let objectsToExport = this.canvas.getObjects();
+		if (filter && typeof filter === "function") {
+			objectsToExport = objectsToExport.filter(filter);
+		}
+
+		const data = {
+			version: this.canvas.version,
+			objects: objectsToExport.map(obj => obj.toObject(props))
+		};
+		
+		if (withAllProps === true) return data;
 		return this.trimExportJSON(data);
 	}
 
