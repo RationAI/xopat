@@ -206,7 +206,6 @@
                 "osd_tools.js",
                 "scalebar.js",
                 "nouislider.min.js"
-                //"uiPlugin.js"
             ]
         },
         /**
