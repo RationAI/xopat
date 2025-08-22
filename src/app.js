@@ -396,8 +396,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     /*------------ Initialization of  new UI -----------------------*/
     /*--------------------------------------------------------------*/
 
-    USER_INTERFACE.TopPluginsMenu.init();
     USER_INTERFACE.TopVisualMenu.init();
+    USER_INTERFACE.TopPluginsMenu.init();
     USER_INTERFACE.TopUserMenu.init();
     USER_INTERFACE.TopFullscreenButton.init();
     USER_INTERFACE.TopSlideMenu.init();

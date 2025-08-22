@@ -967,17 +967,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                this.menu = new UI.MainPanel({
-                    id: "top-plugins-buttons-menu",
-                    orientation: UI.Menu.ORIENTATION.TOP,
-                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                    rounded: UI.Menu.ROUNDED.ENABLE,
-                    extraClasses: { bg: "bg-transparent" }
-                },
-                );
-
-                this.menu.attachTo(this.context);
-                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
+                console.log(USER_INTERFACE.TopVisualMenu);
+                USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: "Plugins", body: [], class: UI.Dropdown});
             },
 
             // TODO find out what should this do
@@ -988,13 +979,16 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
 
                 // adds button to topPluginsMenu and new div to the fullscreenMenu
-                if(!this.menu.tabs[ownerPluginId]){
-                    this.menu.addTab({
-                        id: ownerPluginId, 
-                        icon: "fa-fw", 
-                        title: ownerPluginId, 
-                        body: undefined, 
-                        onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}});
+                const visualMenuContent = document.getElementById("visual-menu-ul-plugins");
+
+                if(document.getElementById(ownerPluginId) === null){
+                    const button = new UI.Button({
+                            id: ownerPluginId,
+                            size: UI.Button.SIZE.SMALL,
+                            onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}},
+                        new UI.FAIcon(icon), ownerPluginId);
+                    
+                    visualMenuContent.appendChild(button.create());
 
                     const InsideMenu = new UI.TabsMenu({
                         id: `${ownerPluginId}-submenu`,
@@ -1010,7 +1004,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
-                const d = van.tags().div();
+                const d = van.tags.div();
                 d.innerHTML = html;
                 insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
 
