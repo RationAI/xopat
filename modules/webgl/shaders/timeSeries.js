@@ -71,7 +71,7 @@ OpenSeadragon.FlexRenderer.TimeSeries = class extends OpenSeadragon.FlexRenderer
         },
         series: {
             //todo allow using the same data in different channels etc.. now the data must be distinct
-            usage: "Specify data indexes for the series order. The starting item is the dataReferences value at index 0. For now, the data indexes must be unique.",
+            usage: "Specify data indexes for the series (as if you've specified dataReferences). The dataReferences is expected to be array with single number, the starting data reference. For now, the data indexes must be unique.",
         }
     }
 

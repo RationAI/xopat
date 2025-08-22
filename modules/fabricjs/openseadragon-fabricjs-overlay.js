@@ -48,6 +48,15 @@
         }));
         return data;
     };
+
+    fabric.Path.prototype.toObject = function(propertiesToInclude) {
+        propertiesToInclude = propertiesToInclude || [];
+        if (!propertiesToInclude.includes('points')) propertiesToInclude.push('points');
+
+        const data = this.callSuper('toObject', propertiesToInclude);
+        return data;
+    };
+
     /**
      * Find object under mouse by iterating
      * @param e mouse event
@@ -73,11 +82,11 @@
     /**
      * Compute more visually-pleasing zoom value for rendering.
      * @memberOf fabric.Canvas
-     * @param zoom
+     * @param zoom zoom value, if undefined it gets the current zoom
      * @return {number}
      */
-    fabric.Canvas.prototype.computeGraphicZoom = function (zoom) {
-        return Math.sqrt(zoom) / 2
+    fabric.Canvas.prototype.computeGraphicZoom = function (zoom = undefined) {
+        return Math.sqrt(zoom === undefined ? this.getZoom() : zoom) / 2;
     };
 
     if (!window.OpenSeadragon) {

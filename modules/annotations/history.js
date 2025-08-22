@@ -14,9 +14,14 @@ OSDAnnotations.History = class {
         this._canvasFocus = '';
 
         this._buffer = [];
+        // points to the current state in the redo/undo index in circular buffer
         this._buffidx = -1;
-        this.BUFFER_LENGTH = null;
+        // points to the most recent object in cache, when undo action comes full loop to _lastValidIndex
+        // it means the redo action went full circle on the buffer, and we cannot further undo,
+        // if we set this index to buffindex, we throw away ability to redo (diverging future)
         this._lastValidIndex = -1;
+
+        this.BUFFER_LENGTH = null;
         this._autoIncrement = 0;
         this._boardSelected = null;
         this._context = context;
@@ -25,6 +30,10 @@ OSDAnnotations.History = class {
         this._focusWithScreen = true;
         this._autoDomRenderer = null;
         this._lastOpenedInDetachedWindow = false;
+
+        this._context.addHandler('annotation-preset-change', e => {
+            this._refreshBoardItem(e.object);
+        });
     }
 
     /**
@@ -109,7 +118,9 @@ window.addEventListener("beforeunload", (e) => {
         }
 
         let active = this._context.canvas.getActiveObject();
-        if (active) this.highlight(active);
+        if (active && renderer) {  // do not call highlight inside detached window, handled by _syncLoad
+            this.highlight(active);
+        }
         this._context.raiseEvent('history-open', {
             inNewWindow: !renderer,
             containerId: this.containerId,
@@ -219,6 +230,20 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
     }
 
     /**
+     * Iterate over cached objects, not necessarily visible
+     * @param callback
+     * @param nonActiveOnly if true, only non-visible annotations in cache are iterated
+     */
+    forEachHistoryCacheObject(callback, nonActiveOnly=false) {
+        //TODO possibly optimize by leaving out annotations not on canvas & also implement timeout
+        for (let cache of this._buffer) {
+            if (!cache) continue;
+            cache.forward && callback(cache.forward);
+            cache.back && callback(cache.back);
+        }
+    }
+
+    /**
      * Go step back in the history. Focuses the undo operation, updates window if opened.
      */
     back() {
@@ -286,12 +311,9 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         if (this._context.disabledInteraction) return;
 
         this._performAtJQNode("annotation-logs", node => node.html(""));
-        let _this = this;
         this._context.canvas.getObjects().forEach(o => {
-            if (!isNaN(o.incrementId)) {
-                let preset = this._presets.get(o.presetID);
-                if (preset) this._presets.updateObjectVisuals(o, preset);
-                _this._addToBoard(o);
+            if (this._context.isAnnotation(o) && this._context.updateSingleAnnotationVisuals(o)) {
+                this._addToBoard(o);
             }
         });
     }
@@ -434,15 +456,20 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
             }
             return false;
         });
+
+        let active = this._context.canvas.getActiveObject();
+        if (active) {
+            this.highlight(active);
+        }
     }
 
-    _focus(bbox, objectId = undefined, adjustZoom=true) {
+    _focus(bbox, incrementId = undefined, adjustZoom=true) {
         bbox.left = Number.parseFloat(bbox.left || bbox.x);
         bbox.top = Number.parseFloat(bbox.top || bbox.y);
 
         let targetObj = undefined;
-        if (objectId !== undefined) {
-            targetObj = this._findObjectOnCanvasById(objectId);
+        if (incrementId !== undefined) {
+            targetObj = this._context.findObjectOnCanvasByIncrementId(incrementId);
             if (targetObj) {
                 this.highlight(targetObj);
                 this._context.canvas.setActiveObject(targetObj);
@@ -508,6 +535,16 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         }
     }
 
+    _clickBoardElement(bbox, incrementId, pointerEvent) {
+        if (pointerEvent.isPrimary || pointerEvent.button === 0) this._focus(bbox, incrementId);
+        this._context.raiseEvent('history-select', {incrementId: incrementId, originalEvent: pointerEvent});
+    }
+
+    _refreshBoardItem(object) {
+        this._addToBoard(object, object);
+        this.highlight(object);
+    }
+
     _addToBoard(object, replaced=undefined) {
         let desc, inputs = [];
         let factory = this._context.getAnnotationObjectFactory(object.factoryID);
@@ -538,11 +575,16 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
         //     }
         // }
         let color = this._context.getAnnotationColor(object),
-            defaultName = this._context.getDefaultAnnotationName(object, false),
+            mainRowContent = this._context.getDefaultAnnotationName(object, false),
             name = this._context.getAnnotationDescription(object, "category", true);
-        if (name) {
-            inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name}">${defaultName} ${object.incrementId}</span>`);
+
+        mainRowContent = mainRowContent ? (mainRowContent + " " + object.incrementId) : '';
+
+        let area = factory.getArea(object);
+        if (area) {
+            mainRowContent += `<span class="float-right">Area ${VIEWER.scalebar.imageAreaToGivenUnits(area)}</span>`;
         }
+        inputs.push(`<span class="show-hint d-block px-2 py-1" data-hint="${name||'unknown'}">${mainRowContent}</span>`);
         // else {  //never happens: description shows at least default description
         //     //with no meta name, object will receive 'category' on edit
         //     inputs.push('<label class="show-hint d-block" data-hint="Name">',
@@ -559,23 +601,44 @@ title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'e
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
         const html = `
-<div id="log-object-${object.incrementId}" class="rounded-2"
-onclick="${_this._globalSelf}._focus(${focusBox}, ${object.incrementId});">
+<div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.internalID}"
+onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
+oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
 </div>`;
+
+
+        const newPosition = object.internalID;
+        function insertAt(containerRef, newObjectRef) {
+            let inserted = false;
+            containerRef.children('.item').each(function() {
+                const current = $(this);
+                const currentOrder = current.data('order');
+
+                if (newPosition < currentOrder) {
+                    // Insert before the current element
+                    newObjectRef.insertBefore(current);
+                    inserted = true;
+                    return false; // Exit the loop
+                }
+            });
+            if (!inserted) {
+                containerRef.prepend(newObjectRef);
+            }
+        }
 
         if (typeof replaced === "object" && !isNaN(replaced?.incrementId)) {
             this._performAtJQNode(`log-object-${replaced.incrementId}`, node => {
                 if (node.length) {
                     node.replaceWith(html);
                 } else {
-                    _this._performAtJQNode("annotation-logs", node => node.prepend(html));
+                    _this._performAtJQNode("annotation-logs", node => insertAt(node, $(html)));
                 }
             });
         } else {
-            this._performAtJQNode("annotation-logs", node => node.prepend(html));
+            this._performAtJQNode("annotation-logs", node => insertAt(node, $(html)));
         }
     }
 
@@ -588,12 +651,12 @@ ${editIcon}
         }
         this._focusWithScreen = false;
 
-        let objectId;
+        let incrementId;
         if (typeof object !== "object") {
-            objectId = object;
-            object = this._focus(focusBBox, objectId) || this._context.canvas.getActiveObject();
+            incrementId = object;
+            object = this._focus(focusBBox, incrementId) || this._context.canvas.getActiveObject();
         } else {
-            objectId = object.incrementId;
+            incrementId = object.incrementId;
         }
 
         if (object) {
@@ -609,7 +672,7 @@ ${editIcon}
                 self.html('save');
 
                 this._editSelection = {
-                    incrementId: objectId,
+                    incrementId: incrementId,
                     self: self,
                     target: object
                 };
@@ -635,7 +698,7 @@ ${editIcon}
         if (!this._editSelection) return;
 
         try {
-            let obj = this._editSelection.target || this._findObjectOnCanvasById(this._editSelection.incrementId);
+            let obj = this._editSelection.target || this._context.findObjectOnCanvasByIncrementId(this._editSelection.incrementId);
             let self = this._editSelection.self,
             //from user testing: disable modification of meta?
                 inputs = self.parent().find("input"),
@@ -692,9 +755,11 @@ ${editIcon}
                     await this._sleep(150); //let user to orient where canvas moved before deleting the element
                 }
             }
-            if (toRemove) canvas.remove(toRemove);
+            if (toRemove) {
+                canvas.remove(toRemove);
+                this._context.raiseEvent('annotation-delete', {object: toRemove});
+            }
             canvas.setActiveObject(toAdd);
-
             this._context.raiseEvent('annotation-create', {object: toAdd});
         } else if (toRemove) {
             if (withFocus && (!focusOnlyIfNecessary || !this._annotationVisible(toRemove))) {
@@ -703,7 +768,7 @@ ${editIcon}
             }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
-            this._context.raiseEvent('annotation-delete', {object: toAdd});
+            this._context.raiseEvent('annotation-delete', {object: toRemove});
         }
         canvas.renderAll();
     }
@@ -723,18 +788,5 @@ ${editIcon}
     _getFocusBBoxAsString(of, factory) {
         let box = this._getFocusBBox(of, factory);
         return `{left: ${box.left},top: ${box.top},width: ${box.width},height: ${box.height}}`;
-    }
-
-    _findObjectOnCanvasById(id) {
-        //todo fabric.js should have some way how to avoid linear iteration over all objects...
-        let target = null;
-        this._context.canvas.getObjects().some(o => {
-            if (o.incrementId === id) {
-                target = o;
-                return true;
-            }
-            return false;
-        });
-        return target;
     }
 };

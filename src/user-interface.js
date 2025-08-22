@@ -99,7 +99,7 @@ function initXopatUI() {
                 if (this._timer) clearTimeout(this._timer);
                 this._timer = setTimeout(this._hideImpl.bind(this, true), delayMS);
                 this._opts = opts;
-                this._opts.onShow && this._opts.onShow();
+                this._opts && this._opts.onShow && this._opts.onShow();
             }
         },
 
@@ -346,7 +346,7 @@ window.addEventListener("beforeunload", (e) => {
 
             let close = params.allowClose ? this._getCloseButton(parentId) : '';
             let resize = params.allowResize ? "resize:vertical;" : "";
-            footer = footer ? `<div class="position-absolute bottom-0 right-0 left-0 border-top"
+            footer = footer ? `<div class="border-top"
 style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             let limits = isModal ? "style='width: 100%; height: 100vh;'" : "style='max-width:80vw; max-height: 80vh'";
@@ -359,7 +359,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
       ${close}
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
-      <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
+      <div class="Box-body pr-2" style="padding-bottom: 5px; min-height: 100%">
 	  ${content}
 	  </div>
     </div>
@@ -380,11 +380,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 
     /**
      * @typedef {{
-     *  icon?: string,
-     * 	iconCss?: string,
+     *  icon: string | undefined,
+     * 	iconCss: string | undefined,
+     *  containerCss: string | undefined,
      * 	title: string,
      * 	action: function,
-     * 	selected?: boolean
+     * 	selected: boolean | undefined
      * }} DropDownItem
      */
 
@@ -432,9 +433,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
          *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
          *      - you can also pass custom HTML and override the default styles and content, handler system etc...
-         *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.containerCss {string} css for the container, optional
          *   config.iconCss {string} css for icon
          */
         bind: function(context, optionsGetter) {
@@ -450,6 +451,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                 _this._toggle(e, optionsGetter);
                 e.preventDefault();
             });
+        },
+
+        hide: function() {
+            this._toggle(undefined);
         },
 
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
@@ -494,7 +499,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);
@@ -549,6 +554,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         focusMenu(menuName, menuId) {
             switch (menuName) {
                 case "MainMenu":
+                    // tODO
                     this.MainMenu.open();
                     $("#main-panel-content").scrollTo("#" + menuId);
                     break;
@@ -727,14 +733,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             _sync() {
                 this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
-                let width = this.opened ? "calc(100% - 400px)" : "100%";
+                let width = this.opened ? `calc(100% - ${VIEWER.navigator.element.clientWidth+5}px)` : "100%";
                 USER_INTERFACE.AdvancedMenu.selfContext.context.style['max-width'] = width;
                 if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
                 if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
 
                 let status = USER_INTERFACE.Status.context;
                 if (status) status.style.right = this.opened ? "408px" : "8px";
-            }
+           },
         },
 
         /**
@@ -927,15 +933,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
             },
             refreshPageWithSelectedPlugins() {
-                let formData = [],
-                    plugins = pluginsMenuBuilder.builder.getSelected();
-
-                for (let plugin of plugins) {
-                    formData.push("<input type='hidden' name='", plugin.id ,"' value='1'>");
-                }
+                let plugins = pluginsMenuBuilder.builder.getSelected();
                 let pluginCookie = APPLICATION_CONTEXT.getOption("permaLoadPlugins") ? plugins.join(',') : "";
                 APPLICATION_CONTEXT.AppCookies.set('_plugins', pluginCookie); //todo where we want to store this?
-                UTILITIES.refreshPage(formData.join(""), plugins);
+                UTILITIES.refreshPage(plugins);
             },
             /**
              * Add Separator to the menu header at current position (end) of the header labels
@@ -1101,9 +1102,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
                 if (!icon) icon = "school";
+                const pluginName = pluginMeta(plugidId, "name");
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
+                const label = pluginName ? `<span class="rounded-2 px-3 py-1 position-absolute top-1 right-1 bg-opacity" style="font-size: 9px">${pluginName}</span>` : "";
                 this.tutorials.append(`
-<div class='d-inline-block px-2 py-2 m-1 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+<div class='d-inline-block px-2 pb-2 pt-3 m-1 pointer position-relative v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+${label}
 <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
                 this.steps.push(steps);
                 this.prerequisites.push(prerequisites);

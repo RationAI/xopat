@@ -16,17 +16,20 @@
     //Event (login) priority
     "eventBeforeOpenPriority": 0,
     //Mathod used for auth: "redirect", "popup"
-    "method": "popup",
-    //Whether to store the login session in cookies
-    "useCookiesStore": true,
+    "method": "redirect",
+    //Whether to store the login session in: "default" (usually sessionStorage) / "cache" (usually localStorage) / "cookies" store
+    // Note that cookies store might fail silently due to size limitations: in that case, use local storage instead.
+    "usesStore": "default",
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'
         //Authority ID (url) the OIDC sets in the communication, url used for authorization
         "authority": "",
-        //Client ID of this application, its auth secret (or null)
+        //The authorization flow config
         "client_id": "",
-        "client_secret": null,
+        "response_type": "code",
+        //Using Client Secret explicitly here is insecure, since it will be exposed to the outside
+        // "client_secret": will-be-stolen
         //Default scope for the user
         "scope": "openid offline_access",
         //Can specify where to redirect after logout, by default the viewer gateway
@@ -35,8 +38,9 @@
         "redirectMethod": "replace",
         "redirectTarget": "top"
     },
+    // extra sign-in arguments, see https://authts.github.io/oidc-client-ts/types/ExtraSigninRequestArgs.html
+    "extraSigninRequestArgs": {
+    },
     // endpoint to read user info from (if the token e.g. does not cover username)
-    "oidcUserInfo": null,
-    // if the refresh token is stored in cookies, provide the name to sync apps
-    "cookieRefreshTokenName": "_sharedEmpaiaRefreshToken"
+    "oidcUserInfo": null
 }

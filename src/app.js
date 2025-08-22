@@ -50,6 +50,18 @@
  * @private
  */
 function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+    const savedState = checkLocalState();
+    if (savedState) {
+        PLUGINS = savedState.PLUGINS;
+        MODULES = savedState.MODULES;
+        ENV = savedState.ENV;
+        POST_DATA = savedState.POST_DATA;
+        PLUGINS_FOLDER = savedState.PLUGINS_FOLDER;
+        MODULES_FOLDER = savedState.MODULES_FOLDER;
+        VERSION = savedState.VERSION;
+        I18NCONFIG = savedState.I18NCONFIG;
+    }
+
     initXopatUI();
 
     //Setup language and parse config if function provided
@@ -108,15 +120,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
     if (!XOpatStorage.Cookies.registered()) {
-        // const storage = new CookieStorage({
-        //     path: ENV.client.js_cookie_path,
-        //     domain: ENV.client.js_cookie_domain || ENV.client.domain,
-        //     expires: new Date(new Date() + ENV.client.js_cookie_expire * 86400000),
-        //     secure:  typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : true,
-        //     sameSite: ENV.client.js_cookie_same_site,
-        // });
-        // XOpatStorage.Cookies.registerInstance(storage);
-
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -124,32 +127,42 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-        XOpatStorage.Cookies.register(class {
-            getItem(key) {
-                return Cookies.get(key) || null;
-            }
-            setItem(key, value) {
-                Cookies.set(key, value);
-            }
-            removeItem(key) {
-                Cookies.remove(key);
-            }
-            clear() {
-                const allCookies = Cookies.get();
-                for (let key in allCookies) {
+
+        Cookies.set("test", "test");
+        if (Cookies.get("test") === "test") {
+            XOpatStorage.Cookies.registerClass(class {
+                getItem(key) {
+                    return Cookies.get(key) || null;
+                }
+                setItem(key, value) {
+                    Cookies.set(key, value);
+                    if (!Cookies.get(key)) {
+                        console.warn("Cookie value too big to store!", key);
+                    }
+                }
+                removeItem(key) {
                     Cookies.remove(key);
                 }
-            }
-            get length() {
-                return Object.keys(Cookies.get()).length;
-            }
-            key(index) {
-                const keys = Object.keys(Cookies.get());
-                return keys[index] || null;
-            }
-        });
-    } else {
-        delete window.Cookies;
+                clear() {
+                    const allCookies = Cookies.get();
+                    for (let key in allCookies) {
+                        Cookies.remove(key);
+                    }
+                }
+                get length() {
+                    return Object.keys(Cookies.get()).length;
+                }
+                key(index) {
+                    const keys = Object.keys(Cookies.get());
+                    return keys[index] || null;
+                }
+            });
+        } else {
+            console.warn("Cookie.js seems to be blocked.");
+            console.log("Cookies are implemented using local storage. This might be a security vulnerability!");
+            XOpatStorage.Cookies.registerInstance(localStorage);
+        }
+        Cookies.remove("test");
     }
 
     // DEFAULT BROWSER IMPLEMENTATION OF THE CACHE STORAGE
@@ -351,11 +364,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          */
         referencedId() {
             if (CONFIG.background.length < 0) {
-                return undefined;
+                return "__anonymous__";
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            if (bgConfig) return CONFIG.data[bgConfig.dataReference];
-            return undefined;
+            let config;
+            if (VIEWER.scalebar) {
+                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            } else {
+                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                    || CONFIG.background[0];
+            }
+            return config ? CONFIG.data[config.dataReference] : "__anonymous__";
         },
         /**
          * Return the current active visualization
@@ -391,15 +409,23 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
      * additional classes and events.
+     * todo add type definitions for OSD
+     *
      * @namespace VIEWER
+     * @type OpenSeadragon.Viewer
      * @see {@link https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html}
      */
     window.VIEWER = OpenSeadragon({
         id: "osd",
         prefixUrl: ENV.openSeadragonPrefix + "images",
         showNavigator: true,
-        maxZoomPixelRatio: 1,
+        maxZoomPixelRatio: 2,
+        zoomPerClick: 2,
+        zoomPerScroll: 1.7,
         blendTime: 0,
+        // This is due to annotations (multipolygon brush) that are disabled during animations
+        // ease out behavior makes user think they can already start drawing and slows them down
+        animationTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
@@ -519,6 +545,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
     VIEWER.gestureSettingsMouse.clickToZoom = false;
     new OpenSeadragon.Tools(VIEWER);
 
+    // TODO: remove?
     window.temp__draw = function() {
         //Necessary to clear if underlying image is hidden, todo: when refactoring, optimize this
         VIEWER.drawer.clear();
@@ -566,39 +593,35 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
-
-    //FIXME STRECKO
-    // VIEWER.addHandler('add-item-failed', e => {
-    //     if (notified) return;
-    //     if (e.message && e.message.statusCode) {
-    //         //todo check if the first background
-    //         let title;
-    //         switch (e.message.statusCode) {
-    //         case 401:
-    //             title = $("#tissue-title-header");
-    //             title.children().last().html($.t('main.global.tissue'));
-    //             Dialogs.show($.t('error.slide.401'),
-    //                 20000, Dialogs.MSG_ERR);
-    //             XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
-    //             break;
-    //         case 403:
-    //             title = $("#tissue-title-header");
-    //             title.children().last().html($.t('main.global.tissue'));
-    //             Dialogs.show($.t('error.slide.403'),
-    //                 20000, Dialogs.MSG_ERR);
-    //             break;
-    //         case 404:
-    //             Dialogs.show($.t('error.slide.404'),
-    //                 20000, Dialogs.MSG_ERR);
-    //             break;
-    //         default:
-    //             break;
-    //         }
-    //         notified = true;
-    //     } else {
-    //         console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
-    //     }
-    // });
+    VIEWER.addHandler('add-item-failed', e => {
+        if (notified) return;
+        if (e.message && e.message.statusCode) {
+            //todo check if the first background
+            let title;
+            switch (e.message.statusCode) {
+                case 401:
+                    $("#tissue-title-content").html($.t('main.global.tissue'));
+                    Dialogs.show($.t('error.slide.401'),
+                        20000, Dialogs.MSG_ERR);
+                    XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
+                    break;
+                case 403:
+                    $("#tissue-title-content").html($.t('main.global.tissue'));
+                    Dialogs.show($.t('error.slide.403'),
+                        20000, Dialogs.MSG_ERR);
+                    break;
+                case 404:
+                    Dialogs.show($.t('error.slide.404'),
+                        20000, Dialogs.MSG_ERR);
+                    break;
+                default:
+                    break;
+            }
+            notified = true;
+        } else {
+            console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
+        }
+    });
 
 
     /*---------------------------------------------------------*/
@@ -620,7 +643,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.children().last().html(name);
+            title.find('#tissue-title-content').html(name);
             title.attr('title', name);
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
@@ -630,7 +653,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                 || 'unknown'
             );
-            title.addClass('error-container').children().last().html($.t('main.navigator.faultyTissue', {slide: name}));
+            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
             USER_INTERFACE.toggleDemoPage(true);
         } else {
             USER_INTERFACE.toggleDemoPage(false);
@@ -674,6 +697,22 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             ppm = 1;
         } else ppm = 1e6 / ppm;
 
+        const magMicrons = microns || (micronsX + micronsY) / 2;
+
+        // todo try read metadata about magnification and warn if we try to guess
+        const values = [2.4, 2, 1.2, 4, 0.6, 10, 0.3, 20, 0.15, 40];
+        let index = 0, best = Infinity, mag;
+        if (magMicrons) {
+            while (index < values.length) {
+                const dev = Math.abs(magMicrons - values[index]);
+                if (dev < best && dev < values[index]) {
+                    best = dev;
+                    mag = values[index+1]
+                }
+                index += 2;
+            }
+        }
+
         VIEWER.makeScalebar({
             pixelsPerMeter: ppm,
             pixelsPerMeterX: ppmX,
@@ -686,7 +725,8 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             backgroundColor: "rgba(255, 255, 255, 0.5)",
             fontSize: "small",
             barThickness: 2,
-            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false)
+            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false),
+            magnification: mag
         });
     };
 
@@ -1016,8 +1056,10 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
-            if (window.innerHeight < 630) {
-                $('#navigator-pin').click();
+            if (window.innerHeight < 630 || window.innerWidth < 900) {
+                if (window.innerWidth >= 900) {
+                    $('#navigator-pin').click();
+                }
                 USER_INTERFACE.MainMenu.close();
             }
 
@@ -1040,8 +1082,6 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     );
                 }, 2000);
             }
-
-
         }
 
         if (USER_INTERFACE.Errors.active) {
@@ -1074,8 +1114,8 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-        background,
-        visualizations=undefined) {
+                                                                    background,
+                                                                    visualizations=undefined) {
         try {
             initXopatLayers();
 
@@ -1094,7 +1134,10 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             for (let pid in PLUGINS) {
                 const hasParams = CONFIG.plugins[pid];
                 const plugin = PLUGINS[pid];
-                if (!plugin.loaded && (hasParams || pluginKeys.includes(pid))) {
+                if (
+                    (plugin.loaded && !plugin.instance) ||  // load plugin if loaded=true but instance not set
+                    (!plugin.loaded && (hasParams || pluginKeys.includes(pid)))
+                ) {
                     if (plugin.error) {
                         console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
                     } else {
@@ -1118,10 +1161,10 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', {
                 data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
             }).catch(e =>
-            {
-                //todo something meaningful
-                console.error(e);
-            }
+                {
+                    //todo something meaningful
+                    console.error(e);
+                }
             );
             this.openViewerWith(data, background, visualizations || []);
         } catch (e) {
@@ -1143,7 +1186,6 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         background,
         visualizations=[],
     ) {
-        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
         USER_INTERFACE.Loading.show(true);
         VIEWER.close();
 
@@ -1163,6 +1205,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
         //         renderingWithWebGL = false;
         //     }
         // }
+        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         config.data = data;
@@ -1346,6 +1389,75 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
     APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
     initXopatScripts();
+    function checkLocalState() {
+        const data = sessionStorage.getItem('__xopat_session__');
+        sessionStorage.setItem('__xopat_session__', undefined);
+        if (data) {
+            try {
+                return JSON.parse(data);
+            } catch (e) {
+                console.debug("Failed to restore session!", e);
+            }
+        }
+        return null;
+    }
+
+    // Refresh Page & Storage state are defined here since we have reference to the incoming config
+    window.UTILITIES.storePageState = function(includedPluginsList=undefined) {
+        try {
+            // Add plugin definition to CONFIG, which is part of POST_DATA entry. Do not change anything if not requested.
+            if (includedPluginsList) {
+                const pluginRefs = CONFIG.plugins;
+                CONFIG.plugins = {};
+                for (let plugin in includedPluginsList) {
+                    const oldPluginRef = pluginRefs.plugins[plugin];
+                    if (!pluginRefs.plugins[plugin]) {
+                        CONFIG.plugins[plugin] = {};
+                    } else {
+                        // FIXME: if we have configured plugin, and we remove and add this plugin, configuration is lost
+                        CONFIG.plugins[plugin] = oldPluginRef;
+                    }
+                }
+            }
+            // Make sure the reference is really there
+            POST_DATA.visualization = CONFIG;
+
+            // Clean up instance references before serialization
+            const plugins = {...PLUGINS};
+            const modules = {...MODULES};
+            for (let id in plugins) {
+                delete plugins[id].instance;
+            }
+            for (let id in modules) {
+                delete modules[id].loaded;
+            }
+            sessionStorage.setItem('__xopat_session__', safeStringify({
+                PLUGINS: plugins, MODULES: modules,
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+            }));
+            return true;
+        } catch (e) {
+            console.error("Failed to store application state!", e);
+        }
+        return false;
+    }
+
+    function safeStringify(obj) {
+        const seenData = new WeakMap();
+
+        return JSON.stringify(obj, function(key, value) {
+            if (key.startsWith("_") || ["eventSource"].includes(key)) {
+                return undefined;
+            }
+            if (value && typeof value === 'object') {
+                if (seenData.has(value)) {
+                    return undefined;
+                }
+                seenData.set(value, true);
+            }
+            return value;
+        });
+    }
 
     if (CONFIG.error) {
         USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,

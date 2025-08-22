@@ -67,6 +67,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Rect(copy);
     }
 
+    getArea(theObject) {
+        return theObject.width * theObject.height;
+    }
+
     exportsGeometry() {
         return ["left", "top", "width", "height"];
     }
@@ -92,7 +96,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, width: width, height: height
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -131,13 +135,21 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
+    }
+
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -166,6 +178,26 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         ];
     }
 
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length < 4) {
+            throw new Error("At least 4 points required to reconstruct rect");
+        }
+
+        const topLeft = deconvertor(points[0]);
+        const topRight = deconvertor(points[1]);
+        const bottomLeft = deconvertor(points[3]);
+
+        const width = topRight.x - topLeft.x;
+        const height = bottomLeft.y - topLeft.y;
+
+        return {
+            left: topLeft.x,
+            top: topLeft.y,
+            width,
+            height
+        };
+    }
+
     title() {
         return "Rectangle";
     }
@@ -180,7 +212,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "circle";
+        return "brightness_1";
     }
 
     fabricStructure() {
@@ -246,6 +278,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return new fabric.Ellipse(copy);
     }
 
+    getArea(theObject) {
+        return Math.PI * theObject.rx * theObject.ry;
+    }
+
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
@@ -267,7 +303,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, rx: rx, ry: ry
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -307,13 +343,21 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
+    }
+
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     /**
@@ -357,6 +401,37 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return points;
     }
 
+    /**
+     * Convert array of points back to ellipse parameters.
+     * @param {Array} points - Array of points representing ellipse perimeter.
+     * @param {function} deconvertor - Function that converts each point to {x, y}.
+     * @returns {{left: number, top: number, rx: number, ry: number}} ellipse object
+     */
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length === 0) {
+            throw new Error("Points array must not be empty");
+        }
+
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+
+        // Iterate once to find bounding box
+        for (let i = 0; i < points.length; i++) {
+            const pt = deconvertor(points[i]);
+            if (pt.x < minX) minX = pt.x;
+            if (pt.x > maxX) maxX = pt.x;
+            if (pt.y < minY) minY = pt.y;
+            if (pt.y > maxY) maxY = pt.y;
+        }
+
+        const rx = (maxX - minX) / 2;
+        const ry = (maxY - minY) / 2;
+        const left = minX;
+        const top = minY;
+
+        return { left, top, rx, ry };
+    }
+
     title() {
         return "Ellipse";
     }
@@ -370,7 +445,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "format_shapes";
+        return "language_japanese_kana";
     }
 
     fabricStructure() {
@@ -446,8 +521,14 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a text has no area
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        // ensure necessary properties are not modified!
+        delete visualProperties["stroke"];
+        delete visualProperties["fill"];
+        delete visualProperties["strokeWidth"];
+        delete visualProperties["originalStrokeWidth"];
+        // no support for internal logics, text driven its own scaling, just set the rest
+        ofObject.set(visualProperties);
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -531,7 +612,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -548,21 +629,34 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             top: y,
             left: x,
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addAnnotation(this._current);
+        this._context.addHelperAnnotation(this._current);
         this._context.canvas.renderAll();
     }
 
-    updateCreate(x, y) {
-        //do nothing
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current);
+            this._current = undefined;
+        }
+    }
+
+    finishDirect() {
+        let obj = this.getCurrentObject();
+        if (!obj) return true;
+        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
+        this._context.deleteHelperAnnotation(obj);
+        this._context.addAnnotation(obj);
+        this._current = undefined;
+        return true;
+    }
+
+    finishIndirect() {
+        this.finishDirect();
     }
 
     isImplicit() {
         //text is implicitly drawn (using fonts)
         return true;
-    }
-
-    finishIndirect() {
-        //do nothing
     }
 
     title() {
@@ -574,6 +668,19 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             return [converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits)))];
         }
         return [converter(obj.left, obj.top)];
+    }
+
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length === 0) {
+            throw new Error("Points array must contain at least one point");
+        }
+
+        const pt = deconvertor(points);
+        return {
+            left: pt.x,
+            top: pt.y,
+            text: "Placeholder"
+        };
     }
 };
 
@@ -627,32 +734,48 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
      * @param object given object type for the factory type
      * @param options
+     *
+     * todo try (also with other props https://fabricjs.com/demos/stroke-uniform-property/) uniform stroke
      */
     configure(object, options) {
+        const graphicZoom = this._context.canvas.computeGraphicZoom();
+        const zoom = 3 / graphicZoom;
         $.extend(object, options, {
             angle: 0,
-            rx: 10,
-            ry: 10,
-            strokeWidth: 1,
-            originalStrokeWidth: 1,
+            rx: zoom,
+            ry: zoom,
+            width: zoom*1.5,
+            height: zoom*1.5,
+            strokeWidth: 2 / graphicZoom,
+            stroke: options.color,
+            originalStrokeWidth: 2,
             originX: 'center',
             originY: 'center',
             type: this.type,
             factoryID: this.factoryID,
-            fill: options.color,
+            uniformStroke: true,
         });
         //todo not directly draggable some error there -> update force bounds
         return object;
     }
 
-    onZoom(ofObject, graphicZoom, realZoom) {
-        ofObject.scaleX = 1/graphicZoom;
-        ofObject.scaleY = 1/graphicZoom;
+    getCreationRequiredMouseDragDurationMS() {
+        return 0;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        super.updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke);
-        ofObject.set({fill: ofObject.color});
+    onZoom(ofObject, graphicZoom, realZoom) {
+        const zoom = 3 / graphicZoom;
+        ofObject.rx = ofObject.ry = zoom;
+        ofObject.width = ofObject.height = zoom*1.5;
+        ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
+    }
+
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        // visualProperties.modeOutline = false;
+        visualProperties.stroke = preset.color;
+        // delete visualProperties.strokeWidth;
+        // delete visualProperties.stroke;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     edit(theObject) {
@@ -671,7 +794,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject, true);
+        this._context.replaceAnnotation(theObject, newObject);
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -683,18 +806,8 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             x: x,
             y: y
         }, this._presets.getAnnotationOptions(isLeftClick));
-        instance.scaleX = 1/instance.zoomAtCreation;
-        instance.scaleY = 1/instance.zoomAtCreation;
         this._context.addAnnotation(instance);
         return true;
-    }
-
-    updateCreate(x, y) {
-        //do nothing
-    }
-
-    finishDirect() {
-        //do nothing
     }
 
     supportsBrush() {
@@ -706,6 +819,18 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             return [converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits)))];
         }
         return [converter(obj.left, obj.top)];
+    }
+
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length === 0) {
+            throw new Error("Points array must contain at least one point");
+        }
+
+        const pt = deconvertor(points);
+        return {
+            x: pt.x,
+            y: pt.y
+        };
     }
 
     title() {
@@ -735,6 +860,39 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return this.configure(instance, options);
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._current.set({points: []});
+            this.finishIndirect();
+        }
+    }
+
+    undoCreate() {
+        if (!this.canUndoCreate()) return;
+
+        if (this._current?.points.length < 2) {
+            this.finishIndirect();
+        } else {
+            const polygon = this._current;
+            polygon.points.pop();
+            if (this._followPoint) {
+                const currentPoint = polygon.points[polygon.points.length - 1];
+                this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+            }
+            polygon.setCoords();
+            this._context.canvas.renderAll();
+        }
+    }
+
+    canUndoCreate() {
+        if (this._polygonBeingCreated && this._current?.points) return true;
+        return undefined; // allow super execution
+    }
+
+    canRedoCreate() {
+        if (this._polygonBeingCreated && this._current?.points) return false; //not implemented
+        return undefined; // allow super execution
+    }
 
     exportsGeometry() {
         return ["points"];
@@ -749,6 +907,19 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         const props = this.copyProperties(ofObject);
         delete props.points;
         return new this.Class(parameters, props);
+    }
+
+    getArea(theObject) {
+        let total = 0;
+        const points = theObject.points;
+        for (let i = 0; i < points.length; i++) {
+            const addX = points[i].x;
+            const addY = points[i === points.length - 1 ? 0 : i + 1].y;
+            const subX = points[i === points.length - 1 ? 0 : i + 1].x;
+            const subY = points[i].y;
+            total += (addX * addY * 0.5) - (subX * subY * 0.5);
+        }
+        return Math.abs(total);
     }
 
     edit(theObject) {
@@ -824,7 +995,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             (value, index) => value === this._origPoints[index])) {
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
-            this._context.replaceAnnotation(theObject, newObject, true);
+            this._context.replaceAnnotation(theObject, newObject);
             this._context.canvas.renderAll();
         }
         this._origPoints = null;
@@ -849,12 +1020,8 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return -1; //always allow
     }
 
-    initCreate(x, y, isLeftClick = true) {
-        if (!this._polygonBeingCreated) {
-            this._initialize();
-        }
-
-        let properties = {
+    _getCommonHelperProps() {
+        return  {
             selectable: false,
             hasControls: false,
             evented: false,
@@ -863,6 +1030,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             lockMovementX: true,
             lockMovementY: true
         };
+    }
+
+    initCreate(x, y, isLeftClick = true) {
+        if (!this._polygonBeingCreated) {
+            this._initialize();
+        }
+
+        const properties = this._getCommonHelperProps();
 
         //create circle representation of the point
         let polygon = this._current,
@@ -923,6 +1098,10 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return false;
     }
 
+    finishDirect() {
+        return false;
+    }
+
     finishIndirect() {
         if (!this._current) return;
 
@@ -967,6 +1146,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return points;
     }
 
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length === 0) {
+            throw new Error("Points array must not be empty");
+        }
+
+        return points.map(deconvertor);
+    }
+
     _initialize(isNew = true) {
         this._polygonBeingCreated = isNew;
         this._initPoint = null;
@@ -977,7 +1164,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
+            radius: 5 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
@@ -1045,8 +1232,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2"];
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a line is always 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     /**
@@ -1152,7 +1340,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.x2 = this._origPoints[2];
             theObject.y2 = this._origPoints[3];
 
-            this._context.replaceAnnotation(theObject, newObject, true);
+            this._context.replaceAnnotation(theObject, newObject);
             this._context.canvas.renderAll();
         }
         this._origPoints = null;
@@ -1186,9 +1374,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementY: true
         };
 
-        this._initPoint = this._createControlPoint(x, y, properties);
-        this._context.addHelperAnnotation(this._initPoint);
-
         if (!this._current) {
             this._current = this.create([x, y, x, y],
                 $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
@@ -1214,9 +1399,12 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     finishIndirect() {
+        this.finishDirect();
+    }
+
+    finishDirect() {
         if (!this._current) return;
 
-        this._context.deleteHelperAnnotation(this._initPoint);
         this._context.deleteHelperAnnotation(this._current);
 
         const dy = this._current.y1 - this._current.y2,
@@ -1231,6 +1419,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             this._context.addAnnotation(this._current);
         }
         this._initialize(false);
+        return true;
     }
 
     _getRelativePixelDiffDistSquared(relativeDiff) {
@@ -1259,13 +1448,28 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         ];
     }
 
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length < 2) {
+            throw new Error("At least two points are required to reconstruct a line");
+        }
+
+        const p1 = deconvertor(points[0]);
+        const p2 = deconvertor(points[1]);
+
+        return [
+            p1.x,
+            p1.y,
+            p2.x,
+            p2.y
+        ];
+    }
+
     title() {
         return "Line";
     }
 
     _initialize(isNew = true) {
         this._isOngoingCreate = isNew;
-        this._initPoint = null;
         this._current = null;
         this._followPoint = null;
         this._isDragging = false;
@@ -1290,7 +1494,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "flash_on";
+        return "pentagon";
     }
 
     fabricStructure() {
@@ -1326,8 +1530,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return instance;
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - a line is always 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true;
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     getDescription(ofObject) {
@@ -1336,6 +1541,11 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
 
     title() {
         return "Polyline";
+    }
+
+    finishDirect() {
+        this.finishIndirect();
+        return true;
     }
 }
 
@@ -1373,7 +1583,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     configure(object, options) {
         super.configure(object, options);
 
-        //or extend with all options?
+        //todo use factory instead
         object.forEachObject(o => {
             o.fill = options.fill;
             o.stroke = options.stroke;
@@ -1448,7 +1658,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     //    //      left: left, top: top, rx: rx, ry: ry
     //    //  });
     //    //  theObject.calcACoords();
-    //    //  this._context.replaceAnnotation(theObject, newObject, true);
+    //    //  this._context.replaceAnnotation(theObject, newObject);
     // }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1485,21 +1695,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         ofObject.forEachObject(o => {
-            if (typeof o.color === 'string') {
-                if (isTransparentFill) {
-                    o.set({
-                        fill: "",
-                        stroke: color
-                    });
-                } else {
-                    o.set({
-                        fill: color,
-                        stroke: defaultStroke
-                    });
-                }
-            }
+            const factory = o._factory();
+            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
         });
     }
 
@@ -1532,7 +1731,140 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         // return result;
     }
 
+    fromPointArray(obj, deconvertor) {
+        //todo
+        return undefined;
+    }
+
     title() {
         return "Complex Annotation";
+    }
+};
+
+OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFactory {
+
+    constructor(context, autoCreationStrategy, presetManager) {
+        super(context, autoCreationStrategy, presetManager, "multipolygon", "path");
+        this._polygonFactory = new OSDAnnotations.Polygon(context, autoCreationStrategy, presetManager);
+    }
+
+    getIcon() {
+        return "view_timeline";
+    }
+
+    fabricStructure() {
+        return "path";
+    }
+
+    getDescription(ofObject) {
+        return `Multipolygon [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;
+    }
+
+    title() {
+        return "Multipolygon";
+    }
+
+    exportsGeometry() {
+        return ["points"];
+    }
+
+    exports() {
+        return [];
+    }
+
+    isImplicit() {
+        return false;
+    }
+
+    create(parameters, options) {
+        const path = this._createPathFromPoints(parameters);
+        let multipolygon = new fabric.Path(path);
+
+        this.configure(multipolygon, options);
+        multipolygon.points = parameters;
+        return multipolygon;
+    }
+
+    configure(object, options) {
+        super.configure(object, options);
+        object.fillRule = "evenodd";
+    }
+
+    _createPathFromPoints(multiPoints) {
+        if (multiPoints.length === 0) return;
+        let pathString = '';
+
+        for (let i = 0; i < multiPoints.length; i++) {
+            const points = multiPoints[i];
+
+            if (i !== 0) pathString += ' ';
+            pathString += `M ${points[0].x} ${points[0].y}`;
+
+            points.forEach(point => {
+                pathString += ` L ${point.x} ${point.y}`;
+            });
+
+            pathString += ' z';
+            if (i !== multiPoints.length) pathString += ' ';
+        }
+
+        return pathString;
+    }
+
+    copy(ofObject, parameters=undefined) {
+        if (!parameters) parameters = [...ofObject.points];
+        const props = this.copyProperties(ofObject);
+        delete props.points;
+        const copy = new fabric.Path(this._createPathFromPoints(parameters), props);
+        // We mimic polygon style - keep points prop
+        copy.points = parameters;
+        return copy;
+    }
+
+    setPoints(object, points) {
+        object.points = points;
+        const newPathString = this._createPathFromPoints(points);
+
+        object._setPath(fabric.util.parsePath(newPathString));
+        object.setCoords();
+        return object;
+    }
+
+    getArea(theObject) {
+        let area = this._polygonFactory.getArea({points: theObject.points[0]});
+
+        for (let i = 1; i < theObject.points.length; i++) {
+            area -= this._polygonFactory.getArea({points: theObject.points[i]});
+        }
+        return area;
+    }
+
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        let polygon;
+        let result = [];
+
+        for (let i = 0; i < obj.points.length; i++) {
+            polygon = {"points": obj.points[i]};
+            let newPoints = this._polygonFactory.toPointArray(polygon, converter, digits, quality);
+            result.push(newPoints);
+        }
+
+        return result;
+    }
+
+    fromPointArray(pointsArray, deconvertor) {
+        if (!pointsArray || pointsArray.length === 0) {
+            throw new Error("Points array must not be empty");
+        }
+
+        const multipolygonPoints = [];
+
+        for (let i = 0; i < pointsArray.length; i++) {
+            const polygonPoints = pointsArray[i];
+            const polygonObj = this._polygonFactory.fromPointArray(polygonPoints, deconvertor);
+            multipolygonPoints.push(polygonObj);
+        }
+
+        return multipolygonPoints;
     }
 };

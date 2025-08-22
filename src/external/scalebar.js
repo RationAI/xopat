@@ -113,6 +113,8 @@
         this.sizeAndTextRenderer = options.sizeAndTextRenderer ||
             $.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
 
+        this.magnificationContainerHeight = 210;
+
         //magnification
         this.magnification = options.magnification || false;
         //todo allow specifying levels of magnification
@@ -133,8 +135,8 @@
             this.scalebarContainer.style.left = location.x + "px";
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            this.magnificationContainer.style.left = location.x + "px";
-            this.magnificationContainer.style.top = location.y - 80 + "px";
+            this.magnificationContainer.style.left = location.x + 8 + "px";
+            this.magnificationContainer.style.top = location.y - this.magnificationContainerHeight - 50 + "px";
 
         }.bind(this);
         this._init(options);
@@ -190,6 +192,12 @@
                 this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
         },
 
+        imageAreaToGivenUnits: function(area) {
+            //todo what about flexibility in units?
+            return getWithSquareUnitRounded(area / (this.pixelsPerMeter*this.pixelsPerMeter),
+                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
+        },
+
         _init: function (options) {
             if (!options.destroy) {
                 this._active = true;
@@ -204,28 +212,44 @@
 
                 if (!this.magnificationContainer) {
                     this.magnificationContainer = document.createElement("div");
-                    this.magnificationContainer.style.position = "relative";
-                    this.magnificationContainer.style.margin = "0";
-                    this.magnificationContainer.style.display = "flex";
                     this.magnificationContainer.id = "viewer-magnification";
+                    // this.magnificationContainer.style.display = "none";
 
                     if (this.magnification > 0) {
+                        this.magnificationContainer.style.position = "relative";
+                        this.magnificationContainer.style.margin = "0";
+                        this.magnificationContainer.style.background = "var(--color-bg-backdrop)";
+                        this.magnificationContainer.style.paddingBottom = "8px";
+                        this.magnificationContainer.style.paddingTop = "4px";
+                        this.magnificationContainer.style.paddingLeft = "16px";
+                        this.magnificationContainer.style.paddingRight = "8px";
+                        this.magnificationContainer.style.opacity = "0.6";
+                        this.magnificationContainer.style.display = "flex";
+                        this.magnificationContainer.style.flexDirection = "column";
+                        this.magnificationContainer.style.height =`${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width = "60px";
 
-                        const steps = Math.round(Math.sqrt(this.magnification)) - 1;
+                        this.magnificationContainer.style.borderRadius = "7px";
+
+                        let steps = 0;
+                        let testMag = this.magnification;
+                        while (testMag > 4) {
+                            testMag = Math.round(testMag / 2);
+                            steps++;
+                        }
+
                         const minValue = 0;
                         const sliderContainer = document.createElement("span");
 
                         const range = {max: [this.magnification], min: [1]}, values = [this.magnification];
-                        let mag = this.magnification, stepPerc = Math.round(92 / (steps-1)), stepPercIter = 100 - stepPerc;
-                        while (mag > 5) {
-                            mag = Math.round(mag / 2);
+                        let mag = this.magnification, stepPerc = Math.round(100 / (steps+1)), stepPercIter = 100;
+                        while (mag > 4) {
+                            mag = Math.floor(mag / 2);
+                            stepPercIter -= stepPerc;
                             range[`${stepPercIter}%`] = [mag];
                             values.push(mag);
-                            stepPercIter -= stepPerc;
                         }
-                        //few last step manually
-                        range[`${stepPercIter}%`] = [2];
-                        values.push(2, 1);
+                        values.push(1);
                         values.reverse();
 
                         const updateZoom = (mag) => {
@@ -240,6 +264,17 @@
                                 this.viewer.viewport.zoomTo(desiredZoom);
                             }
                         };
+
+                        const reflectUpdate = (e) => {
+                            const image = this.getReferencedTiledImage();
+                            if (!image) {
+                                console.error("Linked referenced image does not exist!");
+                            }
+                            const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
+                            sliderContainer.noUiSlider.set(desiredZoom);
+                        };
+                        VIEWER.addHandler('zoom', reflectUpdate);
+
                         function closestValue (v) {
                             let d = Infinity, result = -1;
                             for (let i = 0; i < values.length; i++) {
@@ -254,7 +289,7 @@
 
                         let button = document.createElement("span");
                         button.innerHTML = "remove";
-                        button.classList.add("material-icons", "btn-pointer", "pl-0", "pr-2");
+                        button.classList.add("material-icons", "btn-pointer");
                         button.style.userSelect = 'none';
                         button.addEventListener("click", (event) => {
                             const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));
@@ -270,14 +305,14 @@
                             // limit: limit,
                             connect: true,
                             direction: 'ltr',
-                            orientation: 'horizontal',
+                            orientation: 'vertical',
                             behaviour: 'drag',
-                            tooltips: true,
+                            tooltips: false,
                             //format: format,
                             pips: {
                                 mode: 'values',
                                 values: values,
-                                density: 1,
+                                density: 5,
                                 format: {
                                     // 'to' the formatted value. Receives a number.
                                     to: function (value) {
@@ -293,7 +328,7 @@
                         });
                         button = document.createElement("span");
                         button.innerHTML = "add";
-                        button.classList.add("material-icons", "btn-pointer", "pl-2", "pr-0");
+                        button.classList.add("material-icons", "btn-pointer");
                         button.style.userSelect = 'none';
                         button.addEventListener("click", (event) => {
                             const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));
@@ -305,7 +340,7 @@
                         //todo custom ranges
 
                         sliderContainer.noUiSlider.target.classList.add('d-inline-block', 'flex-1');
-                        sliderContainer.noUiSlider.target.style.height = "4px";
+                        sliderContainer.noUiSlider.target.style.width = "4px";
 
                         sliderContainer.noUiSlider.on("change", (event) => {
                             updateZoom(Number.parseInt(sliderContainer.noUiSlider.get()));
@@ -411,8 +446,6 @@
             this.scalebarContainer.style.width = minWidth;
             // Make sure to display the element before getting is width
             this.scalebarContainer.style.display = "";
-            // Set the width of other components to approx. 1.5* min width
-            this.magnificationContainer.style.width = `${Math.round(this.scalebarContainer.offsetWidth * 1.5)}px`;
             this.minWidth = this.scalebarContainer.offsetWidth;
         },
         /**
@@ -740,6 +773,23 @@
             return (Math.round(value * 100) / 100) + unitSuffix;
         }
         if (value >= 1000) {
+            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
+        }
+        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+    }
+
+    function getWithSquareUnitRounded(value, unitSuffix) {
+        // No support for NM
+        if (value < 0.000001) {
+            return (Math.round(value * 100000000000000) / 100) + " μ" + unitSuffix;
+        }
+        if (value < 1) {
+            return (Math.round(value * 100000000) / 100) + " m" + unitSuffix;
+        }
+        if (value < 1000000) {
+            return (Math.round(value * 100) / 100) + unitSuffix;
+        }
+        if (value >= 1000000) {
             return (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
         return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);

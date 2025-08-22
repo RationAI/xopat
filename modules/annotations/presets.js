@@ -2,6 +2,17 @@
 
 OSDAnnotations.Preset = class {
     /**
+     * @typedef OSDAnnotations.PresetMeta
+     * @type {Object<string,OSDAnnotations.PresetMetaItem>}
+     */
+
+    /**
+     * @typedef OSDAnnotations.PresetMetaItem
+     * @property {string} name
+     * @property {string} value
+     */
+
+    /**
      * Preset: object that pre-defines the type of annotation to be created, along with its parameters
      * @param {string} id
      * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
@@ -13,17 +24,26 @@ OSDAnnotations.Preset = class {
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
+        /**
+         * @type {OSDAnnotations.PresetMeta}
+         */
         this.meta = {};
         this.meta.category = {
             name: 'Name',
             value: category
         };
         this._used = false;
+        this._tmp = {};
     }
 
     /**
      * Create the object from JSON representation
      * @param {object} parsedObject serialized object, output of toJSONFriendlyObject()
+     * @param {string} parsedObject.color
+     * @param {string} parsedObject.factoryID
+     * @param {string} parsedObject.presetID
+     * @param {OSDAnnotations.PresetMeta} [parsedObject.meta]
+     * @param {Object<string,any>} [parsedObject.temporary] temporary data to attach, optional
      * @param {OSDAnnotations} context function able to get object factory from id
      * @return {OSDAnnotations.Preset} instantiated preset
      */
@@ -41,12 +61,13 @@ OSDAnnotations.Preset = class {
             preset.meta = parsedObject.meta;
         }
         preset._used = true; //keep imported
+        preset._tmp = parsedObject.temporary || {};
         return preset;
     }
 
     /**
      * Convert the preset to JSON-friendly object
-     * @return {{color: string, factoryID: string, meta: {}, presetID: string}}
+     * @return {{color: string, factoryID: string, meta: OSDAnnotations.PresetMeta, presetID: string}}
      */
     toJSONFriendlyObject() {
         return {
@@ -74,6 +95,25 @@ OSDAnnotations.Preset = class {
     getMetaValue(key) {
         return this.meta[key] ? this.meta[key].value : undefined;
     }
+
+    /**
+     * Temporary Metadata, not exported
+     * @param {string} key
+     * @param {any} value
+     */
+    setTemporaryMeta(key, value) {
+        this._tmp[key] = value;
+    }
+
+    /**
+     * Temporary Metadata, not exported
+     * @param {string} key
+     * @param {any} defaultValue
+     */
+    getTemporaryMeta(key, defaultValue) {
+        const value = this._tmp[key];
+        return value === undefined ? defaultValue : value;
+    }
 }; // end of namespace Preset
 
 /**
@@ -85,18 +125,41 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Shared options, set to each annotation object.
+     * @typedef {Object} OSDAnnotations.CommonAnnotationVisuals
+     * @property {boolean} [selectable] - Whether the annotation is selectable.
+     * @property {number} [originalStrokeWidth] - The original width of the stroke.
+     * @property {string} [borderColor] - The color of the border.
+     * @property {string} [cornerColor] - The color of the corners.
+     * @property {string} [stroke] - The color of the stroke.
+     * @property {string} [strokeSide] - Position of the stroke (center, inside, outside).
+     * @property {number} [borderScaleFactor] - The factor by which the border is scaled.
+     * @property {boolean} [hasControls] - Whether the annotation has controls.
+     * @property {boolean} [lockMovementY] - Whether movement along the Y-axis is locked.
+     * @property {boolean} [lockMovementX] - Whether movement along the X-axis is locked.
+     * @property {boolean} [hasRotatingPoint] - Whether the annotation has a rotating point.
+     * @property {boolean} [modeOutline] - Whether the annotation is in outline mode.
+     * @property {number} [opacity]
      */
-    static _commonProperty = {
+
+    /**
+     * Default visual settings for annotations.
+     * todo make this cache-loaded, parametrized
+     * @type {OSDAnnotations.CommonAnnotationVisuals}
+     */
+    static commonAnnotationVisuals = {
         selectable: true,
         originalStrokeWidth: 3,
-        borderColor: '#fbb802',
-        cornerColor: '#fbb802',
+        borderColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251,184,2,0.35)',
         stroke: 'black',
         borderScaleFactor: 3,
+        strokeSide: 'center',
         hasControls: false,
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,
+        modeOutline: false,
+        opacity: 0.4
     };
 
     /**
@@ -112,12 +175,40 @@ OSDAnnotations.PresetManager = class {
         this.right = undefined;
         this._colorSteps = 8;
         this._colorStep = 0;
-        this._presetsImported = false;
-        this.modeOutline = this._context.cache.get('drawOutline', true);
+        this._presetsImported = false;  // todo remove this prop
+
+        const cache = this._context.cache;
+        this.commonAnnotationVisuals = { ... this.constructor.commonAnnotationVisuals };
+
+        //todo: consider cache api that supports type conversions
+        const _parseCachedProps = (convertor, ...names) => {
+            for (let name of names) {
+                const value = cache.get('visuals.' + name);
+                if (value !== undefined && value !== null) {
+                    this.commonAnnotationVisuals[name] = convertor ? convertor(value) : value;
+                }
+            }
+        };
+        _parseCachedProps(x => !!x, 'modeOutline');
+        _parseCachedProps(x => Number.parseFloat(x), 'opacity');
+        _parseCachedProps(x => Number.parseInt(x), 'originalStrokeWidth');
+        _parseCachedProps(undefined, 'borderColor', 'cornerColor', 'stroke');
+
         this._context.addHandler('preset-delete', e => {
             if (e.preset === this.left) this.selectPreset(undefined, true);
             else if (e.preset === this.right) this.selectPreset(undefined, false);
         });
+    }
+
+    /**
+     * Get default unknown preset: this preset is used when annotation references unknown preset ID
+     * @type {OSDAnnotations.Preset}
+     */
+    get unknownPreset() {
+        if (!this._unknownPreset) {
+            this._unknownPreset = new OSDAnnotations.Preset("__unknown__", this._context.polygonFactory, "Unknown", "#adadad");
+        }
+        return this._unknownPreset;
     }
 
     getActivePreset(isLeftClick) {
@@ -142,22 +233,6 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Set annotations to mode filled or outlined
-     * @param isOutline true if outlined
-     */
-    setModeOutline(isOutline) {
-        if (this.modeOutline === isOutline) return;
-        this._context.cache.set('drawOutline', isOutline);
-        this.modeOutline = isOutline;
-        this.updateAllObjectsVisuals();
-        this._context.canvas.requestRenderAll();
-    }
-
-    getModeOutline() {
-        return this.modeOutline;
-    }
-
-    /**
      * Add new preset with default values
      * @param {string?} id to create, generates random otherwise
      * @param {string?} categoryName custom name
@@ -165,7 +240,7 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} newly created preset
      */
     addPreset(id=undefined, categoryName="") {
-        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this.randomColorHexString());
         this._presets[preset.presetID] = preset;
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
@@ -179,12 +254,12 @@ OSDAnnotations.PresetManager = class {
      */
     isUnusedPreset(p) {
         return !p._used && p.objectFactory == this._context.polygonFactory
-            && p.meta.category?.value === ""
+            && !p.meta.category?.value
             && Object.keys(p.meta).length === 1;
     }
 
     /**
-     * Alias for static _commonProperty
+     * Alias for static commonAnnotationVisuals
      * @param {OSDAnnotations.Preset} withPreset
      */
     getCommonProperties(withPreset=undefined) {
@@ -192,7 +267,7 @@ OSDAnnotations.PresetManager = class {
             withPreset._used = true;
             return this._withDynamicOptions(this._populateObjectOptions(withPreset));
         }
-        return this._withDynamicOptions(this.constructor._commonProperty);
+        return this._withDynamicOptions(this.commonAnnotationVisuals);
     }
 
     /**
@@ -214,7 +289,7 @@ OSDAnnotations.PresetManager = class {
             for (const k in this._presets) {
                 if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
             }
-            return undefined;
+            return this.unknownPreset;
         }
         return this._presets[id];
     }
@@ -294,35 +369,16 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Correctly and safely reflect object appearance based on mode
-     * @param object object to update
-     * @param withPreset preset that obect belongs to
-     */
-    updateObjectVisuals(object, withPreset) {
-        const factory = this._context.getAnnotationObjectFactory(object.factoryID);
-        factory.updateRendering(this.modeOutline, object, withPreset.color, this.constructor._commonProperty.stroke);
-    }
-
-    /**
-     * Update all object visuals
-     */
-    updateAllObjectsVisuals() {
-        this._context.canvas.getObjects().forEach(o => {
-            let preset = this.get(o.presetID);
-            if (preset) this.updateObjectVisuals(o, preset);
-        });
-    }
-
-    /**
      * Add new metadata field to preset
      * @event preset-meta-add
      * @param {string} id preset id
      * @param {string} name new meta field name
      * @param {string} value default value
-     * @return {string} the new meta id
+     * @return {string|undefined} the new meta id, undefined if no preset found
      */
     addCustomMeta(id, name, value) {
         let preset = this._presets[id];
+        if (!preset) return undefined;
         let key = "k"+Date.now();
         preset.meta[key] = {
             name: name,
@@ -342,10 +398,35 @@ OSDAnnotations.PresetManager = class {
         let preset = this._presets[id];
         if (preset && preset.meta[key]) {
             delete preset.meta[key];
+            this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
             return true;
         }
-        this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
         return false;
+    }
+
+    /**
+     * Set common rendering visual property (stroke, opacity...)
+     * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+     * @param {any} propertyValue value for the property
+     * @return {boolean} true if value changed, false if invalid key
+     */
+    setCommonVisualProp(propertyName, propertyValue) {
+        if (this.commonAnnotationVisuals[propertyName] === undefined) {
+            console.error("[setCommonVisualProp] property name not one of", this.presets.constructor.commonAnnotationVisuals, propertyName);
+            return false;
+        }
+        this._context.cache.set('visuals.' + propertyName, propertyValue);
+        this.commonAnnotationVisuals[propertyName] = propertyValue;
+        return true;
+    }
+
+    /**
+     * Get annotations visual property
+     * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
+     * @return {*}
+     */
+    getCommonVisualProp(propertyName) {
+        return this.commonAnnotationVisuals[propertyName];
     }
 
     /**
@@ -387,28 +468,23 @@ OSDAnnotations.PresetManager = class {
     async import(presets, clear=false) {
         const _this = this;
 
-        if (clear) {
-            Object.values(this._presets).forEach(p => _this._context.raiseEvent('preset-delete', {preset: p}));
-            this._presets = {};
-            this._presetsImported = false;
-        } else {
-            for (let pid in this._presets) {
-                const preset = this._presets[pid];
-                if (this.isUnusedPreset(preset)) {
-                    this._context.raiseEvent('preset-delete', {preset});
-                    delete this._presets[pid];
-                }
+        for (let pid in this._presets) {
+            const preset = this._presets[pid];
+            // TODO: clear might remove presets that are attached to existing annotations!
+            if (clear || this.isUnusedPreset(preset)) {
+                this._context.raiseEvent('preset-delete', {preset});
+                delete this._presets[pid];
             }
         }
-        let first = undefined;
 
         if (typeof presets === 'string' && presets.length > 10) {
             presets = JSON.parse(presets);
         }
 
+        let first;
         if (Array.isArray(presets)) {
             presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
-                if (clear || ! _this._presets.hasOwnProperty(p.presetID)) {
+                if (!_this._presets.hasOwnProperty(p.presetID)) {
                     _this._context.raiseEvent('preset-create', {preset: p});
                     _this._presets[p.presetID] = p;
                     _this._colorStep++; //generate new colors
@@ -466,9 +542,8 @@ OSDAnnotations.PresetManager = class {
 
         return $.extend(options, {
             layerID: this._context.getLayer().id,
-            opacity: this._context.getOpacity(),
             zoomAtCreation: zoom,
-            strokeWidth: 3 / gZoom
+            strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
     }
 
@@ -477,9 +552,9 @@ OSDAnnotations.PresetManager = class {
             console.warn("Attempt to retrieve metadata without a preset!");
             return {};
         }
-        if (this.modeOutline) {
+        if (this.commonAnnotationVisuals.modeOutline) {
             return $.extend({fill: ""},
-                OSDAnnotations.PresetManager._commonProperty,
+                this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
                     stroke: withPreset.color,
@@ -489,7 +564,7 @@ OSDAnnotations.PresetManager = class {
         } else {
             //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
             return $.extend({fill: withPreset.color},
-                OSDAnnotations.PresetManager._commonProperty,
+                this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
                     color: withPreset.color,
@@ -498,7 +573,7 @@ OSDAnnotations.PresetManager = class {
         }
     }
 
-    _randomColorHexString() {
+    randomColorHexString() {
         // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
         let r, g, b;
         let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
@@ -506,12 +581,12 @@ OSDAnnotations.PresetManager = class {
         let f = h * 6 - i;
         let q = 1 - f;
         switch(i % 6){
-        case 0: r = 1; g = f; b = 0; break;
-        case 1: r = q; g = 1; b = 0; break;
-        case 2: r = 0; g = 1; b = f; break;
-        case 3: r = 0; g = q; b = 1; break;
-        case 4: r = f; g = 0; b = 1; break;
-        case 5: r = 1; g = 0; b = q; break;
+            case 0: r = 1; g = f; b = 0; break;
+            case 1: r = q; g = 1; b = 0; break;
+            case 2: r = 0; g = 1; b = f; break;
+            case 3: r = 0; g = q; b = 1; break;
+            case 4: r = f; g = 0; b = 1; break;
+            case 5: r = 1; g = 0; b = q; break;
         }
         let c = "#" + ("00" + (~ ~(r * 255)).toString(16)).slice(-2)
             + ("00" + (~ ~(g * 255)).toString(16)).slice(-2)

@@ -30,7 +30,7 @@
       "global": {
         "tissue": "Tissue",
         "layerOpacity": "Opacity",
-        "clone": "Clone the viewer and synchronize",
+        "clone": "Clone the viewer and synchronize"
       },
       "navigator": {
         "faultyTissue": "Faulty {{slide}}"
@@ -62,7 +62,8 @@
         "explainPlugins": "Add plugins to the visualization",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
-        "settings": "Settings"
+        "settings": "Settings",
+        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved."
       }
     },
     "messages": {
@@ -84,8 +85,9 @@
       "overlaysLoadFail": "Failed to load overlays - only the tissue will be visible.",
       "pluginsWelcome": "It looks like this is your first time here",
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
-      "urlCopied": "The URL was copied to your clipboard.",
+      "valueCopied": "The value was copied to your clipboard.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
+      "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",

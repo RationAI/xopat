@@ -1,15 +1,15 @@
 (function ($) {
 /**
  * @typedef {{
- *  _deprecated?: Array<string>
+ *  _deprecated: Array<string> | undefined
  * }} XOpatStorage.SchemaElement
  *
  * @typedef {Object.<string, XOpatStorage.SchemaElement>} XOpatStorage.Schema
  *
  * @typedef {{
  *  id: string,
- *  schema?: XOpatStorage.Schema,
- *  strictSchema?: boolean
+ *  schema: XOpatStorage.Schema | undefined,
+ *  strictSchema: boolean | undefined
  * }} XOpatStorage.StorageOptions
  */
 
@@ -346,6 +346,7 @@ $.XOpatStorage = {
      * Similar to Storage, AsyncStorage supports asynchronous storage interface.
      * see https://developer.mozilla.org/en-US/docs/Web/API/Storage
      * @type {XOpatStorage.AsyncStorage}
+     * @memberOf XOpatStorage
      */
     AsyncStorage: xoAsyncStorage,
 

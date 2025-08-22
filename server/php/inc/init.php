@@ -13,6 +13,7 @@ define('ABS_PLUGINS', ABSPATH . 'plugins/');
 defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
 define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
 define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
+define('UI_SOURCES', PROJECT_ROOT . 'ui/');
 define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
 define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
 define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');
@@ -59,6 +60,15 @@ function ensureDefined($object, $property, $default) {
     if (!isset($object->{$property})) {
         $object->{$property} = $default;
         return false;
+    }
+    $prop_type = gettype($object->{$property});
+    $def_type = gettype($default);
+    if ($def_type !== $prop_type) {
+        if ($def_type === "object") {
+            $object->{$property} = ((object)$object->{$property});
+        } else if ($def_type === "array") {
+            $object->{$property} = ((array)$object->{$property});
+        } // todo else: incompatible type :/
     }
     return true;
 }

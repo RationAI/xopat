@@ -53,9 +53,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     }
 
     function cleanUpPlugin(id, e=$.t('error.unknown')) {
-        delete PLUGINS[id].instance;
-        PLUGINS[id].loaded = false;
-        PLUGINS[id].error = e;
+        if (PLUGINS[id]) {
+            delete PLUGINS[id].instance;
+            PLUGINS[id].loaded = false;
+            PLUGINS[id].error = e;
+        }
 
         showPluginError(id, e);
         $(`.${id}-plugin-root`).remove();
@@ -188,6 +190,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     window.plugin = function(id) {
         return PLUGINS[id]?.instance;
     };
+
+    /**
+     * Get one of allowed plugin meta keys
+     * @param id
+     * @param {string} metaKey one of "name", "description", "author", "version"
+     */
+    window.pluginMeta = function(id, metaKey) {
+        return ["name", "description", "author", "version"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+    }
 
     /**
      * Get a module singleton reference if instantiated.
@@ -576,7 +587,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         async importData(data) {}
 
         /**
-         *
+         * TODO: this does not wait once module is fully loaded!
          * @param moduleId
          * @param callback
          * @return {boolean} true if finished immediatelly, false if registered handler for the
@@ -607,6 +618,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.getHandler = events.getHandler.bind(events);
             this.numberOfHandlers = events.numberOfHandlers.bind(events);
             this.raiseEvent = events.raiseEvent.bind(events);
+            this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
             this.removeAllHandlers = events.removeAllHandlers.bind(events);
             this.removeHandler = events.removeHandler.bind(events);
             this.__errorBindingOnViewer = errorBindingOnViewer;
@@ -673,6 +685,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Note: noop if registerAsEventSource() not called.
          */
         raiseEvent () {}
+        /**
+         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseAwaitEvent.
+         * Awaits async handlers.
+         * Note: noop if registerAsEventSource() not called.
+         */
+        raiseAwaitEvent() {}
         /**
          * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
          * Note: noop if registerAsEventSource() not called.
@@ -780,7 +798,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             }
             staticContext.__self = this;
 
-            MODULES.instance = this;
+            MODULES[id].instance = this;
 
             // Await event necessary to fire after instantiation, do in async context
             setTimeout(() => VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
@@ -860,7 +878,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
 
             //options are stored only for plugins, so we store them at the lowest level
-            let value = cache ? localStorage.getItem(`${this.id}.${key}`) : null;
+            let value = cache ? this.cache.get(key, null) : null;
             if (value === null) {
                 // read default value from static context if exists
                 if (defaultValue === undefined && key !== "instance") {
@@ -878,11 +896,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Ability to cache a value locally into the browser,
          * the value can be retrieved using this.getOption(...)
+         * todo rename to setCacheOption
          * @param key
          * @param value
          */
         setLocalOption(key, value) {
-            localStorage.setItem(`${this.id}.${key}`, value);
+            this.cache.set(key, value);
         }
 
         /**
@@ -1050,7 +1069,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          */
         loadPlugin: function(id, onload=_=>{}, force) {
             let meta = PLUGINS[id];
-            if (!meta || meta.loaded || meta.instance) return;
+            if (!meta || (meta.loaded && meta.instance)) return;
             if (!Array.isArray(meta.includes)) {
                 meta.includes = [];
             }
@@ -1140,9 +1159,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Serialize the Viewer
          * @param includedPluginsList
          * @param withCookies
+         * @param staticPreview Whether to mark the serialized app as static or not
          * @return {Promise<{app: string, data: {}}>}
          */
-        serializeApp: async function(includedPluginsList=undefined, withCookies=false) {
+        serializeApp: async function(includedPluginsList=undefined, withCookies=false, staticPreview=false) {
             //reconstruct active plugins
             let pluginsData = APPLICATION_CONTEXT.config.plugins;
             let includeEvaluator = includedPluginsList ?
@@ -1170,7 +1190,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @event export-data
              */
             await VIEWER.tools.raiseAwaitEvent(VIEWER, 'export-data');
-            return {app: UTILITIES.serializeAppConfig(withCookies), data: POST_DATA};
+            return {app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA};
         }
     };
 

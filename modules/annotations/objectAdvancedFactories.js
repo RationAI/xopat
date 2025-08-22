@@ -71,6 +71,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementY: line.lockMovementY,
             originalStrokeWidth: line.originalStrokeWidth,
             selectable: false,
+            originX: 'left',
+            originY: 'top'
         }), new fabric.Text(text.text), {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize,
@@ -83,6 +85,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             fill: text.fill,
             paintFirst: 'stroke',
             strokeWidth: text.strokeWidth,
+            originX: 'left',
+            originY: 'top'
         }], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
@@ -93,8 +97,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             layerID: ofObject.layerID,
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
-            selectable: false,
-            hasControls: false
+            selectable: true,
+            hasControls: true
         });
     }
 
@@ -106,16 +110,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         //not supported error?
     }
 
-    updateRendering(isTransparentFill, ofObject, withPreset, defaultStroke) {
-        //do nothing - always same 'transparent'
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        visualProperties.modeOutline = true; // we are always transparent
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject._objects) {
             ofObject._objects[1].set({
+                //todo add geometric zoom, do not change opacity
                 scaleX: 1/realZoom,
                 scaleY: 1/realZoom,
-                opacity: realZoom / ofObject.zoomAtCreation
             });
             super.onZoom(ofObject._objects[0], graphicZoom, realZoom);
         }
@@ -150,9 +155,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._updateText(line, text);
     }
 
+    discardCreate() {
+        if (this._current) {
+            this._context.deleteHelperAnnotation(this._current[0]);
+            this._context.deleteHelperAnnotation(this._current[1]);
+            this._current = undefined;
+        }
+    }
+
     finishDirect() {
         let obj = this.getCurrentObject();
-        if (!obj) return;
+        if (!obj) return true;
         this._context.deleteHelperAnnotation(obj[0]);
         this._context.deleteHelperAnnotation(obj[1]);
 
@@ -161,19 +174,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             pid = line.presetID;
 
         if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
-            return;
+            return true;
         }
 
         const props = this._presets.getCommonProperties();
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
-        text.set({
-            top: line.top + line.height / 2,
-            left: line.left + line.width / 2
-        });
-        text.calcOCoords();
         this._context.addAnnotation(obj);
         this._current = undefined;
+        return true;
     }
 
     finishIndirect() {
@@ -213,18 +222,30 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        //fallback to line
-        //todo problem: can be used (by converters) for exported or active objects, one has the list underscored, other not
-        // probably ban using toPointArray on exported native format..
-        const line = obj._objects ? obj._objects[0] : obj.objects[0];
-        let x1 = obj.left + line.x1 + obj.width/2, x2 = obj.left + line.x2 + obj.width/2;
-        let y1 = obj.top + line.y1 + obj.height/2, y2 = obj.top + line.y2 + obj.height/2;
+        const line = obj._objects ? obj._objects[0] : [];
+
+        let x1 = line.x1;
+        let y1 = line.y1;
+        let x2 = line.x2;
+        let y2 = line.y2;
 
         if (digits !== undefined) {
-            x1 = parseFloat(Number(x1).toFixed(digits)); y1 = parseFloat(Number(y1).toFixed(digits));
-            x2 = parseFloat(Number(x2).toFixed(digits)); y2 = parseFloat(Number(y2).toFixed(digits));
+            x1 = parseFloat(x1.toFixed(digits));
+            y1 = parseFloat(y1.toFixed(digits));
+            x2 = parseFloat(x2.toFixed(digits));
+            y2 = parseFloat(y2.toFixed(digits));
         }
         return [converter(x1, y1), converter(x2, y2)];
+    }
+
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length < 2) {
+            throw new Error("At least two points required");
+        }
+
+        const p1 = deconvertor(points[0]);
+        const p2 = deconvertor(points[1]);
+        return [p1.x, p1.y, p2.x, p2.y];
     }
 
     _configureLine(line, options) {
@@ -236,6 +257,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             selectable: false,
             factoryID: this.factoryID,
             hasControls: false,
+            originX: 'left',
+            originY: 'top'
         }, options);
     }
 
@@ -251,7 +274,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             paintFirst: 'stroke',
             strokeWidth: 2,
             scaleX: 1/options.zoomAtCreation,
-            scaleY: 1/options.zoomAtCreation
+            scaleY: 1/options.zoomAtCreation,
+            originX: 'left',
+            originY: 'top'
         });
     }
 
@@ -265,11 +290,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
-            measure: this._updateText(line, text),
-            selectable: false,
-            hasBorders: false,
-            originX: 'left',
-            originY: 'top'
+            measure: text.text,
         });
     }
 
@@ -277,6 +298,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = new fabric.Line(parameters),
             text = new fabric.Text('');
         this._configureParts(line, text, options);
+        this._updateText(line, text);
         return [line, text];
     }
 
@@ -420,13 +442,14 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //
 //     finishDirect() {
 //         let obj = this.getCurrentObject();
-//         if (!obj) return;
+//         if (!obj) return true;
 //         this._context.deleteHelperAnnotation(obj[0]);
 //         this._context.deleteHelperAnnotation(obj[1]);
 //
 //         obj = this._createWrap(obj, this._presets.getCommonProperties());
 //         this._context.addAnnotation(obj);
 //         this._current = undefined;
+//         return true;
 //     }
 //
 //     /**
@@ -598,7 +621,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         let newObject = this.copy(theObject, {left: left, top: top});
 //         delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
 //         theObject.calcACoords();
-//         this._context.replaceAnnotation(theObject, newObject, true);
+//         this._context.replaceAnnotation(theObject, newObject);
 //     }
 //
 //     instantCreate(screenPoint, isLeftClick = true) {
@@ -633,7 +656,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //
 //     finishDirect() {
 //         let obj = this.getCurrentObject();
-//         if (!obj) return;
+//         if (!obj) return true;
 //
 //         const self = this;
 //         UTILITIES.uploadFile(url => {
@@ -657,6 +680,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             image.setAttribute('src', url);
 //         }, "image/*", "url");
 //         this._current = undefined;
+//         return true;
 //     }
 //
 //     finishIndirect() {

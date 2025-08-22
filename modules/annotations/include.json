@@ -7,12 +7,14 @@
         "annotations.js",
         "ext/greiner-hormann.min.js",
         "ext/magic-wand.js",
+        "ext/polygon-intersect.js",
         "convert/convertor.js",
         "convert/native.js",
         "convert/asapXml.js",
         "convert/geoJSON.js",
         "convert/qupath.js",
         "magic-wand.js",
+        "viewport-segmentation.js",
         "presets.js",
         "objects.js",
         "objectGenericFactories.js",
@@ -20,5 +22,7 @@
         "freeFormTool.js",
         "history.js"
     ],
-    "requires": ["webgl", "fabricjs"]
+    "requires": ["webgl", "fabricjs"],
+    // Whether to store presets in the local storage
+    "storeCacheSnapshots": true,
 }

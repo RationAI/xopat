@@ -12,9 +12,11 @@
 //         let _this  = this;
 //         this.openSD = openSeaDragonInstance;
 //
+//         const originalReset = webGLEngine.resetCallback;
 //         webGLEngine.resetCallback = _ => {
 //             _this.clear();
 //             _this.redraw();
+//             originalReset();
 //         };
 //         this._disabled = true; //so that first enable call is executed
 //         this.webGLEngine = webGLEngine;

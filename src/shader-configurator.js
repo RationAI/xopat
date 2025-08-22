@@ -140,7 +140,7 @@ var ShaderConfigurator = {
                     "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
                     "</div><div>");
 
-                html.push("<div><pre>", JSON.stringify(ctrl.supports, null, 4) ,"</pre></div>");
+                html.push("<div><pre>", JSON.stringify({type: ctrl.name, ...ctrl.supports}, null, 4) ,"</pre></div>");
                 html.push("</div></div><br>");
             }
             html.push("</div>");

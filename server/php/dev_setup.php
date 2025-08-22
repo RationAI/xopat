@@ -15,18 +15,21 @@ include_once ABSPATH . "server/php/inc/core.php";
 $replacer = function($match) use ($i18n) {
     ob_start();
 
+    // Temporary, we also load opensedragon in case some modules got loaded too,
+    // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
     switch ($match[1]) {
         case "head":
             require_openseadragon();
             require_lib("primer");
             require_lib("jquery");
-            require_core("env");
+            require_ui();
             require_core("deps");
+            require_openseadragon();
 
             include_once(PHP_INCLUDES . "plugins.php");
             global $MODULES;
             $MODULES["webgl"]["loaded"] = true;
-            require_modules();
+            require_modules(true);
             break;
 
         case "form-init":

@@ -1,3 +1,8 @@
+/**
+ * Lightweight user instance, mainly for event interaction
+ * @class
+ * @extends OpenSeadragon.EventSource
+ */
 class XOpatUser extends OpenSeadragon.EventSource {
 
     login(id, name, icon="") {
@@ -49,8 +54,24 @@ class XOpatUser extends OpenSeadragon.EventSource {
         }
     }
 
-    async requestSecretUpdate(type="jtw") {
+    async requestSecretUpdate(type="jwt") {
+        const awaitToken = new Promise((resolve, reject) => {
+            let timeout = setTimeout(() => reject('Timeout waiting for secret update'), 20000);
+            this.addOnceHandler('secret-updated', e => {
+                if (e.type === type) {
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+            this.addOnceHandler('secret-removed', e => {
+                if (e.type === type) {
+                    clearTimeout(timeout);
+                    reject('Secret removed.');
+                }
+            });
+        });
         await VIEWER.tools.raiseAwaitEvent(this, 'secret-needs-update', {type: type});
+        return awaitToken;
     }
 
     get id() {
@@ -79,7 +100,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
      * Get instance of the annotations manger, a singleton
      * (only one instance can run since it captures mouse events)
      * @static
-     * @return {XOpatModuleSingleton} manager instance
+     * @return {XOpatUser} manager instance
      */
     static instance() {
         //this calls sub-class constructor, no args required
@@ -104,5 +125,9 @@ class XOpatUser extends OpenSeadragon.EventSource {
         }
         staticContext.__self = this;
         $("#user-panel").on('click', this.onUserSelect.bind(this));
+        this.addHandler('logout', () => {
+            Dialogs.show('You have been logged out. Please, <a onclick="UTILITIES.refreshPage()">log-in</a> again.',
+                50000, Dialogs.MSG_ERR);
+        });
     }
 }

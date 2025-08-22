@@ -27,9 +27,42 @@ To register a new converter, register the converter class after its definition w
 
 Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
 
+### Generic polygon / multipolygon representation
+
+You can abstract from understanding the object internals, which is useful in case of export to some
+format that does not support the target annotation type.
+
+````js
+const poly = factory.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, 0);
+````
+When polygon is retrieved, it can be either a polygon or a nested polygon (when multipolygon appears).
+You need to somehow store this object, preferably along with ``factoryID``. Later, you can re-import
+it using:
+
+````js
+const factory = this.context.getAnnotationObjectFactory(type);
+const annotation = factory.create(factory.fromPointArray(poly, 
+    OSDAnnotations.AnnotationObjectFactory.fromArrayPoint), this.context.presets.getCommonProperties());
+````
+The application can consume both JSON-exported representations or fully fabric objects coming from ``factory.create(..)``.
+We don't need to call ``getCommonProperties`` with preset instance as this will be handled during annotations import -
+we now care about correct geometry / instance creation. The properties also carry information like zoom level and so on.
+
+> The downside is that in the given format, the annotation itself might not be well understood or represented! 
+
 ### Native Format
-The format includes the most verbose, detailed export option. The output is a JSON object with three
+This format is used when rendering annotations, and any other format is sooner or later converted to this
+format. It includes the most detailed export data. The output is a JSON object with three
 major keys: ``metadata``, `objects` and `presets`. Metadata includes a timestamp and a version.
+
+#### IDs
+There are three ID types:
+ - ``id``: unused property, left for integration with other logics: gives the annotation identity of the 
+ external (often storage) system
+ - ``incrementID``: unique ID per annotation memory object, even if object is perceived by user the same
+ after e.g. modification, it has different increment ID
+ - ``internalID``: consistent ID of annotation as perceived by a user, internal value not to be exported
+ and copied over between objects - the system manages this internally
 
 ### Native Format: objects
 The objects build on fabricJS objects, extending them with multiple properties. You can use any fabricJS properties, 
@@ -66,7 +99,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
     layerID         a numerical layer id binding, experimental
-    id              annotation ID, can be undefined, unused by the core module
+    id              annotation ID, can be undefined, unused by the core module, supported for external use
     author
     created
 

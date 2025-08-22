@@ -2,6 +2,7 @@
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
+ * @class OSDAnnotations.AnnotationObjectFactory
  */
 OSDAnnotations.AnnotationObjectFactory = class {
 
@@ -24,6 +25,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Properties copied with 'all' (+exports())
+     * instance ID is NOT exported and should not be exported.
      * @type {string[]}
      */
     static copiedProperties = [
@@ -56,11 +58,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "sessionID",
         "presetID",
         "layerID",
-        "id"
+        "id",
+        "author",
+        "created",
     ];
 
     /**
-     * Properties copied with 'necessary' (+exports())
+     * Properties copied with 'necessary' (+exports()), subset of copiedProperties
      * @type {string[]}
      */
     static necessaryProperties = [
@@ -74,6 +78,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "color",
         "author",
         "created",
+        "id",
     ];
 
     /**
@@ -347,6 +352,65 @@ OSDAnnotations.AnnotationObjectFactory = class {
     updateCreate(x, y) {
     }
 
+    /**
+     * Undo of the last manual creation step
+     */
+    undoCreate() {
+    }
+
+    /**
+     * Redo of the last manual creation step
+     */
+    redoCreate() {
+    }
+
+    /**
+     * Discard active creation
+     */
+    discardCreate() {
+    }
+
+    /**
+     * Finish object creation, if in progress. Can be called also if no object
+     * is being created. This action was performed directly by the user.
+     * @return {boolean} true if object finished; when factory for example
+     *   decide not yet to finish, this should return false. Return true
+     *   if you are not sure.
+     */
+    finishDirect() {
+        return true;
+    }
+
+    /**
+     * Finish object creation, if in progress. Can be called also if no object
+     * is being created. This action was enforced by the environment (i.e.
+     * performed by the user indirectly). Thus, it shall finish the object creation
+     * at all costs - usually, an annotation mode will be changing.
+     */
+    finishIndirect() {
+    }
+
+    /**
+     * Check if factory (or its current state) will handle undoCreate() call
+     * @return {boolean|undefined}
+     *   true if undoCreate() will undo one manual creation step,
+     *   false if undo will not be able to be called, but should be blocked
+     *   undefined if undo will not be handled and super() logics should take over
+     */
+    canUndoCreate() {
+        return undefined;
+    }
+
+    /**
+     * Check if factory (or its current state) will handle redoCreate() call
+     * @return {boolean|undefined}
+     *   true if redoCreate() will undo one manual creation step,
+     *   false if undo will not be able to be called, but should be blocked
+     *   undefined if undo will not be handled and super() logics should take over
+     */
+    canRedoCreate() {
+        return undefined;
+    }
 
     /**
      * Update the object coordinates by user interaction
@@ -360,6 +424,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.Object} theObject recalculate the object that has been modified
      */
     recalculate(theObject) {
+    }
+
+    /**
+     * Compute the area of the object in pixels (image dimension) squared
+     * @param {fabric.Object} theObject recalculate the object that has been modified
+     * @return {Number|undefined} undefined if area not measure-able
+     */
+    getArea(theObject) {
+        return undefined;
     }
 
     /**
@@ -391,21 +464,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Finish object creation, if in progress. Can be called also if no object
-     * is being created. This action was performed directly by the user.
-     */
-    finishDirect() {
-    }
-
-    /**
-     * Finish object creation, if in progress. Can be called also if no object
-     * is being created. This action was enforced by the environment (i.e.
-     * performed by the user indirectly).
-     */
-    finishIndirect() {
-    }
-
-    /**
      * Called when object is selected
      * @param {fabric.Object} theObject selected fabricjs object
      */
@@ -431,38 +489,57 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Update object rendering based on rendering mode
-     * @param {boolean} isTransparentFill
      * @param {object} ofObject
-     * @param {string} color
-     * @param defaultStroke
+     * @param {OSDAnnotations.Preset} preset
+     * @param {OSDAnnotations.CommonAnnotationVisuals} visualProperties must be a modifiable object, will be used
+     * @param {OSDAnnotations.CommonAnnotationVisuals} defaultVisualProperties will not be touched
      */
-    updateRendering(isTransparentFill, ofObject, color, defaultStroke) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+        //todo possible issue if someone sets manually single object prop
+        // (e.g. show borders) and then system triggers update (open history window)
+
         if (typeof ofObject.color === 'string') {
-            if (isTransparentFill) {
-                ofObject.set({
-                    fill: "",
-                    stroke: color
-                });
+            const props = visualProperties;
+
+            const color = preset.color;
+            const stroke = visualProperties.stroke || defaultVisualProperties.stroke;
+            // todo consider respecting object property here? or implement by locking (see todo above)
+            const modeOutline = visualProperties.modeOutline !== undefined ? visualProperties.modeOutline : defaultVisualProperties.modeOutline;
+            if (modeOutline) {
+                props.stroke = color;
+                props.fill = "";
             } else {
-                ofObject.set({
-                    fill: color,
-                    stroke: defaultStroke
-                });
+                props.stroke = stroke;
+                props.fill = color;
             }
+
+            if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
+                // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
+                const canvas = this._context.canvas;
+                props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+            } else {
+                // Shared props object carries over the value
+                delete props.strokeWidth;
+            }
+            ofObject.set(props);
         }
     }
 
     /**
      * Create array of points - approximation of the object shape. This method should be overridden.
-     * For groups, it should return the best possible approximation via single array of points.
-     *  - if difficult, you can return undefined, in that case some features will not work.
+     * For groups, it should return the best possible approximation via single array of points
+     * (or nested points see multipolygons). If difficult, you can return undefined,
+     * in that case some features will not work (like exporting to some formats!).
+     *
+     * For multipolygons, it should return [ [bounding polygon points], [hole1] .... ].
+     * Usage of withObjectPoint and withArrayPoint as converter.
      *
      * @param {fabric.Object} obj object that is being approximated
      * @param {function} converter take two elements and convert and return item, see
      *  withObjectPoint, withArrayPoint
      * @param {number} digits decimal precision, default undefined
      * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
-     * @return {Array} array of items returned by the converter - points
+     * @return {Array} array of items returned by the converter - points or arrays in case of multipolygon
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
         return undefined;
@@ -480,6 +557,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
     static withArrayPoint(x, y) {
         return [x, y];
     }
+
+    /**
+     * Revert toPointArray, useful for converters when they need to serialize unsupported object type.
+     * Usage of fromObjectPoint or fromArrayPoint as deconvertors.
+     *
+     * @param {Array} obj approximated object
+     * @param {function} deconvertor take two elements and convert and return item, see
+     *  fromObjectPoint, fromArrayPoint.
+     * @return {object} object suitable for create(...) call of the given factory
+     */
+    fromPointArray(obj, deconvertor) {
+        return undefined;
+    }
+
+    /**
+     * Strategy de-convertor, converts point to an object compatible with the internal point representation.
+     */
+    static fromObjectPoint(point) {
+        return point; //identity
+    }
+
+    /**
+     * Strategy de-convertor, converts point to an object compatible with the internal point representation.
+     */
+    static fromArrayPoint(point) {
+        return {x: point[0], y: point[1]};
+    }
 };
 
 /**
@@ -496,7 +600,7 @@ OSDAnnotations.PolygonUtilities = {
         }
 
         const dy = a.y - b.y;
-        const py = (a.height + b.height) - Math.abs(dx);
+        const py = (a.height + b.height) - Math.abs(dy);
         return py > 0;
 
     },
@@ -514,21 +618,37 @@ OSDAnnotations.PolygonUtilities = {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = (15 - 9*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = (15 - 12*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 
     approximatePolygonArea: function (points) {
-        if (points.length < 3) return { diffX: 0, diffY: 0 };
-        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
-        for (let i = 1; i < points.length; i++) {
-            maxX = Math.max(maxX, points[i].x);
-            maxY = Math.max(maxY, points[i].y);
-            minX = Math.min(minX, points[i].x);
-            minY = Math.min(minY, points[i].y);
-        }
-        return { diffX: maxX - minX, diffY: maxY - minY };
+        if (!points || points.length < 3) return { diffX: 0, diffY: 0 };
+        const bbox = this.getBoundingBox(points);
+
+        return { diffX: bbox.width, diffY: bbox.height };
     },
+
+    getBoundingBox: function (points) {
+		if (!points || points.length === 0) return null;
+
+        let maxX = points[0].x, minX = points[0].x, maxY = points[0].y, minY = points[0].y;
+
+		for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+
+		return {
+			x: minX,
+			y: minY,
+			width: maxX - minX,
+			height: maxY - minY
+		};
+	},
 
     /**
      *  https://gist.github.com/cwleonard/e124d63238bda7a3cbfa
@@ -537,6 +657,8 @@ OSDAnnotations.PolygonUtilities = {
      *  if there is no intersection, or an object if there is. The object
      *  contains 2 fields, overlap and axis. Moving the polygon by overlap
      *  on axis will get the polygons out of intersection.
+     *
+     *  WARNING: the intersection does not work for 'eaten' polygons (one polygon inside another)
      *
      *  @Aiosa Cleaned. Honestly, why people who are good at math cannot keep their code clean.
      */

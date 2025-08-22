@@ -1,28 +1,66 @@
+# allow only build-in items in modules/plugins
+/modules/**
+!/modules/annotations
+!/modules/colormaps
+!/modules/empaia-wsi-tile-source
+!/modules/empation-api
+!/modules/fabricjs
+!/modules/human-readable-ids
+!/modules/jwt-decode
+!/modules/menu-pages
+!/modules/oidc-client-ts
+!/modules/pollyjs
+!/modules/rationai-wsi-tile-source
+!/modules/sanitize-html
+!/modules/snapshots
+!/modules/vega
+!/modules/vega-secure
+!/modules/webgl
+!/modules/sam-segmentation-experimental
+!/modules/sam-segmentation-experimental/**
+
+/plugins/**
+!/plugins/annotations
+!/plugins/custom-pages
+!/plugins/empaia
+!/plugins/extra-tutorials
+!/plugins/hotkeys
+!/plugins/navigation-tracker
+!/plugins/profiler
+!/plugins/recorder
+!/plugins/simple-integration
+!/plugins/user-session
+!/plugins/youtrack-feedback-form
+!/plugins/sam-segment-tool-experimental
+!/plugins/sam-segment-tool-experimental/**
+
 #rubbish
 *.txt
 *.old
+*.temp
 .idea/
 Thumbs.db
 
 #builds and binaries
 *.min.js
 *.min.js.map
-openseadragon/
-openseadragon-new/
-node_modules/
-build/
-coverage/
-env/
+/openseadragon/
+/openseadragon-new/
+/node_modules/
+/build/
+/coverage/
+/env/
 !env/README.md
 
 #docs
-docs/build/
+/docs/build/
 !docs/doctemplates/openseadragon
 
 #test suite data
-test/downloads/
-test/screenshots/
-test/videos/
+/test/downloads/
+/test/screenshots/
+/test/videos/
+/wsi_data
 
 #sensitive data
 cypress.env.*
@@ -33,3 +71,6 @@ cypress.env.*
 
 #all hidden files unless explicitly added
 .*
+
+# hidden docs file
+!.readthedocs.yaml

@@ -13,7 +13,7 @@ require_once ABSPATH . "server/php/inc/init.php";
 
 if (!count($_POST)) {
     try {
-        $_POST = (array)json_decode(file_get_contents("php://input"), true);
+        $_POST = (array)json_decode(file_get_contents("php://input"), false);
     } catch (Exception $e) {
         //pass not a valid input
         $_POST = (object)[];
@@ -37,7 +37,10 @@ require_once PHP_INCLUDES . "plugins.php";
 function safeReadPostValue($val) {
     if (!is_string($val)) return $val;
     try {
-        return json_decode($val, true);
+        $parsed = json_decode($val);
+        if ((bool)$val && $parsed != null) {
+            return $parsed;
+        }
     } catch (Exception $e) {
         return $val;
     }
@@ -65,10 +68,15 @@ foreach ($_POST as $key=>&$value) {
 //$pluginsInCookies = isset($_COOKIE["_plugins"]) && !$bypassCookies ? explode(',', $_COOKIE["_plugins"]) : [];
 //
 
+//ensureDefined($_POST, "params", {});
+//ensureDefined($_POST, "data", []);
+//ensureDefined($_POST, "background", []);
+//ensureDefined($_POST, "plugins", {});
+
 $CORE["serverStatus"]["name"] = "php";
 $CORE["serverStatus"]["supportsPost"] = true;
 
-$replacer = function($match) use ($i18n) {
+$replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();
 
     switch ($match[1]) {
@@ -77,6 +85,7 @@ $replacer = function($match) use ($i18n) {
             require_openseadragon();
             require_libs();
             require_external();
+            require_ui();
             require_core("loader");
             require_core("deps");
             require_core("app");
@@ -84,7 +93,6 @@ $replacer = function($match) use ($i18n) {
 
         case "app":
             //Todo think of secure way of sharing POST with the app
-            global $PLUGINS, $MODULES, $CORE;
 ?>
     <script type="text/javascript">
         initXopat(
@@ -106,11 +114,11 @@ $replacer = function($match) use ($i18n) {
     </script><?php break;
 
         case "modules":
-            require_modules();
+            require_modules($CORE["client"]["production"]);
             break;
 
         case "plugins":
-            require_plugins();
+            require_plugins($CORE["client"]["production"]);
             break;
 
         default:

@@ -1,13 +1,13 @@
 FROM ubuntu:jammy AS viewer-build-deps
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
-ENV NVM_DIR /usr/local/nvm
-ENV NODE_VERSION 18.7.0
-ENV NODE_PATH $NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
-ENV PATH      $NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
+ENV NVM_DIR=/usr/local/nvm
+ENV NODE_VERSION=18.7.0
+ENV NODE_PATH=$NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
+ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -y \
@@ -80,7 +80,10 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
     && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache /var/www/html/xopat  \
     # Other
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
-    && chmod --recursive 777 /var/run
+    && chmod --recursive 777 /var/run \
+    # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
+    && rm /etc/apache2/sites-available/000-default.conf \
+    && echo > /etc/apache2/ports.conf
 
 COPY --chown=www-data:www-data docker/php/apache-dev.conf /etc/apache2/sites-available/000-default.conf
 
@@ -97,9 +100,9 @@ CMD apache2ctl -D FOREGROUND
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 FROM ubuntu:jammy AS viewer-git
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -y \
@@ -136,8 +139,10 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     && touch /etc/apache2/.env.apache && mkdir -p /usr/local/etc/apache /var/www/html/xopat \
     # Other
     && chown -R www-data:www-data /var/lock /var/log /var/www /var/run /run/lock /etc/apache2/.env.apache \
-    && chmod --recursive 777 /var/run
-    # \ && echo "RewriteEngine on\nRewriteRule .* xopat/index.php [NL,L,QSA]" > /var/www/html/.htaccess
+    && chmod --recursive 777 /var/run \
+    # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
+    && rm /etc/apache2/sites-available/000-default.conf \
+    && echo > /etc/apache2/ports.conf
 
 COPY --chown=www-data:www-data docker/php/apache.conf /etc/apache2/sites-available/000-default.conf
 
@@ -146,7 +151,7 @@ USER www-data
 WORKDIR /var/www
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD apache2ctl -D FOREGROUND
+CMD ["apache2ctl", "-D", "FOREGROUND"]
 
 
 ###############################
@@ -166,3 +171,5 @@ COPY plugins/ /var/www/html/xopat/plugins
 COPY modules/ /var/www/html/xopat/modules
 COPY env/ /var/www/html/xopat/env
 COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
+
+LABEL org.opencontainers.image.source="https://github.com/rationAI/xopat"

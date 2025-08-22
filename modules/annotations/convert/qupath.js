@@ -53,10 +53,23 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
+        let coordinates;
+
         if (poly?.length > 0) {
             const offset = this.offset;
-            if (offset) poly = poly.map(o => ([o[0]-offset.x, o[1]-offset.y]));
-            if (asLinearRing) poly.push(poly[0]); //linear ring
+
+            if (object.factoryID === "multipolygon") {
+                coordinates = poly.map(ring => {
+                    if (offset) ring = ring.map(o => ([o[0] - offset.x, o[1] - offset.y]));
+                    if (asLinearRing) ring.push(ring[0]);
+                    return ring;
+                });
+            } else {
+                if (offset) poly = poly.map(o => ([o[0] - offset.x, o[1] - offset.y]));
+                if (asLinearRing) poly.push(poly[0]);
+                coordinates = poly;
+            }
+
             const props = {
                 "objectType": "annotation",
                 "classification": {
@@ -75,7 +88,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return {
                 geometry: {
                     type: type,
-                    coordinates: poly
+                    coordinates: coordinates
                 },
                 properties: props
             }
@@ -117,6 +130,10 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
+        "multipolygon": (object, preset) => {
+            const res = this._asGEOJsonFeature(object, preset, "Polygon", ["points"], true);
+            return res;
+        },
         "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], false),
         "point": (object, preset) => {
             object = this._asGEOJsonFeature(object, preset, "Point");
@@ -131,32 +148,41 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
-    _decodeMulti(object, type) {
-        let result = new fabric.Group(object.coordinates.map(g => this.decoders[type]({ coordinates: g, type: type })))
-        result.objects = result._objects; //hack, import works without underscore
-        result.factoryID = "group";
-        return result;
+    _decodeMulti(object, featureParentDict, type) {
+        // MultiPoint, MultiLineString, MultiPolygon should not contain nested multi objects
+        return object.coordinates.map(g => {
+            const item = this.decoders[type]({coordinates: g, type: type});
+            item.id = featureParentDict.id; // todo id not unique!
+            return item;
+        });
     }
 
     //decode all unsupported geometries
     decoders = {
-        Point: (object) => {
+        Point: (object, featureParentDict) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("point");
-            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, {});
+            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.context.presets.getCommonProperties());
         },
-        MultiPoint: (object) => this._decodeMulti(object, "Point"),
-        LineString: (object) => {
+        MultiPoint: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Point"),
+        LineString: (object, featureParentDict) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polyline");
-            return factory.create(this._toNativeRing(object.coordinates, false), {});
+            return factory.create(this._toNativeRing(object.coordinates, false), this.context.presets.getCommonProperties());
         },
-        MultiLineString: (object) => this._decodeMulti(object, "LineString"),
-        Polygon: (object) => {
+        MultiLineString: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "LineString"),
+        Polygon: (object, featureParentDict) => {
+            if (object.coordinates.length > 1) {
+                let factory = OSDAnnotations.instance().getAnnotationObjectFactory("multipolygon");
+                const rings = object.coordinates.map(ring => this._toNativeRing(ring));
+                return factory.create(rings, this.context.presets.getCommonProperties());
+            }
+
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polygon");
-            return factory.create(this._toNativeRing(object.coordinates[0] || []), {});
+            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.context.presets.getCommonProperties());
         },
-        MultiPolygon: (object) => this._decodeMulti(object, "Polygon"),
-        GeometryCollection: (object) => {
-            let result = new fabric.Group(object.geometries.map(g => this.decoders[g.type]?.(g)).filter(x => x))
+        MultiPolygon: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Polygon"),
+        GeometryCollection: (object, featureParentDict) => {
+            // Flat necessary since multi decoder can return arrays of objects
+            let result = new fabric.Group(object.geometries.map(g => this.decoders[g.type]?.(g, featureParentDict)).filter(Boolean).flat())
             result.factoryID = "group";
             result.objects = result._objects; //hack, import works without underscore
             return result;
@@ -221,42 +247,69 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return "#" + arr.map(x => x.toString(16).padStart(2, '0')).join('');
         }
 
-        const parseFeature = function (object, presets, annotations) {
+        const addAnnotations = (parsedResult, object, presets, annotations) => {
+            if (object.properties?.classification) {
+                const p = object.properties.classification;
+
+                const builtInPreset = this._defaultQuPathPresets.find(p => p.presetID === p.name);
+                presets[p.name] = builtInPreset || {
+                    color: asHexColor(p.color),
+                    factoryID: "polygon",
+                    presetID: p.name,
+                    meta: {
+                        category: {
+                            name: 'Category',
+                            value: p.name
+                        }
+                    }
+                }
+                parsedResult.presetID = p.name;
+            }
+            if (object.properties?.name) {
+                // todo some warning that the preset was generated, not imported
+                const pid = object.properties?.name;
+                const builtInPreset = this._defaultQuPathPresets.find(p => p.presetID === pid);
+
+                // define if not exists
+                if (!presets[pid]) {
+                    presets[pid] = builtInPreset || {
+                        color: this.context.presets.randomColorHexString(),
+                        factoryID: "polygon",
+                        presetID: pid,
+                        meta: {
+                            category: {
+                                name: 'Category',
+                                value: pid
+                            }
+                        }
+                    }
+                }
+                parsedResult.presetID = pid;
+                parsedResult.meta = {};
+                parsedResult.meta.category = object.properties.name;
+            }
+            if (Array.isArray(object.properties?.color)) {
+                parsedResult.fill = asHexColor(object.properties.color);
+            }
+            annotations.push(parsedResult);
+        }
+
+        const parseFeature = (object, presets, annotations) => {
             if (object.geometry === null) {
                 throw "Invalid feature! ";
             }
 
-            let result = this.decoders[object.geometry.type]?.(object.geometry);
-            //if (result) $.extend(result, object.properties); //attach properties for partial compatibility
+            let result = this.decoders[object.geometry.type]?.(object.geometry, object);
 
-            if (result) {
-                if (object.properties?.classification) {
-                    const p = object.properties.classification;
-                    presets[p.name] = {
-                        color: asHexColor(p.color),
-                        factoryID: "polygon",
-                        presetID: p.name,
-                        meta: {
-                            category: {
-                                name: 'Category',
-                                value: p.name
-                            }
-                        }
-                    }
-                    result.presetID = p.name;
-                }
-                if (object.properties?.name) {
-                    result.meta = {};
-                    result.meta.category = object.properties.name;
-                }
-                if (Array.isArray(object.properties?.color)) {
-                    result.fill = asHexColor(object.properties.color);
-                }
-                annotations.push(result);
+            if (Array.isArray(result)) {
+                //MultiPolygon, MultiPoint, etc.
+                result.forEach(item => addAnnotations(item, object, presets, annotations));
+            } else if (result) {
+                addAnnotations(result, object, presets, annotations);
             } else {
                 throw "Could not import!";
             }
-        }.bind(this);
+        };
 
         const presets = {}, annotations = [];
 

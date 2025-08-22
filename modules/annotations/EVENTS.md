@@ -2,7 +2,8 @@
 
 ##### factory-registered | e: `{factory: OSDAnnotations.AnnotationObjectFactory}`
 
-##### opacity-changed | ``{opacity: float}``
+##### visual-property-changed | ``{[name]: any}``
+Common visual property changed.
 
 ##### osd-interactivity-toggle
 
@@ -21,10 +22,11 @@ considered as the creation.
 
 ##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
-in fact replace annotation with a new one. This event is called only once per update, 
+in fact replace annotation with a new one, although the annotation identity as perceived
+by the user remains the same. This event is called only once per update, 
 at the end.
 
-##### annotation-replace-helper | ``{previous: fabric.Object, next: fabric.Object}``
+##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
 It can be called several times during one edit action.
 
@@ -43,6 +45,10 @@ This event is fired when user performs direct annotation editing.
 
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
 
+##### annotation-preset-change | ``{object: fabric.Object, presetID: string, oldPresetID: string}``
+
+##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
+
 ##### import | ``{options: object, clear: boolean, data: object}``
 
 ##### export-partial | ``{options: object, data: object}``
@@ -58,6 +64,8 @@ the DOM does not belong to this context. The container
 ##### history-swap | ``{inNewWindow: boolean}``
 
 ##### history-close | ``{inNewWindow: boolean}``
+
+#### history-change
 
 ##### canvas-nonprimary-release-not-handled
 Called when the annotation modes did not handle mouse release action.

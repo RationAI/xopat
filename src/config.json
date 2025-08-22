@@ -5,7 +5,7 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.0.0",
+    "version": "2.2.2",
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -13,7 +13,7 @@
     /**
      * The Client App static configuration
      * @typedef {{
-     *   domain: string
+     *   domain: string,
      *   path: string,
      *   image_group_server: string,
      *   image_group_protocol: string,
@@ -27,6 +27,7 @@
      *   js_cookie_secure: ?boolean,
      *   secureMode: ?boolean,
      *   redirectUrl: ?string
+     *   production: ?boolean
      * }} xoClientSetup
      */
     "client": {
@@ -66,6 +67,8 @@
             "js_cookie_secure": false, //boolean - true/false
             "js_cookie_domain": null, //by default the viewer domain
             "secureMode": false,
+            /* Production mode (serve minified files if available) */
+            "production": false,
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
             "redirectUrl": "redirect.php"
         },
@@ -85,13 +88,14 @@
             "js_cookie_secure": true,
             "js_cookie_domain": null,
             "secureMode": true,
+            "production": true,
             "redirectUrl": "redirect.php"
         }
     },
     /**
      * The Viewer Default Settings, all overrideable through params configuration.
      * @typedef {{
-     *   sessionName: ?string
+     *   sessionName: ?string,
      *   locale: ?string,
      *   customBlending: ?boolean,
      *   debugMode: ?boolean,
@@ -157,13 +161,15 @@
         "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
+        // Renders viewer in standalone mode, all data is static (leave as false if unsure)
+        "isStaticPreview": false
     },
     /**
      * The Server status. This object is here just for the reference and
      * to provide default values; the server shall set up these properties accordingly.
      * DO NOT modify these
      * @typedef {{
-     *   name: string
+     *   name: string,
      *   supportsPost: boolean
      * }} xoServerState
      */
@@ -201,11 +207,12 @@
             ],
             "common": [
                 "enjoyhint.js",
-                //"cookie-storage.js",
+//                "cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
-                "nouislider.min.js"
+                "nouislider.min.js",
+                "autocomplete.js"
             ]
         },
         /**
@@ -222,16 +229,20 @@
             "loader": ["store.js", "loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
+        },
+        "ui": {
+            // Todo: temporarily disabled due to import errors
+            // "components": ["index.mjs"]
         }
     },
-
     /**
      * Css files shadow the JS structure, with custom keys except for "src"
      */
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css"
+            "fontawesome": "fontawesome/css/v6-all.css",
+            "tailwind": "tailwind.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",
