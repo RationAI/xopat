@@ -121,13 +121,6 @@ button div {
     bottom: auto;
 }
 
-@media (max-width: 1610px) {
-    #top-slide {
-        left: 0%;
-        transform: translateX(0%);
-    }
-}
-
 #overlay-content{
     position: absolute; 
     pointer-events: auto; 

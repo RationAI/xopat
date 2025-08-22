@@ -862,9 +862,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
                 }, { id: "settings", icon: "fa-gear", title: "Settings", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
-                   { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                   { id: "share", icon: "fa-share-nodes", title: "Share", body: this.getShareDropdownBody(), class: UI.Dropdown},
-                   { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
+                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
+                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+                    { id: "share", icon: "fa-share-nodes", title: "Share", body: this.getShareDropdownBody(), class: UI.Dropdown},
+                    { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
                 );
 
                 this.menu.attachTo(this.context);
@@ -910,18 +911,29 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-eye-slash", title: "Window", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
-                   { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
-                   { id: "clone", icon: "fa-clone", title: "Clone the viewer and synchronize", body: undefined, onClick: function () {UTILITIES.clone();}},
+                }, { id: "visual", icon: "fa-eye-slash", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
                 );
 
                 this.menu.attachTo(this.context);
-                this.menu.set(UI.Menu.DESIGN.ICONONLY);
+                this.menu.set(UI.Menu.DESIGN.TITLEICON);
+            },
+
+            addCloneButton: function () {
+                const visualMenuContent = document.getElementById("visual-menu-ul-visual");
+                const button = new UI.Button({
+                    id: `visual-menu-ul-visual-button-clone`,
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: () => {
+                        UTILITIES.clone();
+                    },
+                }, new UI.FAIcon({ name: "fa-clone" }), "Clone the viewer");
+                visualMenuContent.appendChild(button.create());
             },
 
             refreshVisualDropdown: function () {
                 const visualMenuContent = document.getElementById("visual-menu-ul-visual");
                 visualMenuContent.innerHTML = "";
+                this.addCloneButton();
                 
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
 
@@ -936,6 +948,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
             },
+        },
+
+        TopLeftWindowMenu:{
+            context: $("#top-side-left"),
+            menu: "",
+            init: function () {
+
+            }
         },
 
         /**
