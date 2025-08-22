@@ -1,84 +1,8 @@
 /**
- * Re-uses two compound components since they are fully compatible
- * @class WebGLModule.UIControls.SliderWithInput
- */
-WebGLModule.UIControls.SliderWithInput = class extends WebGLModule.UIControls.IControl {
-    constructor(context, name, webGLVariableName, params) {
-        super(context, name, webGLVariableName);
-        this._c1 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('range'));
-        params.title = "";
-        this._c2 = new WebGLModule.UIControls.SimpleUIControl(
-            context, name, webGLVariableName, params, WebGLModule.UIControls.getUiElement('number'), "second-");
-    }
-
-    init() {
-        const _this = this;
-        this._c2._params = this._c1._params;
-        this._c1.init();
-        this._c2.init();
-        this._c1.on("default", function(value, encoded, context) {
-            $(`#${_this._c2.id}`).val(encoded);
-            _this._c2.value = value;
-            _this.changed("default", value, encoded, context);
-        }, true); //silently fail if registered
-        this._c2.on("default", function(value, encoded, context) {
-            $(`#${_this._c1.id}`).val(encoded);
-            _this._c1.value = value;
-            _this.changed("default", value, encoded, context);
-        }, true); //silently fail if registered
-    }
-
-    glDrawing(program, dimension, gl) {
-        this._c1.glDrawing(program, dimension, gl);
-    }
-
-    glLoaded(program, gl) {
-        this._c1.glLoaded(program, gl);
-    }
-
-    toHtml(breakLine=true, controlCss="") {
-        if (!this._c1.params.interactive) return "";
-        let cls = breakLine ? "" : "class='d-inline-block'";
-        return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'width: 48%;')}
-        ${this._c2.toHtml(false, 'width: 12%;')}</div>`;
-    }
-
-    define() {
-        return this._c1.define();
-    }
-
-    sample(ratio) {
-        return this._c1.sample(ratio);
-    }
-
-    get supports() {
-        return this._c1.supports;
-    }
-
-    get params() {
-        return this._c1.params;
-    }
-
-    get type() {
-        return this._c1.type;
-    }
-
-    get raw() {
-        return this._c1.raw;
-    }
-
-    get encoded() {
-        return this._c1.encoded;
-    }
-};
-WebGLModule.UIControls.registerClass("range_input", WebGLModule.UIControls.SliderWithInput);
-
-/**
  * ColorMap Input
- * @class WebGLModule.UIControls.ColorMap
+ * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
  */
-WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl {
+OpenSeadragon.FlexRenderer.UIControls.ColorMap = class extends OpenSeadragon.FlexRenderer.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this._params = this.getParams(params);
@@ -90,7 +14,7 @@ WebGLModule.UIControls.ColorMap = class extends WebGLModule.UIControls.IControl 
         this.MAX_SAMPLES = 8;
         this.GLOBAL_GLSL_KEY = 'colormap';
 
-        this.parser = WebGLModule.UIControls.getUiElement("color").decode;
+        this.parser = OpenSeadragon.FlexRenderer.UIControls.getUiElement("color").decode;
         if (this.params.continuous) {
             this.cssGradient = this._continuousCssFromPallete;
         } else {
@@ -300,15 +224,15 @@ uniform int ${this.webGLVariableName}_colormap_size;`;
         return this.value;
     }
 };
-WebGLModule.UIControls.registerClass("colormap", WebGLModule.UIControls.ColorMap);
+OpenSeadragon.FlexRenderer.UIControls.registerClass("colormap", OpenSeadragon.FlexRenderer.UIControls.ColorMap);
 
 
-WebGLModule.UIControls.registerClass("custom_colormap", class extends WebGLModule.UIControls.ColorMap {
+OpenSeadragon.FlexRenderer.UIControls.registerClass("custom_colormap", class extends OpenSeadragon.FlexRenderer.UIControls.ColorMap {
     prepare() {
         this.MAX_SAMPLES = 32;
         this.GLOBAL_GLSL_KEY = 'custom_colormap';
 
-        this.parser = WebGLModule.UIControls.getUiElement("color").decode;
+        this.parser = OpenSeadragon.FlexRenderer.UIControls.getUiElement("color").decode;
         if (this.params.continuous) {
             this.cssGradient = this._continuousCssFromPallete;
         } else {
@@ -394,9 +318,9 @@ style="width: 60%;"></span></div>`;
  * will be sampled with mask float[5], the result is
  * the percentage reached within this interval: e.g. if C <= ratio < D, then
  * the result is  4/5 * mask[3]   (4-th interval out of 5 reached, multiplied by 4th mask)
- * @class WebGLModule.UIControls.AdvancedSlider
+ * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
  */
-WebGLModule.UIControls.AdvancedSlider = class extends WebGLModule.UIControls.IControl {
+OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider = class extends OpenSeadragon.FlexRenderer.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this.MAX_SLIDERS = 12;
@@ -649,7 +573,7 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
         return this.encodedValues;
     }
 };
-WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.AdvancedSlider);
+OpenSeadragon.FlexRenderer.UIControls.registerClass("advanced_slider", OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider);
 
 // /**
 //  * Kernel filter applied onto texture
@@ -736,7 +660,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
 //     }
 //
 //    sample(value=undefined, valueGlType='void') {
-//         if (typeof ratio !== "string") ratio = "tile_texture_coords";
+//         if (typeof ratio !== "string") ratio = "v_texture_coords";
 //         return `filter_${this.context.uid}_kernel(${ratio}, ${this.webGLVariableName})`;
 //     }
 //
@@ -769,7 +693,7 @@ WebGLModule.UIControls.registerClass("advanced_slider", WebGLModule.UIControls.A
  * Text area input
  * @class WebGLModule.UIControls.TextArea
  */
-WebGLModule.UIControls.TextArea = class extends WebGLModule.UIControls.IControl {
+OpenSeadragon.FlexRenderer.UIControls.TextArea = class extends OpenSeadragon.FlexRenderer.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this._params = this.getParams(params);
@@ -843,13 +767,13 @@ style="width: 100%; display: block; resize: vertical; ${controlCss}" ${disabled}
         return this.value;
     }
 };
-WebGLModule.UIControls.registerClass("text_area", WebGLModule.UIControls.TextArea);
+OpenSeadragon.FlexRenderer.UIControls.registerClass("text_area", OpenSeadragon.FlexRenderer.UIControls.TextArea);
 
 /**
  * Button Input
- * @class WebGLModule.UIControls.Button
+ * @class OpenSeadragon.FlexRenderer.UIControls.Button
  */
-WebGLModule.UIControls.Button = class extends WebGLModule.UIControls.IControl {
+OpenSeadragon.FlexRenderer.UIControls.Button = class extends OpenSeadragon.FlexRenderer.UIControls.IControl {
     constructor(context, name, webGLVariableName, params) {
         super(context, name, webGLVariableName);
         this._params = this.getParams(params);
@@ -921,4 +845,4 @@ ${breakLine ? '<br style="clear: both;">' : ""}`;
         return this.value;
     }
 };
-WebGLModule.UIControls.registerClass("button", WebGLModule.UIControls.Button);
+OpenSeadragon.FlexRenderer.UIControls.registerClass("button", OpenSeadragon.FlexRenderer.UIControls.Button);

@@ -263,7 +263,7 @@ function initXopatScripts() {
 
         //by default ommit underscore
         let app = APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(APPLICATION_CONTEXT.config, WebGLModule.jsonReplacer)
+            ? JSON.stringify(APPLICATION_CONTEXT.config, OpenSeadragon.FlexRenderer.jsonReplacer)
             : JSON.stringify(APPLICATION_CONTEXT.config, (key, value) => key.startsWith("_") ? undefined : value);
         APPLICATION_CONTEXT.config.params.viewport = oldViewport;
         APPLICATION_CONTEXT.config.params.bypassCookies = bypass;

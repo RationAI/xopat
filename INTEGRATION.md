@@ -187,7 +187,7 @@ Step by step for synchronous transfer implementation
    is correctly parsed to provide the ``TileSource`` with necessary metadata. All the metadata required
    is present in the ``TileSource`` class, in short you need to read the `tileSize`, `maxLevel`, `witdh`, `height` of the data,
    which you have to decide for yourself how to aggregate (e.g. ``maxLevel = min(maxLevel1, ...)``).
-   - **API Extension** ``getImageMetaAt()`` - implement method to access image metadata for each image source in the array independently - 
+   - **API Extension** ``getMetadata()`` - implement method to access image metadata for each image source in the array independently - 
    this methods can be omitted, but if present the viewer adjusts layer UI with error warning on all layers that use the data for which
    the metadata contains ``error`` key (with a message).
    - **API Extension** ``setFormat()`` - that gives you an argument of preferred format (string, e.g. `"png"`) parsed from available viewer static and dynamic configuration,

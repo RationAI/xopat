@@ -457,7 +457,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         _toggle: function(mouseEvent, optionsGetter) {
             const opened = this.opened();
 
-            if (mouseEvent === undefined || opened) {
+            if (mouseEvent === undefined) {
                 if (opened) {
                     this._calls = [];
                     this._body.html("");
@@ -468,6 +468,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     });
                 }
             } else {
+                if (opened) {
+                    this._calls = [];
+                    this._body.html("");
+                }
                 ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
                 this._body.css({
                     display: "block",

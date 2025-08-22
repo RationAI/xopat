@@ -11,9 +11,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     constructor(options) {
         super(options);
 
-        if (!this.__configuredDownload) {
-            this._setDownloadHandler(options.multifetch);
-        }
+        // if (!this.__configuredDownload) {
+        //     this._setDownloadHandler(options.multifetch);
+        // }
     }
 
 
@@ -25,11 +25,11 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
      */
     supports( data, url ) {
         if (url && Array.isArray(data)) {
-            //multi-tile or single tile access
-            let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
+            //multi-tile or single tile access, batch is old name on the api
+            let match = url.match(/^(\/?[^\/].*\/v3\/)(files|batch)\/info/i);
             if (match) {
                 data = data || [{}];
-                data[0].tilesUrl = match[1];
+                data[0].tilesUrl = match[1] + match[2];
                 return true;
             }
         } else if (url && typeof data === "object") {
@@ -159,11 +159,13 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     }
 
     _getInfo(url, tilesUrl) {
-        fetch(url).then(res => {
+        fetch(url).then(async res => {
+            const text = await res.text();
+            const json = JSON.parse(text);
             if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", res, res.error);
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
             }
-            return res.json();
+            return json;
         }).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
             // necessary TileSource props that wont get set manually
@@ -182,7 +184,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         });
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 
@@ -208,120 +210,124 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
 
         if (this.multifetch) {
-            //endpoint batch/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?slides=${this.fileId}`
+            //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
+            const query_name = tiles.endsWith("batch") ? "slides" : "paths";
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
         }
         //endpoint slides/[SLIDE]/tile/level/[L]/tile/[X]/[Y]/
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide=${this.fileId}`
+        const query_name = tiles.endsWith("batch") ? "slides" : "slide_id";
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
     }
 
-    _setDownloadHandler(isMultiplex) {
 
-        let blackImage = (context, resolve, reject) => {
-            const canvas = document.createElement('canvas');
-            canvas.width = context.getTileWidth();
-            canvas.height = context.getTileHeight();
-            const ctx = canvas.getContext('2d');
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const img = new Image(canvas.width, canvas.height);
-            img.onload = () => {
-                //next promise just returns the created object
-                blackImage = (context, ready, _) => ready(img);
-                resolve(img);
-            };
-            img.onerror = img.onabort = reject;
-            img.src = canvas.toDataURL();
-        };
-
-        if (isMultiplex) {
-            this.__cached_downloadTileStart = this.downloadTileStart;
-            this.downloadTileStart = function(context) {
-                const abort = context.finish.bind(context, null, undefined);
-                if (!context.loadWithAjax) {
-                    abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
-                }
-
-                var dataStore = context.userData;
-                const _this = this;
-
-                dataStore.request = OpenSeadragon.makeAjaxRequest({
-                    url: context.src,
-                    withCredentials: context.ajaxWithCredentials,
-                    headers: context.ajaxHeaders,
-                    responseType: "arraybuffer",
-                    postData: context.postData,
-                    success: async function(request) {
-                        var blb;
-                        try {
-                            blb = new window.Blob([request.response]);
-                        } catch (e) {
-                            var BlobBuilder = (
-                                window.BlobBuilder ||
-                                window.WebKitBlobBuilder ||
-                                window.MozBlobBuilder ||
-                                window.MSBlobBuilder
-                            );
-                            if (e.name === 'TypeError' && BlobBuilder) {
-                                var bb = new BlobBuilder();
-                                bb.append(request.response);
-                                blb = bb.getBlob();
-                            }
-                        }
-                        // If the blob is empty for some reason consider the image load a failure.
-                        if (blb.size === 0) {
-                            return abort("Empty image response.");
-                        }
-
-                        const {zip, entries} = await unzipit.unzipRaw(blb);
-                        Promise.all(
-                            Object.entries(entries).map(([name, entry]) => {
-                                if (entry.name.endsWith(".err")) {
-                                    return new Promise((resolve, reject) => blackImage(_this, resolve, reject));
-                                }
-
-                                return new Promise((resolve, reject) => {
-                                    entry.blob().then(blob => {
-                                        if (blob.size > 0) {
-                                            const img = new Image(), url = URL.createObjectURL(blob);
-                                            img.onload = () => {
-                                                URL.revokeObjectURL(url);
-                                                resolve(img);
-                                            };
-                                            img.onerror = img.onabort = () => {
-                                                URL.revokeObjectURL(url);
-                                                reject();
-                                            };
-                                            img.src = url;
-                                        } else blackImage(_this, resolve, reject);
-                                    });
-                                });
-                            })
-                        ).then(result =>
-                            //we return array of promise responses - images
-                            context.finish(result, dataStore.request, undefined)
-                        ).catch(
-                            abort
-                        );
-                    },
-                    error(request) {
-                        abort("Image load aborted - XHR error");
-                    }
-                });
-            }
-            //no need to provide downloadTileAbort since we keep the meta structure
-            this.__cached_downloadTileAbort = this.downloadTileAbort;
-            this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
-        } else if (this.__cached_downloadTileStart) {
-            this.downloadTileStart = this.__cached_downloadTileStart;
-            this.downloadTileAbort = this.__cached_downloadTileAbort;
-        }
-        this.__configuredDownload = true;
-    }
+    // Todo multiplex not supported for now, OSD needs to have grouping mechanism on requests
+    // _setDownloadHandler(isMultiplex) {
+    //
+    //     let blackImage = (context, resolve, reject) => {
+    //         const canvas = document.createElement('canvas');
+    //         canvas.width = context.getTileWidth();
+    //         canvas.height = context.getTileHeight();
+    //         const ctx = canvas.getContext('2d');
+    //         ctx.fillRect(0, 0, canvas.width, canvas.height);
+    //
+    //         const img = new Image(canvas.width, canvas.height);
+    //         img.onload = () => {
+    //             //next promise just returns the created object
+    //             blackImage = (context, ready, _) => ready(img);
+    //             resolve(img);
+    //         };
+    //         img.onerror = img.onabort = reject;
+    //         img.src = canvas.toDataURL();
+    //     };
+    //
+    //     if (isMultiplex) {
+    //         this.__cached_downloadTileStart = this.downloadTileStart;
+    //         this.downloadTileStart = function(context) {
+    //             const abort = context.fail.bind(context, "Image load aborted!");
+    //             if (!context.loadWithAjax) {
+    //                 abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
+    //             }
+    //
+    //             var dataStore = context.userData;
+    //             const _this = this;
+    //
+    //             dataStore.request = OpenSeadragon.makeAjaxRequest({
+    //                 url: context.src,
+    //                 withCredentials: context.ajaxWithCredentials,
+    //                 headers: context.ajaxHeaders,
+    //                 responseType: "arraybuffer",
+    //                 postData: context.postData,
+    //                 success: async function(request) {
+    //                     var blb;
+    //                     try {
+    //                         blb = new window.Blob([request.response]);
+    //                     } catch (e) {
+    //                         var BlobBuilder = (
+    //                             window.BlobBuilder ||
+    //                             window.WebKitBlobBuilder ||
+    //                             window.MozBlobBuilder ||
+    //                             window.MSBlobBuilder
+    //                         );
+    //                         if (e.name === 'TypeError' && BlobBuilder) {
+    //                             var bb = new BlobBuilder();
+    //                             bb.append(request.response);
+    //                             blb = bb.getBlob();
+    //                         }
+    //                     }
+    //                     // If the blob is empty for some reason consider the image load a failure.
+    //                     if (blb.size === 0) {
+    //                         return abort("Empty image response.");
+    //                     }
+    //
+    //                     const {zip, entries} = await unzipit.unzipRaw(blb);
+    //                     Promise.all(
+    //                         Object.entries(entries).map(([name, entry]) => {
+    //                             if (entry.name.endsWith(".err")) {
+    //                                 return new Promise((resolve, reject) => blackImage(_this, resolve, reject));
+    //                             }
+    //
+    //                             return new Promise((resolve, reject) => {
+    //                                 entry.blob().then(blob => {
+    //                                     if (blob.size > 0) {
+    //                                         const img = new Image(), url = URL.createObjectURL(blob);
+    //                                         img.onload = () => {
+    //                                             URL.revokeObjectURL(url);
+    //                                             resolve(img);
+    //                                         };
+    //                                         img.onerror = img.onabort = () => {
+    //                                             URL.revokeObjectURL(url);
+    //                                             reject();
+    //                                         };
+    //                                         img.src = url;
+    //                                     } else blackImage(_this, resolve, reject);
+    //                                 });
+    //                             });
+    //                         })
+    //                     ).then(result =>
+    //                         //we return array of promise responses - images
+    //                         context.finish(result, dataStore.request, "image")
+    //                     ).catch(
+    //                         abort
+    //                     );
+    //                 },
+    //                 error(request) {
+    //                     abort("Image load aborted - XHR error");
+    //                 }
+    //             });
+    //         }
+    //         //no need to provide downloadTileAbort since we keep the meta structure
+    //         this.__cached_downloadTileAbort = this.downloadTileAbort;
+    //         this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
+    //     } else if (this.__cached_downloadTileStart) {
+    //         this.downloadTileStart = this.__cached_downloadTileStart;
+    //         this.downloadTileAbort = this.__cached_downloadTileAbort;
+    //     }
+    //     this.__configuredDownload = true;
+    // }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
-        return `${x}_${y}/${level}/${this.tilesUrl}`;
+        return `${x}_${y}/${level}/${this.fileId}`;
     }
 
     getTileCacheDataAsContext2D(cacheObject) {

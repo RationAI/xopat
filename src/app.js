@@ -357,6 +357,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (bgConfig) return CONFIG.data[bgConfig.dataReference];
             return undefined;
         },
+        /**
+         * Return the current active visualization
+         * @return {*}
+         */
+        activeVisualizationConfig() {
+            return CONFIG.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")];
+        },
         _dangerouslyAccessConfig() {
             //remove in the future?
             return CONFIG;
@@ -396,70 +403,78 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
-        // drawer: "canvas",
-        drawer: 'myImplementation',
+        drawer: 'flex-renderer',
         drawerOptions: {
-            'myImplementation': {
-                //htmlShaderPartHeader
-                htmlControlsId: 'data-layer-options',
+            'flex-renderer': {
                 webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                 debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
-                htmlShaderPartHeader: temp__createHTMLLayerControls,
-                ready: function() {
-                    let i = 0;
-                    const select = $("#shaders"),
-                        activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
-                    VIEWER.drawer.renderer.foreachVisualization(function (vis) {
-                        let selected = i == activeIndex ? "selected" : "";
-                        if (vis.error) {
-                            select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
-                        } else {
-                            select.append(`<option value="${i}" ${selected}>${vis['name']}</option>`);
-                        }
-                        i++;
-                    });
+                debugInfoContainer: 'panel-shaders',
+                interactive: true,
+                htmlHandler: (shaderLayer, shaderConfig) => {
+                    const container = $("#data-layer-options");
 
-                    if (window.APPLICATION_CONTEXT.getOption("customBlending")) {
-                        let blend = $("#blending-equation");
-                        blend.html(`
-<span class="blob-code"><span class="blob-code-inner">vec4 blend(vec4 foreground, vec4 background) {</span></span>
-<textarea id="custom-blend-equation-code" class="form-control blob-code-inner" style="width: calc(100% - 20px); margin-left: 20px;
-display: block; resize: vertical;">//mask:\nreturn background * (1.0 - step(0.001, foreground.a));</textarea>
-<span class="blob-code"><span class="blob-code-inner">}</span></span>
-<button class="btn" onclick="VIEWER.drawer.renderer.changeBlending($('#custom-blend-equation-code').val()); window.temp__draw();"
-style="float: right;"><span class="material-icons pl-0" style="line-height: 11px;">payments</span> ${$.t('main.shaders.setBlending')}</button>`);
+                    let fixed = UTILITIES.isJSONBoolean(shaderConfig.fixed, true);
+                    let isVisible = UTILITIES.isJSONBoolean(shaderConfig.visible, true);
+                    const dataId = shaderLayer.id;
+                    const title = shaderConfig.title || dataId;
+                    //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
+
+                    let style = isVisible ? (shaderConfig.params.use_mode === "clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
+                    const isModeShow = !shaderConfig.params.use_mode || shaderConfig.params.use_mode === "show";
+                    let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
+                    modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "blend" : shaderConfig.params.use_mode}"
+id="${dataId}-mode-toggle"
+ style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
+onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
+
+                    let availableShaders = "";
+                    for (let available of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
+                        let selected = available.type() === shaderConfig.type ? " selected" : "";
+                        availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
                     }
-                },
-                visualizationInUse: function(visualization) {
-                    temp__enableDragSort("data-layer-options");
-                    UTILITIES.updateUIForMissingSources();
-                    //called only if everything is fine
-                    // TODO: consider timeout - this hides any errors although they might be valid
-                    //USER_INTERFACE.Errors.hide(); //preventive
 
-                    //Re-fetching data not necessary as we always fetch all the data of given visualization
-                    // var activeData = ""; //don't set this globally :(
-                    // let data = seaGL.dataImageSources();
-                    // if (data !== activeData) {
-                    //     activeData = data;
-                    //     if (seaGL.getTiledImage()) {
-                    //          window.VIEWER.addTiledImage({
-                    //             tileSource : iipSrvUrlPOST + seaGL.dataImageSources() + ".dzi",
-                    //             index: seaGL.getLayerIdx(),
-                    //             opacity: $("#global-opacity input").val(),
-                    //             replace: true
-                    //         });
-                    //     }
-                    // }
-                    /**
-                     * Fired when visualization goal is set up and run, but before first rendering occurs.
-                     * @property visualization visualization configuration used
-                     * @memberOf VIEWER
-                     * @event visualization-used
-                     */
-                    VIEWER.raiseEvent('visualization-used', visualization);
+                    let filterUpdate = [];
+                    if (!fixed) {
+                        for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
+                            let found = shaderConfig.params.hasOwnProperty(key);
+                            if (found) {
+                                filterUpdate.push('<span>', OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
+                                    ':</span><input type="number" value="', shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key]),
+                                    '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
+                                    "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
+                            }
+                        }
+                    }
+                    const cacheApplied = shaderConfig._cacheApplied ?
+                        `<div class="p2 info-container rounded-2" style="width: 97%">
+${$.t('main.shaders.cache.' + shaderConfig._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
+                    container.append(`<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
+${shaderLayer.error ? 'disabled' : ''} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${title}">${title}</span>
+              <div class="d-inline-block label-render-type pointer" style="float: right;">
+                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
+onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
+                </div>
+                ${modeChange}
+                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
+            </div>
+            <div class="non-draggable">${shaderLayer.htmlControls()}${filterUpdate.join("")}</div>${cacheApplied}
+            </div>`);
+                },
+                htmlReset: () => {
+                    //$("#data-layer-options").html();
+                    document.getElementById("data-layer-options").innerHTML = "";
+                },
+
+                //TODO
+                visualizationInUse: function(visualization) {
+
                 },
                 visualizationChanged: function(oldVis, newVis) {
+                    //todo, fire just reload?
                     seaGL.createUrlMaker(newVis, APPLICATION_CONTEXT.secure);
                     let index = seaGL.getWorldIndex(),
                         sources = seaGL.dataImageSources();
@@ -490,15 +505,6 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
                         });
                     }
                 },
-                //called when this module is unable to run
-                onFatalError: function(error) {
-                    USER_INTERFACE.Errors.show(error.error, error.desc);
-                },
-
-                //called when a problem occurs, but other parts of the system still might work
-                onError: function(error) {
-                    USER_INTERFACE.Errors.show(error.error, error.desc);
-                },
             }
         },
         ajaxHeaders: headers,
@@ -519,100 +525,6 @@ style="float: right;"><span class="material-icons pl-0" style="line-height: 11px
         VIEWER.navigator.drawer.clear();
         VIEWER.world.draw();
         VIEWER.world.draw();
-    }
-    /**
-     * Made with love by @fitri
-     * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
-     *
-     * Shader re-compilation and re-ordering logics
-     * Modified by Jiří
-     */
-    function temp__enableDragSort(listId) {
-        UIComponents.Actions.draggable(listId, item => {
-            const id = item.dataset.id;
-            window.DropDown.bind(item, () => {
-                const currentMask = seaGL.visualization()?.shaders[id]?.params.use_mode;
-                const clipSelected = currentMask === "mask_clip";
-                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
-
-                return [{
-                    title: $.t('main.shaders.defaultBlending'),
-                }, {
-                    title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
-                    selected: maskEnabled
-                }, {
-                    title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                    icon: "payments",
-                    styles: "padding-right: 5px;",
-                    action: (selected) => {
-                        const node = document.getElementById(`${id}-mode-toggle`);
-                        const newMode = selected ? "mask" : "mask_clip";
-                        node.dataset.mode = newMode;
-                        if (!maskEnabled) {
-                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
-                        } else {
-                            UTILITIES.changeModeOfLayer(id, newMode, false);
-                        }
-                    },
-                    selected: clipSelected
-                }];
-            });
-        }, undefined, e => {
-            const listItems = e.target.parentNode.children;
-            seaGL.reorder(Array.prototype.map.call(listItems, child => child.dataset.id));
-        })
-    }
-    function temp__createHTMLLayerControls(title, html, dataId, isVisible, layer, wasErrorWhenLoading) {
-        let fixed = UTILITIES.isJSONBoolean(layer.fixed, true);
-        //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
-
-        let style = isVisible ? (layer.params.use_mode === "mask_clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
-        const isModeShow = !layer.params.use_mode || layer.params.use_mode === "show";
-        let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
-        modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "mask" : layer.params.use_mode}"
-id="${dataId}-mode-toggle"
- style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
-
-        let availableShaders = "";
-        for (let available of WebGLModule.ShaderMediator.availableShaders()) {
-            let selected = available.type() === layer.type ? " selected" : "";
-            availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-        }
-
-        let filterUpdate = [];
-        if (!fixed) {
-            for (let key in WebGLModule.ShaderLayer.filters) {
-                let found = layer.params.hasOwnProperty(key);
-                if (found) {
-                    filterUpdate.push('<span>', WebGLModule.ShaderLayer.filterNames[key],
-                        ':</span><input type="number" value="', layer._renderContext.getFilterValue(key, layer.params[key]),
-                        '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
-                        "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
-                }
-            }
-        }
-        const fullTitle = title.startsWith("...") ? dataId : title;
-        const cacheApplied = layer._cacheApplied ?
-            `<div class="p2 info-container rounded-2" style="width: 97%">
-${$.t('main.shaders.cache.' + layer._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
-
-        return `<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
-            <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
-${wasErrorWhenLoading ? '' : 'disabled'} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${fullTitle}">${title}</span>
-              <div class="d-inline-block label-render-type pointer" style="float: right;">
-                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
-                </div>
-                ${modeChange}
-                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
-            </div>
-            <div class="non-draggable">${html}${filterUpdate.join("")}</div>${cacheApplied}
-            </div>`;
     }
 
     /**
@@ -726,7 +638,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
 
         const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
         if (!hasMicrons || !hasDimMicrons) {
-            const sourceMeta = typeof tiledImage?.source?.getImageMetaAt === "function" && tiledImage.source.getImageMetaAt();
+            const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
             if (sourceMeta) {
                 if (!hasMicrons) imageData.microns = sourceMeta.microns;
                 if (!hasDimMicrons) {
@@ -908,23 +820,24 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
 
             $("#global-tissue-visibility").css("display", "none");
 
-            if (largestWidth === -1) {
-                VIEWER.addTiledImage({
-                    tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
-                    index: 0,
-                    opacity: $("#global-opacity input").val(),
-                    replace: false,
-                    success: (event) => {
-                        event.item.getBackgroundConfig = () => {
-                            return undefined;
-                        }
-                        //standard
-                        handleSyntheticEventFinishWithValidData(0, 1);
-                    }
-                });
-            } else {
-                handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
-            }
+            // if (largestWidth === -1) {
+            //     VIEWER.addTiledImage({
+            //         tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+            //         index: 0,
+            //         opacity: $("#global-opacity input").val(),
+            //         replace: false,
+            //         success: (event) => {
+            //             event.item.getBackgroundConfig = () => {
+            //                 return undefined;
+            //             }
+            //             //standard
+            //             handleSyntheticEventFinishWithValidData(0, 1);
+            //         }
+            //     });
+            // } else {
+            //
+            // }
+            handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
             return;
         }
 
@@ -1052,17 +965,30 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
 
         const eventOpts = {};
 
-
-        const seaGL = VIEWER.bridge;
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && seaGL) {
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
             const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
-            const activeVis = seaGL.visualization();
+            const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
             if (layerWorldItem) {
                 UTILITIES.prepareTiledImage(layerPosition,
                     layerWorldItem, activeVis);
 
                 $("#panel-shaders").css('display', 'block');
-                seaGL.initAfterOpen();
+
+                // Init swwitching between goals
+                let i = 0;
+                // todo test change of visualization
+                const select = $("#shaders"),
+                    activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
+
+                for (let vis of APPLICATION_CONTEXT.config.visualizations) {
+                    let selected = i == activeIndex ? "selected" : "";
+                    if (vis.error) { //todo valid prop? document
+                        select.append(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
+                    } else {
+                        select.append(`<option value="${i}" ${selected}>${vis['name']}</option>`);
+                    }
+                    i++;
+                }
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
@@ -1114,6 +1040,8 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                     );
                 }, 2000);
             }
+
+
         }
 
         if (USER_INTERFACE.Errors.active) {
@@ -1221,20 +1149,20 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
         let renderingWithWebGL = visualizations?.length > 0;
-        if (renderingWithWebGL) {
-            if (_allowRecursionReload && !window.WebGLModule) {
-                _allowRecursionReload = false;
-                UTILITIES.loadModules(() => APPLICATION_CONTEXT.openViewerWith(data, background, visualizations), "webgl");
-                return;
-            }
-
-            if (!window.WebGLModule) {
-                console.error("Recursion prevented: webgl module failed to load!");
-                //allow to continue...
-                Dialogs.show($.t('messages.overlaysLoadFail'), 8000, Dialogs.MSG_ERR);
-                renderingWithWebGL = false;
-            }
-        }
+        // if (renderingWithWebGL) {
+        //     if (_allowRecursionReload && !window.OpenSeadragon.FlexRenderer) {
+        //         _allowRecursionReload = false;
+        //         UTILITIES.loadModules(() => APPLICATION_CONTEXT.openViewerWith(data, background, visualizations), "webgl");
+        //         return;
+        //     }
+        //
+        //     if (!window.OpenSeadragon.FlexRenderer) {
+        //         console.error("Recursion prevented: webgl module failed to load!");
+        //         //allow to continue...
+        //         Dialogs.show($.t('messages.overlaysLoadFail'), 8000, Dialogs.MSG_ERR);
+        //         renderingWithWebGL = false;
+        //     }
+        // }
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         config.data = data;
@@ -1252,29 +1180,11 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             VIEWER.raiseEvent('before-canvas-reload');
         }
 
-        const toOpen = [];
+
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
         const handleFinishOpenImageEvent = (item, url, index) => {
             openedSources--;
-            if (item) {
-
-                if (url.source) { //todo dirty
-                    const shader = url.shader;
-                    VIEWER.drawer.configureTiledImage(item, shader);
-                    url = url.source;
-                }
-
-                /**
-                 * Fired before visualization is initialized and loaded.
-                 * @event tiled-image-created
-                 * @memberOf VIEWER
-                 * @property {OpenSeadragon.TiledImage} item
-                 * @property {string} url used to create the item
-                 * @property {number} index TiledImage index
-                 */
-                VIEWER.raiseEvent('tiled-image-created', {item, url, index});
-            }
             if (openedSources <= 0) handleSyntheticOpenEvent();
         };
         let imageOpenerCreator = (success, userArg=undefined) => {
@@ -1283,18 +1193,34 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 window.VIEWER.addTiledImage({
                     tileSource: source.source || source, //todo dirty
                     opacity: opacity,
+                    index: toOpenIndex,
                     success: (event) => {
                         success({userArg, toOpenLastBgIndex, toOpenIndex, event});
                         handleFinishOpenImageEvent(event.item, source, toOpenIndex);
                     },
-                    error: () => {
+                    error: (e) => {
+                        VIEWER.addTiledImage({
+                            tileSource: {type: "_blank", error: e.message || $.t('error.slide.pending') + " " + $.t('error.slide.imageLoadFail') + ' ' + source},
+                            opacity: 0,
+                            index: toOpenIndex,
+                            success: (event) => {
+                                handleFinishOpenImageEvent();
+                            },
+                            error: (e) => {
+                                handleFinishOpenImageEvent();
+                            }
+                        });
                         handleFinishOpenImageEvent();
                     }
                 });
             }
         };
 
+        const toOpen = [];
         let imageOpener; //has to set-up correct getBackgroundConfig function
+        let vizOpener = imageOpenerCreator(()=>{});
+
+        // todo better bg config getter logics could be now used...
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             //reverse order: last opened IMAGE is the first visible
             for (let i = background.length-1; i >= 0; i--) {
@@ -1325,23 +1251,27 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             }, selectedIndex);
         }
 
-        const openAll = (numOfVisLayersAtTheEnd) => {
+        // Todo all the functionality is too complicated, simplify...
+        const openAll = (shaders, numOfVisLayersAtTheEnd) => {
             if (toOpen.length < 1) {
-                // //todo two places where we need to remove loading screen make clear flow of the initialization!
-                // USER_INTERFACE.Loading.show(false);
-                // if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
-                // USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
-                //
                 handleFinishOpenImageEvent();
                 return;
             }
 
             let i = 0;
             let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
-            for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
 
-            const visOpener = imageOpenerCreator(()=>{});
-            for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
+            // First, configure external shaders
+            const renderOutput = {};
+            // TODO named!
+            for (; i <= lastValidBgIndex; i++) renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [lastValidBgIndex]};
+            Object.assign(renderOutput, shaders);
+            VIEWER.drawer.overrideConfigureAll(renderOutput);
+
+            // Then, attach to-open images
+            i = 0;
+            for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
+            for (; i < toOpen.length; i++) vizOpener(toOpen.length - 1, toOpen[i], i);
         }
 
         if (renderingWithWebGL) {
@@ -1372,20 +1302,28 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
                 }
             }
 
-            // Prepare data
             const activeVis = visualizations[activeVisIndex];
             VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
+            const sourcesToOpen = {};
+            let counter = toOpen.length;
             for (let shaderId in activeVis.shaders) {
 
                 const shaderConfig = activeVis.shaders[shaderId];
-                toOpen.push({
-                    source: VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server,
-                        shaderConfig.dataReferences.map(rId => data[rId])
-                    ),
-                    shader: shaderConfig
-                });
+                shaderConfig.tiledImages = [];
+                for (let dataSource of shaderConfig.dataReferences.map(rId =>
+                    VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]] ))
+                    ) {
+
+                    // Find unique sources and map them to indexes
+                    let index = sourcesToOpen[dataSource];
+                    if (index === undefined) {
+                        sourcesToOpen[dataSource] = index = counter++;
+                        toOpen.push(dataSource);
+                    }
+                    shaderConfig.tiledImages.push(index);
+                }
             }
-            openAll(activeVis.shaders.length);
+            openAll(activeVis.shaders, Object.keys(sourcesToOpen).length);
 
             // VIEWER.bridge.loadShaders(
             //     activeVisIndex,
@@ -1399,7 +1337,7 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             //     }
             // );
         } else {
-            openAll(0);
+            openAll({},0);
         }
     }
 

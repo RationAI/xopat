@@ -1,12 +1,12 @@
 // noinspection JSUnresolvedVariable
 
 /**
- * @class EmpaiaStandaloneV3TileSource
+ * @class RationaiStandaloneV3TileSource
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
  * @param {object} options configuration either empaia info response or list of these objects
  */
-OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSource {
+OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileSource {
 
     constructor(options) {
         super(options);
@@ -50,9 +50,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
             return true;
         }
 
-        if (!url || !Array.isArray(data) || typeof data !== "object") return false;
+        if (!url && !Array.isArray(data) && typeof data !== "object") return false;
         //multi-tile or single tile access
-        let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
+        let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
             data = data || [{}];
             data[0].tilesUrl = match[1];
@@ -199,7 +199,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     getImageInfo(url) {
         if (!this._handlesOwnImageLoadLogics) return super.getImageInfo(url);
 
-        let match = url.match(/^(\/?[^\/].*\/v3\/batch)\/info/i);
+        let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
             this._setDownloadHandler(true);
             return this._getInfo(url, match[1]);
@@ -215,11 +215,13 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     _getInfo(url, tilesUrl) {
         fetch(url, {
             headers: this.ajaxHeaders || {}
-        }).then(res => {
+        }).then(async res => {
+            const text = await res.text();
+            const json = JSON.parse(text);
             if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", res, res.error);
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
             }
-            return res.json();
+            return json;
         }).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
             // necessary TileSource props that wont get set manually
@@ -238,7 +240,7 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         });
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 
@@ -264,11 +266,11 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
 
         if (this.multifetch) {
-            //endpoint batch/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?slides=${this.fileId}`
+            //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}`
         }
-        //endpoint slides/[SLIDE]/tile/level/[L]/tile/[X]/[Y]/
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide=${this.fileId}`
+        //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}`
     }
 
     _setDownloadHandler(isMultiplex) {

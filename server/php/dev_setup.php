@@ -17,6 +17,7 @@ $replacer = function($match) use ($i18n) {
 
     switch ($match[1]) {
         case "head":
+            require_openseadragon();
             require_lib("primer");
             require_lib("jquery");
             require_core("env");

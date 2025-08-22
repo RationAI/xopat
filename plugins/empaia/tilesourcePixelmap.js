@@ -92,7 +92,7 @@ OpenSeadragon.EmpaiaPixelmapV3TileSource = class extends OpenSeadragon.TileSourc
         }
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 

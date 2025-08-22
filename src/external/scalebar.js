@@ -117,8 +117,7 @@
         this.magnification = options.magnification || false;
         //todo allow specifying levels of magnification
 
-
-        this.refreshHandler = function () {
+        this.refreshHandler = async function () {
             if (!this.viewer.isOpen() ||
                 !this.drawScalebar ||
                 !this.pixelsPerMeter ||
@@ -138,8 +137,7 @@
             this.magnificationContainer.style.top = location.y - 80 + "px";
 
         }.bind(this);
-        this._init(!options.destroy);
-        this.setMinWidth(options.minWidth || "150px");
+        this._init(options);
     };
 
     $.Scalebar.prototype = {
@@ -192,8 +190,8 @@
                 this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
         },
 
-        _init: function (doInit) {
-            if (doInit) {
+        _init: function (options) {
+            if (!options.destroy) {
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
@@ -325,11 +323,12 @@
                     }
                     this.viewer.container.appendChild(this.magnificationContainer);
                 }
-                this.viewer.addHandler("open", this.refreshHandler);
+                this.setMinWidth(options.minWidth || "150px");
+
+                this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
             } else {
                 this._active = false;
-                this.viewer.removeHandler("open", this.refreshHandler);
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
                 let container = document.getElementById("viewer-scale-bar");
                 if (container) container.remove();
@@ -347,7 +346,7 @@
                 return;
             }
 
-            this._init(!options.destroy);
+            this._init(options);
 
             if (isDefined(options.type)) {
                 this.setDrawScalebarFunction(options.type);
@@ -401,8 +400,11 @@
             }
             else if (type === $.ScalebarType.MAP) {
                 this.drawScalebar = this.drawMapScalebar;
+                this.prepareScalebar = this.prepareMapScalebar;
+                this.prepareMapScalebar();
             } else {
                 this.drawScalebar = this.drawMicroscopyScalebar;
+                this.prepareScalebar = this.prepareMicroscopyScalebar;
             }
         },
         setMinWidth: function(minWidth) {
@@ -420,28 +422,33 @@
          */
         refresh: function(options) {
             this.updateOptions(options);
+            this.prepareScalebar();
             this.refreshHandler();
         },
-        drawMicroscopyScalebar: function(size, text) {
+        _prepareScalebarCommon: function () {
             this.scalebarContainer.style.fontSize = this.fontSize;
             this.scalebarContainer.style.fontFamily = this.fontFamily;
             this.scalebarContainer.style.textAlign = "center";
             this.scalebarContainer.style.fontWeight = "600";
             this.scalebarContainer.style.color = this.fontColor;
-            this.scalebarContainer.style.border = "none";
-            this.scalebarContainer.style.borderBottom = this.barThickness + "px solid " + this.color;
             this.scalebarContainer.style.backgroundColor = this.backgroundColor;
+        },
+        prepareMicroscopyScalebar: function () {
+            this._prepareScalebarCommon();
+            this.scalebarContainer.style.border = "none";
+        },
+        prepareMapScalebar: function () {
+            this._prepareScalebarCommon();
+            this.scalebarContainer.style.borderTop = "none";
+        },
+        drawMicroscopyScalebar: function(size, text) {
+            this.scalebarContainer.style.borderBottom = this.barThickness + "px solid " + this.color;
             this.scalebarContainer.innerHTML = text;
             this.scalebarContainer.style.width = size + "px";
         },
         drawMapScalebar: function(size, text) {
-            this.scalebarContainer.style.fontSize = this.fontSize;
-            this.scalebarContainer.style.fontFamily = this.fontFamily;
             this.scalebarContainer.style.textAlign = "center";
-            this.scalebarContainer.style.color = this.fontColor;
             this.scalebarContainer.style.border = this.barThickness + "px solid " + this.color;
-            this.scalebarContainer.style.borderTop = "none";
-            this.scalebarContainer.style.backgroundColor = this.backgroundColor;
             this.scalebarContainer.innerHTML = text;
             this.scalebarContainer.style.width = size + "px";
         },

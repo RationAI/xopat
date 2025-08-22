@@ -262,7 +262,7 @@ OpenSeadragon.EmpationAPIV3TileSource = class extends OpenSeadragon.TileSource {
         }
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 

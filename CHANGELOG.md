@@ -1,5 +1,10 @@
 # Changelog
 
+### New renderer
+* Breaking: ``getMetadata`` replaces ``getMetadataAt(index)`` which is no longer supported
+
+------
+
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 

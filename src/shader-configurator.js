@@ -13,6 +13,9 @@ var ShaderConfigurator = {
      * @param nodeId DOM ID or node to render the content into
      */
     buildShadersAndControlsDocs: function(nodeId) {
+        // TODO fix
+        return;
+
         let node = typeof nodeId === "string" ? document.getElementById(nodeId) : nodeId;
         node.innerHTML = this.staticShadersDocs() + this.staticControlsDocs();
     },
@@ -87,6 +90,9 @@ var ShaderConfigurator = {
     _uniqueId: "live-setup-",
 
     staticShadersDocs: function() {
+        // TODO fix this
+        return "";
+
         let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
         const uiControls = this._buildControls();
         for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
@@ -408,7 +414,7 @@ ${renders.join("")}
     },
 
     getCurrentShaderConfig() {
-        return JSON.parse(JSON.stringify(this.setup.shader, WebGLModule.jsonReplacer))
+        return JSON.parse(JSON.stringify(this.setup.shader, OpenSeadragon.FlexRenderer.jsonReplacer))
     },
 
     /**********************/

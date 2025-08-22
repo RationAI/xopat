@@ -3,12 +3,12 @@
  *
  * data reference must contain one index to the data to render using identity
  */
-WebGLModule.TimeSeries = class extends WebGLModule.ShaderLayer {
+OpenSeadragon.FlexRenderer.TimeSeries = class extends OpenSeadragon.FlexRenderer.ShaderLayer {
 
     construct(options, dataReferences) {
         //todo supply options clone? options changes are propagated and then break things
 
-        const ShaderClass = WebGLModule.ShaderMediator.getClass(options.seriesRenderer);
+        const ShaderClass = OpenSeadragon.FlexRenderer.ShaderMediator.getClass(options.seriesRenderer);
         if (!ShaderClass) {
             //todo better way of throwing errors to show users
             throw "";
@@ -132,4 +132,4 @@ ${this._renderer.htmlControls()}`;
     }
 };
 
-WebGLModule.ShaderMediator.registerLayer(WebGLModule.TimeSeries);
+OpenSeadragon.FlexRenderer.ShaderMediator.registerLayer(OpenSeadragon.FlexRenderer.TimeSeries);

@@ -330,7 +330,7 @@
 // uniform float pixel_size_in_fragments;
 // uniform float zoom_level;
 // ${this.texture.declare(indicesOfImages)}
-// varying vec2 tile_texture_coords;
+// varying vec2 v_texture_coords;
 //
 // bool close(float value, float target) {
 //     return abs(target - value) < 0.001;
@@ -385,10 +385,10 @@
 //         return `
 // attribute vec4 a_pos;
 // attribute vec2 a_tile_pos;
-// varying vec2 tile_texture_coords;
+// varying vec2 v_texture_coords;
 //
 // void main() {
-//     tile_texture_coords = a_tile_pos;
+//     v_texture_coords = a_tile_pos;
 //     gl_Position = a_pos;
 // }
 // `;
@@ -583,7 +583,7 @@
 // uniform float zoom_level;
 // uniform vec2 u_tile_size;
 //
-// in vec2 tile_texture_coords;
+// in vec2 v_texture_coords;
 //
 // out vec4 final_color;
 //
@@ -639,7 +639,7 @@
 //     getVertexShader() {
 //         //UNPACK_FLIP_Y_WEBGL not supported with 3D textures so sample bottom up
 //         return `#version 300 es
-// out vec2 tile_texture_coords;
+// out vec2 v_texture_coords;
 // const vec2 tex_coords[3] = vec2[3] (
 //     vec2(0.0, 0.0),
 //     vec2(2.0, 0.0),
@@ -650,7 +650,7 @@
 //     vec2 tex_coord = tex_coords[gl_VertexID];
 //     gl_Position = vec4(tex_coord * 2.0 - 1.0, 0.0, 1.0);
 //     tex_coord.y = 1.0 - tex_coord.y;
-//     tile_texture_coords = tex_coord;
+//     v_texture_coords = tex_coord;
 // }
 // `;
 //     }

@@ -74,8 +74,8 @@ $replacer = function($match) use ($i18n) {
     switch ($match[1]) {
         case "head":
             require_core("env");
-            require_libs();
             require_openseadragon();
+            require_libs();
             require_external();
             require_core("loader");
             require_core("deps");

@@ -25,7 +25,8 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
-		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
+		// TODO fix
+		//this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 
 		await this.setupFromParams();
@@ -174,7 +175,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push('</span>');
 		// Wand + correction
 		modeOptions.push(vertSeparator);
-		modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
+		// TODO: modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
@@ -363,14 +364,15 @@ ${modeOptions.join("")}</div>`, 'draw');
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
-			if (this.context.presets.right
-				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
+			if (this.context.presets.right || (Date.now() - e.pressTime) > 250) {
 				return;
 			}
 
 			let actions = [], handler;
 			let active = this.context.canvas.findTarget(e.originalEvent);
 			if (active) {
+				this.context.canvas.setActiveObject(active);
+				this.context.canvas.renderAll();
 				actions.push({
 					title: `Change annotation to:`
 				});

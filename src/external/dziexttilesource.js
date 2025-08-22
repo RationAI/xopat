@@ -206,7 +206,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * @param index index of the data if tilesource supports multi data fetching
      * @return {TileSourceMetadata}
      */
-    getImageMetaAt(index) {
+    getMetadata() {
         //not really compatible type, but carries over the error property
         return this.ImageArray[index];
     }
@@ -234,7 +234,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function(context) {
-                const abort = context.finish.bind(context, null);
+                const abort = context.fail.bind(context, "Load aborted.");
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
@@ -289,7 +289,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
                             })
                         ).then(result =>
                             //we return array of promise responses - images
-                            context.finish(result, dataStore.request, undefined)
+                            context.finish(result, dataStore.request, "image")
                         ).catch(
                             abort
                         );

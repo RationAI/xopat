@@ -156,7 +156,7 @@
         "preferredFormat": "zip",
         "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
-        "disablePluginsUi": false
+        "disablePluginsUi": false,
     },
     /**
      * The Server status. This object is here just for the reference and
@@ -190,7 +190,8 @@
             "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
-            "unzip_it": "unzipit.min.js"
+            "unzip_it": "unzipit.min.js",
+            "render": "flex-renderer.js"
         },
         // src/external  key: source / [sources,list]
         "external": {
@@ -205,6 +206,7 @@
                 "osd_tools.js",
                 "scalebar.js",
                 "nouislider.min.js"
+                //"uiPlugin.js"
             ]
         },
         /**

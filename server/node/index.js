@@ -151,8 +151,8 @@ async function responseViewer(req, res) {
             case "head":
                 return `
 ${core.requireCore("env")}
-${core.requireLibs()}
 ${core.requireOpenseadragon()}
+${core.requireLibs()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -214,6 +214,7 @@ async function responseDeveloperSetup(req, res) {
             switch (p1) {
             case "head":
                 return `
+${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireCore("env")}
