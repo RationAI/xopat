@@ -9,7 +9,12 @@ function initXopatScripts() {
     // opacity of general layer available everywhere
     $("#global-opacity input").on("input", function() {
         let val = $(this).val();
-        VIEWER.world.getItemAt(VIEWER.bridge.getWorldIndex()).setOpacity(val);
+        for (let imageIndex = 0; imageIndex < VIEWER.world.getItemCount(); imageIndex++) {
+            const image = VIEWER.world.getItemAt(imageIndex);
+            if (!image.getBackgroundConfig) {
+                image.setOpacity(val);
+            }
+        }
     });
 
     $(VIEWER.element).on('contextmenu', function(event) {
@@ -591,6 +596,24 @@ ${await UTILITIES.getForm()}
             else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
             else throw "Invalid read file mode " + mode;
         });
+    };
+
+    //TODO: make this a normal standard UI api (open / focus / inline)
+    window.UTILITIES.openDebuggingWindow = function (html = '') {
+        let ctx = Dialogs.getModalContext('__xopat__debug__window__');
+        if (ctx) {
+            ctx.window.focus();
+            return ctx.window;
+        }
+
+        //TODO ... VIEWER.drawer.showDebugging
+        Dialogs.showCustomModal('__xopat__debug__window__', 'Debugging Window', 'Debugging Window', html);
+        const window = Dialogs.getModalContext('__xopat__debug__window__')?.window;
+        if (!window) {
+            return null;
+        }
+
+        return window;
     };
 
     $("body")

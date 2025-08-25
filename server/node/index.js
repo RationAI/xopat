@@ -226,6 +226,7 @@ async function responseDeveloperSetup(req, res) {
 ${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
+${core.requireLib('render')}
 ${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}

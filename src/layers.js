@@ -213,7 +213,6 @@ function initXopatLayers() {
          * @private
          */
         UTILITIES.shaderPartToogleOnOff = function (self, layerId) {
-
             let shader = VIEWER.drawer.renderer.getShaderLayerConfig(layerId);
             if (shader) {
                 if (self.checked) {
