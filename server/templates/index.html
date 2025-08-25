@@ -59,11 +59,9 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     <div id='viewer-demo-advertising' style='display: none'>
         <h1>xOpat - The WSI Viewer</h1>
         <p>The viewer is missing the target data to view; this might happen, if</p>
-        <ul class="ml-3">
-            <li>you have an invalid link, or</li>
-            <li>the server that should deliver data is not responding</li>
-            <li>the data is not available due to authorization issues</li>
-        </ul>
+        <div id='viewer-demo-error-description'>
+            <!-- message space-->
+        </div>
         <br><br>
         <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>
         <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">
@@ -114,8 +112,8 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
             </div>
             <div class="position-absolute top-1 left-3 right-0 d-flex pr-2">
                 <div id="tissue-title-header" class="d-flex flex-items-center" style="max-height: 255px; max-width: 90%; flex-grow: 1;">
-                    <span id="global-tissue-visibility" class="d-inline-block">
-                        <input type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
+                    <span id="global-tissue-visibility" class="d-inline-block" style="display: none">
+                        <input name="global-tissue-visibility" type="checkbox" style="align-self: center; vertical-align: baseline;" checked class="form-control mr-1" onchange="VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);">
                     </span>
                     <span class="tissue-title-container d-flex">
                         <span id="tissue-title-content" class="text-shadow-mild one-liner" style="flex-grow: 1">Slide<!--Inserted slide name--></span>
@@ -153,8 +151,8 @@ if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
                         <span id="cache-snapshot" class="material-icons btn-pointer text-right"
                         style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
                         <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
-                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
-                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.storeVisualizationSnapshot(true);">sort_by_alpha</span>
+                            <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.storeVisualizationSnapshot(false);">format_list_numbered</span>
                         </div>
                     </div>
                     <br>
@@ -251,7 +249,7 @@ window.onerror = function (message, file, line, col, error) {
     /*------------ Basic Tutorial       -----------------------*/
     /*---------------------------------------------------------*/
 
-    const withLayers = () => APPLICATION_CONTEXT.layersAvailable;
+    const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
     window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
         {'next #viewer-container' : $.t('tutorials.basic.1')
         }, {'next #main-panel' : $.t('tutorials.basic.2')

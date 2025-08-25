@@ -73,7 +73,6 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         }
 
         if (!this.fileFormat) this.fileFormat = ".jpg";
-        if (!this.greyscale) this.greyscale = "";
     }
 
 
@@ -155,7 +154,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      */
     getUrl( level, x, y, tiles=this.tilesUrl ) {
         return this.postData ? `${tiles}${this.queryParams}`
-            : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}${this.queryParams}`;
+            : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.queryParams}`;
     }
 
     /**
@@ -198,7 +197,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * @return {string|null} post data to send with tile configuration request
      */
     getPostData(level, x, y, data) {
-        return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
+        return data ? `${data}${level}/${x}_${y}.${this.fileFormat}` : null;
     }
 
     /**

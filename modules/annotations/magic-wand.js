@@ -16,10 +16,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         this._scrollZoom = this.scrollZooming.bind(this);
 
-        this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
-        APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
-        this.disabled = !(APPLICATION_CONTEXT.config.background.length +
-            APPLICATION_CONTEXT.config.visualizations.length);
+        const shaders = VIEWER.drawer.renderer.getShaderLayerOrder();
+        this._selectedShader = shaders[0];
+        this.disabled = !shaders.length;
 
         VIEWER.addHandler('visualization-used', () => {
             this._invalidData = Date.now();
@@ -29,26 +28,28 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         VIEWER.addHandler('visualization-redrawn', () => {
             this._invalidData = Date.now();
         });
+    }
 
-        // TODO works with OSD 5.0+
-        // const drawerType = "canvas"; //VIEWER.drawer.getType();
-        // const Drawer = OpenSeadragon.determineDrawer(drawerType);
-        // this.drawer = new Drawer({
-        //     viewer:             VIEWER,
-        //     viewport:           VIEWER.viewport,
-        //     element:            VIEWER.drawer.container,
-        //     debugGridColor:     VIEWER.debugGridColor,
-        //     options:            VIEWER.drawerOptions[drawerType]
-        // });
-        this.drawer = new OpenSeadragon.Drawer({
-            viewer:             VIEWER,
-            viewport:           VIEWER.viewport,
-            element:            VIEWER.canvas,
-            debugGridColor:     VIEWER.debugGridColor
-        });
-        this.drawer.canvas.style.setProperty('z-index', '-999');
-        this.drawer.canvas.style.setProperty('visibility', 'hidden');
-        this.drawer.canvas.style.setProperty('display', 'none');
+    async refreshDrawer() {
+        // for some reason change in drawer completely wrongs the logics
+        // of reading the texture, so the drawer must be recreated
+
+        if (this.drawer) {
+            this.drawer.destroy();
+        }
+
+        this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(VIEWER);
+        const shaders = VIEWER.drawer.renderer.getAllShaders();
+        const result = {};
+        if (shaders[this._selectedShader]) {
+            result[this._selectedShader] = shaders[this._selectedShader].getConfig();
+        } else {
+            for (let id in shaders) {
+                result[id] = shaders[id].getConfig();
+            }
+        }
+        this.drawer.overrideConfigureAll(result);
+        await this.drawer._requestRebuild(0, true);
     }
 
     setLayer(index, key) {
@@ -86,23 +87,32 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         w = w || Math.round(VIEWER.drawer.canvas.width);
         h = h || Math.round(VIEWER.drawer.canvas.height);
 
-        //TODO single line works with OSD 5.0+
-        //this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
-        this.drawer.clear();
-        const targetImage = VIEWER.world.getItemAt(this.tiledImageIndex),
-            oldDrawer = targetImage._drawer;
-        targetImage._drawer = this.drawer;
-        targetImage.draw();
-        targetImage._drawer = oldDrawer;
+        this.data = null;
+        this._invalidData = true;
+        this.drawer.draw(VIEWER.world._items);
+
         // end
-        const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
+        const data = new Uint8Array(w * h * 4);         // RGBA8
+        const gl = this.drawer.renderer.gl;
+        gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        // vertical swap
+        const row = w * 4;
+        const tmp = new Uint8Array(row);
+        for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
+            tmp.set(data.subarray(t, t + row));
+            data.copyWithin(t, b, b + row);
+            data.set(tmp, b);
+        }
+
         this.data = {
-            width: data.width,
-            height: data.height,
-            data: data.data,
+            width: w,
+            height: h,
+            data: data,
             bytes:4,
             rawData: data,
-            binaryMask: new Uint8ClampedArray(data.width * data.height)
+            binaryMask: new Uint8ClampedArray(w * h)
         }
         this._invalidData = false;
         return this.data;
@@ -222,12 +232,13 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleMouseHover(event, point) {
         if (!this.context.presets.left) return;
         this._isLeft = true;
-        this._process(event);
+        this._process(event, true);
     }
 
     setFromAuto() {
-        this.drawer.canvas.style.setProperty('display', 'block');
-        this.prepareViewportScreenshot();
+        this.refreshDrawer().then(() => {
+            this.prepareViewportScreenshot();
+        });
 
         VIEWER.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
@@ -242,12 +253,13 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             this.result = null;
         }
         this.data = null;
-        this.drawer.canvas.style.setProperty('display', 'none');
 
         VIEWER.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
         this.context.canvas.renderAll();
+        this.drawer.destroy();
+        this.drawer = null;
         return true;
     }
 
@@ -267,19 +279,22 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return e.code === "KeyT";
     }
 
-    setTiledImageIndex(value) {
-        this._invalidData = Date.now();
-        this.tiledImageIndex = Number.parseInt(value);
+    setShaderToDetectFrom(value) {
+        this._selectedShader = value;
+        this.refreshDrawer().then(() => {
+            this._invalidData = Date.now();
+        });
     }
 
     customHtml() {
         let options;
-        if (APPLICATION_CONTEXT.config.background.length < 1) {
-            options = "<option selected value='0'>Overlay</option>";
-        } else if (APPLICATION_CONTEXT.config.visualizations.length < 1) {
-            options = "<option selected value='0'>Tissue</option>";
-        } else {
-            options = "<option value='0'>Tissue</option>" + "<option selected value='1'>Overlay</option>";;
+        for (let shaderId of VIEWER.drawer.renderer.getShaderLayerOrder()) {
+            const config = VIEWER.drawer.renderer.getShaderLayerConfig(shaderId);
+            if (this._selectedShader === shaderId) {
+                options += `<option value='${shaderId}' selected>${config.name}</option>`;
+            } else {
+                options += `<option value='${shaderId}'>${config.name}</option>`;
+            }
         }
 
         return `
@@ -289,6 +304,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
 </span><select class="ml-2 form-control text-small"
-onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setTiledImageIndex(Number.parseInt(this.value));">${options}</select>`;
+onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setShaderToDetectFrom(this.value);">${options}</select>`;
     }
 };

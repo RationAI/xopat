@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-08-21
-//! Git commit: --ae2f888-dirty
+//! Built on 2025-08-25
+//! Git commit: --01bb5db-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -15,7 +15,7 @@
      * @property {Object} shaderConfig.params          settings for the ShaderLayer
      * @property {OpenSeadragon.TiledImage[]|number[]} tiledImages images that provide the data
      * @property {Object} shaderConfig._controls       storage for the ShaderLayer's controls
-     * @property {Object} shaderConfig._cache          cache object used by the ShaderLayer's controls
+     * @property {Object} shaderConfig.cache          cache object used by the ShaderLayer's controls
      */
 
     /**
@@ -51,8 +51,8 @@
      */
 
     /**
-     * @typedef {Object} FPOutput
-     * @typedef {Object} SPOutput
+     * @typedef {Object} RenderOutput
+     * @property {Number} sourcesLength
      */
 
     /**
@@ -78,7 +78,6 @@
          *
          * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
          *
-         * @param {Function} incomingOptions.ready                  function called when FlexRenderer is ready to render
          * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
          * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
          * @param {Boolean} incomingOptions.debug                   debug mode on/off
@@ -104,8 +103,6 @@
 
             this.webGLPreferredVersion = incomingOptions.webGLPreferredVersion;
 
-
-            this.ready = incomingOptions.ready;
             this.redrawCallback = incomingOptions.redrawCallback;
             this.refetchCallback = incomingOptions.refetchCallback;
             this.debug = incomingOptions.debug;
@@ -122,11 +119,12 @@
                 this.htmlReset = () => {};
             }
 
-            this.running = false;           // boolean; true if FlexRenderer is ready to render
+            this.running = false;
             this._program = null;            // WebGLProgram
             this._shaders = {};
             this._shadersOrder = null;
             this._programImplementations = {};
+            this.__firstPassResult = null;
 
             this.canvasContextOptions = incomingOptions.canvasOptions;
             const canvas = document.createElement("canvas");
@@ -206,7 +204,7 @@
         /**
          * Call to first-pass draw using WebGLProgram.
          * @param {FPRenderPackage[]} source
-         * @return {FPOutput}
+         * @return {RenderOutput}
          * @instance
          * @memberof FlexRenderer
          */
@@ -215,25 +213,26 @@
             if (this.useProgram(program, "first-pass")) {
                 program.load();
             }
-            const result =  program.use(source);
+            const result = program.use(this.__firstPassResult, source);
             if (this.debug) {
                 this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
             }
+            this.__firstPassResult = result;
+            this.__firstPassResult.sourcesLength = source.length;
             return result;
         }
 
         /**
          * Call to second-pass draw
-         * @param {FPOutput} source
          * @param {SPRenderPackage[]} renderArray
-         * @return {*}
+         * @return {RenderOutput}
          */
-        secondPassProcessData(source, renderArray) {
+        secondPassProcessData(renderArray) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
-            return program.use(source, renderArray);
+            return program.use(this.__firstPassResult, renderArray);
         }
 
         /**
@@ -284,6 +283,7 @@
             if ($.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
+                this.gl.useProgram(webglProgram);
                 program.created(webglProgram, this.canvas.width, this.canvas.height);
                 return key;
             }
@@ -360,8 +360,6 @@
             }
 
             if (!this.running) {
-                //TODO: might not be the best place to call, timeout necessary to allow finish initialization of OSD before called
-                setTimeout(() => this.ready());
                 this.running = true;
             }
             return needsUpdate;
@@ -385,8 +383,10 @@
             if (!implementation) {
                 return;
             }
+            implementation.unload();
             implementation.destroy();
             this.gl.deleteProgram(implementation._webGLProgram);
+            this.__firstPassResult = null;
             this._programImplementations[key] = null;
         }
 
@@ -439,7 +439,6 @@
                 shaderConfig: shaderConfig,
                 webglContext: this.webglContext,
                 controls: shaderConfig._controls,
-                cache: shaderConfig._cache,
                 params: shaderConfig.params,
                 interactive: this.interactive,
 
@@ -540,6 +539,7 @@
 
         destroy() {
             this.htmlReset();
+            this.deleteShaders();
             for (let pId in this._programImplementations) {
                 this.deleteProgram(pId);
             }
@@ -560,7 +560,125 @@
             return key;
         }
 
-        _showOffscreenMatrix(fpOutput, length, {
+        // Todo below are debug and other utilities hardcoded for WebGL2. In case of other engines support, these methods
+        //  must be adjusted or moved to appropriate interfaces
+
+        /**
+         * Convenience: copy your RenderOutput {texture, stencil} to desination.
+         * Returns { texture: WebGLTexture, stencil: WebGLTexture } in the destination context.
+         *
+         * @param {OpenSeadragon.FlexRenderer} dst
+         * @param {RenderOutput} [renderOutput]  first pass output to copy, defaults to latest internal state
+         * @param {Object} [opts]  options
+         * @return {RenderOutput}
+         */
+        copyRenderOutputToContext(dst, renderOutput = undefined, {
+            level = 0,
+            format = null,
+            type = null,
+            internalFormatGuess = null,
+        } = {}) {
+            renderOutput = renderOutput || this.__firstPassResult;
+            const out = {};
+            if (renderOutput.texture) {
+                out.texture = this._copyTexture2DArrayBetweenContexts({
+                    dstGL: dst.gl, srcTex: renderOutput.texture, dstTex: dst.__firstPassResult.texture,
+                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                });
+            }
+            if (renderOutput.stencil) {
+                out.stencil = this._copyTexture2DArrayBetweenContexts({
+                    dstGL: dst.gl, srcTex: renderOutput.stencil, dstTex: dst.__firstPassResult.stencil,
+                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                });
+            }
+            out.sourcesLength = renderOutput.sourcesLength || 0;
+            dst.__firstPassResult = out;
+            return out;
+        }
+
+        /**
+         * Copy a TEXTURE_2D_ARRAY from one WebGL2 context to another by readPixels -> texSubImage3D.
+         * Creates the destination texture if not provided.
+         *
+         * @param {Object} opts
+         * @param {WebGL2RenderingContext} opts.dstGL
+         * @param {WebGLTexture} opts.srcTex           - source TEXTURE_2D_ARRAY
+         * @param {WebGLTexture?} [opts.dstTex]        - optional destination TEXTURE_2D_ARRAY (created if omitted)
+         * @param {number} [opts.level=0]              - mip level to copy
+         * @param {GLenum} [opts.format=srcGL.RGBA]    - pixel format for read/upload
+         * @param {GLenum} [opts.type=srcGL.UNSIGNED_BYTE]  - pixel type for read/upload (supports srcGL.FLOAT if you have the extensions)
+         * @param {GLenum} [opts.internalFormatGuess]  - sized internal format for dst allocation (defaults to RGBA8 for UNSIGNED_BYTE, RGBA32F for FLOAT)
+         * @returns {WebGLTexture} dstTex
+         */
+        _copyTexture2DArrayBetweenContexts({ dstGL, srcTex, dstTex = null,
+               textureLayerCount, format = null, type = null, internalFormatGuess = null }) {
+            const gl = this.gl;
+            if (!(gl instanceof WebGL2RenderingContext) || !(dstGL instanceof WebGL2RenderingContext)) {
+                throw new Error('WebGL2 contexts required (texture arrays + tex(Sub)Image3D).');
+            }
+
+            // ---------- Inspect source texture dimensions ----------
+           // const srcPrevTex = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcTex);
+
+            if (format === null) {
+                format = gl.RGBA;
+            }
+            if (type === null) {
+                type = gl.UNSIGNED_BYTE;
+            }
+
+            const width  = this.canvas.width;
+            const height = this.canvas.height;
+            if (!width || !height || !textureLayerCount) {
+                // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+                throw new Error('Source texture level has no width/height/layers (is it initialized?)');
+            }
+
+            // ---------- Create + allocate destination texture if needed ----------
+            //const dstPrevTex = dstGL.getParameter(dstGL.TEXTURE_BINDING_2D_ARRAY);
+            dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstTex);
+
+            // todo cache fb
+            const srcFB = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, srcFB);
+
+            // ---------- Prepare source framebuffer for extraction ----------
+            // const srcPrevFB = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+
+            const layerByteLen = width * height * 4 * (type === gl.FLOAT ? 4 : 1);
+            const layerBuf = (type === gl.FLOAT) ? new Float32Array(layerByteLen / 4) : new Uint8Array(layerByteLen);
+
+            for (let z = 0; z < textureLayerCount; z++) {
+                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, srcTex, 0, z);
+                const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+                if (status !== gl.FRAMEBUFFER_COMPLETE) {
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                    gl.deleteFramebuffer(srcFB);
+                    // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+                    // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
+                    throw new Error(`Framebuffer incomplete for source layer ${z}: 0x${status.toString(16)}`);
+                }
+
+                gl.readPixels(0, 0, width, height, format, type, layerBuf);
+                dstGL.texSubImage3D(
+                    dstGL.TEXTURE_2D_ARRAY, 0,
+                    0, 0, z,
+                    width, height, 1,
+                    format, type,
+                    layerBuf
+                );
+            }
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.deleteFramebuffer(srcFB);
+            // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+            // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
+            return dstTex;
+        }
+
+        _showOffscreenMatrix(renderOutput, length, {
             scale = 1,
             pad = 8,
             drawLabels = true,
@@ -644,8 +762,8 @@
             // Iterate rows: each row = {texture i, stencil i}
             for (let i = 0; i < length; i++) {
                 // ---- texture ----
-                if (isGL2 && fpOutput.texture /* texture array */) {
-                    attachLayer(fpOutput.texture, i);
+                if (isGL2 && renderOutput.texture /* texture array */) {
+                    attachLayer(renderOutput.texture, i);
                 } else {
                     console.error('No valid texture binding for "texture" at index', i);
                     continue;
@@ -664,8 +782,8 @@
                 ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
 
                 // ---- stencil ----
-                if (isGL2 && fpOutput.stencil /* texture array */) {
-                    attachLayer(fpOutput.stencil, i);
+                if (isGL2 && renderOutput.stencil /* texture array */) {
+                    attachLayer(renderOutput.stencil, i);
                 } else {
                     console.error('No valid texture binding for "stencil" at index', i);
                     continue;
@@ -902,10 +1020,13 @@
             });
         }
         downloadTileStart(context) {
-            return context.finish(undefined, undefined, "undefined");
+            return context.finish("_blank", undefined, "undefined");
         }
         getMetadata() {
             return this;
+        }
+        getTileUrl(level, x, y) {
+            return "_blank";
         }
     };
 
@@ -1028,7 +1149,6 @@
             this.__shaderConfig = privateOptions.shaderConfig;
             this.webglContext = privateOptions.webglContext;
             this._interactive = privateOptions.interactive;
-            this._cache = privateOptions.cache ? privateOptions.cache : {};
             this._customControls = privateOptions.params ? privateOptions.params : {};
 
 
@@ -1315,6 +1435,14 @@
         destroy() {
         }
 
+        /**
+         * Proxy cache to the config object. The config object stores the cached values, which keeps consistent state.
+         * @return {Object}
+         */
+        get cache() {
+            return this.__shaderConfig.cache;
+        }
+
         // CACHE LOGIC
         /**
          * Load value from the cache, return default value if not found.
@@ -1324,7 +1452,7 @@
          * @return {String}
          */
         loadProperty(name, defaultValue) {
-            const value = this._cache[name];
+            const value = this.cache[name];
             return value !== undefined ? value : defaultValue;
         }
 
@@ -1334,10 +1462,8 @@
          * @param {String} value
          */
         storeProperty(name, value) {
-            this._cache[name] = value;
+            this.cache[name] = value;
         }
-
-
 
         // TEXTURE SAMPLING LOGIC
         /**
@@ -2634,9 +2760,7 @@ ${code}
          * Attach shaders and link WebGLProgram, catch errors.
          * @param {WebGLProgram} program
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         * @param options build options
-         * @param {String} options.vertexShader
-         * @param {String} options.fragmentShader
+         * @param {OpenSeadragon.FlexRenderer.WGLProgram} options build options
          * @param {function} onError
          * @param {boolean} debug
          * @return {boolean} true if program was built successfully
@@ -2772,10 +2896,14 @@ ${code}
         /**
          *
          * @param context
-         * @param gl {WebGLProgram} Rendering program.
+         * @param gl {WebGLRenderingContext} Rendering program.
          */
         constructor(context, gl) {
             super(context);
+            /**
+             *
+             * @type {WebGLRenderingContext}
+             */
             this.gl = gl;
             this._webGLProgram = null;
             /**
@@ -2835,8 +2963,9 @@ ${code}
 
         /**
          * Use program. Arbitrary arguments.
+         * @param {RenderOutput} renderOutput the object passed between first and second pass
          */
-        use() {
+        use(renderOutput) {
         }
 
         unload() {
@@ -3463,13 +3592,6 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
         this.textureMappingsUniformSize = 64;
     }
 
-    get webGLProgram() {
-        if (!this._webGLProgram) {
-            throw Error("Program accessed without registration - did you call this.renderer.registerProgram()?");
-        }
-        return this._webGLProgram;
-    }
-
     build(shaderMap, keyOrder) {
         if (!keyOrder.length) {
             // Todo prevent unimportant first init build call
@@ -3583,8 +3705,8 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         const program = this.webGLProgram;
 
         // Shader element indexes match element id (instance id) to position in the texture array
-        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets");
-        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes");
+        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets[0]");
+        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
         this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
 
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
@@ -3607,7 +3729,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     /**
      * Use program. Arbitrary arguments.
      */
-    use(source, renderArray) {
+    use(renderOutput, renderArray) {
         //todo flatten render array :/
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -3630,16 +3752,18 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         gl.uniform3fv(this._shaderVariables, shaderVariables);
 
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.texture);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
         gl.uniform1i(this._texturesLocation, 0);
 
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.stencil);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
+
+        return renderOutput;
     }
 
     /**
@@ -3764,7 +3888,7 @@ $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgra
         this._textureIndexes = [...Array(this._maxTextures).keys()];
         // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
         //   make the first pass shader run multiple times if the number does not suffice
-        this._maxAttachments = gl.getParameter(gl.MAX_COLOR_ATTACHMENTS);
+        // this._maxAttachments = gl.getParameter(gl.MAX_COLOR_ATTACHMENTS);
     }
 
     build(shaderMap, shaderKeys) {
@@ -3929,9 +4053,10 @@ void main() {
 
     /**
      * Use program. Arbitrary arguments.
+     * @param {RenderOutput} renderOutput
      * @param {FPRenderPackage[]} sourceArray
      */
-    use(sourceArray) {
+    use(renderOutput, sourceArray) {
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
         gl.enable(gl.STENCIL_TEST);
@@ -4030,10 +4155,12 @@ void main() {
         gl.disable(gl.STENCIL_TEST);
         gl.bindVertexArray(null);
 
-        return {
-            texture: this.fpTexture,
-            stencil: this.fpTextureClip
-        };
+        if (!renderOutput) {
+            renderOutput = {};
+        }
+        renderOutput.texture = this.fpTexture;
+        renderOutput.stencil = this.fpTextureClip;
+        return renderOutput;
     }
 
     unload() {
@@ -4042,10 +4169,10 @@ void main() {
     setDimensions(x, y, width, height, dataLayerCount) {
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
+        // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
         this._createOffscreenTexture("stencilTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
+        // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
         const gl  = this.gl;
         if (this.stencilClipBuffer) {
@@ -4069,12 +4196,11 @@ void main() {
         this.colorTextureA = null;
         gl.deleteTexture(this.stencilTextureA);
         this.stencilTextureA = null;
-        gl.deleteTexture(this.colorTextureB);
-        this.colorTextureB = null;
-        gl.deleteTexture(this.stencilTextureB);
-        this.stencilTextureB = null;
+        // gl.deleteTexture(this.colorTextureB);
+        // this.colorTextureB = null;
+        // gl.deleteTexture(this.stencilTextureB);
+        // this.stencilTextureB = null;
 
-        gl.deleteBuffer(gl.createRenderbuffer());
         this.stencilClipBuffer = null;
 
         gl.deleteVertexArray(this.firstPassVao);
@@ -4147,37 +4273,11 @@ void main() {
             super(options);
 
             this._destroyed = false;
-            this._backupCanvasDrawer = null;
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             // We have 'undefined' extra format for blank tiles
             this._supportedFormats = ["rasterBlob", "context2d", "image", "undefined"];
             this.rebuildCounter = 0;
-
-            // Create a link for downloading off-screen textures, or input image data tiles. Only for the main drawer, not the minimap.
-            // Generated with ChatGPT, customized.
-            if (this._id === 0 && this.debug) {
-                const canvas = document.createElement("canvas");
-                canvas.id = 'download-off-screen-textures';
-                canvas.href = '#';  // make it a clickable link
-                canvas.textContent = 'Download off-screen textures';
-
-                const element = document.getElementById(this.options.debugInfoContainer); // todo dirty
-                if (!element) {
-                    console.warn('Element with id "panel-shaders" not found, appending download link for off-screen textures to body.');
-                    document.body.appendChild(canvas);
-                    canvas.style.position = 'absolute';
-                    canvas.style.top = '0px';
-
-                } else {
-                    element.appendChild(canvas);
-                }
-                canvas.style.width = '250px';
-                canvas.style.height = '250px';
-                this._debugCanvas = canvas; //todo dirty
-                this._extractionFB =  this.renderer.gl.createFramebuffer();
-                this._debugIntermediate = document.createElement("canvas");
-            }
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
             this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
@@ -4221,7 +4321,8 @@ void main() {
                 usePrivateCache: true,
                 preloadCache: true,
                 copyShaderConfig: false,
-                debugInfoContainer: undefined
+                debugInfoContainer: undefined,
+                handleNavigator: true
             };
         }
 
@@ -4236,7 +4337,7 @@ void main() {
             // todo reset also when reordering tiled images!
             // or we could change order only
 
-            if (!this._isNavigatorDrawer && this.viewer.navigator) {
+            if (this.options.handleNavigator && this.viewer.navigator) {
                 this.viewer.navigator.drawer.overrideConfigureAll(shaders, shaderOrder);
             }
 
@@ -4294,7 +4395,7 @@ void main() {
                 this.tiledImageCreated(tiledImage);
             }
 
-            if (!this._isNavigatorDrawer && this.viewer.navigator) {
+            if (this.options.handleNavigator && this.viewer.navigator) {
                 const nav = this.viewer.navigator;
                 let tiledImageNavigator = null;
                 for (let i = 0; i < nav.world.getItemCount(); i++) {
@@ -4406,9 +4507,13 @@ void main() {
 
         /**
          * Rebuild current shaders to reflect updated configurations.
+         * @return {Promise}
          */
         rebuild() {
-            this._requestRebuild();
+            if (this.options.handleNavigator) {
+                this.viewer.navigator.drawer.rebuild();
+            }
+            return this._requestRebuild();
         }
 
         /**
@@ -4434,10 +4539,6 @@ void main() {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
 
-            // this._outputCanvas.width = this._outputCanvas.height = 1;
-            // this._renderingCanvas.width = this._renderingCanvas.height = 1;
-            // this._outputCanvas = this._outputContext = null;
-
             // this._renderingCanvas = null;
             let ext = gl.getExtension('WEBGL_lose_context');
             if (ext) {
@@ -4446,19 +4547,18 @@ void main() {
             // set our webgl context reference to null to enable garbage collection
             this._gl = null;
 
-            gl.deleteFramebuffer(this._extractionFB);
             // unbind our event listeners from the viewer
             this.viewer.removeHandler("resize", this._resizeHandler);
 
-            if (this._backupCanvasDrawer){
-                this._backupCanvasDrawer.destroy();
-                this._backupCanvasDrawer = null;
+            if (!this.options.offScreen) {
+                this.container.removeChild(this.canvas);
+                if (this.viewer.drawer === this){
+                    this.viewer.drawer = null;
+                }
             }
 
-            this.container.removeChild(this.canvas);
-            if (this.viewer.drawer === this){
-                this.viewer.drawer = null;
-            }
+            this.renderer.destroy();
+            this.renderer = null;
 
             // set our destroyed flag to true
             this._destroyed = true;
@@ -4472,27 +4572,38 @@ void main() {
             this._requestBuildStamp = Date.now();
             if (this._rebuildHandle) {
                 if (!force) {
-                    return;
+                    return $.Promise.resolve();
                 }
                 clearTimeout(this._rebuildHandle);
             }
-            this._rebuildHandle = setTimeout(() => {
-                if (!this._configuredExternally) {
-                    this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
-                        item.__shaderConfig.id));
-                }
-                this._buildStamp = Date.now();
 
-                //todo internals touching
+            if (timeout === 0) {
+                this._buildStamp = Date.now();
                 this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
                 // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                 this.rebuildCounter++;
-                this._rebuildHandle = null;
-                setTimeout(() => {
-                    this.viewer.forceRedraw();
-                });
-            }, timeout);
+                return $.Promise.resolve();
+            }
+
+            return new $.Promise((success, _) => {
+                this._rebuildHandle = setTimeout(() => {
+                    if (!this._configuredExternally) {
+                        this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
+                            item.__shaderConfig.id));
+                    }
+                    this._buildStamp = Date.now();
+                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
+                    // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
+                    this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                    this.rebuildCounter++;
+                    this._rebuildHandle = null;
+                    success();
+                    setTimeout(() => {
+                        this.viewer.forceRedraw();
+                    });
+                }, timeout);
+            });
         }
 
         /**
@@ -4563,24 +4674,23 @@ void main() {
             let scaleMatrix = $.Mat3.makeScaling(2 / view.bounds.width * flipMultiplier, -2 / view.bounds.height);
             let rotMatrix = $.Mat3.makeRotation(-view.rotation);
             let viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
-            this._drawTwoPass(tiledImages, view, viewMatrix);
+
+            if (this._drawTwoPassFirst(tiledImages, view, viewMatrix)) {
+                this._drawTwoPassSecond(view);
+            }
         } // end of function
 
         /**
          * During the first-pass draw all tiles' data sources into the corresponding off-screen textures using identity rendering,
          * excluding any image-processing operations or any rendering customizations.
-         * During the second-pass draw from the off-screen textures into the rendering canvas,
-         * applying the image-processing operations and rendering customizations.
          * @param {OpenSeadragon.TiledImage[]} tiledImages array of TiledImage objects to draw
          * @param {Object} viewport has bounds, center, rotation, zoom
          * @param {OpenSeadragon.Mat3} viewMatrix
          */
-        _drawTwoPass(tiledImages, viewport, viewMatrix) {
+        _drawTwoPassFirst(tiledImages, viewport, viewMatrix) {
             const gl = this._gl;
-            let firstPassOutput;
 
             // FIRST PASS (render things as they are into the corresponding off-screen textures)
-
             const TI_PAYLOAD = [];
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
@@ -4664,18 +4774,18 @@ void main() {
 
             if (!TI_PAYLOAD.length) {
                 this.renderer.gl.clear(gl.COLOR_BUFFER_BIT);
-                return;
+                return false;
             }
-            firstPassOutput = this.renderer.firstPassProcessData(TI_PAYLOAD);
+            this.renderer.firstPassProcessData(TI_PAYLOAD);
+            return true;
+        }
 
-            // // DEBUG; export the off-screen textures as canvases  TODO some more elegant view
-            // if (this.debug) {
-            //     // wait for the GPU to finish rendering into the off-screen textures
-            //     gl.finish();
-            //
-            //     this._extractOffScreenTexture(firstPassOutput, this.viewer.world.getItemCount());
-            // }
-
+        /**
+         * During the second-pass draw from the off-screen textures into the rendering canvas,
+         * applying the image-processing operations and rendering customizations.
+         * @param {Object} viewport has bounds, center, rotation, zoom
+         */
+        _drawTwoPassSecond(viewport) {
             const sources = [];
             const shaders = this.renderer.getAllShaders();
 
@@ -4695,12 +4805,13 @@ void main() {
 
             if (!sources.length) {
                 this.viewer.forceRedraw();
-                return;
+                return false;
             }
 
-            this.renderer.secondPassProcessData(firstPassOutput, sources);
-            gl.finish();
-        } // end of function
+            this.renderer.secondPassProcessData(sources);
+            this.renderer.gl.finish();
+            return true;
+        }
 
         _getTileRenderMeta(tile, tiledImage) {
             let result = tile._renderStruct;
@@ -4777,67 +4888,6 @@ void main() {
         }
 
         /**
-         * Extract texture data into the canvas in this.offScreenTexturesAsCanvases[index] for debugging purposes.
-         * @returns
-         */
-        // Generated with ChatGPT, customized.
-        _extractOffScreenTexture(fpOutput, length) {
-            let dx = 0;
-            if (!this._debugCanvas) {
-                return;
-            }
-            const gl = this._gl;
-            const width = this._size.x;
-            const height = this._size.y;
-
-            // create a temporary framebuffer to read from the texture layer
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this._extractionFB);
-            this._debugCanvas.width = width;
-            this._debugCanvas.height = height;
-            this._debugIntermediate.width = width;
-            this._debugIntermediate.height = height;
-
-            const ctx = this._debugCanvas.getContext('2d');
-            const contextIntermediate = this._debugIntermediate.getContext('2d');
-
-            for (let index = 0; index < length * 2; index++) {
-
-                if (this.webGLVersion === "1.0") {
-                    // attach the texture to the framebuffer
-                    //TODO
-                    // gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this._offScreenTextures[index], 0);
-                } else {
-                    // attach the specific layer of the textureArray to the framebuffer todo make render debug info inside the renderer so we do not touch internals
-                    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, fpOutput.texture, 0, index);
-                }
-
-                // check if framebuffer is complete
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error(`Framebuffer is not complete, could not extract offScreenTexture index ${index}`);
-                    return;
-                }
-
-                // read pixels from the framebuffer
-                const pixels = new Uint8ClampedArray(width * height * 4);  // RGBA format needed???
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-                const imageData = new ImageData(pixels, width, height);
-                contextIntermediate.putImageData(imageData, 0, 0);
-
-                if (index % 2 === 1) {
-                    ctx.drawImage(this._debugIntermediate, dx + 25, dx + 25);
-                } else {
-                    ctx.drawImage(this._debugIntermediate, dx, dx);
-                }
-                dx += 7;
-
-            }
-            // unbind and delete the framebuffer
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-        }
-
-        /**
          * @returns {Boolean} true
          */
         canRotate() {
@@ -4879,6 +4929,7 @@ void main() {
             this._isNavigatorDrawer = !!this.viewer.viewer;
             if (this._isNavigatorDrawer) {
                 this.options.debug = false;
+                this.options.handleNavigator = false;
             }
 
             // todo better handling, build-in ID does not comply to syntax... :/
@@ -4888,7 +4939,6 @@ void main() {
             const rendererOptions = $.extend(
                 // Default
                 {
-                    ready: () => {},
                     debug: false,
                     webGLPreferredVersion: "2.0",
                 },
@@ -4930,22 +4980,6 @@ void main() {
             return canvas;
         }
 
-        /**
-         * Get the backup renderer (CanvasDrawer) to use if data cannot be used by webgl
-         * Lazy loaded
-         * @private
-         * @returns {CanvasDrawer}
-         */
-        _getBackupCanvasDrawer(){
-            if(!this._backupCanvasDrawer){
-                this._backupCanvasDrawer = this.viewer.requestDrawer('canvas', {mainDrawer: false});
-                this._backupCanvasDrawer.canvas.style.setProperty('visibility', 'hidden');
-                this._backupCanvasDrawer.getSupportedDataFormats = () => this._supportedFormats;
-                this._backupCanvasDrawer.getDataToDraw = this.getDataToDraw.bind(this);
-            }
-
-            return this._backupCanvasDrawer;
-        }
 
         /**
          * Sets whether image smoothing is enabled or disabled.
@@ -5022,11 +5056,6 @@ void main() {
                     texture: null,
                 };
 
-                if (this.debug) {
-                    tileInfo.debugTiledImage = tiledImage;
-                    tileInfo.debugCanvas = data; //fixme possibly an image
-                }
-
                 try {
                     const texture = gl.createTexture();
                     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -5090,6 +5119,115 @@ void main() {
         }
     });
 }( OpenSeadragon ));
+
+(function($) {
+
+    $.makeStandaloneFlexDrawer = function(viewer) {
+        const Drawer = OpenSeadragon.FlexDrawer;
+
+        const options = $.extend(true, {}, viewer.drawerOptions[Drawer.prototype.getType()]);
+        options.debug = false;
+        options.htmlReset = undefined;
+        options.htmlHandler = undefined;
+        // avoid modification on navigator
+        options.handleNavigator = false;
+        options.offScreen = true;
+
+        const drawer = new Drawer({
+            viewer:             viewer,
+            viewport:           viewer.viewport,
+            element:            viewer.drawer.container,
+            debugGridColor:     viewer.debugGridColor,
+            options:            options
+        });
+
+        drawer.draw = (function (tiledImages) {
+            // Steal FP initialized textures
+            if (!this.renderer.__firstPassResult) {
+                // todo dirty, hide the __firstPassResult structure within the program logics
+                const program = this.renderer.getProgram('firstPass');
+                console.log("Stealing first pass result from the renderer: ", program.colorTextureA, program.stencilTextureA);
+                this.renderer.__firstPassResult = {
+                    texture: program.colorTextureA,
+                    stencil: program.stencilTextureA,
+                };
+            }
+
+            // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
+            viewer.drawer.renderer.copyRenderOutputToContext(this.renderer);
+            this._drawTwoPassSecond({
+                zoom: this.viewport.getZoom(true)
+            });
+
+            // const sources = [];
+            // const shaders = this.renderer.getAllShaders();
+            // for (let shaderID of this.renderer.getShaderLayerOrder()) {
+            //     const shader = shaders[shaderID];
+            //     const config = shader.getConfig();
+            //
+            //     // Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+            //     const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
+            //     sources.push({
+            //         zoom: viewport.zoom,
+            //         pixelSize: tiledImage ? this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom) : 1,
+            //         opacity: tiledImage ? tiledImage.getOpacity() : 1,
+            //         shader: shader
+            //     });
+            // }
+            //
+            // if (!sources.length) {
+            //     this.viewer.forceRedraw();
+            //     return;
+            // }
+            //
+            // this.renderer.secondPassProcessData(drawFirstPass, sources);
+
+        }).bind(drawer);
+        return drawer;
+
+        // todo consider generic solution for all drawers like this (might be hard to do though...)
+        // const freeTileMap = {};
+
+        //
+        // const drawCall = drawer.draw.bind(drawer);
+        // drawer.draw = function (tiledImages) {
+        //     throw Error("Standalone drawer cannot draw: use async offScreenDraw() instead.");
+        // };
+        //
+        // drawer.offScreenDraw = async function (tiledImages) {
+        //     const drawStamp = Date.now();
+        //     for (const image of tiledImages) {
+        //         const tileList = image.getTilesToDraw();
+        //
+        //         for (const tileSpec of tileList) {
+        //             const cache = tileSpec.tile.getCache();
+        //             const iCacheRef = cache._getInternalCacheRef(drawer);
+        //             if (!iCacheRef) {
+        //                 await cache.prepareInternalCacheAsync(drawer);
+        //                 freeTileMap[tileSpec.tile.cacheKey] = drawStamp;
+        //             }
+        //         }
+        //     }
+        //
+        //     // Free old data
+        //     const drawerId = drawer.getId();
+        //     for (let key in freeTileMap) {
+        //         const stamp = freeTileMap[key];
+        //         if (stamp < drawStamp) {
+        //             const cache = viewer.tileCache.getCacheRecord(key);
+        //             if (cache && cache.loaded) {
+        //                 cache.destroyInternalCache(drawerId);
+        //             }
+        //             delete freeTileMap[key];
+        //         }
+        //     }
+        //
+        //     drawCall(tiledImages);
+        // };
+        // return drawer;
+    };
+
+}(OpenSeadragon));
 
 (function($) {
     /**

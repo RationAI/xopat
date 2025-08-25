@@ -29,9 +29,10 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
 		// TODO fix
-		//this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
+		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
-		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
+		// todo fix
+		// this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
 		await this.setupFromParams();
 
@@ -203,12 +204,12 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push('</span>');
 		// Wand + correction
 		modeOptions.push(vertSeparator);
-		// TODO: modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
+		modeOptions.push(defaultModeControl(modes.MAGIC_WAND));
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
-		modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
-		modeOptions.push(vertSeparator);
+		// modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
+		// modeOptions.push(vertSeparator);
 
 		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
 		modeOptions.push(this.context.mode.customHtml());
@@ -365,6 +366,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
 		};
 
+        // FIXME event no longer exist
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => this.setupActiveTissue());
 		VIEWER.addHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));

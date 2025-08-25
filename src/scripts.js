@@ -358,9 +358,7 @@ function initXopatScripts() {
         };
 
         //by default omit underscore
-        return APPLICATION_CONTEXT.layersAvailable && window.WebGLModule
-            ? JSON.stringify(data, OpenSeadragon.FlexRenderer.jsonReplacer)
-            : JSON.stringify(data, (key, value) => key.startsWith("_") ? undefined : value);
+        return JSON.stringify(data, OpenSeadragon.FlexRenderer.jsonReplacer);
     };
 
     /**

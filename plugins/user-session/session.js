@@ -15,6 +15,7 @@ addPlugin("user-session", class extends XOpatPlugin {
         this.authenticate();
 
         const _this = this;
+        // FIXME fix this event no longer exist
         VIEWER.addHandler('background-image-swap', e => {
             _this.setupActiveTissue(e.backgroundSetup);
         });

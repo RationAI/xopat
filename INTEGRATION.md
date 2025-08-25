@@ -167,6 +167,8 @@ Also, for multi-tile fethching see ``src/external/dziexttilesource.js`` Extended
 > urls. Just remember to keep the order of URLs given as ``data`` param to ``data_group_protocol``.
 
 
+# FIXME update docs
+ 
 ### Custom Synchronous And Asynchronous Protocols
 We prefer for the visualization data to come in synchronous requests due to scalability.
 It is a fact that most image servers do not support queries for multiple images at once;
@@ -179,9 +181,18 @@ Note that you can add your custom headers, use both GET and POST and even implem
 your custom data fetching and presentation logics.
 
 Step by step for synchronous transfer implementation
-1. First, you need to configure the viewer so that it uses your protocol:
-    > "data_group_protocol": \`${path}?Deepzoom=${data[0]}.dzi\`
-2. Then, implement a ``TileSource`` interface to correctly work with the image array metadata
+1. First, you need to configure the viewer so that it uses your protocol - 
+in the viewer configuration JSON, set up ``data_group_protocol`` to your protocol. 
+It is an one-liner expression evaluated at startup. This can be done in several ways using different data:
+    1. `string` - treated as an URL, issues the initial request for the data. It should return data that your desired protocol understands.
+       Example:
+        >    "data_group_protocol": \`${path}?Deepzoom=${data[0]}.dzi\`
+    2. `object` - treated as custom configuration, it is up to the implementation to decide how to fetch metadata
+        and individual tiles. The advantage is that this request does not fire URL immediatelly, but it is under your control. 
+        Object properties are arbitrary. Example:
+        >    "data_group_protocol": \`{"type": "myCustomProtocol", "data": "${data[0]}"}`
+2. If you are using one of existing protocols, you are done. Otherwise, you need to provide interaction logics.
+2. To provide interaction logics, implement a ``TileSource`` interface and attach it to the `OpenSeadragon` namespace.
     - ``supports()`` - make sure when the response of `data_group_protocol` - dependent request
     - ``configure()`` - make sure the response data, given url and post-data present in the url after `#` sign (if applicable)
    is correctly parsed to provide the ``TileSource`` with necessary metadata. All the metadata required
@@ -199,161 +210,112 @@ a black tile in case some tile is missing. Tiles must have the same ``tileSize``
    - You do not have to care about cache-related API of ``TileSource``, this is handled by the rendering routine. But:
    - The renderer can work by default with vertically-concatenated tiles in a single image or image arrays.  If you finish job with different data type, custom rendering methods can be added to the WebGL data loader - see the module docs.
 
----
-
-Step by step for asynchronous transfer implementation (demonstrated on DeepZoom protocol). Some steps might seem difficult, please check the [Advanced Data API model documentation](https://openseadragon.github.io/examples/advanced-data-model/).
-1. Turn on the ``fetchAsync`` flag in the viewer.
-2. Now, data group protocol gives you only the first data URL, i.e. ``data[0]``, so construct a protocol like so:
-    > "data_group_protocol": \`${path}?Deepzoom=${data}.dzi\` //compatible with DeeepZoom
-2. Now, the OSD will recognize the image array requests as a basic DZI protocol. Since we re-use DeepZoom, we
-   will adjust the DeepZoom implementation to support tile request mutliplexing:
-   - **New API** ``multiConfigure(urls)`` - method gets a list of configuration URLs for all tile sources independently, e.g. 
-   ``data_group_protocol`` applied on each tile URL. use this method to remember the URLs and parse necessary metadata
-   from them to create requests for each tile (e.g. by regex matching while having an invariant of equal image metadata without
-   explicit verification; or by really using the URL and parsing the metadata). 
-   The idea is that once you start adjusting the protocol to fetch the tile data, 
-   you create a request for each tile and return an array of image results (or other desired type).
-4. We now re-implement a data fetching that awaits all tile data of given ``level``, ``x`` and ``y`` coordinates (can be forwarded within the
-   post data) and call finish with an array of images. As before, you do not have to care
-   about cache-related API of the TileSource, however, providing incompatible data to the system
-   means you have to define how the data is loaded to GPU - see the WebGL module.
 <details>
 <summary>Exemplary Implementation</summary>
 Note this approach does not explicitly verify the image array meta compatibility. `this` refers
 to the tile source instance, as if we called this in some method that injects the 
 
-    this.multiConfigure = function(urls) {
-        //extract tile urls from the post data/url
-        if (this.postData) {
-            //for simplicity
-            console.error('DeepZoom Mutliplex does not support POST queries!');
-        } else {
-            //just parse DZI to build tile queries without checking the meta
-            this.URLs = urls.map(url => url.replace(
-                /([^\/]+?)(\.(dzi|xml|js)?(\?[^\/]*)?)?\/?$/, '$1_files/'));
+````js
+OpenSeadragon.MyCustomTileSource = class extends OpenSeadragon.TileSource {
+
+    constructor(options) {
+        super(options);
+        // Example support for authentication within tileSource
+        // FIXME: make this tile-source-wide support no matter the implementation
+        if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
+            const user = XOpatUser.instance();
+            user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
+            user.addHandler('secret-updated', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = e.secret));
+            user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
+            user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
         }
     }
 
-    this.__cached_getTilePostData = this.getTilePostData;
-    this.getTilePostData = function(level, x, y) {
-        return [level, x, y];
-    }
 
-    //see https://stackoverflow.com/questions/41996814/how-to-abort-a-fetch-request
-    function abortableFetch(input, init) {
-        let controller = new AbortController();
-        let signal = controller.signal;
-        init = Object.assign({signal}, init);
-        let promise = fetch(input, init);
-        promise.controller = controller;
-        return promise;
-    }
-
-    //tile black image data, memoized
-    let blackImage = (resolve, reject) => {
-        const canvas = document.createElement('canvas');
-        canvas.width = context.getTileWidth();
-        canvas.height = context.getTileHeight();
-        const ctx = canvas.getContext('2d');
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const img = new Image(canvas.width, canvas.height);
-        img.onload = () => {
-            //next promise just returns the created object
-            blackImage = (ready, _) => ready(img);
-            resolve(img);
-        };
-        img.onerror = img.onabort = reject;
-        img.src = canvas.toDataURL();
-    };
-
-    this.setFormat = function(format) {
-        this.fileFormat = format;
-    }
-
-    this.downloadTileStart = function(imageJob) {
-        let count = URLs.length, errors = 0;
-        const context = imageJob.userData,
-            finish = (error) => {
-                if (error) {
-                    imageJob.finish(null, context.promise, error);
-                    return;
-                }
-                count--;
-                if (count < 1) {
-                    if (context.images.length < 1) context.images = null;
-                    if (errors === URLs.length) {
-                        imageJob.finish(null, context.promise, "All images failed to load!");
-                    } else {
-                        imageJob.finish(context.images, context.promise);
-                    }
-                }
-            },
-            fallBack = (i) => {
-                errors++;
-                return blackImage(
-                    (image) => {
-                        context.images[i] = image;
-                        finish();
-                    },
-                    () => finish("Failed to create black image!")
-                );
-            };
-    
-            const coords = imageJob.postData,
-                success = () => {
-                   finish(null)
-                };
-                self = this;
-
-        //ignored: use just ajax allways: if (imageJob.loadWithAjax)...
-        context.images = new Array(count);
-            for (let i = 0; i < count; i++) {
-            const img = new Image();
-            img.onerror = img.onabort = fallBack.bind(this, i);
-            img.onload = success;
-            context.images[i] = img;
-        }
-
-        context.promises = URLs.map((url, i) => {
-            //re-contruct the data
-            let furl;
-            if (self.postData) {
-                //for simplicity
-                console.error('DeepZoom Mutliplex does not support POST queries!');
-            } else {
-                //Just the old good DZI, query params are parsed in the configure call, reuse for all tiles
-                furl = [url, coords[0], '/', coords[1], '_', coords[2], '.', this.fileFormat, this.queryParams ].join( '' ); 
-                method = "GET";
+    /**
+     * Determine if the data and/or url imply the image service is supported by
+     * this tile source.
+     * @param {(Object|Array<Object>)} data
+     * @param {String} url
+     */
+    supports( data, url ) {
+        if (data.data && data.type && data.type === "myCustomProtocol") {
+            data.ajaxHeaders = data.ajaxHeaders || {};
+            const user = XOpatUser.instance();
+            const secret = user.getSecret();
+            if (secret) {
+                data.ajaxHeaders["Authorization"] = user.getSecret();
             }
+            return true;
+        }
+        return false;
+    }
 
-            return abortableFetch(furl, {
-                method: 'GET',
-                mode: 'cors',
-                cache: 'no-cache',
-                credentials: 'same-origin',
-                headers: imageJob.ajaxHeaders || {},
-                body: null
-            }).then(data => data.blob()).then(blob => {
-                if (imageJob.userData.didAbort) throw "Aborted!";
-                const url = URL.createObjectURL(blob);
-                context.images[i].src = url;
-                //note you should free the object url after image load completion! 
-            }).catch((e) => {
-                console.log(e);
-                fallBack(i);
+    /**
+     * Configure is called once we agree to handle certain data. Since we have not used a string,
+     * it is simply given the object we created. Pass it further, we will fetch the info ourselves.
+     * @param {(Object|XMLDocument)} data - the raw configuration
+     * @param {String} url - the url the data was retrieved from if any.
+     * @param {String} postData - data for the post request or null
+     * @return {Object} options - A dictionary of keyword arguments sufficient
+     *      to configure this tile sources constructor.
+     */
+    configure( data, url, postData ) {
+        if (data.type === "myCustomProtocol" && data.url) {
+            // data.url is set, which will trigger getImageInfo() and call configure second time with real data
+            return data;
+        }
+        throw new Error("Invalid configuration: supports should've returned false!");
+    }
+
+    /**
+     * Not needed to define if we use string to initialize a tile source. But here, we have a custom 
+     * object and thus need to somehow define logics of how to handle the data.
+     * @param url
+     */
+    getImageInfo(url) {
+        fetch(url, {
+            headers: this.ajaxHeaders || {}
+        }).then(async res => {
+            const text = await res.text();
+            const json = JSON.parse(text);
+            if (res.status !== 200) {
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
+            }
+            return json;
+        }).then(imageInfo => {
+            const data = this.configure(imageInfo, url, null);
+            // necessary TileSource props that wont get set manually
+            data.dimensions  = new OpenSeadragon.Point( data.width, data.height );
+            data.aspectRatio = data.width / data.height;
+            data.ready = true;
+            OpenSeadragon.extend(this, data);
+            this.raiseEvent('ready', {tileSource: this});
+        }).catch(e => {
+            this.raiseEvent( 'open-failed', {
+                message: e,
+                source: url,
+                postData: null
             });
         });
     }
-    this.downloadTileAbort = function(imageJob) {
-        imageJob.userData.didAbort = true;
-        imageJob.userData.promises?.forEach(p => p.controller.abort());
+
+    getMetadata() {
+        return this.metadata;
     }
 
-    //here is a bit of an exception, rendering injects its own data pipeline
-    //handling, so we do not have to overide getCache*() functions although
-    //we finish() the job with images array, such array is furthermore
-    //compatible with the rendering engine so we are done
+    /**
+     * @param {Number} level
+     * @param {Number} x
+     * @param {Number} y
+     * @return {string}
+     */
+    getTileUrl( level, x, y ) {
+        // todo: define your way of getting a tile url. example:
+        return `localhost:8080/${level}/${x}_${y}.png`;
+    }
+};
+````
 
 </details>
 
@@ -411,25 +373,9 @@ The WebGL module responsible for interactive visualizations supports
 different contexts for different versions of WebGL. In order to
 support all versions, you have to correctly define how your data
 is loaded as a texture to the GPU.
-The process happens as follows:
- - define what data is getting fetched inside your child protocol by overriding ``OpenSeadragon.TileSrouce::downloadTileStart``
-   - ``finish()`` method of the options is given the data
-   - you should override this method to return custom data instead of trying to try to load it as an image object
-   - you do not have to override any other cache (or rendering) -related methods in this function, everything else is taken care of
-     - **only when used for ``data`` group, otherwise see below**
- - this data is being propagated automatically all the way to the WebGL module
-   - note that this is not true for ``background`` group and you should define also how cache works in that case
- - the module uses ``dataLoader.js`` to load textures to the GPU - you should either extend the data loading strategy
-   - add loading strategy to all ``WebGLModule.DataLoader.V[X]_[Y].loadersByType`` classes for all `X.Y` WebGL versions you want to support. Define
-   a key that corresponds to your data type, the type is obtained as ``toString.apply(data)``
- - or implement the whole data loader interface
-   - you get the same data as ``data`` object within `toCanvas(...)` method
-   - for WebGL 1.0, `i`th texture is loaded as `TEXTURE_i` - up to max texture units of the given machine
-   - for WebGL 2.0, `i`th texture is loaded as `2D_TEXTURE_ARRAY` `i`th element, sampled as texture 3D with `z` coordinate = `i`
-   - you can load the texture any way you like, ignoring the above, but you should make sure that ``sampleChannel(index, ...)`` samples `index=i`th texture
-   - all sampling overflows should be wrapped, e.g. overflow of texture coordinates behaves as
-     - ``TEXTURE_WRAP_S``
-     - ``TEXTURE_WRAP_T``
+
+This is done by implementing target _convertors_ or ensuring the viewer has support for
+your data type. FIXME: allow custom types in the drawer, support custom data for textures.
 
 Doing so will enable you to use ANY (raster) data in the viewer, e.g.,
 reading from a zip file.
