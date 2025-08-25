@@ -1032,10 +1032,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
                                         <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
                                     </div>`;
+
+                const slideName = this.CreateSlideTop();
+
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "navigator", icon: "fa-map", title: "Navigator", body: [viewer]},
+                {id: "navigator", icon: "fa-map", title: "Navigator", body: [slideName.create(), viewer]},
                 {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
                 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
@@ -1056,6 +1059,33 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                 } 
             },
+            CreateSlideTop: function () {
+                const { input } = van.tags;
+
+                const text = new UI.Div(
+                    {id: "tissue-title-content", 
+                    class: "", 
+                    extraClasses: {btn: "btn btn-primary btn-sm"}, 
+                    extraProperties: {style: "flex-grow: 1; box-sizing: border-box; vertical-align: center", title: "Copy"},
+                    onClick: function () {
+                        UTILITIES.copyToClipboard(this.textContent);
+                    }
+                    },); 
+                    
+                const checkbox = new UI.Div(
+                    {id: "global-tissue-visibility",
+                    class: "", 
+                    extraClasses: {btn: "btn btn-primary btn-sm"},
+                    style: "display: flex; align-items: center;"},
+                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
+                        onchange: function () { 
+                            VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
+                        }}))
+                
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraProperties:{style: "width:300px"}}, checkbox, text);
+                return menu;
+            },
+            
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 const { div, span, h3 } = van.tags();
                 const titleHtmlIn = div();
@@ -1164,42 +1194,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 shadersMenu.innerHTML = innerHTML;
                 return shadersMenu;
             },
-        },
-
-        /**
-         * Application TopRightMenu
-         * @namespace USER_INTERFACE.TopSlideMenu
-         */
-        TopSlideMenu:{
-            context: $("#top-slide"),
-            menu: "",
-
-            init: function () {
-                const { input } = van.tags;
-
-                const text = new UI.Div(
-                    {id: "tissue-title-content", 
-                    class: "", 
-                    extraClasses: {btn: "btn btn-primary btn-sm"}, 
-                    extraProperties: {style: "box-sizing: border-box; vertical-align: center", title: "Copy"},
-                    onClick: function () {
-                        UTILITIES.copyToClipboard(this.textContent);
-                    }
-                    },); 
-                    
-                const checkbox = new UI.Div(
-                    {id: "global-tissue-visibility",
-                    class: "", 
-                    extraClasses: {btn: "btn btn-primary btn-sm"},
-                    style: "display: flex; align-items: center;"},
-                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
-                        onchange: function () { 
-                            VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
-                        }}))
-                
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header"}, checkbox, text);
-                menu.attachTo(this.context);
-            }
         },
 
         /**

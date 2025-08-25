@@ -400,7 +400,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     USER_INTERFACE.TopPluginsMenu.init();
     USER_INTERFACE.TopUserMenu.init();
     USER_INTERFACE.TopFullscreenButton.init();
-    USER_INTERFACE.TopSlideMenu.init();
     USER_INTERFACE.RightSideMenu.init();
     USER_INTERFACE.FullscreenMenu.init();
     USER_INTERFACE.Toolbar.init();
