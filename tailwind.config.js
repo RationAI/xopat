@@ -1,15 +1,18 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./ui/**/*"],
+  // WARNING: compiling styles for the entire app can take a few minutes
+  content: [
+    "./ui/**/*.{html,js,mjs}",
+    "./modules/**/*.{html,js}",
+    "./plugins/**/*.{html,js}",
+    "./src/**/*.{html,js}",
+    "./index.html",
+    "!**/*.min.js",
+  ],
   darkMode: ["selector", '[data-theme="catppuccin-mocha"]', '[data-theme="blood-moon"]'],
   theme: {
 
   },
-  // safelist: [
-  //   {
-  //     pattern: /./, // the "." means "everything"
-  //   },
-  // ],
   plugins: [
     require("@catppuccin/tailwindcss"),
     require("daisyui")

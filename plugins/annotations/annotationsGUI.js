@@ -1,4 +1,36 @@
 class AnnotationsGUI extends XOpatPlugin {
+	/**
+	 * @typedef {{
+	 * 	show?: boolean;
+	 * 	pos?: {
+	 * 		x: number;
+	 * 		y: number;
+	 * 	}
+	 * 	private?: boolean;
+	 * 	comments?: {
+	 * 		author: string;
+	 * 		date: Date;
+	 * 		content: string;
+	 * 	}
+	 * }} AnnotationMenuOptions
+	 */
+
+	static annotationMenuIconOrder = [
+		"private", "locked", "comments"
+	]
+
+	/**
+	 * Check if an array of menu icons is sorted per annotationMenuIconOrder
+	 * @param {string[]} array 
+	 * @returns {boolean}
+	 */
+	static _isAnnotationMenuSorted(array) {
+		const order = AnnotationsGUI.annotationMenuIconOrder;
+		return (
+			array.length === order.length &&
+			array.every((v, i) => v.includes(order[i]))
+		)
+	}
 
 	//todo test with multiple swap bgimages
 	constructor(id) {
@@ -56,6 +88,9 @@ class AnnotationsGUI extends XOpatPlugin {
 			_this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat($(this).val()));
 		});
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
+
+		this._copiedAnnotation = null;
+		this._copiedPos = {x: 0, y: 0};
 	}
 
 	async setupFromParams() {
@@ -406,6 +441,10 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
+		this.context.addHandler('annotation-set-private', e => {
+			this.context.canvas.requestRenderAll();
+		})
+
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
 			if ((this.context.presets.right && this.context.mode !== this.context.Modes.AUTO)
@@ -442,6 +481,69 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					},
 				});
 			});
+
+			if (active) {
+				const props = this._getAnnotationProps(active);
+				const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+
+				actions.push({
+					title: "Modify annotation:",
+				})
+				actions.push({
+					title: props.private ? "Unmark as private" : "Mark as private",
+					icon: props.private ? "visibility" : "visibility_lock",
+					action: () => {
+						handlerMarkPrivate();
+					}
+				})
+			}
+
+			actions.push({
+				title: "Actions:",
+			});
+
+			const mousePos = this._getMousePosition(e);
+
+			const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Copy",
+				icon: "content_copy",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCopy();
+				}
+			})
+
+			const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Cut",
+				icon: "content_cut",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCut();
+				}
+			})
+
+			const canPaste = this._canPasteAnnotation(e);
+			const handlerPaste = this._pasteAnnotation.bind(this, e);
+			actions.push({
+				title: "Paste",
+				icon: "content_paste",
+				containerCss: !canPaste && 'opacity-50',
+				action: () => {
+					if (canPaste) handlerPaste();
+				}
+			})
+
+			const handlerDelete = this._deleteAnnotation.bind(this, active);
+			actions.push({
+				title: "Delete",
+				icon: "delete",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerDelete();
+				}
+			})
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
@@ -1186,6 +1288,81 @@ class="btn m-2">Set for left click </button></div>`
 		return false;
 	}
 
+	_getMousePosition(e, checkBounds = true) {
+		const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+		if (!image) return {x: 0, y: 0};
+		const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+
+		const {x, y} = image.windowToImageCoordinates(screen);
+		const {x: maxX, y: maxY} = image.getContentSize();
+
+		if (
+			checkBounds && (
+				x <= 0 ||
+				y <= 0 ||
+				x >= maxX ||
+				y >= maxY
+			)
+		) {
+			return false;
+		}
+		return {x, y};
+	}
+
+	_copyAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+	}
+
+	_cutAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+		this._deleteAnnotation(annotation);
+	}
+
+	_deleteAnnotation(annotation) {
+		this.context.deleteObject(annotation);
+		this.context.canvas.requestRenderAll();
+	}
+
+	_canPasteAnnotation(e, getMouseValue = false) {
+		if (!this._copiedAnnotation) return null;
+		const mousePos = this._getMousePosition(e);
+		if (getMouseValue) return mousePos;
+		else return !!mousePos;
+	}
+
+	_pasteAnnotation(e) {
+		const mousePos = this._canPasteAnnotation(e, true);
+		if (!mousePos) {
+			if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
+			return;
+		}
+
+		const annotation = this._copiedAnnotation;
+		const factory = annotation._factory();
+
+		const copy = factory.copy(annotation);
+		const res = factory.translate(
+			copy,
+			{
+				x: mousePos.x + this._copiedPos.x,
+				y: mousePos.y + this._copiedPos.y,
+			},
+			true
+		);
+		this.context.addAnnotation(res);
+		factory.renderAllControls(res);
+	}
+
 	_clickAnnotationChangePreset(annotation) {
 		if (this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
@@ -1198,6 +1375,19 @@ class="btn m-2">Set for left click </button></div>`
 			_this.context.canvas.requestRenderAll();
 		}, 150);
 		return false;
+	}
+
+	_clickAnnotationMarkPrivate(annotation) {
+		const _this = this;
+		const newValue = !this._getAnnotationProps(annotation).private;
+
+		_this.context.setAnnotationPrivate(annotation, newValue);
+	}
+
+	_getAnnotationProps(annotation) {
+		return {
+			private: annotation.private
+		};
 	}
 
 	createNewPreset(buttonNode, isLeftClick) {

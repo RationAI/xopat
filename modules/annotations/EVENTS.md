@@ -33,6 +33,9 @@ It can be called several times during one edit action.
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
 
+##### annotation-set-private | ``{object: fabric.Object}``
+This event is fired when the `private` property of an annotation changes
+
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
 ##### preset-create | ``{preset: OSDAnnotations.Preset}``
@@ -72,6 +75,5 @@ Called when the annotation modes did not handle mouse release action.
 
 ##### canvas-release-not-handled
 Called when the annotation modes did not handle mouse release action.
-
 
 Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.
