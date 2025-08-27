@@ -90,6 +90,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
 
 		this._copiedAnnotation = null;
+		this._copiedPos = {x: 0, y: 0};
 	}
 
 	async setupFromParams() {
@@ -501,7 +502,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				title: "Actions:",
 			});
 
-			const handlerCopy = this._copyAnnotation.bind(this, active);
+			const mousePos = this._getMousePosition(e);
+
+			const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
 			actions.push({
 				title: "Copy",
 				icon: "content_copy",
@@ -511,7 +514,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				}
 			})
 
-			const handlerCut = this._cutAnnotation.bind(this, active);
+			const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
 			actions.push({
 				title: "Cut",
 				icon: "content_cut",
@@ -1306,11 +1309,21 @@ class="btn m-2">Set for left click </button></div>`
 		return {x, y};
 	}
 
-	_copyAnnotation(annotation) {
+	_copyAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
 		this._copiedAnnotation = annotation;
 	}
 
-	_cutAnnotation(annotation) {
+	_cutAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
 		this._copiedAnnotation = annotation;
 		this._deleteAnnotation(annotation);
 	}
@@ -1341,8 +1354,8 @@ class="btn m-2">Set for left click </button></div>`
 		const res = factory.translate(
 			copy,
 			{
-				x: mousePos.x,
-				y: mousePos.y,
+				x: mousePos.x + this._copiedPos.x,
+				y: mousePos.y + this._copiedPos.y,
 			},
 			true
 		);
