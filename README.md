@@ -50,3 +50,5 @@ Please, visit <https://xopat.readthedocs.io/>.
 
 ## API
 Please, see <https://rationai.github.io/xopat/>.
+
+<!--Icon finder: https://awes0mem4n.github.io/-->

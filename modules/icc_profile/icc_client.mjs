@@ -45,31 +45,61 @@ class ICCProfile extends window.XOpatModuleSingleton {
             { type: 'module' }
         );
 
-        this.ready = new Promise((res, rej) => {
-            this.worker.addEventListener('message', (e) => {
+        this.ready = new Promise((resolve, reject) => {
+            let settled = false;
+
+            const cleanup = () => {
+                this.worker.removeEventListener('message', onMessage);
+                this.worker.removeEventListener('error', onError);
+                this.worker.removeEventListener('messageerror', onMessageError);
+            };
+
+            const onMessage = (e) => {
                 const msg = e.data;
                 if (!msg) return;
 
                 if (msg.type === 'ready') {
-                    // Optional: warn if threads disabled
-                    if (!msg.threads) {
-                        console.warn('[ICC] Threads disabled (no cross-origin isolation). Running single-thread.');
+                    if (!settled) {
+                        settled = true;
+                        if (!msg.threads) {
+                            console.warn('[ICC] Threads disabled (no cross-origin isolation). Running single-thread.');
+                        }
+                        cleanup();
+                        resolve();
                     }
-                    res();
                 } else if (msg.type === 'error') {
-                    rej(new Error(msg.message ?? msg.reason ?? 'Worker init failed'));
+                    if (!settled) {
+                        settled = true;
+                        cleanup();
+                        reject(new Error(msg.message ?? msg.reason ?? 'Worker init failed'));
+                    } else {
+                        // still log later worker errors
+                        console.error('[ICC worker error after ready]', msg);
+                    }
                 }
-            });
+            };
 
-            this.worker.addEventListener('error', (e) => {
-                // Default is "Worker script error"
+            const onError = (e) => {
                 console.error('Worker script error:', e.message, 'at', e.filename, 'line', e.lineno, 'col', e.colno);
-                rej(e.error ?? new Error(e.message));
-            });
+                if (!settled) {
+                    settled = true;
+                    cleanup();
+                    reject(e.error ?? new Error(e.message || 'Worker script error'));
+                    this.earlyQueue = null;
+                }
+            };
 
-            this.worker.addEventListener('messageerror', (e) => {
+            const onMessageError = (e) => {
                 console.error('Worker messageerror', e);
-            });
+                if (!settled) {
+                    // treat as non-fatal unless you want to reject here
+                    this.earlyQueue = null;
+                }
+            };
+
+            this.worker.addEventListener('message', onMessage);
+            this.worker.addEventListener('error', onError);
+            this.worker.addEventListener('messageerror', onMessageError);
         });
 
         this.loaded = false;
@@ -99,7 +129,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
             if (type === 'profileSet') {
                 this.loaded = true;
                 const q = this.earlyQueue;
-                this.earlyQueue = []; // drain (we’ll re-queue any that are null)
+                this.earlyQueue = null; // drain (we’ll re-queue any that are null)
                 for (const item of q) {
                     const tile = item.ref.deref?.() ?? null;
                     if (!tile) { continue; } // tile no longer alive
@@ -179,11 +209,15 @@ class ICCProfile extends window.XOpatModuleSingleton {
             if (!this.loaded && source.downloadICCProfile) {
                 source.downloadICCProfile().then(data => {
                     if (data instanceof ArrayBuffer) {
+                        this.earlyQueue = [];
                         this.worker.postMessage({ type: 'setProfile', profile: data }, [data]);
                     } else {
                         throw new Error("Invalid profile data!");
                     }
-                }).catch(console.error);
+                }).catch(e => {
+                    console.warn("Failed to load icc profile data: continue without", e);
+                    this.earlyQueue = null;
+                });
             }
         });
 
@@ -216,7 +250,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 return;
             }
 
-            if (!this.loaded) {
+            if (!this.loaded && this.earlyQueue) {
                 // --- profile not ready yet → queue weakly ---
                 const token = Symbol(jobId);
                 const rec = { ref: new WeakRef(e.tile), key: jobId, bmp: bmpForWorker, before: beforeForDebug, token };
