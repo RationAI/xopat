@@ -43,7 +43,7 @@ class Toolbar extends BaseComponent{
             this.display = "none";
         }
         for (let i of args) {
-            this.addTab(i);
+            this.addToToolbar(i);
         }
     }
 
@@ -67,7 +67,6 @@ class Toolbar extends BaseComponent{
             tab.contentDiv.attachTo(this.body);
         }
 
-        document.getElementById("toolbar-drag").style.display = "";
         this.display = "";
 
         if (Object.keys(this.tabs).length === 1) {
@@ -112,8 +111,7 @@ class Toolbar extends BaseComponent{
     }
 
     create() {
-        console.log(this.display);
-        return div({id: "toolbar-drag", class: "draggable boxed", 
+        return div({id: `${this.id}`, class: "draggable boxed", 
                     style: `position: fixed; 
                             left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; 
                             top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px; 

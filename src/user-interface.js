@@ -967,7 +967,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                console.log(USER_INTERFACE.TopVisualMenu);
                 USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: "Plugins", body: [], class: UI.Dropdown});
             },
 
@@ -1210,13 +1209,91 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} icon
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                USER_INTERFACE.Toolbar.menu.addToToolbar({
+                menu = new UI.Toolbar({
+                    id: `toolbar-${ownerPluginId}`},
+                    {
                     id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
                     icon: icon,
                     title: title,
                     body: [html],
-                })
+                    })
+                menu.attachTo($("#bottom-menu-center"));
+                this.makeDraggable(`toolbar-${ownerPluginId}`);
 
+            },
+            makeDraggable(id){
+                const draggableBox = document.getElementById(id);
+                const handle = draggableBox.querySelector('.handle');
+
+                let isDragging = false;
+                let offsetX, offsetY;
+                const SNAP_DISTANCE = 20;
+
+
+                handle.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) {
+                        isDragging = true;
+                        draggableBox.classList.add('dragging');
+
+                        offsetX = e.clientX - draggableBox.getBoundingClientRect().left;
+                        offsetY = e.clientY - draggableBox.getBoundingClientRect().top;
+
+                        e.preventDefault();
+                    }
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+
+                    draggableBox.style["max-width"] = "";
+
+                    const viewportWidth = window.innerWidth;
+                    const viewportHeight = window.innerHeight;
+                    const boxWidth = draggableBox.offsetWidth;
+                    const boxHeight = draggableBox.offsetHeight;
+
+                    let newX = e.clientX - offsetX;
+                    let newY = e.clientY - offsetY;
+
+        // ----- Logika pro přilepení k okrajům -----
+
+                    // Přilepení k levému okraji
+                    if (newX < SNAP_DISTANCE) {
+                        draggableBox.style["max-width"] = "100px";
+                        newY = viewportHeight / 2 - draggableBox.offsetHeight / 2; // Center vertically
+                        newX = 0;
+                    }
+
+                    // Přilepení k dolnímu okraji
+                    else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
+                        newY = viewportHeight - boxHeight;
+                        newX = viewportWidth / 2 - boxWidth / 2; // Center horizontally
+                    }
+
+                    // Zabraňte přetažení mimo okraje (volitelné, pokud nechceš "snap", ale jen omezení)
+                    newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
+                    newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
+
+                    draggableBox.style.left = `${newX}px`;
+                    draggableBox.style.top = `${newY}px`;
+
+                    APPLICATION_CONTEXT.setOption('toolbarPositionLeft', newX);
+                    APPLICATION_CONTEXT.setOption('toolbarPositionTop', newY);
+                });
+
+                document.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        draggableBox.classList.remove('dragging');
+                    }
+                });
+
+                document.addEventListener('mouseleave', (e) => {
+                    if (isDragging && e.buttons === 1) {
+                        isDragging = false;
+                        draggableBox.classList.remove('dragging');
+                    }
+                });
             },
             /**
              * Show desired toolBar menu. Also opens the toolbar if closed.
