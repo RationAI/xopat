@@ -61,6 +61,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "id",
         "author",
         "created",
+        "private",
     ];
 
     /**
@@ -286,6 +287,55 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
+    renderIcon(ofObject, iconRenderer, index) {
+        return new fabric.Control({
+            x: 0.5,
+            y: -0.5,
+            offsetX: 25,
+            offsetY: 20 + 45 * index,
+            cursorStyle: 'grab',
+            render: (ctx, left, top, styleOverride, fabricObject) => {
+                const icon = iconRenderer(ofObject);
+                const size = 36;
+                const radius = size / 2;
+                
+                ctx.save();
+                ctx.translate(left, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
+                
+                // bg
+                ctx.beginPath();
+                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+                
+                // outline
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                
+                // icon
+                ctx.font = `${size * 0.8}px "Material Icons"`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = 'black';
+                ctx.fillText(icon, 0, 2);
+
+                ctx.restore();
+            },
+        })
+    }
+
+    renderAllControls(ofObject) {
+        ofObject.controls = {
+            private: this.renderIcon(
+                ofObject,
+                (obj) => obj.private ? 'visibility_lock' : 'visibility',
+                0
+            ),
+        };
+    }
+
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
         for (let prop of defaultProps) {
             toObject[prop] = ofObject[prop];
@@ -422,8 +472,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
+     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
      */
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
+    }
+
+    /**
+     * Update the object coordinates to the set position
+     * @param {fabric.Object} theObject object to translate
+     * @param {Object} pos new position of object
+     * @param {number} pos.x new x value
+     * @param {number} pos.y new y value
+     * @param {'move' | 'set'} [pos.mode='set'] whether to 'move' annotation from its existing position or 'set' a new one.
+     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     */
+    translate(theObject, pos, ignoreReplace=false) {
+        let x, y;
+        if (pos.mode === 'move') {
+            x = theObject.left + pos.x;
+            y = theObject.top + pos.y;
+        } else {
+            x = pos.x;
+            y = pos.y;
+        }
+        theObject.top = y;
+        theObject.left = x;
+        this.recalculate(theObject, ignoreReplace);
+        return theObject;
     }
 
     /**
