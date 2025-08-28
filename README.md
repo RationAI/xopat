@@ -24,7 +24,8 @@ viewer tries to address issues in digital pathology related to AI adoption.
 :book: Visualization Storytelling  
 :memo: Versatile annotations and supported annotation formats.  
 :bulb: Flexible tutorial system: send viewer session with custom tutorials!  
-:keyboard: Action shortcuts (screenshot, copy of viewport location...)  
+:keyboard: Action shortcuts (screenshot, copy of viewport location...)
+:paintbrush: ICC Profiles
 ...  
 :fast_forward: And more including custom functionality!  
 
