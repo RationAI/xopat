@@ -39,6 +39,9 @@ class Toolbar extends BaseComponent{
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
         this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed" } });
 
+        if (args.length === 0){
+            this.display = "none";
+        }
         for (let i of args) {
             this.addTab(i);
         }
@@ -53,6 +56,9 @@ class Toolbar extends BaseComponent{
             throw new Error("Item for menu needs every property set.");
         }
 
+        this.header.setClass("display", "");
+        this.body.setClass("display", "");
+
         const tab = this.createTab(item);
         this.tabs[item.id] = tab;
 
@@ -60,6 +66,9 @@ class Toolbar extends BaseComponent{
         if (tab.contentDiv) {
             tab.contentDiv.attachTo(this.body);
         }
+
+        document.getElementById("toolbar-drag").style.display = "";
+        this.display = "";
 
         if (Object.keys(this.tabs).length === 1) {
             this.focus(item.id);
@@ -103,8 +112,13 @@ class Toolbar extends BaseComponent{
     }
 
     create() {
+        console.log(this.display);
         return div({id: "toolbar-drag", class: "draggable boxed", 
-                    style: `position: fixed; left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px`},
+                    style: `position: fixed; 
+                            left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; 
+                            top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px; 
+                            display: ${this.display};
+                            z-index: 1000;`},
                     div({class: "handle"}, "----"),
                     this.header.create(),
                     this.body.create()
