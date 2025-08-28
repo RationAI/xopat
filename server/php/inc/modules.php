@@ -107,9 +107,14 @@ function resolveDependencies(&$itemList) {
 
 function getAttributes($source, $properties) {
     $html = "";
-    foreach ($properties as $property=>$propScriptName) {
+    foreach ($properties as $property => $propScriptName) {
         if (isset($source[$property])) {
-            $html .= " $propScriptName=\"{$source[$property]}\"";
+            $val = $source[$property];
+            // Add type='module' automatically if src ends with .mjs and no explicit type is set
+            if ($property === 'src' && str_ends_with($val, '.mjs') && empty($source['type'])) {
+                $html .= " type=\"module\"";
+            }
+            $html .= " $propScriptName=\"" . htmlspecialchars($val, ENT_QUOTES) . "\"";
         }
     }
     return $html;
@@ -135,10 +140,22 @@ function printDependencies($directory, $item, $production) {
 
     foreach ($item["includes"] as $__ => $file) {
         if (is_string($file)) {
-            echo "    <script src=\"$directory{$item["directory"]}/$file?v=$version\"></script>\n";
+            $path = "$directory{$item["directory"]}/$file?v=$version";
+            if (str_ends_with($file, '.mjs')) {
+                echo "    <script src=\"$path\" type=\"module\"></script>\n";
+            } else {
+                echo "    <script src=\"$path\"></script>\n";
+            }
         } else if (is_array($file)) {
+            if (isset($file['src']) && !preg_match('#^https?://#', $file['src'])) {
+                $src = ltrim($file['src'], './');
+                $file['src'] = "$directory{$item["directory"]}/$src?v=$version";
+                if (str_ends_with($src, '.mjs') && empty($file['type'])) {
+                    $file['type'] = 'module';
+                }
+            }
             echo "    <script" . getAttributes($file, array(
-                    'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer',
+                    'async' => 'async', 'crossOrigin' => 'crossorigin', 'defer' => 'defer', 'type' => 'type',
                     'integrity' => 'integrity', 'referrerPolicy' => 'referrerpolicy', 'src' => 'src')) . "></script>";
         } else {
             $details = json_encode($file);
