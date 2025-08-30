@@ -53,13 +53,13 @@ self.addEventListener('unhandledrejection', (e) => {
 
 self.onmessage = async (e)=> {
     if (!self.mod) return;
-    const {type, profile, image, width, height, stride, canvas, bitmap, tileId} = e.data;
+    const {type, profile, image, width, height, stride, canvas, bitmap, contextId} = e.data;
     if (type === 'setProfile') {
         const p = self.mod._malloc(profile.byteLength);
         self.mod.HEAPU8.set(new Uint8Array(profile), p);
         self.mod.ccall('set_icc_profile', null, ['number', 'number'], [p, profile.byteLength]);
         self.mod._free(p);
-        postMessage({type: 'profileSet'});
+        postMessage({type: 'profileSet', contextId});
     } else if (type === 'process') {
         // process raw RGB buffer
         const ptr = self.mod._malloc(image.byteLength);
@@ -67,7 +67,7 @@ self.onmessage = async (e)=> {
         self.mod.ccall('process_image', null, ['number', 'number'], [ptr, image.byteLength / 3]);
         const out = self.mod.HEAPU8.slice(ptr, ptr + image.byteLength);
         self.mod._free(ptr);
-        postMessage({type: 'done', image: out.buffer, tileId}, [out.buffer]);
+        postMessage({type: 'done', image: out.buffer, contextId}, [out.buffer]);
     } else if (type === 'processBitmap' && bitmap) {
         // Draw into an OffscreenCanvas owned by the worker
         const off = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -105,6 +105,6 @@ self.onmessage = async (e)=> {
 
         // Return a fresh ImageBitmap (transferable)
         const processedBmp = await off.transferToImageBitmap();
-        postMessage({ type: 'doneBitmap', bitmap: processedBmp, tileId }, [processedBmp]);
+        postMessage({ type: 'doneBitmap', bitmap: processedBmp, contextId }, [processedBmp]);
     }
 };

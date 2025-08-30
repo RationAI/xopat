@@ -114,7 +114,6 @@ class ICCProfile extends window.XOpatModuleSingleton {
             })
             : null;
 
-
         VIEWER.addHandler("before-first-open", this.init.bind(this));
     }
 
@@ -124,7 +123,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
         this.debug = this.debug || makeDebugPanel();
 
         this.worker.onmessage = async (e) => {
-            const { type, image, bitmap, tileId } = e.data;
+            const { type, image, bitmap, contextId } = e.data;
 
             if (type === 'profileSet') {
                 this.loaded = true;
@@ -133,23 +132,26 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 for (const item of q) {
                     const tile = item.ref.deref?.() ?? null;
                     if (!tile) { continue; } // tile no longer alive
-                    // remember tile for the response
-                    this.pendingTiles[item.key] = this.debugMode
-                        ? { tile, before: item.before }
-                        : { tile };
 
-                    // ship the bitmap we saved
-                    this.worker.postMessage(
-                        { type: 'processBitmap', bitmap: item.bmp, tileId: item.key },
-                        [item.bmp]
-                    );
+                    if (item.source.url === contextId) {
+                        // remember tile for the response
+                        this.pendingTiles[item.key] = this.debugMode
+                            ? { tile, before: item.before }
+                            : { tile };
+
+                        // ship the bitmap we saved
+                        this.worker.postMessage(
+                            { type: 'processBitmap', bitmap: item.bmp, contextId: item.key },
+                            [item.bmp]
+                        );
+                    }
                 }
 
                 return;
             }
 
             if (type === 'done') {
-                const tile = this.pendingTiles[tileId];
+                const tile = this.pendingTiles[contextId];
                 if (!tile) return;
 
                 // Convert raw RGB back to RGBA
@@ -173,14 +175,14 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 tile.context2D = ctx;
                 tile.hasTransparencyChannel = false;
 
-                delete this.pendingTiles[tileId];
+                delete this.pendingTiles[contextId];
                 window.VIEWER.forceRedraw();
 
             } else if (type === 'doneBitmap') {
-                const rec = this.pendingTiles[tileId];
+                const rec = this.pendingTiles[contextId];
                 if (!rec) return;
                 const { tile, before } = rec;
-                delete this.pendingTiles[tileId];
+                delete this.pendingTiles[contextId];
 
                 if (this.debugMode && before) {
                     this.debug = this.debug || makeDebugPanel();
@@ -200,18 +202,24 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 window.VIEWER.forceRedraw();
             }
 
+            this.initEvents(window.VIEWER);
+            if (window.VIEWER.navigator) {
+                this.initEvents(window.VIEWER.navigator);
+            }
         };
+    }
 
-        window.VIEWER.world.addHandler("add-item", e => {
+    initEvents(viewer) {
+        viewer.world.addHandler("add-item", e => {
             const source = e.item.source;
 
             // todo support more than one profile
             if (!this.loaded && source.downloadICCProfile) {
                 source.downloadICCProfile().then(data => {
                     if (data instanceof ArrayBuffer) {
-                        this.earlyQueue = [];
-                        this.worker.postMessage({ type: 'setProfile', profile: data }, [data]);
+                        this.worker.postMessage({ type: 'setProfile', profile: data, contextId: source.url }, [data]);
                     } else {
+                        this.earlyQueue = [];
                         throw new Error("Invalid profile data!");
                     }
                 }).catch(e => {
@@ -225,7 +233,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
         //     remove unused profiles
         // });
 
-        window.VIEWER.addHandler('tile-loaded', async e => {
+        viewer.addHandler('tile-loaded', async e => {
             if (!e.data) return;
             const source = e.tiledImage?.source;
             if (!source?.downloadICCProfile) return;
@@ -253,7 +261,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
             if (!this.loaded && this.earlyQueue) {
                 // --- profile not ready yet → queue weakly ---
                 const token = Symbol(jobId);
-                const rec = { ref: new WeakRef(e.tile), key: jobId, bmp: bmpForWorker, before: beforeForDebug, token };
+                const rec = { ref: new WeakRef(e.tile), key: jobId, bmp: bmpForWorker, before: beforeForDebug, token, source };
                 this.earlyQueue.push(rec);
                 if (this.finalizer) this.finalizer.register(e.tile, token, rec);
 
@@ -267,7 +275,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 : { tile: e.tile };
 
             this.worker.postMessage(
-                { type: 'processBitmap', bitmap: bmpForWorker, tileId: jobId },
+                { type: 'processBitmap', bitmap: bmpForWorker, contextId: jobId },
                 [bmpForWorker] // transfer
             );
         }, null, Infinity);
