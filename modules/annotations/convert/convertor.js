@@ -120,7 +120,12 @@ OSDAnnotations.Convertor = class {
         options.exportsObjects = withAnnotations && parserCls.exportsObjects;
         options.exportsPresets = withPresets && parserCls.exportsPresets;
         const encoded = await new parserCls(context, options).encodePartial(
-            (...exportedProps) => context.toObject(exportAll, ...exportedProps).objects,
+            (...exportedProps) =>
+                context.toObject(
+                    exportAll,
+                    !context._exportPrivateAnnotations && ((o) => !o.private),
+                    ...exportedProps
+                ).objects,
             () => context.presets.toObject()
         );
         encoded.format = options.format;

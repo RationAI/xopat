@@ -387,10 +387,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 *
 	 * @param {boolean|string} withAllProps if boolean, true means export all props, false necessary ones,
 	 *   string counts as one of withProperties
+	 * @param {((object) => boolean)|string} filter callback function to filter objects (applied to fabric objects before export),
+	 *   string counts as one of withProperties
 	 * @param {string[]} withProperties list of extra properties to export
 	 * @return {object} exported canvas content in {objects:[object], version:string} format
 	 */
-	toObject(withAllProps=false, ...withProperties) {
+	toObject(withAllProps=true, filter=false, ...withProperties) {
 		let props;
 		if (typeof withAllProps === "boolean") {
 			props = this._exportedPropertiesGlobal(withAllProps);
@@ -398,11 +400,27 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			props = this._exportedPropertiesGlobal(true);
 			props.push(withAllProps);
 		}
+		
+		if (typeof filter === "string") {
+			props.push(filter);
+			filter = undefined;
+		}
+		
 		props.push(...withProperties);
 		props.push(...this._extraProps);
 		props = Array.from(new Set(props));
-		const data = this.canvas.toObject(props);
-		if (withAllProps) return data;
+		
+		let objectsToExport = this.canvas.getObjects();
+		if (filter && typeof filter === "function") {
+			objectsToExport = objectsToExport.filter(filter);
+		}
+
+		const data = {
+			version: this.canvas.version,
+			objects: objectsToExport.map(obj => obj.toObject(props))
+		};
+		
+		if (withAllProps === true) return data;
 		return this.trimExportJSON(data);
 	}
 
@@ -704,7 +722,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				object.factoryID = factory.factoryID;
 			}
 		}
-		factory.configure(object, props);
+		const conf = factory.configure(object, props);
+		conf?._factory?.().renderAllControls(conf);
 
 		//todo make sure cached zoom value
 		const zoom = this.canvas.getZoom();
@@ -858,6 +877,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 		this.canvas.renderAll();
+	}
+
+	/**
+	 * Change annotation's `private` property
+	 * @param {fabric.Object} annotation Any annotation
+	 * @param {boolean} value New value
+	 */
+	setAnnotationPrivate(annotation, value) {
+		if (annotation.private === value) return;
+		annotation.private = value;
+		this.raiseEvent('annotation-set-private', {object: annotation});
 	}
 
 	/**
@@ -1322,6 +1352,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// note the board would have to reflect the UI state when opening
 
 		const _this = this;
+		
 		/**
 		 * Attach factory getter to each object
 		 */
@@ -1350,6 +1381,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
+		this._exportPrivateAnnotations = APPLICATION_CONTEXT.getOption("exportPrivate", this.getStaticMeta("exportPrivate", false));
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -1738,6 +1770,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_objectDeselected(event) {
 		if (this.disabledInteraction || !event.target) return;
+		// this.raiseEvent('annotation-deselected', {object: event.target});
+
 		//todo make sure deselect prevent does not prevent also deletion
 		try {
 			if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
@@ -1771,7 +1805,10 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 					}
 				} else {
 					let factory = this.getAnnotationObjectFactory(object.factoryID);
-					if (factory) factory.selected(object);
+					if (factory) {
+						factory.selected(object);
+						// this.raiseEvent('annotation-selected', {object});
+					}
 				}
 			}
 		} catch (e) {
