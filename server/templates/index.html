@@ -56,11 +56,9 @@
     <div id='viewer-demo-advertising' style='display: none'>
         <h1>xOpat - The WSI Viewer</h1>
         <p>The viewer is missing the target data to view; this might happen, if</p>
-        <ul class="ml-3">
-            <li>you have an invalid link, or</li>
-            <li>the server that should deliver data is not responding</li>
-            <li>the data is not available due to authorization issues</li>
-        </ul>
+        <div id='viewer-demo-error-description'>
+            <!-- message space-->
+        </div>
         <br><br>
         <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>
         <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">
@@ -149,7 +147,7 @@ window.onerror = function (message, file, line, col, error) {
     /*------------ Basic Tutorial       -----------------------*/
     /*---------------------------------------------------------*/
 
-    const withLayers = () => APPLICATION_CONTEXT.layersAvailable;
+    const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
     window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
         {'next #viewer-container' : $.t('tutorials.basic.1')
         }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.3')

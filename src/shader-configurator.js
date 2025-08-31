@@ -87,9 +87,12 @@ var ShaderConfigurator = {
     _uniqueId: "live-setup-",
 
     staticShadersDocs: function() {
+        // TODO fix this
+        return "";
+
         let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
         const uiControls = this._buildControls();
-        for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
+        for (let shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
             let id = shader.type();
 
             html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
@@ -209,7 +212,7 @@ var ShaderConfigurator = {
     parseJSONConfig(value, controlId) {
         const config = JSON.parse(value);
         const control = this.active.layer[controlId];
-        const t = WebGLModule.UIControls.IControl.getVarType;
+        const t = OpenSeadragon.FlexRenderer.UIControls.IControl.getVarType;
 
         function extendValuesBy(to, nameMap, suffix="") {
             Object.keys(nameMap).forEach(key => {
@@ -321,7 +324,7 @@ ${JSON.stringify(params, null, '\t')}
 
     getInteractiveControlsHtmlFor: function(shaderId) {
         let shader;
-        for (let s of WebGLModule.ShaderMediator.availableShaders()) {
+        for (let s of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
             if (shaderId === s.type()) {
                 shader = s;
                 break;
@@ -408,7 +411,7 @@ ${renders.join("")}
     },
 
     getCurrentShaderConfig() {
-        return JSON.parse(JSON.stringify(this.setup.shader, WebGLModule.jsonReplacer))
+        return JSON.parse(JSON.stringify(this.setup.shader, OpenSeadragon.FlexRenderer.jsonReplacer))
     },
 
     /**********************/
@@ -452,7 +455,7 @@ ${renders.join("")}
     _buildModule: function(id, htmlRenderer, onReady) {
         if (this["__module_"+id]) return this["__module_"+id];
         const _this = this;
-        const module = new WebGLModule({
+        const module = new OpenSeadragon.FlexRenderer({
             htmlControlsId: id,
             webGlPreferredVersion: "2.0",
             htmlShaderPartHeader: htmlRenderer,
@@ -478,11 +481,33 @@ ${renders.join("")}
     _buildControls: function () {
         if (this.__uicontrols) return this.__uicontrols;
         this.__uicontrols = {};
-        let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {layer: {}});
+        let types = OpenSeadragon.FlexRenderer.UIControls.types();
+        let fallbackLayer = new OpenSeadragon.FlexRenderer.IdentityLayer("id", {
+            shaderConfig: {
+                id: "fallback__",
+                name: "Layer",
+                type: "identity",
+                visible: 1,
+                fixed: false,
+                tiledImages: [0],
+                params: {},
+                cache: {},
+            },
+            webglContext: {},
+            params: {},
+            interactive: false,
+            invalidate: () => {},
+            rebuild: () => {},
+            refetch: () => {}
+        });
         fallbackLayer.construct({}, [0]);
         for (let type of types) {
-            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
+            let ctrl = OpenSeadragon.FlexRenderer.UIControls.build(fallbackLayer, type, {
+                default: {
+                    type: type
+                },
+                accepts: () => true,
+            }, Date.now(), {});
             let glType = ctrl.type;
             ctrl.name = type;
             if (!this.__uicontrols.hasOwnProperty(glType)) this.__uicontrols[glType] = [];
@@ -663,7 +688,7 @@ ${renders.join("")}
             const _this = this,
                 keys = Object.keys(this.selectionRules),
                 REF = context.REF + ".picker",
-                allShaderTypeList = WebGLModule.ShaderMediator.availableShaders();
+                allShaderTypeList = OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders();
 
             const idPrefix = params.idPrefix || "shader-picker-";
             this.onFinish = params.onFinish || (() => {})

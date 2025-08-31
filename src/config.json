@@ -196,7 +196,8 @@
             "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
-            "unzip_it": "unzipit.min.js"
+            "unzip_it": "unzipit.min.js",
+            "render": "flex-renderer.js"
         },
         // src/external  key: source / [sources,list]
         "external": {

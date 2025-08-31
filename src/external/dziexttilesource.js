@@ -73,7 +73,6 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         }
 
         if (!this.fileFormat) this.fileFormat = ".jpg";
-        if (!this.greyscale) this.greyscale = "";
     }
 
 
@@ -155,7 +154,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      */
     getUrl( level, x, y, tiles=this.tilesUrl ) {
         return this.postData ? `${tiles}${this.queryParams}`
-            : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}${this.queryParams}`;
+            : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.queryParams}`;
     }
 
     /**
@@ -198,7 +197,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * @return {string|null} post data to send with tile configuration request
      */
     getPostData(level, x, y, data) {
-        return data ? `${data}${level}/${x}_${y}.${this.fileFormat}${this.greyscale}` : null;
+        return data ? `${data}${level}/${x}_${y}.${this.fileFormat}` : null;
     }
 
     /**
@@ -206,7 +205,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * @param index index of the data if tilesource supports multi data fetching
      * @return {TileSourceMetadata}
      */
-    getImageMetaAt(index) {
+    getMetadata() {
         //not really compatible type, but carries over the error property
         return this.ImageArray[index];
     }
@@ -234,7 +233,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
             this.downloadTileStart = function(context) {
-                const abort = context.finish.bind(context, null);
+                const abort = context.fail.bind(context, "Load aborted.");
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
@@ -289,7 +288,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
                             })
                         ).then(result =>
                             //we return array of promise responses - images
-                            context.finish(result, dataStore.request, undefined)
+                            context.finish(result, dataStore.request, "image")
                         ).catch(
                             abort
                         );

@@ -240,7 +240,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         });
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 
@@ -271,6 +271,14 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
         return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}`
+    }
+
+    /**
+     * @returns {Promise<ArrayBuffer>}
+     */
+    async downloadICCProfile() {
+        const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
+        return fetch(url).then(async res => res.arrayBuffer())
     }
 
     _setDownloadHandler(isMultiplex) {

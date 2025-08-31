@@ -6,6 +6,7 @@
 !/modules/empation-api
 !/modules/fabricjs
 !/modules/human-readable-ids
+!/modules/icc_profile
 !/modules/jwt-decode
 !/modules/menu-pages
 !/modules/oidc-client-ts
@@ -45,6 +46,7 @@ Thumbs.db
 *.min.js
 *.min.js.map
 /openseadragon/
+/openseadragon-new/
 /node_modules/
 /build/
 /coverage/

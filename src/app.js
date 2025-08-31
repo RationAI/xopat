@@ -231,25 +231,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @type XOpatStorage.Cache
          * @memberOf APPLICATION_CONTEXT
          */
-        AppCache: {
-            get() {console.warn("AppCache used before initialization.")},
-            set() {console.warn("AppCache used before initialization.")},
-        },
+        AppCache: new XOpatStorage.Cache({id: ""}),
         /**
          * Global Application Cookies.
          * @type XOpatStorage.Cookies
          * @memberOf APPLICATION_CONTEXT
          */
-        AppCookies: {
-            get() {console.warn("AppCookies used before initialization.")},
-            set() {console.warn("AppCookies used before initialization.")},
-        },
+        AppCookies: new XOpatStorage.Cookies({id: ""}),
         /**
          * Get sessionName value (fallback refereceId) from the configuration.
          * @return {string|*}
          */
         get sessionName() {
-            const config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig() || {};
+            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") || {};
             if (config["sessionName"]) return config["sessionName"];
             if (sessionName) return sessionName;
             return this.referencedId();
@@ -279,7 +273,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },
-        layersAvailable: false,
         /**
          * Get option, preferred way of accessing the viewer config values.
          * @param name
@@ -304,7 +297,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
-         * @param name;
+         * @param name
          * @param value
          * @param cache
          */
@@ -351,7 +344,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (CONFIG.background.length < 0) {
                 return undefined;
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
             if (bgConfig) {
                 if (bgConfig.name) return bgConfig.name;
                 return UTILITIES.fileNameFromPath(CONFIG.data[bgConfig.dataReference], stripSuffix);
@@ -368,12 +361,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             let config;
             if (VIEWER.scalebar) {
-                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+                VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
             } else {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                     || CONFIG.background[0];
             }
             return config ? CONFIG.data[config.dataReference] : "__anonymous__";
+        },
+        /**
+         * Return the current active visualization
+         * @return {*}
+         */
+        activeVisualizationConfig() {
+            return CONFIG.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")];
         },
         _dangerouslyAccessConfig() {
             //remove in the future?
@@ -387,10 +387,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             dirty: false
         }
     };
-
-    // Initialize middleware before we run scripts initialization
-    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
-    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
 
     /*--------------------------------------------------------------*/
     /*------------ Initialization of  new UI -----------------------*/
@@ -417,7 +413,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
      * additional classes and events.
-     * todo add type definitions for OSD
      *
      * @namespace VIEWER
      * @type OpenSeadragon.Viewer
@@ -437,7 +432,73 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         showNavigationControl: false,
         navigatorId: "panel-navigator",
         loadTilesWithAjax : true,
-        drawer: "canvas",
+        drawer: 'flex-renderer',
+        drawerOptions: {
+            'flex-renderer': {
+                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                debugInfoContainer: 'panel-shaders',
+                interactive: true,
+                htmlHandler: (shaderLayer, shaderConfig) => {
+                    const container = $("#data-layer-options");
+
+                    let fixed = UTILITIES.isJSONBoolean(shaderConfig.fixed, true);
+                    let isVisible = UTILITIES.isJSONBoolean(shaderConfig.visible, true);
+                    const dataId = shaderLayer.id;
+                    const title = shaderConfig.title || dataId;
+                    //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
+
+                    let style = isVisible ? (shaderConfig.params.use_mode === "clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
+                    const isModeShow = !shaderConfig.params.use_mode || shaderConfig.params.use_mode === "show";
+                    let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
+                    modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "blend" : shaderConfig.params.use_mode}"
+id="${dataId}-mode-toggle"
+ style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
+onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
+
+                    let availableShaders = "";
+                    for (let available of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
+                        let selected = available.type() === shaderConfig.type ? " selected" : "";
+                        availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
+                    }
+
+                    let filterUpdate = [];
+                    if (!fixed) {
+                        for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
+                            let found = shaderConfig.params.hasOwnProperty(key);
+                            if (found) {
+                                filterUpdate.push('<span>', OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
+                                    ':</span><input type="number" value="', shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key]),
+                                    '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
+                                    "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
+                            }
+                        }
+                    }
+                    const cacheApplied = shaderConfig._cacheApplied ?
+                        `<div class="p2 info-container rounded-2" style="width: 97%">
+${$.t('main.shaders.cache.' + shaderConfig._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
+                    container.prepend(`<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
+            <div class="h5 py-1 position-relative">
+              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
+${shaderLayer.error ? 'disabled' : ''} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
+              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${title}">${title}</span>
+              <div class="d-inline-block label-render-type pointer" style="float: right;">
+                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
+                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
+onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
+                </div>
+                ${modeChange}
+                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
+            </div>
+            <div class="non-draggable">${shaderLayer.htmlControls()}${filterUpdate.join("")}</div>${cacheApplied}
+            </div>`);
+                },
+                htmlReset: () => {
+                    //$("#data-layer-options").html();
+                    document.getElementById("data-layer-options").innerHTML = "";
+                }
+            }
+        },
         ajaxHeaders: headers,
         splitHashDataForPost: true,
         subPixelRoundingForTransparency:
@@ -519,62 +580,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
     });
 
-    
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
 
-    //properties depentend and important to change on bg image load/swap
-    //index is the TiledImage index in OSD - usually 0, with stacked bgs the selected background...
-    function updateBackgroundChanged(index) {
-        //Todo once rewritten, treat always low level item as the reference layer (index == 0)
-
-        //the viewer scales differently-sized layers sich that the biggest rules the visualization
-        //this is the largest image layer, or possibly the rendering layers layer
-        const tiledImage = VIEWER.world.getItemAt(index);
-        const imageData = tiledImage?.getBackgroundConfig() || {};
-
-        const title = $("#tissue-title-content").removeClass('error-container');
-        if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-            const name = imageData.name || UTILITIES.fileNameFromPath(
-                APPLICATION_CONTEXT.config.data[imageData.dataReference]
-            );
-            title.html(name);
-            USER_INTERFACE.toggleDemoPage(false);
-        } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
-            //todo merge tile sources with layers/background to simplify mapping, now we need to guess where error occurs on error event
-            //todo better naming logics
-            const name = imageData.name || UTILITIES.fileNameFromPath(
-                APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
-                || 'unknown'
-            );
-            title.addClass('error-container').html($.t('main.navigator.faultyTissue', {slide: name}));
-            USER_INTERFACE.toggleDemoPage(true);
-        } else {
-            USER_INTERFACE.toggleDemoPage(false);
-        }
-
-        const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
-        if (!hasMicrons || !hasDimMicrons) {
-            const sourceMeta = typeof tiledImage?.source?.getImageMetaAt === "function" && tiledImage.source.getImageMetaAt();
-            if (sourceMeta) {
-                if (!hasMicrons) imageData.microns = sourceMeta.microns;
-                if (!hasDimMicrons) {
-                    imageData.micronsX = sourceMeta.micronsX;
-                    imageData.micronsY = sourceMeta.micronsY;
-                }
-            }
-        }
-
-        if (!VIEWER.scalebar) {
-            UTILITIES.setImageMeasurements(imageData?.microns, imageData?.micronsX, imageData?.micronsY);
-        }
-        VIEWER.scalebar.linkReferenceTileSourceIndex(index);
-    }
-
     /**
      * Set current viewer real world measurements. Set undefined values to fallback to pixels.
-     * todo rethink namespaces
      * @param microns
      * @param micronsX
      * @param micronsY
@@ -625,91 +636,96 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         });
         // TODO make in destroy???
         if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
-            $('#viewer-magnification').toggleClass('hidden');  
+            $('#viewer-magnification').toggleClass('hidden');
             $('#viewer-scale-bar').toggleClass('hidden');
         }
     };
 
-    let preventedSwap = false;
-
     /**
      * Change background image if not in stacked mode
-     * @param bgIndex
+     * @param {Number} [bgIndex=undefined]
+     * @param {Number} [goalIndex=undefined]
      */
-    window.UTILITIES.swapBackgroundImages = function(bgIndex) {
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
-            return;
-        }
-        if (preventedSwap) {
-            Dialogs.show($.t('messages.stillLoadingSwap'), 5000, Dialogs.MSG_WARN);
-            return;
-        }
-        let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-        if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
-        if (activeBackground === bgIndex) return;
-        const image = APPLICATION_CONTEXT.config.background[bgIndex],
-            imagePath = APPLICATION_CONTEXT.config.data[image.dataReference],
-            sourceUrlMaker = new Function("path,data", "return " +
-                (image.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+    window.UTILITIES.setBackgroundAndGoal = function(bgIndex = undefined, goalIndex = undefined) {
 
-        let prevImage = VIEWER.world.getItemAt(0);
-        let url = sourceUrlMaker(APPLICATION_CONTEXT.env.client.image_group_server, imagePath);
-        preventedSwap = true;
-        VIEWER.addTiledImage({
-            tileSource: url,
-            index: 0,
-            opacity: 1,
-            replace: true,
-            success: function(e) {
-                preventedSwap = false;
-                APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-                e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
-                updateBackgroundChanged(0);
-                let previousBackgroundSetup = APPLICATION_CONTEXT.config.background[activeBackground];
-
-                /**
-                 * When background image changes (in non-stacked mode), this event fires.
-                 * @property {string} backgroundImageUrl - A reference to the World which raised the event.
-                 * @property {{}} prevBackgroundSetup - Previous image configuration.
-                 * @property {{}} backgroundSetup - New image configuration.
-                 * @property {OpenSeadragon.TiledImage} previousTiledImage - Old, Replaced TiledImage
-                 * @property {OpenSeadragon.TiledImage} tiledImage - New TiledImage
-                 *
-                 * @memberOf VIEWER
-                 * @event background-image-swap
-                 */
-                VIEWER.raiseEvent('background-image-swap', {
-                    backgroundImageUrl: url,
-                    prevBackgroundSetup: previousBackgroundSetup,
-                    backgroundSetup: image,
-                    previousTiledImage: prevImage,
-                    tiledImage: e.item,
-                });
-                let container = document.getElementById('tissue-preview-container');
-                container.children[activeBackground].classList.remove('selected');
-                container.children[bgIndex].classList.add('selected');
-            },
-            error: function(e) {
-                preventedSwap = false;
-                console.error("Swap Images Failure", e);
-                let container = document.getElementById('tissue-preview-container');
-                Dialogs.show($.t('messages.swapImagesFail'), 5000, Dialogs.MSG_ERR);
-                container.children[bgIndex].classList.remove('selected');
-                container.children[activeBackground].classList.add('selected');
+        let updated = false;
+        if (bgIndex !== undefined && APPLICATION_CONTEXT.config.background.length > bgIndex) {
+            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+                console.error("UTILITIES::setBackgroundAndGoal not supported in stackedBackground mode! Call setBackgroundAndGoal with undefined bgIndex.");
+                bgIndex = undefined;
+            } else {
+                let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
+                if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
+                if (activeBackground !== bgIndex) {
+                    APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+                    updated = true;
+                }
             }
-        });
+        }
+        if (goalIndex !== undefined && APPLICATION_CONTEXT.config.visualizations.length > goalIndex) {
+            const config = bgIndex === undefined ? VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") :
+                APPLICATION_CONTEXT.config.background[bgIndex];
+            if (config) {
+                config.goalIndex = goalIndex;
+            }
+            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", goalIndex);
+            updated = true;
+        }
+
+        if (updated) {
+            APPLICATION_CONTEXT.openViewerWith(
+                APPLICATION_CONTEXT.config.data,
+                APPLICATION_CONTEXT.config.background,
+                APPLICATION_CONTEXT.config.visualizations
+            );
+        }
     };
 
     //initialization of UI and handling of background image load errors
     let reopenCounter = -1;
-    function handleSyntheticOpenEvent() {
+    function handleSyntheticOpenEvent(successLoadedItemCount) {
         reopenCounter += 1; //so that immediately the value is set
 
-        let confData = APPLICATION_CONTEXT.config.data,
-            confBackground = APPLICATION_CONTEXT.config.background;
+        const confData = APPLICATION_CONTEXT.config.data,
+            confBackground = APPLICATION_CONTEXT.config.background,
+            world = VIEWER.world;
 
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
+        if (world.getItemCount() < 1) {
+            $("#global-tissue-visibility").removeClass("d-inline-block");
+            $("#panel-images").html("").css('display', 'none');
+            $("#panel-shaders").css('display', 'none');
+            VIEWER.addTiledImage({
+                tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                index: 0,
+                opacity: $("#global-opacity input").val(),
+                replace: false,
+                success: (event) => {
+                    event.item.getConfig = type => undefined;
+                    USER_INTERFACE.toggleDemoPage(true);
+                    handleSyntheticEventFinishWithValidData(0, 1);
+                }
+            });
+            return;
+        }
+
+        if (successLoadedItemCount === 0) {
+            USER_INTERFACE.toggleDemoPage(true, $.t('error.invalidDataHtml'));
+        } else {
+            // TODO propose fix in OpenSeadragon
+            // Fix indexing: OSD has race conditions when we call addTiledImage subsequently with defined indexes
+            const itemCount = world.getItemCount();
+            let index = 0;
+            while (index < itemCount) {
+                const item = world.getItemAt(index);
+                if (item.__targetIndex !== index) {
+                    world.setItemIndex(item, item.__targetIndex);
+                } else {
+                    index++;
+                }
+            }
+        }
+
+        if (confBackground.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground")) {
             let i = 0, selectedImageLayer = 0;
             let imageOpts = [];
             let largestWidth = -1,
@@ -718,9 +734,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (imageNode) {
                 for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
                     const image = confBackground[idx],
-                        worldItem =  VIEWER.world.getItemAt(i),
-                        configGetter = worldItem?.getBackgroundConfig,
-                        referencedImage = configGetter && configGetter();
+                        worldItem =  world.getItemAt(i),
+                        referencedImage = worldItem?.getConfig("background");
 
                     if (image == referencedImage) {
                         //todo not very flexible...
@@ -758,28 +773,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             imageOpts.push("</div></div>");
             $("#panel-images").html(imageOpts.join("")).css('display', 'block');
 
-            $("#global-tissue-visibility").css("display", "none");
-
-            if (largestWidth === -1) {
-                VIEWER.addTiledImage({
-                    tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
-                    index: 0,
-                    opacity: $("#global-opacity input").val(),
-                    replace: false,
-                    success: (event) => {
-                        event.item.getBackgroundConfig = () => {
-                            return undefined;
-                        }
-                        //standard
-                        handleSyntheticEventFinishWithValidData(0, 1);
-                    }
-                });
-            } else {
-                handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
-            }
+            $("#global-tissue-visibility").removeClass("d-inline-block");
+            handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
             return;
         }
-
 
         const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
         if (confBackground.length > 1) {
@@ -814,7 +811,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         let child = img;
                         if (img.width < img.height) {
                             child = document.createElement("canvas"),
-                                context = child.getContext("2d");
+                            context = child.getContext("2d");
                             child.width = img.height;
                             child.height = img.width;
                             context.setTransform(0,-1, 1,0, 0, child.width/2);
@@ -825,14 +822,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         if (blobUrl) URL.revokeObjectURL(blobUrl);
                     };
                     img.onerror = img.onabort = () => {
-                        //todo some error image?
+                        $(`#tissue-preview-item-${idx}`).append('<span class="material-icons" style="color: darkred">warning</span>');
                         if (blobUrl) URL.revokeObjectURL(blobUrl);
                     };
                     img.src = eventArgs.imagePreview;
                 });
 
                 html += `
-    <div id="tissue-preview-item-${idx}" onclick="UTILITIES.swapBackgroundImages(${idx});"
+    <div id="tissue-preview-item-${idx}" onclick="UTILITIES.setBackgroundAndGoal(${idx});"
     class="${activeIndex == idx ? 'selected' : ''} pointer position-relative mx-2 my-2 color-bg-canvas overflow-hidden" 
     style="width: 180px; height: 90px; border-bottom: 1px solid var(--color-bg-backdrop); border-radius: 21px;">
     <span class="tissue-label">${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])}</span>
@@ -848,82 +845,128 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             $("#global-tissue-visibility").css("display", "flex");
 
             const image = confBackground[activeIndex],
-                worldItem =  VIEWER.world.getItemAt(0),
-                configGetter = worldItem?.getBackgroundConfig,
-                referencedImage = configGetter && configGetter();
+                worldItem =  world.getItemAt(0),
+                referencedImage = worldItem?.getConfig("background");
 
-            if (image != referencedImage) {
-                const dimensions = worldItem?.getContentSize();
-                VIEWER.addTiledImage({
-                    tileSource : new OpenSeadragon.EmptyTileSource({
-                        height: dimensions?.y || 20000,
-                        width: dimensions?.x || 20000,
-                        tileSize: 512 //can be arbitrary, 512 works well...
-                    }),
-                    index: 0,
-                    opacity: $("#global-opacity input").val(),
-                    replace: false,
-                    success: (event) => {
-                        event.item.getBackgroundConfig = () => {
-                            return undefined;
-                        }
-                        //standard
-                        handleSyntheticEventFinishWithValidData(0, 1);
-                    }
-                });
-
-                return;
-            } else {
+            if (image == referencedImage) {
                 //todo not very flexible...
                 if (image.hasOwnProperty("lossless") && image.lossless && worldItem) {
                     worldItem.source.fileFormat = "png";
                 }
+            } else {
+                console.warn("Background image failed to load.");
             }
             handleSyntheticEventFinishWithValidData(0, 1);
         } else {
-            // We can leave it here, it shows default white image..
-            VIEWER.addTiledImage({
-                tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
-                index: 0,
-                opacity: $("#global-opacity input").val(),
-                replace: false,
-                success: (event) => {
-                    event.item.getBackgroundConfig = () => {
-                        return undefined;
+            $("#global-tissue-visibility").removeClass("d-inline-block");
+            let selectedIndex = 0;
+            // try to find at least one valid config to use as a reference in case
+            if (successLoadedItemCount > 0) {
+                for (; selectedIndex < world.getItemCount(); selectedIndex++) {
+                    if (world.getItemAt(selectedIndex).getConfig("visualization")) {
+                        break;
                     }
-                    //standard
-                    handleSyntheticEventFinishWithValidData(0, 1);
                 }
-            });
-            //handleSyntheticEventFinishWithValidData(-1, 0);
+            }
+
+            handleSyntheticEventFinishWithValidData(selectedIndex, 0);
         }
     }
 
     function handleSyntheticEventFinishWithValidData(referenceImage, layerPosition) {
-        updateBackgroundChanged(referenceImage);
+        //Todo once rewritten, treat always low level item as the reference layer (index == 0)
+
+        //the viewer scales differently-sized layers sich that the biggest rules the visualization
+        //this is the largest image layer, or possibly the rendering layers layer
+        const tiledImage = VIEWER.world.getItemAt(referenceImage);
+        const imageData = tiledImage?.getConfig();
+
+        const title = $("#tissue-title-header").removeClass('error-container');
+        if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
+            const name = imageData.name || UTILITIES.fileNameFromPath(
+                APPLICATION_CONTEXT.config.data[imageData.dataReference]
+            );
+            title.find('#tissue-title-content').html(name);
+            title.attr('title', name);
+        } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
+            const name = UTILITIES.fileNameFromPath(
+                APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                || 'unknown'
+            );
+            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
+
+        } else if (!imageData) {
+            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyViz'));
+        } else {
+            const name = imageData.name || $.t('common.Image');
+            title.find('#tissue-title-content').html(name);
+            title.attr('title', name);
+        }
+
+        if (imageData) {
+            const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
+            if (!hasMicrons || !hasDimMicrons) {
+                const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
+                if (sourceMeta) {
+                    if (!hasMicrons) imageData.microns = sourceMeta.microns;
+                    if (!hasDimMicrons) {
+                        imageData.micronsX = sourceMeta.micronsX;
+                        imageData.micronsY = sourceMeta.micronsY;
+                    }
+                }
+            }
+        }
+
+        if (!VIEWER.scalebar) {
+            UTILITIES.setImageMeasurements(imageData?.microns, imageData?.micronsX, imageData?.micronsY);
+        }
+        VIEWER.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
         const eventOpts = {};
 
-
-        const seaGL = VIEWER.bridge;
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0 && seaGL) {
-            const layerWorldItem = VIEWER.world.getItemAt(layerPosition);
-            const activeVis = seaGL.visualization();
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
+            let layerWorldItem = VIEWER.world.getItemAt(layerPosition);
+            const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
             if (layerWorldItem) {
-                UTILITIES.prepareTiledImage(layerPosition,
-                    layerWorldItem, activeVis);
+                const async = APPLICATION_CONTEXT.getOption("fetchAsync");
+                do {
+                    if (layerWorldItem.source.setFormat) {
+                        const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
+                        const lossless = !activeVis.hasOwnProperty("lossless") || activeVis.lossless;
+                        const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
+                        layerWorldItem.source.setFormat(format);
+                    }
+                    layerWorldItem = VIEWER.world.getItemAt(++layerPosition);
+                } while (layerWorldItem);
 
                 $("#panel-shaders").css('display', 'block');
-                seaGL.initAfterOpen();
+
+                // Init swwitching between goals
+                let i = 0;
+                // todo test change of visualization
+                const select = $("#shaders"),
+                    activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
+
+                const html = [];
+                for (let vis of APPLICATION_CONTEXT.config.visualizations) {
+                    let selected = i == activeIndex ? "selected" : "";
+                    if (vis.error) { //todo valid prop? document
+                        html.push(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
+                    } else {
+                        html.push(`<option value="${i}" ${selected}>${vis['name']}</option>`);
+                    }
+                    i++;
+                }
+                select.html(html.join(""));
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
-
-                APPLICATION_CONTEXT.disableVisualization();
                 eventOpts.error = $.t('messages.overlaysDisabled');
             }
+        } else {
+            $("#panel-shaders").css('display', 'none');
         }
         handleSyntheticEventFinish(eventOpts);
     }
@@ -933,7 +976,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     function handleSyntheticEventFinish(opts={}) {
 
         if (reopenCounter === 0) {
-
             runLoader();
 
             let focus = APPLICATION_CONTEXT.getOption("viewport");
@@ -1076,121 +1118,112 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
         let renderingWithWebGL = visualizations?.length > 0;
-        if (renderingWithWebGL) {
-            if (_allowRecursionReload && !window.WebGLModule) {
-                _allowRecursionReload = false;
-                UTILITIES.loadModules(() => APPLICATION_CONTEXT.openViewerWith(data, background, visualizations), "webgl");
-                return;
-            }
-
-            if (!window.WebGLModule) {
-                console.error("Recursion prevented: webgl module failed to load!");
-                //allow to continue...
-                Dialogs.show($.t('messages.overlaysLoadFail'), 8000, Dialogs.MSG_ERR);
-                renderingWithWebGL = false;
-            }
-        }
         loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         config.data = data;
         config.background = background;
         config.visualizations = visualizations;
-
-        if (reopenCounter > 0) {
-            APPLICATION_CONTEXT.disableVisualization();
-        } else {
-            /**
-             * Fired before visualization is initialized and loaded.
-             * @memberOf VIEWER
-             * @event before-canvas-reload
-             */
-            VIEWER.raiseEvent('before-canvas-reload');
-        }
+        /**
+         * Fired before visualization is initialized and loaded.
+         * @memberOf VIEWER
+         * @event before-canvas-reload
+         */
+        VIEWER.raiseEvent('before-canvas-reload');
 
         const toOpen = [];
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
-        const handleFinishOpenImageEvent = (item, url, index) => {
+        let successOpenedSources = 0;
+        const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
+        const selectedIndex = isModeStacked || background.length < 1 ? -1 : APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
+        const handleFinishOpenImageEvent = success => {
             openedSources--;
-            if (item) {
-                /**
-                 * Fired before visualization is initialized and loaded.
-                 * @event tiled-image-created
-                 * @memberOf VIEWER
-                 * @property {OpenSeadragon.TiledImage} item
-                 * @property {string} url used to create the item
-                 * @property {number} index TiledImage index
-                 */
-                VIEWER.raiseEvent('tiled-image-created', {item, url, index});
-            }
-            if (openedSources <= 0) handleSyntheticOpenEvent();
+            if (success) successOpenedSources++;
+            if (openedSources <= 0) handleSyntheticOpenEvent(successOpenedSources);
         };
-        let imageOpenerCreator = (success, userArg=undefined) => {
-            return (toOpenLastBgIndex, source, toOpenIndex) => {
-                openedSources++;
-                window.VIEWER.addTiledImage({
-                    tileSource: source,
-                    opacity: opacity,
-                    success: (event) => {
-                        success({userArg, toOpenLastBgIndex, toOpenIndex, event});
-                        handleFinishOpenImageEvent(event.item, source, toOpenIndex);
-                    },
-                    error: () => {
-                        handleFinishOpenImageEvent();
+        let imageOpener = (source, kind, imageIndex, lastBGIndex) => {
+            const item = VIEWER.world.getItemAt(imageIndex);
+            if (item && item.__origin === source) {
+                return;
+            }
+
+            openedSources++;
+            console.log("Opening image", source, kind, imageIndex, lastBGIndex);
+            window.VIEWER.addTiledImage({
+                tileSource: source.source || source, //todo dirty
+                opacity: opacity,
+                index: imageIndex,
+                success: (event) => {
+                    event.item.__origin = source;
+                    event.item.__targetIndex = imageIndex;
+
+                    if (kind === "background") {
+                        let index = isModeStacked ? imageIndex : selectedIndex;
+                        event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.background[index] : undefined
+                    } else if (kind === "visualization") {
+                        event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")] : undefined
+                    } else {
+                        event.item.getConfig = type => undefined;
                     }
-                });
-            }
-        };
-
-        let imageOpener; //has to set-up correct getBackgroundConfig function
-        if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            //reverse order: last opened IMAGE is the first visible
-            for (let i = background.length-1; i >= 0; i--) {
-                const bg = background[i];
-                if (isSecureMode) delete bg.protocol;
-                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
-            }
-
-            imageOpener = imageOpenerCreator(e => {
-                const index = e.toOpenLastBgIndex - e.toOpenIndex; //reverse order in toOpen
-                e.event.item.getBackgroundConfig = () => {
-                    return APPLICATION_CONTEXT.config.background[index];
-                };
+                    handleFinishOpenImageEvent(true);
+                },
+                error: (e) => {
+                    VIEWER.addTiledImage({
+                        tileSource: {
+                            type: "_blank",
+                            error: e.message || $.t('error.slide.pending') + " " + $.t('error.slide.imageLoadFail') + ' ' + source
+                        },
+                        opacity: 0,
+                        index: imageIndex,
+                        success: (event) => {
+                            event.item.__targetIndex = imageIndex;
+                            event.item.getConfig = type => undefined;
+                            handleFinishOpenImageEvent(false);
+                        },
+                        error: (e) => {
+                            handleFinishOpenImageEvent(false);
+                        }
+                    });
+                }
             });
-        } else if (background.length > 0) {
-            const selectedIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-            let selectedImage = background[selectedIndex];
-            if (isSecureMode) delete selectedImage.protocol;
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
-
-            imageOpener = imageOpenerCreator(e => {
-                const index = e.userArg;
-                e.event.item.getBackgroundConfig = () => {
-                    return APPLICATION_CONTEXT.config.background[index];
-                };
-            }, selectedIndex);
-        }
-
-        const openAll = (numOfVisLayersAtTheEnd) => {
+        };
+        const openAll = (shaders, numOfVisLayersAtTheEnd) => {
             if (toOpen.length < 1) {
-                // //todo two places where we need to remove loading screen make clear flow of the initialization!
-                // USER_INTERFACE.Loading.show(false);
-                // if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
-                // USER_INTERFACE.Errors.show($.t('error.nothingToRender'), $.t('error.nothingToRenderDetails'), true);
-                //
-                handleFinishOpenImageEvent();
+                handleFinishOpenImageEvent(false);
                 return;
             }
 
             let i = 0;
             let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
-            for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
 
-            const visOpener = imageOpenerCreator(()=>{});
-            for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
+            // First, configure external shaders
+            const renderOutput = {};
+            // TODO named! ensure each entry has name or define one
+            for (; i <= lastValidBgIndex; i++) renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i]};
+            Object.assign(renderOutput, shaders);
+            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+            VIEWER.drawer.overrideConfigureAll(renderOutput);
+            console.log("renderOutput", renderOutput);
+
+            // Then, attach to-open images
+            i = 0;
+            for (; i <= lastValidBgIndex; i++) imageOpener(toOpen[i], "background", i, lastValidBgIndex);
+            for (; i < toOpen.length; i++) imageOpener(toOpen[i], "visualization", i, lastValidBgIndex);
+        };
+
+        if (isModeStacked) {
+            for (let i = 0; i < background.length; i++) {
+                const bg = background[i];
+                if (isSecureMode) delete bg.protocol;
+                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+                toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
+            }
+        } else if (selectedIndex >= 0) {
+            let selectedImage = background[selectedIndex];
+            if (isSecureMode) delete selectedImage.protocol;
+            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+            toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
         }
 
         if (renderingWithWebGL) {
@@ -1203,12 +1236,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             //prepare rendering can disable layers
             APPLICATION_CONTEXT.prepareRendering();
-            renderingWithWebGL = APPLICATION_CONTEXT.layersAvailable;
-        }
-
-        if (renderingWithWebGL) {
-            APPLICATION_CONTEXT.prepareRendering();
-
             let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
             if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
                 // binding background config overrides active visualization, only if not in stacked mode
@@ -1221,20 +1248,31 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             }
 
-            VIEWER.bridge.loadShaders(
-                activeVisIndex,
-                function() {
-                    VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
-                    //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
-                    let data = VIEWER.bridge.dataImageSources();
-                    //if (async && data.length > 0) data = data[0];
-                    toOpen.push(VIEWER.bridge.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, data));
-                    openAll(1);
+            const activeVis = visualizations[activeVisIndex];
+            VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
+            const sourcesToOpen = {};
+            const lastBgIndex = toOpen.length;
+            let counter = toOpen.length;
+            for (let shaderId in activeVis.shaders) {
+
+                const shaderConfig = activeVis.shaders[shaderId];
+                shaderConfig.tiledImages = [];
+                const sources = shaderConfig.dataReferences.map(rId =>
+                    VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]]));
+                for (let dataSource of sources) {
+                    // Find unique sources and map them to indexes
+                    let index = sourcesToOpen[dataSource];
+                    if (index === undefined) {
+                        sourcesToOpen[dataSource] = index = counter++;
+                        toOpen.push(dataSource);
+                    }
+                    shaderConfig.tiledImages.push(index);
                 }
-            );
-        } else {
-            openAll(0);
+            }
+            openAll(activeVis.shaders, counter - lastBgIndex);
+            return;
         }
+        openAll({}, 0);
     }
 
     initXopatScripts();

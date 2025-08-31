@@ -15,7 +15,7 @@ function initXopatUI() {
         /**
          * @private
          */
-        init: function () {
+        init: function() {
             $("body").append(`<div id="dialogs-container" class="popUpHide position-fixed" style='z-index: 5050; transform: translate(calc(50vw - 50%));'>
 <div class="Toast" style="margin: 16px 0 0 0;">
 <span class="Toast-icon"><svg width="12" height="16" id="notification-bar-icon" viewBox="0 0 12 16" class="octicon octicon-check" aria-hidden="true"></svg></span>
@@ -33,7 +33,7 @@ function initXopatUI() {
             const _this = this;
 
             //close all child modals if parent dies
-            window.onunload = function () {
+            window.onunload = function() {
                 for (let key in _this._modals) {
                     if (_this._modals.hasOwnProperty(key)) {
                         let context = _this._modals[key].context;
@@ -55,7 +55,7 @@ function initXopatUI() {
          * @param {object} [props.onShow]
          * @param {object} [props.onHide]
          */
-        show: function (text, delayMS = 5000, importance = Dialogs.MSG_INFO, props = {}) {
+        show: function(text, delayMS = 5000, importance = Dialogs.MSG_INFO, props = {}) {
             props = $.extend({}, props, { queued: true })
 
             if (props.queued && this._timer) {
@@ -66,11 +66,11 @@ function initXopatUI() {
         /**
          * Hide notification
          */
-        hide: function (withCallback = true) {
+        hide: function(withCallback = true) {
             this._hideImpl(false, withCallback);
         },
 
-        _hideImpl: function (timeoutCleaned, callOnHide = true) {
+        _hideImpl: function(timeoutCleaned, callOnHide = true) {
             this._body.removeClass("popUpEnter");
             this._body.addClass("popUpHide");
 
@@ -86,7 +86,7 @@ function initXopatUI() {
             }
         },
 
-        _showImpl: function (text, delayMS, importance, opts) {
+        _showImpl: function(text, delayMS, importance, opts) {
             this._board.html(text);
             this._icon.html(importance.icon);
             this._toast.removeClass(); //all
@@ -115,7 +115,7 @@ function initXopatUI() {
          * @param params.allowClose whether to show 'close' button, default true
          * @param params.allowResize whether to allow user to change the window size, default false
          */
-        showCustom: function (parentId, header, content, footer, params = { allowClose: true }) {
+        showCustom: function(parentId, header, content, footer, params = { allowClose: true }) {
             let result = this._buildComplexWindow(false, parentId, header, content, footer,
                 `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`, params);
             if (result) $("body").append(result);
@@ -134,7 +134,7 @@ function initXopatUI() {
          * @param header HTML content to put in the header
          * @param content HTML content
          */
-        showCustomModal: function (parentId, title, header, content) {
+        showCustomModal: function(parentId, title, header, content) {
             if (this.getModalContext(parentId)) {
                 console.error("Modal window " + title + " with id '" + parentId + "' already exists.");
                 return;
@@ -147,7 +147,7 @@ function initXopatUI() {
         /**
          * Open Monaco Editor
          */
-        openEditor: function (parentId, title, inputText, language, onSave) {
+        openEditor: function(parentId, title, inputText, language, onSave) {
             if (this.getModalContext(parentId)) {
                 console.log("Modal window with id '" + parentId + "' already exists. Using the window.");
                 this._modals[parentId].callback = onSave;
@@ -224,7 +224,7 @@ window.addEventListener("beforeunload", (e) => {
          * @param id id used to create the window
          * @returns {(Window|undefined|null)} window context or undefined
          */
-        getModalContext: function (id) {
+        getModalContext: function(id) {
             let ctx = this._modals[id];
             if (!ctx || !ctx.context) return undefined;
             ctx = ctx.context;
@@ -243,7 +243,7 @@ window.addEventListener("beforeunload", (e) => {
          * @returns {boolean|undefined} true if managed to close, false if
          *   nothing was opened, undefined if error
          */
-        closeWindow: function (id) {
+        closeWindow: function(id) {
             if (!id) {
                 console.error("Invalid form: unique container id not defined.");
                 return undefined;
@@ -269,7 +269,7 @@ window.addEventListener("beforeunload", (e) => {
             return returns;
         },
 
-        _showCustomModalImpl: function (id, title, html, size = 'width=450,height=250', customCall = function () { }) {
+        _showCustomModalImpl: function(id, title, html, size = 'width=450,height=250', customCall = function () { }) {
             //todo support modal redirection, opening in current browser instead (ID container OR this window modal)
 
             //can be called recursively from message popup, that's why we cache it
@@ -292,7 +292,7 @@ window.addEventListener("beforeunload", (e) => {
             }
         },
 
-        _openModalWindow: function (id, title, content, size) {
+        _openModalWindow: function(id, title, content, size) {
             let objUrl = URL.createObjectURL(
                 new Blob([`
 <!DOCTYPE html>
@@ -303,6 +303,7 @@ window.addEventListener("beforeunload", (e) => {
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
             crossorigin="anonymous"></script>
@@ -329,7 +330,7 @@ window.addEventListener("beforeunload", (e) => {
             };
         },
 
-        _destroyModalWindow: function (id, context) {
+        _destroyModalWindow: function(id, context) {
             //important to clean up
             let body = context?.document?.getElementById("body");
             if (body) body.innerHTML = "";
@@ -337,7 +338,7 @@ window.addEventListener("beforeunload", (e) => {
             delete this._modals[id];
         },
 
-        _buildComplexWindow: function (isModal, parentId, title, content, footer, positionStrategy, params) {
+        _buildComplexWindow: function(isModal, parentId, title, content, footer, positionStrategy, params) {
             //preventive close, applies to non-modals only
             if (!isModal && this.closeWindow(parentId) === undefined) return;
             params = params || {};
@@ -368,7 +369,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 </div>`;
         },
 
-        _getCloseButton: function (id) {
+        _getCloseButton: function(id) {
             return `<button class="Box-btn-octicon btn-octicon position-relative" type="button"
 aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true">
@@ -382,6 +383,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
      * @typedef {{
      *  icon: string | undefined,
      * 	iconCss: string | undefined,
+     *  containerCss: string | undefined,
      * 	title: string,
      * 	action: function,
      * 	selected: boolean | undefined
@@ -399,7 +401,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         /**
          * @private
          */
-        init: function () {
+        init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
             $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
 
@@ -411,7 +413,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          * @param {Event} mouseEvent
          * @param {function|Array<DropDownItem>} optionsGetter
          */
-        open: function (mouseEvent, optionsGetter) {
+        open: function(mouseEvent, optionsGetter) {
             this._toggle(mouseEvent, optionsGetter);
             mouseEvent.preventDefault();
         },
@@ -432,12 +434,12 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
          *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
          *      - you can also pass custom HTML and override the default styles and content, handler system etc...
-         *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.containerCss {string} css for the container, optional
          *   config.iconCss {string} css for icon
          */
-        bind: function (context, optionsGetter) {
+        bind: function(context, optionsGetter) {
             if (typeof context === "string") {
                 context = document.getElementById(context);
             }
@@ -452,16 +454,16 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
             });
         },
 
-        hide: function () {
+        hide: function() {
             this._toggle(undefined);
         },
 
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
         // if too close to edges
-        _toggle: function (mouseEvent, optionsGetter) {
+        _toggle: function(mouseEvent, optionsGetter) {
             const opened = this.opened();
 
-            if (mouseEvent === undefined || opened) {
+            if (mouseEvent === undefined) {
                 if (opened) {
                     this._calls = [];
                     this._body.html("");
@@ -472,6 +474,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     });
                 }
             } else {
+                if (opened) {
+                    this._calls = [];
+                    this._body.html("");
+                }
                 ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
                 this._body.css({
                     display: "block",
@@ -494,7 +500,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);
@@ -578,7 +584,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param description
              * @param withHiddenMenu
              */
-            show: function (title, description, withHiddenMenu = false) {
+            show: function(title, description, withHiddenMenu = false) {
                 USER_INTERFACE.Tutorials._hideImpl(); //preventive
                 $("#system-message-title").html(title);
                 $("#system-message-details").html(description);
@@ -590,7 +596,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             /**
              * Hide system-wide error.
              */
-            hide: function () {
+            hide: function() {
                 $("#system-message").addClass("hidden");
                 $("#viewer-container").removeClass("disabled");
                 USER_INTERFACE.Tools.open();
@@ -625,7 +631,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             getSettingsBody: function () {
                 const { div, span, a, option, select, b } = van.tags;
                 const logo = this.getLogo(-70, 20);
-                                
+
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
                     div({ class: "py-1 px-2 rounded-2", style: "background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;" },
                       span({ class: "material-icons", style: "font-size: initial; color: var( --color-icon-warning)" },
@@ -647,7 +653,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     { value: "", selected: "selected", hidden: "hidden", text: themePretty },
                     { value: "auto", text: "Automatic" },
                     { value: "light", text: "Light Theme" },
-                    { value: "dark", text: "Dark Theme" } 
+                    { value: "dark", text: "Dark Theme" }
                 );
                 const settings = div(
                   div({ class: "boxed"},
@@ -667,7 +673,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox("Debug Mode", function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                   this.createCheckbox("Debug Rendering", function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
                   ),
-                );      
+                );
                 result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
 
                 return result;
@@ -706,17 +712,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     //todo maybe avoid using _dangerously* ?
                     let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
                         pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
-        
+
                     //permaLoad plugins are not available for interaction
                     if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
                         (plugin.hasOwnProperty("hidden") && plugin.hidden) ||
                         (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) continue;
-        
+
                     const pluginDiv = this.createPluginDiv(plugin, pluginCount);
                     pluginDivs.push(pluginDiv);
                     pluginCount++;
                 }
-        
+
                 if (pluginCount < 1) {
                     emptyPlugin = {
                         id: "_undefined_",
@@ -730,7 +736,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     pluginDivs.push(pluginDiv);
                 }
 
-                                
+
                 const logo = this.getLogo(-70, 20);
                 const body = new UI.Div({ id: "app-plugins", class: "height-full position-relative", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" },
                     div({ class: "d-flex flex-column-reverse" },
@@ -744,7 +750,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 );
 
                 return body;
-                
+
             },
 
             createPluginDiv: function (plugin, pluginCount) {
@@ -755,8 +761,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 let actionPart;
                 if (errMessage || plugin.loaded){
-                    actionPart = div({ id: `load-plugin-${plugin.id}` }, 
-                                        button({class: "btn btn-disabled" }, 
+                    actionPart = div({ id: `load-plugin-${plugin.id}` },
+                                        button({class: "btn btn-disabled" },
                                             "Loaded"
                                         )
                                     )
@@ -777,22 +783,22 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                 div({ class: "f3-light" }, plugin.name),
                                 div({ class: "text-small color-text-secondary" }, plugin.description),
                               );
-                    
+
                 const plugin_div = div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
                     input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
                     div({ class: "width-full d-flex selectable-image-row rounded-2 pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
                         text,
-                        actionPart,    
+                        actionPart,
                     ),
                     problematic,
-                )  
-                return plugin_div;          
+                )
+                return plugin_div;
             },
         },
 
         /**
-         * 
+         *
          * @namespace USER_INTERFACE.Toolbar
          */
         Toolbar:{
@@ -934,7 +940,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const visualMenuContent = document.getElementById("visual-menu-ul-visual");
                 visualMenuContent.innerHTML = "";
                 this.addCloneButton();
-                
+
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
 
                 for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
@@ -986,7 +992,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             size: UI.Button.SIZE.SMALL,
                             onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}},
                         new UI.FAIcon(icon), ownerPluginId);
-                    
+
                     visualMenuContent.appendChild(button.create());
 
                     const InsideMenu = new UI.TabsMenu({
@@ -995,8 +1001,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                         rounded: UI.Menu.ROUNDED.ENABLE,
                         extraClasses: { bg: "bg-transparent" }
-                    },);  
-        
+                    },);
+
                     const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
 
                     USER_INTERFACE.FullscreenMenu.menu.addTab(d);
@@ -1039,7 +1045,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 },
                 {id: "navigator", icon: "fa-map", title: "Navigator", body: [slideName.create(), viewer]},
                 {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
-                
+
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
@@ -1056,43 +1062,43 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     else{
                         this.menu.tabs[i]._removeFocus();
                     }
-                } 
+                }
             },
             CreateSlideTop: function () {
                 const { input } = van.tags;
 
                 const text = new UI.Div(
-                    {id: "tissue-title-content", 
-                    class: "", 
-                    extraClasses: {btn: "btn btn-primary btn-sm"}, 
+                    {id: "tissue-title-content",
+                    class: "",
+                    extraClasses: {btn: "btn btn-primary btn-sm"},
                     extraProperties: {style: "flex-grow: 1; box-sizing: border-box; vertical-align: center", title: "Copy"},
                     onClick: function () {
                         UTILITIES.copyToClipboard(this.textContent);
                     }
-                    },); 
-                    
+                    },);
+
                 const checkbox = new UI.Div(
                     {id: "global-tissue-visibility",
-                    class: "", 
+                    class: "",
                     extraClasses: {btn: "btn btn-primary btn-sm"},
                     style: "display: flex; align-items: center;"},
                     input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
-                        onchange: function () { 
+                        onchange: function () {
                             VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
                         }}))
-                
+
                 const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraProperties:{style: "width:300px"}}, checkbox, text);
                 return menu;
             },
-            
+
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 const { div, span, h3 } = van.tags();
                 const titleHtmlIn = div();
                 titleHtmlIn.innerHTML = titleHtml;
-        
+
                 const htmlIn = div();
                 htmlIn.innerHTML = html;
-        
+
                 const hiddenHtmlIn = div();
                 hiddenHtmlIn.innerHTML = hiddenHtml;
 
@@ -1100,9 +1106,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 let content =
                     div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                         div(
-                            span({ 
+                            span({
                                 class: "material-icons inline-arrow plugins-pin btn-pointer",
-                                id: `${id}-pin`, 
+                                id: `${id}-pin`,
                                 onclick: function(){
                                     toVisible = this.offsetParent.lastChild;
                                     if (toVisible.classList.contains('force-visible')){
@@ -1116,7 +1122,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                 style: "padding: 0;" },
                                 "navigate_next",
                             ),
-                            h3({ 
+                            h3({
                                 class: "d-inline-block h3 btn-pointer",
                                 onclick: function(){
                                     toVisible = this.previousElementSibling.offsetParent.lastChild;
@@ -1406,7 +1412,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * Show or hide full-page loading.
              * @param loading
              */
-            show: function (loading) {
+            show: function(loading) {
                 const loader = $("#fullscreen-loader");
                 if (this._visible === loading) return;
                 if (loading) {
@@ -1422,7 +1428,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {boolean|string} titleText boolean to show/hide default text, string to show custom title
              * @param {string} descriptionText optionally details
              */
-            text: function (titleText = true, descriptionText = "") {
+            text: function(titleText = true, descriptionText = "") {
                 if (!this.isVisible()) return;
 
                 const title = document.getElementById("fullscreen-loader-title");
@@ -1453,7 +1459,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} title title to show
              * @param {string} description subtitle to show
              */
-            show: function (title = undefined, description = undefined) {
+            show: function(title = undefined, description = undefined) {
                 if (USER_INTERFACE.Errors.active || this.running) return;
 
                 if (!title) title = $.t('tutorials.menu.title');
@@ -1490,7 +1496,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              *  rules are 'next', 'click', selectors define what element to highlight
              * @param prerequisites a function to execute at the beginning, default undefined
              */
-            add: function (plugidId, name, description, icon, steps, prerequisites = undefined) {
+            add: function(plugidId, name, description, icon, steps, prerequisites = undefined) {
                 if (!icon) icon = "school";
                 const pluginName = pluginMeta(plugidId, "name");
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
@@ -1508,7 +1514,7 @@ ${label}
              * @param {(number|Array)} ctx index to the attached tutorials list (internal use) or tutorials data
              *  see add(..) steps parameter
              */
-            run: function (ctx) {
+            run: function(ctx) {
                 let prereq, data;
 
                 if (Number.isInteger(ctx)) {
@@ -1520,7 +1526,7 @@ ${label}
                 }
 
                 //reset plugins visibility
-                $(".plugins-pin").each(function () {
+                $(".plugins-pin").each(function() {
                     let pin = $(this);
                     let container = pin.parents().eq(1).children().eq(2);
                     pin.removeClass('pressed');
@@ -1567,9 +1573,16 @@ ${label}
             }
         },
 
-        toggleDemoPage: function (enable) {
+        /**
+         * Show demo page with error message
+         * @param enable
+         * @param [explainErrorHtml=undefined]
+         */
+        toggleDemoPage: function (enable, explainErrorHtml = undefined) {
             const overlay = document.getElementById('viewer-demo-advertising');
             if (enable) {
+                const explain = document.getElementById('viewer-demo-error-description');
+                explain.innerHTML = explainErrorHtml || $.t('error.defaultDemoHtml');
                 VIEWER.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
                 overlay.style.display = 'block';
             } else {

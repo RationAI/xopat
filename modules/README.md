@@ -175,7 +175,13 @@ export something like:
   "presets": [...]
 }
 ````
-TODO DOCS
+
+## Dynamic Loading
+As workers and js modules (recommended usage), the viewer does not offer advanced tools for
+loading these scripts dynamically. You need to use **relative** file names and instantiate
+your worker or import a module. Relative paths must begin in the repository root. With plugins and
+modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
+``this.MODULE_ROOT`` respectively, against which you can import local files.
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create

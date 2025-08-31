@@ -1,4 +1,4 @@
-# xOpat - Events
+# xOpat - Storage
 
 Events in the system are either native OpenSeadragon events, 
 or events emitted directly by the viewer. OpenSeadragon events
@@ -132,16 +132,12 @@ so that the viewer believes the `TiledImage` instance is faulty and should be re
 The removal does not happen on the basic viewer layers but should you add your own `TiledImage`s to
 OpenSeadragon, this helps you to react on their misbehaviour.
 
-#### `background-image-swap` | e: `{backgroundImageUrl: string, prevBackgroundSetup: object, backgroundSetup: object, previousTiledImage: OpenSeadragon.TiledImage, tiledImage:OpenSeadragon.TiledImage}`
-When a different image pyramid is loaded as a background, the viewer notifies you that the basic 
-measurements (aspect ratio, dimensions...) might have changed. It gives you the background setup objects from
-the viewer configuration and corresponding `TiledImage` instances.
-
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.
 
+TODO: event not supported
 #### `visualization-redrawn`
 Called every time the user changes visualization configuration. Should not run expensive computation,
 as it blocks the rendering frames.

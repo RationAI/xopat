@@ -49,13 +49,29 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * @param {Object} ofObject fabricjs.Line object that is being copied
-     * @param {array} parameters array of line points [x, y, x, y ..]
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' [x1, y1, x2, y2] or an object which also specifies 'left' and 'top' values
      */
-    copy(ofObject, parameters=undefined) {
-        let line = ofObject.item(0),
-            text = ofObject.item(1);
-        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-        return new fabric.Group([fabric.Line(parameters, {
+    copy(ofObject, parameters = undefined) {
+        const line = ofObject.item(0);
+        const text = ofObject.item(1);
+
+        if (parameters && Array.isArray(parameters)) {
+            parameters = {
+                left: ofObject.left,
+                top: ofObject.top,
+                points: parameters,
+            }
+        } else if (!parameters) parameters = {
+            left: ofObject.left,
+            top: ofObject.top,
+            points: [line.x1, line.y1, line.x2, line.y2]
+        }
+
+        const conf = new fabric.Group([new fabric.Line(parameters.points, {
             fill: line.fill,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
@@ -71,9 +87,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementY: line.lockMovementY,
             originalStrokeWidth: line.originalStrokeWidth,
             selectable: false,
-            originX: 'left',
-            originY: 'top'
-        }), new fabric.Text(text.text), {
+            originX: "left",
+            originY: "top",
+            left: line.left,
+            top: line.top,
+        }), new fabric.Text(text.text, {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize,
             lockUniScaling: true,
@@ -83,11 +101,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             stroke: text.stroke,
             fill: text.fill,
-            paintFirst: 'stroke',
+            paintFirst: text.paintFirst,
             strokeWidth: text.strokeWidth,
-            originX: 'left',
-            originY: 'top'
-        }], {
+            originX: "left",
+            originY: "top",
+            left: text.left,
+            top: text.top,
+        })], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
             meta: ofObject.meta,
@@ -98,16 +118,100 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
-            hasControls: true
+            hasControls: true,
+            left: parameters.left,
+            top: parameters.top,
+            height: ofObject.height,
+            width: ofObject.width,
+            fill: ofObject.fill,
+            stroke: ofObject.stroke,
+            strokeWidth: ofObject.strokeWidth,
+            opacity: ofObject.opacity,
+            borderColor: ofObject.borderColor,
+            cornerColor: ofObject.cornerColor,
+            borderScaleFactor: ofObject.borderScaleFactor,
+            borderDashArray: ofObject.borderDashArray,
+            cornerSize: ofObject.cornerSize,
+            cornerStyle: ofObject.cornerStyle,
+            transparentCorners: ofObject.transparentCorners,
+            private: ofObject.private,
         });
+        this.renderAllControls(conf);
+        return conf;
     }
 
     edit(theObject) {
         //not allowed
     }
 
-    recalculate(theObject) {
-        //not supported error?
+    /**
+     * Called when object is selected - restore custom controls
+     * @param {fabric.Object} theObject selected fabricjs object
+     */
+    selected(theObject) {
+        // Re-apply controls after object selection, as FabricJS might reset them
+        this.renderAllControls(theObject);
+        theObject.setControlsVisibility({ private: true });
+    }
+
+    recalculate(theObject, ignoreReplace=false) {
+        // warning: untested
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        const points = [line.x1, line.y1, line.x2, line.y2];
+        
+        const newObject = this.copy(theObject, {
+            left: theObject.left,
+            top: theObject.top,
+            points: points
+        });
+
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+
+        return newObject;
+    }
+
+    translate(theObject, pos, ignoreReplace=false) {
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        let deltaX, deltaY;
+        
+        if (pos.mode === 'move') {
+            deltaX = pos.x;
+            deltaY = pos.y;
+        } else {
+            deltaX = pos.x - theObject.left;
+            deltaY = pos.y - theObject.top;
+        }
+
+        const newPoints = [
+            line.x1 + deltaX,
+            line.y1 + deltaY,
+            line.x2 + deltaX,
+            line.y2 + deltaY
+        ];
+
+        const newObject = this.copy(theObject, {
+            left: theObject.left + deltaX,
+            top: theObject.top + deltaY,
+            points: newPoints
+        });
+
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+
+        return newObject;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
@@ -249,7 +353,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureLine(line, options) {
-        options.stroke = options.color;
+        const lineOptions = Object.assign({}, options);
+        lineOptions.stroke = options.color;
 
         $.extend(line, {
             scaleX: 1,
@@ -259,7 +364,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             originX: 'left',
             originY: 'top'
-        }, options);
+        }, lineOptions);
     }
 
     _configureText(text, options) {
@@ -291,6 +396,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: text.text,
+            hasControls: true,
         });
     }
 

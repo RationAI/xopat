@@ -12,6 +12,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this._invalidData = Date.now();
         });
 
+        // todo _invalidData not properly updated
         VIEWER.addHandler('visualization-redrawn', () => {
             this._invalidData = Date.now();
         });

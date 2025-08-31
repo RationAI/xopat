@@ -759,6 +759,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Root path - the modules folder
          */
         static ROOT = MODULES_FOLDER;
+
+        /**
+         * The root of this module folder
+         * @return {string}
+         * @constructor
+         */
+        get MODULE_ROOT() {
+            if (!MODULES[this.id]) {
+                throw new Error("Invalid module - not properly initialized!");
+            }
+            return MODULES_FOLDER + MODULES[this.id]?.directory
+        }
     }
 
     /**
@@ -952,6 +964,19 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         static ROOT = PLUGINS_FOLDER;
+
+
+        /**
+         * The root of this plugin folder
+         * @return {string}
+         * @constructor
+         */
+        get PLUGIN_ROOT() {
+            if (!PLUGINS[this.id]) {
+                throw new Error("Invalid module - not properly initialized!");
+            }
+            return PLUGINS_FOLDER + PLUGINS[this.id]?.directory
+        }
     }
 
     /**

@@ -1,7 +1,20 @@
 # Changelog
 
+### New renderer
+* Breaking: ``getMetadata`` replaces ``getMetadataAt(index)`` which is no longer supported
+
+------
+
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
+
+### 2.3.0 (unreleased)
+
+**Features**: added a way to set preferred annotation preset IDs for the GUI. Support for
+annotation modes private and locked. Support for annotation comments. Implementation of ICC profiles.
+Guidelines for WASM usage.
+
+**Bugfixes**: Fixed mjs module loading on servers.
 
 ### 2.2.2
 

@@ -95,7 +95,11 @@ async function responseStaticFile(req, res, targetPath) {
             res.writeHead(500);
             res.end(`Sorry, check with the site admin for error: ${err.code}`);
         } else {
-            res.writeHead(200, { 'Content-Type': contentType }); // indicate the request was successful
+            const head = { 'Content-Type': contentType };
+            // Threading for WASM requires all resources to comply: this is not often doable due to external image servers
+            // head['Cross-Origin-Opener-Policy'] = 'same-origin';
+            // head['Cross-Origin-Embedder-Policy'] = 'require-corp';
+            res.writeHead(200, head);
             res.end(content, 'utf-8');
         }
     });
@@ -226,8 +230,10 @@ async function responseDeveloperSetup(req, res) {
             switch (p1) {
                 case "head":
                     return `
+${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
+${core.requireLib('render')}
 ${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}

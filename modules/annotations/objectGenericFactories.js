@@ -31,8 +31,11 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
+        parameters.controls = {};
         const instance = new fabric.Rect(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -64,7 +67,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.top = parameters.top;
         copy.width = parameters.width;
         copy.height = parameters.height;
-        return new fabric.Rect(copy);
+        const conf = new fabric.Rect(copy);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -79,24 +84,26 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._left = theObject.left;
         this._top = theObject.top;
         theObject.set({
-            hasControls: true,
             lockMovementX: false,
             lockMovementY: false
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         let height = theObject.getScaledHeight(),
             width = theObject.getScaledWidth(),
             left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+        theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
+            lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -238,7 +245,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         const instance = new fabric.Ellipse(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -275,7 +284,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         copy.top = parameters.top;
         copy.rx = parameters.rx;
         copy.ry = parameters.ry;
-        return new fabric.Ellipse(copy);
+        const conf = new fabric.Ellipse(copy);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -292,18 +303,21 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         let rx = theObject.rx * theObject.scaleX,
             ry = theObject.ry * theObject.scaleY,
             left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+        theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
+            hasControls: true, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, rx: rx, ry: ry
         });
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -471,7 +485,9 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     create(parameters, options) {
         const instance = new fabric.Text(parameters.text);
-        return this.configure(instance, $.extend(options, parameters));
+        const conf = this.configure(instance, $.extend(options, parameters));
+        this.renderAllControls(conf);
+        return conf;
     }
 
 
@@ -587,7 +603,9 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
         $.extend(props, parameters);
         props.paintFirst = 'stroke';
-        return new fabric.Text(parameters.text, props);
+        const conf = new fabric.Text(parameters.text, props);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     edit(theObject) {
@@ -603,7 +621,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return -1; //always allow
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top,
             text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
@@ -612,7 +630,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -787,14 +808,17 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         });
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left, top: this._top,
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
-        this._context.replaceAnnotation(theObject, newObject);
+        
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+        }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -857,7 +881,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      */
     create(parameters, options) {
         const instance = new this.Class(parameters);
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     discardCreate() {
@@ -900,13 +926,34 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     /**
      * @param {Object} ofObject fabricjs.Polygon object that is being copied
-     * @param {Array} parameters array of points: {x, y} objects
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters) {
-        if (!parameters) parameters = [...ofObject.points];
+        if (parameters && Array.isArray(parameters)) {
+            // array kept for backwards compatibility
+            parameters = {
+                points: parameters,
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        } else if (!parameters) {
+            parameters = {
+                points: [...ofObject.points],
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        }
         const props = this.copyProperties(ofObject);
+        props.left = parameters.left;
+        props.top = parameters.top;
         delete props.points;
-        return new this.Class(parameters, props);
+        const conf = new this.Class(parameters.points, props);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     getArea(theObject) {
@@ -986,7 +1033,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
@@ -995,11 +1042,46 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             (value, index) => value === this._origPoints[index])) {
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            
+            if (!ignoreReplace) {
+                this._context.replaceAnnotation(theObject, newObject);
+                this._context.canvas.renderAll();
+            }
         }
         this._origPoints = null;
         this._initialize(false);
+    }
+
+    translate(theObject, pos, ignoreReplace=false) {
+        if (!theObject.points || theObject.points.length === 0) {
+            return theObject;
+        }
+
+        let deltaX, deltaY;
+        
+        if (pos.mode === 'move') {
+            deltaX = pos.x;
+            deltaY = pos.y;
+        } else {
+            deltaX = pos.x - theObject.left;
+            deltaY = pos.y - theObject.top;
+        }
+
+        const translatedPoints = theObject.points.map(point => ({
+            x: point.x + deltaX,
+            y: point.y + deltaY
+        }));
+        const newObject = this.copy(theObject, {
+            points: translatedPoints,
+            left: theObject.left + deltaX,
+            top: theObject.top + deltaY
+        });
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+
+        return newObject;
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1327,7 +1409,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
@@ -1340,8 +1422,10 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.x2 = this._origPoints[2];
             theObject.y2 = this._origPoints[3];
 
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            if (!ignoreReplace) {
+                this._context.replaceAnnotation(theObject, newObject);
+                this._context.canvas.renderAll();
+            }
         }
         this._origPoints = null;
     }
@@ -1782,6 +1866,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
         this.configure(multipolygon, options);
         multipolygon.points = parameters;
+        this.renderAllControls(multipolygon);
         return multipolygon;
     }
 
@@ -1811,13 +1896,37 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return pathString;
     }
 
+    /**
+     * @param {Object} ofObject Multipolygon object that is being copied
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
+     */
     copy(ofObject, parameters=undefined) {
-        if (!parameters) parameters = [...ofObject.points];
+        if (parameters && Array.isArray(parameters)) {
+            // array kept for backwards compatibility
+            parameters = {
+                points: parameters,
+                left: ofObject.left,
+                top: ofObject.top,
+            }
+        } else if (!parameters) {
+            parameters = {
+                left: ofObject.left,
+                top: ofObject.top,
+                points: [...ofObject.points],
+            };
+        }
         const props = this.copyProperties(ofObject);
         delete props.points;
-        const copy = new fabric.Path(this._createPathFromPoints(parameters), props);
+        const copy = new fabric.Path(this._createPathFromPoints(parameters.points), props);
         // We mimic polygon style - keep points prop
-        copy.points = parameters;
+        copy.points = parameters.points;
+        copy.left = parameters.left;
+        copy.top = parameters.top;
+        this.renderAllControls(copy);
         return copy;
     }
 

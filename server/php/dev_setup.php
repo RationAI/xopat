@@ -19,8 +19,10 @@ $replacer = function($match) use ($i18n) {
     // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
     switch ($match[1]) {
         case "head":
+            require_openseadragon();
             require_lib("primer");
             require_lib("jquery");
+            require_lib("render");
             require_ui();
             require_core("deps");
             require_openseadragon();

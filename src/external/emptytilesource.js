@@ -31,7 +31,7 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
      * @param index index of the data if tilesource supports multi data fetching
      * @return {TileSourceMetadata}
      */
-    getImageMetaAt(index) {
+    getMetadata() {
         return {error: 'No data available. The layer is empty.'};
     }
     setFormat(format) {
@@ -62,7 +62,7 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
         }
         ctx.fillStyle = this.color;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        context.finish(ctx);
+        context.finish(ctx, null, "context2d");
     }
 
     downloadTileAbort(context) {

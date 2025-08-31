@@ -58,8 +58,10 @@ params field (such as custom 'color' in the example above):
  - `use_channel[X]` - sample desired channel combination (consists of `rgba`), make sure the specified amount of channels is supported by given shader type
     - e.g. if `params.use_channel1 = "rrr"` the shader will sample the `RED` channel three times when reading a second texture in `dataReferences` and obtain `vec3`
 
-To specify blending, the params field can specify
- - `use_mode` - with values `"show"` (default alpha blending), `"mask"` or `"mask_clip"` (custom blending with default hard mask implementation)
+To specify blending and rendering mode, the params field can specify
+ - `use_blending` - with values such as `"mask"`, `"add"`, `"overlay"` and other standard blending mode names
+ - `use_mode` - `"show"` (default stacking) or `"clip"` (application on the previous layer only)
+Therefore, to apply layer as a mask on all previous layers, use the pair of ``show``, `mask`. To mask only direct previous layer, `clip` and `mask` must be used.
 
 The following three filters can be specified. The order of definition in the params sets the order of application. They accept one float value as the filter parameter.    
  - `use_gamma` - a gamma scale applied on the intensities, 
@@ -103,7 +105,7 @@ class IdentityVisualizationLayer extends VisualizationLayer {
 
     getFragmentShaderExecution() {
         //opacity available by default without doing anything
-        return `return ${this.sampleChannel("tile_texture_coords")};`;
+        return `return ${this.sampleChannel("v_texture_coords")};`;
     }
 }
 ````
@@ -158,7 +160,7 @@ At your disposal are these global variables:
 - `uniform float pixel_size_in_fragments;` - how many fragmens can fit into one pixel on the screen
 - `uniform float zoom_level;` - zoom level, a value passed from the outer scope, can be anything, in our context used as OpenSeadragon zoom level TODO rename?
 - `uniform vec2 u_tile_size;` - size of the canvas
-- `in vec2 tile_texture_coords;` - texture coordinates for this fragment
+- `in vec2 v_texture_coords;` - texture coordinates for this fragment
 
 
 And a member function to sample a texture appropriately: [JavaScript] 
@@ -193,11 +195,11 @@ Shader in WebGL 2.0 is then composed in this manner:
 precision mediump float;
 precision mediump sampler2DArray;
 
-uniform ?                               //textures definition, you use ${this.sampleChannel('tile_texture_coords')}
+uniform ?                               //textures definition, you use ${this.sampleChannel('v_texture_coords')}
 uniform float pixel_size_in_fragments;  //how many fragments add up to one pixel on screen
 uniform float zoom_level;               //zoom amount (see OpenSeadragon.Viewport::getZoom())
 uniform vec2 u_tile_size;               //tile dimension
-in vec2 tile_texture_coords;            //in-texture position
+in vec2 v_texture_coords;            //in-texture position
         
 out vec4 final_color;                    //do not touch directly, fragment output, use show(...) instead
        
@@ -329,8 +331,8 @@ and having one visualization goal set-up in the following manner:
 We can
 - sample the shader in the class with `this.sampleChannel(..)`
     - arguments are: `vec2(--texture coordinates--)` string representing sampling coords and index to the `dataReference` array
-    - e.g. to sample `"image1"`, call `this.sampleChannel('tile_texture_coords')` or `this.sampleChannel('tile_texture_coords', 0)`
-    - e.g. to sample `"image6"`, call `this.sampleChannel('tile_texture_coords', 2)` which maps to third index in `dataReferences`
+    - e.g. to sample `"image1"`, call `this.sampleChannel('v_texture_coords')` or `this.sampleChannel('v_texture_coords', 0)`
+    - e.g. to sample `"image6"`, call `this.sampleChannel('v_texture_coords', 2)` which maps to third index in `dataReferences`
     - note that the shader defines how `dataReference` should look like (number of required indices)
 - use any combinations of shaders and their collections within different groups (goals) we want
     - sampling any number of data

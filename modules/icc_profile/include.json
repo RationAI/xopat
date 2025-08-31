@@ -1,0 +1,11 @@
+{
+    "id": "icc-profiles",
+    "name": "ICC Profiles On Client",
+    "description": "Mounts ICC Profile loading to OpenSeadragon. It is implemented using WASM with thread workers.",
+    "version": "0.1.0",
+    "includes" : [
+        "icc_client.mjs"
+    ],
+    "requires": [],
+    "debugMode": false,
+}

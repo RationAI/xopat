@@ -1,10 +1,47 @@
 class AnnotationsGUI extends XOpatPlugin {
+	/**
+	 * @typedef {{
+	 * 	show?: boolean;
+	 * 	pos?: {
+	 * 		x: number;
+	 * 		y: number;
+	 * 	}
+	 * 	private?: boolean;
+	 * 	comments?: {
+	 * 		author: string;
+	 * 		date: Date;
+	 * 		content: string;
+	 * 	}
+	 * }} AnnotationMenuOptions
+	 */
+
+	static annotationMenuIconOrder = [
+		"private", "locked", "comments"
+	]
+
+	/**
+	 * Check if an array of menu icons is sorted per annotationMenuIconOrder
+	 * @param {string[]} array
+	 * @returns {boolean}
+	 */
+	static _isAnnotationMenuSorted(array) {
+		const order = AnnotationsGUI.annotationMenuIconOrder;
+		return (
+			array.length === order.length &&
+			array.every((v, i) => v.includes(order[i]))
+		)
+	}
 
 	//todo test with multiple swap bgimages
 	constructor(id) {
 		super(id);
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
+		/**
+		 * @type {Set<string>}
+		 */
+		this._preferredPresets = new Set();
+
 		this.registerAsEventSource();
 	}
 
@@ -23,9 +60,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
+		// TODO fix
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
-		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
+		// todo fix
+		// this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
 		await this.setupFromParams();
 
@@ -51,6 +90,9 @@ class AnnotationsGUI extends XOpatPlugin {
 			_this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat($(this).val()));
 		});
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
+
+		this._copiedAnnotation = null;
+		this._copiedPos = {x: 0, y: 0};
 	}
 
 	async setupFromParams() {
@@ -201,8 +243,8 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push(defaultModeControl(modes.FREE_FORM_TOOL_CORRECT));
 
 		modeOptions.push(vertSeparator);
-		modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
-		modeOptions.push(vertSeparator);
+		// modeOptions.push(defaultModeControl(modes.VIEWPORT_SEGMENTATION));
+		// modeOptions.push(vertSeparator);
 
 		modeOptions.push('<div id="mode-custom-items" class="d-inline-block">');
 		modeOptions.push(this.context.mode.customHtml());
@@ -359,6 +401,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				"var(--color-icon-primary)" : "var(--color-icon-tertiary)");
 		};
 
+        // FIXME event no longer exist
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
 		VIEWER.addHandler('background-image-swap', e => this.setupActiveTissue());
 		VIEWER.addHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
@@ -401,16 +444,21 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
+		this.context.addHandler('annotation-set-private', e => {
+			this.context.canvas.requestRenderAll();
+		})
+
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
-			if ((this.context.presets.right && this.context.mode !== this.context.Modes.AUTO)
-				|| (!USER_INTERFACE.DropDown.opened() && (Date.now() - e.pressTime) > 250)) {
+			if (this.context.presets.right || (Date.now() - e.pressTime) > 250) {
 				return;
 			}
 
 			let actions = [], handler;
 			let active = this.context.canvas.findTarget(e.originalEvent);
 			if (active) {
+				this.context.canvas.setActiveObject(active);
+				this.context.canvas.renderAll();
 				actions.push({
 					title: `Change annotation to:`
 				});
@@ -424,9 +472,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -434,6 +485,69 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					},
 				});
 			});
+
+			if (active) {
+				const props = this._getAnnotationProps(active);
+				const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+
+				actions.push({
+					title: "Modify annotation:",
+				})
+				actions.push({
+					title: props.private ? "Unmark as private" : "Mark as private",
+					icon: props.private ? "visibility" : "visibility_lock",
+					action: () => {
+						handlerMarkPrivate();
+					}
+				})
+			}
+
+			actions.push({
+				title: "Actions:",
+			});
+
+			const mousePos = this._getMousePosition(e);
+
+			const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Copy",
+				icon: "content_copy",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCopy();
+				}
+			})
+
+			const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Cut",
+				icon: "content_cut",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCut();
+				}
+			})
+
+			const canPaste = this._canPasteAnnotation(e);
+			const handlerPaste = this._pasteAnnotation.bind(this, e);
+			actions.push({
+				title: "Paste",
+				icon: "content_paste",
+				containerCss: !canPaste && 'opacity-50',
+				action: () => {
+					if (canPaste) handlerPaste();
+				}
+			})
+
+			const handlerDelete = this._deleteAnnotation.bind(this, active);
+			actions.push({
+				title: "Delete",
+				icon: "delete",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerDelete();
+				}
+			})
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
@@ -449,9 +563,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -943,10 +1060,12 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 		let pushed = false;
 		this.context.presets.foreach(preset => {
+			const containerCss =
+				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -1142,8 +1261,13 @@ class="btn m-2">Set for left click </button></div>`
 			$("#preset-filter-select").on('input', e => {
 				const search = e.target.value.toLowerCase();
 				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
-					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
-					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
+					const meta = this.context.presets._presets[el.dataset.presetId].meta;
+					const value = meta.category?.value.toLowerCase();
+					const collection = meta.collection?.name.toLowerCase() || "";
+					if (
+						!search || value.includes(search) || ("unknown".includes(search) && !value) ||
+						collection.includes(search)
+					) {
 						el.classList.remove("hidden");
 					} else {
 						el.classList.add("hidden");
@@ -1168,6 +1292,81 @@ class="btn m-2">Set for left click </button></div>`
 		return false;
 	}
 
+	_getMousePosition(e, checkBounds = true) {
+		const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+		if (!image) return {x: 0, y: 0};
+		const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+
+		const {x, y} = image.windowToImageCoordinates(screen);
+		const {x: maxX, y: maxY} = image.getContentSize();
+
+		if (
+			checkBounds && (
+				x <= 0 ||
+				y <= 0 ||
+				x >= maxX ||
+				y >= maxY
+			)
+		) {
+			return false;
+		}
+		return {x, y};
+	}
+
+	_copyAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+	}
+
+	_cutAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+		this._deleteAnnotation(annotation);
+	}
+
+	_deleteAnnotation(annotation) {
+		this.context.deleteObject(annotation);
+		this.context.canvas.requestRenderAll();
+	}
+
+	_canPasteAnnotation(e, getMouseValue = false) {
+		if (!this._copiedAnnotation) return null;
+		const mousePos = this._getMousePosition(e);
+		if (getMouseValue) return mousePos;
+		else return !!mousePos;
+	}
+
+	_pasteAnnotation(e) {
+		const mousePos = this._canPasteAnnotation(e, true);
+		if (!mousePos) {
+			if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
+			return;
+		}
+
+		const annotation = this._copiedAnnotation;
+		const factory = annotation._factory();
+
+		const copy = factory.copy(annotation);
+		const res = factory.translate(
+			copy,
+			{
+				x: mousePos.x + this._copiedPos.x,
+				y: mousePos.y + this._copiedPos.y,
+			},
+			true
+		);
+		this.context.addAnnotation(res);
+		factory.renderAllControls(res);
+	}
+
 	_clickAnnotationChangePreset(annotation) {
 		if (this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
@@ -1180,6 +1379,19 @@ class="btn m-2">Set for left click </button></div>`
 			_this.context.canvas.requestRenderAll();
 		}, 150);
 		return false;
+	}
+
+	_clickAnnotationMarkPrivate(annotation) {
+		const _this = this;
+		const newValue = !this._getAnnotationProps(annotation).private;
+
+		_this.context.setAnnotationPrivate(annotation, newValue);
+	}
+
+	_getAnnotationProps(annotation) {
+		return {
+			private: annotation.private
+		};
 	}
 
 	createNewPreset(buttonNode, isLeftClick) {
@@ -1209,6 +1421,40 @@ class="btn m-2">Set for left click </button></div>`
 			this.exportToFile();
 		}
 	}
+
+	/**
+	 * Set preferred preset IDs for the GUI
+	 * @param {string[]} presets array of presetIDs
+	 */
+	setPreferredPresets(presetIDs) {
+		this._preferredPresets = new Set(presetIDs);
+	}
+
+	/**
+	 * Add a preset ID to the preferred presets
+	 * @param {string} presetID
+	 */
+	addPreferredPreset(presetID) {
+		this._preferredPresets.add(presetID);
+	}
+
+	/**
+	 * Remove a preset ID from the preferred presets
+	 * @param {string} presetID
+	 */
+	removePreferredPreset(presetID) {
+		this._preferredPresets.delete(presetID);
+	}
+
+	/**
+	 * Check if a preset ID is not preferred
+	 * @param {string} presetID
+	 * @returns {boolean} true if the preset is not preferred
+	 */
+	isUnpreferredPreset(presetID) {
+		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+	}
+
 }
 
 /*------------ Initialization of OSD Annotations ------------*/
