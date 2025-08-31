@@ -167,8 +167,8 @@ async function responseViewer(req, res) {
             switch (p1) {
             case "head":
                 return `
-${core.requireLibs()}
 ${core.requireOpenseadragon()}
+${core.requireLibs()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -234,7 +234,7 @@ ${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireLib('render')}
-${core.requireUI()}
+${core.requireUI()}  // TODO Jirka: do we need to keep this? visit /dev_setup page to find out
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
 ${core.requireModules(true)}`;

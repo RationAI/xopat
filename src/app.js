@@ -436,7 +436,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         drawerOptions: {
             'flex-renderer': {
                 webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
                 debugInfoContainer: 'panel-shaders',
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig) => {

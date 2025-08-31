@@ -128,8 +128,6 @@ class MainPanel extends Menu {
     }
     openSubmenu(atPluginId, atSubId, toggle) {
     }
-    close() {
-    }
     refreshPageWithSelectedPlugins() {
     }
     addSeparator() {
